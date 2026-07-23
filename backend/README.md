@@ -7,6 +7,8 @@
 3. REST API（前台）+ 管理后台 + 直链代理
 4. 标签池、视频隐藏、按网盘统计和详情页来源网盘类型展示能力
 
+自定义 Python 爬虫的正式接入规范见 [CRAWLER_PROTOCOL.md](./CRAWLER_PROTOCOL.md)。该文档是简洁的全英文脚本协议，也可直接作为 AI 生成脚本时的协议约束；新脚本应使用 `crawler.v2`，旧脚本继续以 `crawler.v1` 兼容运行。
+
 ## 目录
 
 ```

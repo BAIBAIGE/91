@@ -35,24 +35,41 @@ const (
 	defaultCandidateMultiplier = 10
 	defaultCandidateFloorExtra = 50
 	defaultCandidateBudgetMax  = 500
+	defaultRunTimeout          = 3 * time.Hour
+	defaultCandidateIdle       = 30 * time.Minute
+	defaultV2IdleTimeout       = 5 * time.Minute
+	defaultProgressInterval    = 60 * time.Second
+	defaultDoneGrace           = 5 * time.Second
+	defaultMaxStdoutBytes      = 64 * 1024 * 1024
+	defaultMaxStderrBytes      = 1024 * 1024
+	maxV1StdoutLineBytes       = 4 * 1024 * 1024
+	maxV2StdoutLineBytes       = 1024 * 1024
+	maxStderrLineBytes         = 8 * 1024
 )
 
 type CrawlerConfig struct {
-	Driver          *Driver
-	Catalog         *catalog.Catalog
-	CrawlerName     string
-	PythonPath      string
-	FFmpegPath      string
-	FFprobePath     string
-	ScriptPath      string
-	WorkDir         string
-	CommonThumbDir  string
-	ProxyURL        string
-	ConfigJSON      string
-	DisablePreview  bool
-	HTTPClient      *http.Client
-	DownloadTimeout time.Duration
-	OnProgress      func(CrawlProgress)
+	Driver               *Driver
+	Catalog              *catalog.Catalog
+	CrawlerName          string
+	Protocol             string
+	PythonPath           string
+	FFmpegPath           string
+	FFprobePath          string
+	ScriptPath           string
+	WorkDir              string
+	CommonThumbDir       string
+	ProxyURL             string
+	ConfigJSON           string
+	DisablePreview       bool
+	HTTPClient           *http.Client
+	DownloadTimeout      time.Duration
+	RunTimeout           time.Duration
+	CandidateIdleTimeout time.Duration
+	IdleTimeout          time.Duration
+	DoneGrace            time.Duration
+	MaxStdoutBytes       int64
+	MaxStderrBytes       int64
+	OnProgress           func(CrawlProgress)
 }
 
 type Crawler struct {
@@ -72,6 +89,28 @@ func NewCrawler(cfg CrawlerConfig) *Crawler {
 	}
 	if cfg.DownloadTimeout <= 0 {
 		cfg.DownloadTimeout = 30 * time.Minute
+	}
+	if strings.TrimSpace(cfg.Protocol) == "" {
+		cfg.Protocol = ProtocolV1
+	}
+	cfg.Protocol = strings.TrimSpace(cfg.Protocol)
+	if cfg.RunTimeout <= 0 {
+		cfg.RunTimeout = defaultRunTimeout
+	}
+	if cfg.CandidateIdleTimeout <= 0 {
+		cfg.CandidateIdleTimeout = defaultCandidateIdle
+	}
+	if cfg.IdleTimeout <= 0 {
+		cfg.IdleTimeout = defaultV2IdleTimeout
+	}
+	if cfg.DoneGrace <= 0 {
+		cfg.DoneGrace = defaultDoneGrace
+	}
+	if cfg.MaxStdoutBytes <= 0 {
+		cfg.MaxStdoutBytes = defaultMaxStdoutBytes
+	}
+	if cfg.MaxStderrBytes <= 0 {
+		cfg.MaxStderrBytes = defaultMaxStderrBytes
 	}
 	if cfg.HTTPClient == nil {
 		transport := &http.Transport{
@@ -126,10 +165,19 @@ type Job struct {
 	OutputDir         string          `json:"output_dir"`
 	Config            json.RawMessage `json:"config"`
 	Network           JobNetwork      `json:"network"`
+	Limits            *JobLimits      `json:"limits,omitempty"`
 }
 
 type JobNetwork struct {
 	ProxyURL string `json:"proxy_url,omitempty"`
+}
+
+type JobLimits struct {
+	MaxRuntimeSeconds           int    `json:"max_runtime_seconds"`
+	DeadlineAt                  string `json:"deadline_at"`
+	ProgressIntervalSeconds     int    `json:"progress_interval_seconds"`
+	IdleTimeoutSeconds          int    `json:"idle_timeout_seconds"`
+	CandidateIdleTimeoutSeconds int    `json:"candidate_idle_timeout_seconds"`
 }
 
 type Event struct {
@@ -262,6 +310,9 @@ func (c *Crawler) RunOnce(ctx context.Context, targetNew int) (*CrawlResult, err
 	if _, err := os.Stat(c.cfg.ScriptPath); err != nil {
 		return nil, fmt.Errorf("scriptcrawler: script not found: %w", err)
 	}
+	if c.cfg.Protocol != ProtocolV1 && c.cfg.Protocol != ProtocolV2 {
+		return nil, fmt.Errorf("scriptcrawler: unsupported protocol %q", c.cfg.Protocol)
+	}
 	if targetNew <= 0 {
 		targetNew = DefaultTargetNew
 	}
@@ -306,82 +357,15 @@ func (c *Crawler) RunOnce(ctx context.Context, targetNew int) (*CrawlResult, err
 	result.SeenSnapshot = seenCount
 	emit(CrawlProgress{})
 
-	if err := c.writeJobFile(jobPath, runID, targetNew, candidateBudget, seenPath); err != nil {
+	deadline := time.Now().Add(c.cfg.RunTimeout).UTC()
+	if err := c.writeJobFile(jobPath, runID, targetNew, candidateBudget, seenPath, deadline); err != nil {
 		return result, fmt.Errorf("scriptcrawler: write job: %w", err)
 	}
 
-	cmd, stdout, err := c.startScript(ctx, jobPath, targetNew, candidateBudget)
-	if err != nil {
-		return result, fmt.Errorf("scriptcrawler: start: %w", err)
-	}
-	scanner := bufio.NewScanner(stdout)
-	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
-	progress := CrawlProgress{}
-	for scanner.Scan() {
-		if err := ctx.Err(); err != nil {
-			_ = cmd.Process.Kill()
-			break
-		}
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
-		}
-		var event Event
-		if err := json.Unmarshal([]byte(line), &event); err != nil {
-			log.Printf("[scriptcrawler] drive=%s stdout parse: %v line=%q", c.cfg.Driver.ID(), err, line)
-			continue
-		}
-		eventType := strings.ToLower(strings.TrimSpace(event.Type))
-		item := event.normalizedItem()
-		if eventType == "" && item.hasPayload() {
-			eventType = "item"
-		}
-		switch eventType {
-		case "item":
-			result.TotalEntries++
-			progress.Emitted++
-			emit(progress)
-			if result.NewVideos >= targetNew {
-				_ = cmd.Process.Kill()
-				break
-			}
-			added, err := c.processItem(ctx, item)
-			if err != nil {
-				log.Printf("[scriptcrawler] drive=%s item failed source_id=%q title=%q: %v", c.cfg.Driver.ID(), item.SourceID, item.Title, err)
-				result.Failed++
-			} else if added {
-				result.NewVideos++
-			} else {
-				result.Skipped++
-			}
-			emit(progress)
-			if result.NewVideos >= targetNew {
-				_ = cmd.Process.Kill()
-				break
-			}
-		case "progress":
-			if event.Checked > 0 {
-				progress.Checked = event.Checked
-			}
-			if event.Emitted > 0 {
-				progress.Emitted = event.Emitted
-			}
-			progress.Message = event.Message
-			emit(progress)
-		case "done":
-			progress.Message = event.Message
-			emit(progress)
-		case "":
-			log.Printf("[scriptcrawler] drive=%s missing event type line=%q", c.cfg.Driver.ID(), line)
-		default:
-			log.Printf("[scriptcrawler] drive=%s unknown event type=%q", c.cfg.Driver.ID(), event.Type)
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		log.Printf("[scriptcrawler] drive=%s stdout scan: %v", c.cfg.Driver.ID(), err)
-	}
-	if err := cmd.Wait(); err != nil && ctx.Err() == nil && result.NewVideos < targetNew {
-		log.Printf("[scriptcrawler] drive=%s script exit: %v", c.cfg.Driver.ID(), err)
+	runCtx, cancel := context.WithDeadline(ctx, deadline)
+	defer cancel()
+	if err := c.executeScript(runCtx, ctx, jobPath, targetNew, candidateBudget, result, emit); err != nil {
+		return result, err
 	}
 	return result, nil
 }
@@ -421,7 +405,7 @@ func (c *Crawler) writeSeenSourceIDs(ctx context.Context, path string) (int, err
 	return len(seen), nil
 }
 
-func (c *Crawler) writeJobFile(path, runID string, targetNew, candidateBudget int, seenPath string) error {
+func (c *Crawler) writeJobFile(path, runID string, targetNew, candidateBudget int, seenPath string, deadline time.Time) error {
 	cfg := json.RawMessage([]byte("{}"))
 	if raw := strings.TrimSpace(c.cfg.ConfigJSON); raw != "" {
 		if !json.Valid([]byte(raw)) {
@@ -434,7 +418,7 @@ func (c *Crawler) writeJobFile(path, runID string, targetNew, candidateBudget in
 		return fmt.Errorf("resolve output dir: %w", err)
 	}
 	job := Job{
-		Protocol:          "crawler.v1",
+		Protocol:          c.cfg.Protocol,
 		Mode:              "crawl",
 		RunID:             runID,
 		CrawlerID:         c.cfg.Driver.ID(),
@@ -445,6 +429,15 @@ func (c *Crawler) writeJobFile(path, runID string, targetNew, candidateBudget in
 		OutputDir:         outputDir,
 		Config:            cfg,
 		Network:           JobNetwork{ProxyURL: strings.TrimSpace(c.cfg.ProxyURL)},
+	}
+	if c.cfg.Protocol == ProtocolV2 {
+		job.Limits = &JobLimits{
+			MaxRuntimeSeconds:           durationSeconds(c.cfg.RunTimeout),
+			DeadlineAt:                  deadline.UTC().Format(time.RFC3339),
+			ProgressIntervalSeconds:     durationSeconds(defaultProgressInterval),
+			IdleTimeoutSeconds:          durationSeconds(c.cfg.IdleTimeout),
+			CandidateIdleTimeoutSeconds: durationSeconds(c.cfg.CandidateIdleTimeout),
+		}
 	}
 	data, err := json.MarshalIndent(job, "", "  ")
 	if err != nil {
@@ -459,6 +452,11 @@ func (c *Crawler) writeJobFile(path, runID string, targetNew, candidateBudget in
 
 func (c *Crawler) startScript(ctx context.Context, jobPath string, targetNew, candidateBudget int) (*exec.Cmd, io.ReadCloser, error) {
 	cmd := exec.CommandContext(ctx, c.cfg.PythonPath, c.cfg.ScriptPath, "--job", jobPath)
+	setCrawlerProcAttr(cmd)
+	cmd.Cancel = func() error {
+		return killCrawlerProcess(cmd)
+	}
+	cmd.WaitDelay = 3 * time.Second
 	if strings.TrimSpace(c.cfg.WorkDir) != "" {
 		cmd.Dir = c.cfg.WorkDir
 	}
@@ -487,20 +485,87 @@ func (c *Crawler) startScript(ctx context.Context, jobPath string, targetNew, ca
 		_ = stderr.Close()
 		return nil, nil, err
 	}
-	go forwardScriptLog(c.cfg.Driver.ID(), stderr)
+	go forwardScriptLog(c.cfg.Driver.ID(), stderr, c.cfg.MaxStderrBytes)
 	return cmd, stdout, nil
 }
 
-func forwardScriptLog(driveID string, r io.Reader) {
-	scanner := bufio.NewScanner(r)
-	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
+func forwardScriptLog(driveID string, r io.Reader, maxBytes int64) {
+	reader := bufio.NewReaderSize(r, maxStderrLineBytes)
+	line := make([]byte, 0, maxStderrLineBytes)
+	var consumed int64
+	var suppressed int64
+	lineTruncated := false
+	flushLine := func() {
+		trimmed := strings.TrimSpace(string(line))
+		if trimmed != "" {
+			if lineTruncated {
+				trimmed += "…"
+			}
+			log.Printf("[scriptcrawler:script] drive=%s %s", driveID, trimmed)
 		}
-		log.Printf("[scriptcrawler:script] drive=%s %s", driveID, line)
+		line = line[:0]
+		lineTruncated = false
 	}
+	for {
+		fragment, err := reader.ReadSlice('\n')
+		accepted := fragment
+		if remaining := maxBytes - consumed; remaining <= 0 {
+			accepted = nil
+			suppressed += int64(len(fragment))
+		} else if int64(len(accepted)) > remaining {
+			accepted = accepted[:remaining]
+			consumed += int64(len(accepted))
+			suppressed += int64(len(fragment) - len(accepted))
+		} else {
+			consumed += int64(len(accepted))
+		}
+		if len(accepted) > 0 {
+			content := accepted
+			if content[len(content)-1] == '\n' {
+				content = content[:len(content)-1]
+			}
+			if remaining := maxStderrLineBytes - len(line); remaining > 0 {
+				toKeep := content
+				if len(toKeep) > remaining {
+					toKeep = toKeep[:remaining]
+				}
+				line = append(line, toKeep...)
+				if len(toKeep) < len(content) {
+					lineTruncated = true
+					suppressed += int64(len(content) - len(toKeep))
+				}
+			} else if len(content) > 0 {
+				lineTruncated = true
+				suppressed += int64(len(content))
+			}
+		}
+		if len(fragment) > 0 && fragment[len(fragment)-1] == '\n' {
+			flushLine()
+		}
+		if err != nil {
+			if errors.Is(err, bufio.ErrBufferFull) {
+				continue
+			}
+			if err != io.EOF && !errors.Is(err, os.ErrClosed) {
+				log.Printf("[scriptcrawler:script] drive=%s stderr read: %v", driveID, err)
+			}
+			if len(line) > 0 || lineTruncated {
+				flushLine()
+			}
+			break
+		}
+	}
+	if suppressed > 0 {
+		log.Printf("[scriptcrawler:script] drive=%s suppressed %d stderr bytes after limit", driveID, suppressed)
+	}
+}
+
+func durationSeconds(value time.Duration) int {
+	seconds := int(value / time.Second)
+	if seconds < 1 {
+		return 1
+	}
+	return seconds
 }
 
 func (c *Crawler) processItem(ctx context.Context, item Item) (bool, error) {

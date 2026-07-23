@@ -400,12 +400,17 @@ func (a *App) attachScriptCrawler(d *catalog.Drive, drv *scriptcrawler.Driver) {
 	if scriptPath != "" {
 		workDir = filepath.Dir(scriptPath)
 	}
+	protocol := scriptcrawler.ProtocolV1
+	if meta, err := scriptcrawler.ReadMetadata(scriptPath); err == nil {
+		protocol = meta.Protocol
+	}
 
 	driveID := d.ID
 	c := scriptcrawler.NewCrawler(scriptcrawler.CrawlerConfig{
 		Driver:         drv,
 		Catalog:        a.cat,
 		CrawlerName:    d.Name,
+		Protocol:       protocol,
 		PythonPath:     pythonPath,
 		FFmpegPath:     a.cfg.Preview.FFmpegPath,
 		FFprobePath:    a.cfg.Preview.FFprobePath,

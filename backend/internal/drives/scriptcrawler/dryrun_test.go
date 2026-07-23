@@ -13,13 +13,50 @@ import (
 )
 
 func writeDryRunScript(t *testing.T, body string) string {
+	return writeDryRunProtocolScript(t, "", body)
+}
+
+func writeDryRunProtocolScript(t *testing.T, protocol, body string) string {
 	t.Helper()
 	dir := t.TempDir()
-	path := filepath.Join(dir, "crawler.sh")
-	if err := os.WriteFile(path, []byte("#!/bin/sh\n"+body), 0o755); err != nil {
+	path := filepath.Join(dir, "crawler.py")
+	metadata := "#!/bin/sh\nCRAWLER_NAME=\"Dry Run Test\"\n"
+	if protocol != "" {
+		metadata += "CRAWLER_PROTOCOL=\"" + protocol + "\"\n"
+	}
+	if err := os.WriteFile(path, []byte(metadata+body), 0o755); err != nil {
 		t.Fatalf("write script: %v", err)
 	}
 	return path
+}
+
+func TestDryRunUsesV2AndStopsAfterFirstItemWithoutDone(t *testing.T) {
+	script := writeDryRunProtocolScript(t, ProtocolV2, `
+echo '{"type":"item","source_id":"v2-item","title":"V2 Video","media_url":"https://cdn.example.test/v2.mp4"}'
+sleep 30
+`)
+	result := DryRun(context.Background(), DryRunConfig{
+		PythonPath:     "/bin/sh",
+		ScriptPath:     script,
+		SkipMediaProbe: true,
+	})
+	if !result.OK || result.Protocol != ProtocolV2 || len(result.Items) != 1 {
+		t.Fatalf("result = %+v", result)
+	}
+}
+
+func TestDryRunV2RejectsDoneStatsMismatch(t *testing.T) {
+	script := writeDryRunProtocolScript(t, ProtocolV2, `
+echo '{"type":"done","stats":{"checked":1,"emitted":1}}'
+`)
+	result := DryRun(context.Background(), DryRunConfig{
+		PythonPath:     "/bin/sh",
+		ScriptPath:     script,
+		SkipMediaProbe: true,
+	})
+	if result.OK || !strings.Contains(result.Error, "does not match") {
+		t.Fatalf("result = %+v", result)
+	}
 }
 
 func TestDryRunCollectsFirstItem(t *testing.T) {

@@ -1263,7 +1263,7 @@ func TestHandleListCrawlersOnlyIncludesCrawlerPageScripts(t *testing.T) {
 		}
 	})
 	scriptPath := filepath.Join(tmp, "demo_crawler.py")
-	if err := os.WriteFile(scriptPath, []byte("CRAWLER_NAME = \"Demo Crawler\"\n"), 0o644); err != nil {
+	if err := os.WriteFile(scriptPath, []byte("CRAWLER_NAME = \"Demo Crawler\"\nCRAWLER_PROTOCOL = \"crawler.v2\"\n"), 0o644); err != nil {
 		t.Fatalf("write crawler script: %v", err)
 	}
 
@@ -1361,6 +1361,7 @@ func TestHandleListCrawlersOnlyIncludesCrawlerPageScripts(t *testing.T) {
 	var got []struct {
 		ID               string `json:"id"`
 		Name             string `json:"name"`
+		Protocol         string `json:"protocol"`
 		Kind             string `json:"kind"`
 		Proxy            string `json:"proxy"`
 		UploadDriveID    string `json:"uploadDriveId"`
@@ -1379,6 +1380,7 @@ func TestHandleListCrawlersOnlyIncludesCrawlerPageScripts(t *testing.T) {
 	}
 	type crawlerListRow struct {
 		Name             string
+		Protocol         string
 		Kind             string
 		Proxy            string
 		UploadDriveID    string
@@ -1396,6 +1398,7 @@ func TestHandleListCrawlersOnlyIncludesCrawlerPageScripts(t *testing.T) {
 	for _, d := range got {
 		byID[d.ID] = crawlerListRow{
 			Name:             d.Name,
+			Protocol:         d.Protocol,
 			Kind:             d.Kind,
 			Proxy:            d.Proxy,
 			UploadDriveID:    d.UploadDriveID,
@@ -1418,6 +1421,9 @@ func TestHandleListCrawlersOnlyIncludesCrawlerPageScripts(t *testing.T) {
 	}
 	if byID["crawler-main"].Name != "Demo Crawler" {
 		t.Fatalf("crawler name = %q, want script metadata name", byID["crawler-main"].Name)
+	}
+	if byID["crawler-main"].Protocol != scriptcrawler.ProtocolV2 {
+		t.Fatalf("crawler protocol = %q, want %q", byID["crawler-main"].Protocol, scriptcrawler.ProtocolV2)
 	}
 	if byID["crawler-main"].Proxy != "http://127.0.0.1:7890" {
 		t.Fatalf("crawler proxy = %q, want trimmed proxy", byID["crawler-main"].Proxy)
@@ -1727,7 +1733,7 @@ func TestHandleUpsertCrawlerPersistsAndValidatesUploadDrive(t *testing.T) {
 
 func TestHandleImportCrawlerScriptFile(t *testing.T) {
 	tmp := t.TempDir()
-	script := "CRAWLER_NAME = \"Demo Crawler\"\nprint('crawler')\n"
+	script := "CRAWLER_NAME = \"Demo Crawler\"\nCRAWLER_PROTOCOL = \"crawler.v2\"\nprint('crawler')\n"
 	var body bytes.Buffer
 	mw := multipart.NewWriter(&body)
 	part, err := mw.CreateFormFile("file", "../demo crawler.py")
@@ -1751,6 +1757,7 @@ func TestHandleImportCrawlerScriptFile(t *testing.T) {
 	var got struct {
 		ScriptPath string `json:"scriptPath"`
 		Name       string `json:"name"`
+		Protocol   string `json:"protocol"`
 	}
 	if err := json.NewDecoder(rr.Body).Decode(&got); err != nil {
 		t.Fatalf("decode: %v", err)
@@ -1771,6 +1778,9 @@ func TestHandleImportCrawlerScriptFile(t *testing.T) {
 	}
 	if got.Name != "Demo Crawler" {
 		t.Fatalf("name = %q, want script metadata name", got.Name)
+	}
+	if got.Protocol != scriptcrawler.ProtocolV2 {
+		t.Fatalf("protocol = %q, want %q", got.Protocol, scriptcrawler.ProtocolV2)
 	}
 	if string(data) != script {
 		t.Fatalf("script content = %q", string(data))
@@ -1909,6 +1919,7 @@ func TestHandleImportCrawlerScriptURL(t *testing.T) {
 	var got struct {
 		ScriptPath string `json:"scriptPath"`
 		Name       string `json:"name"`
+		Protocol   string `json:"protocol"`
 	}
 	if err := json.NewDecoder(rr.Body).Decode(&got); err != nil {
 		t.Fatalf("decode: %v", err)
@@ -1923,6 +1934,9 @@ func TestHandleImportCrawlerScriptURL(t *testing.T) {
 	}
 	if got.Name != "URL Crawler" {
 		t.Fatalf("name = %q, want script metadata name", got.Name)
+	}
+	if got.Protocol != scriptcrawler.ProtocolV1 {
+		t.Fatalf("protocol = %q, want %q", got.Protocol, scriptcrawler.ProtocolV1)
 	}
 	if filepath.Base(got.ScriptPath) != "crawler.py" {
 		t.Fatalf("script filename = %q, want original filename", filepath.Base(got.ScriptPath))
@@ -2567,7 +2581,8 @@ func TestHandleTestCrawlerScriptRunsImportedScript(t *testing.T) {
 	defer media.Close()
 
 	script := filepath.Join(t.TempDir(), "crawler.py")
-	body := `import json
+	body := `CRAWLER_NAME = "Dry Run Test"
+import json
 print(json.dumps({"title": "Dry Run Video", "source_id": "dry-1", "media_url": "` + media.URL + `/video.mp4", "thumbnail_url": "` + media.URL + `/thumb.jpg", "detail_url": "` + media.URL + `/detail"}))
 `
 	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {

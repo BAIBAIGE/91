@@ -25,6 +25,7 @@ import (
 type crawlerDTO struct {
 	ID                          string           `json:"id"`
 	Name                        string           `json:"name"`
+	Protocol                    string           `json:"protocol"`
 	Kind                        string           `json:"kind"`
 	Status                      string           `json:"status"`
 	LastError                   string           `json:"lastError,omitempty"`
@@ -117,9 +118,11 @@ func (a *AdminServer) crawlerDTOForDrive(d *catalog.Drive, assets catalog.Crawle
 			lastCrawlAt = v
 		}
 	}
+	meta := crawlerMetadataForDrive(d)
 	return crawlerDTO{
 		ID:                          d.ID,
-		Name:                        crawlerNameForDrive(d),
+		Name:                        meta.Name,
+		Protocol:                    meta.Protocol,
 		Kind:                        d.Kind,
 		Status:                      d.Status,
 		LastError:                   d.LastError,
@@ -173,15 +176,19 @@ func crawlerVideoIDPrefixes(d *catalog.Drive) []string {
 }
 
 func crawlerNameForDrive(d *catalog.Drive) string {
+	return crawlerMetadataForDrive(d).Name
+}
+
+func crawlerMetadataForDrive(d *catalog.Drive) scriptcrawler.Metadata {
 	if d == nil {
-		return ""
+		return scriptcrawler.Metadata{Protocol: scriptcrawler.ProtocolV1}
 	}
 	if d.Credentials != nil {
 		if meta, err := scriptcrawler.ReadMetadata(strings.TrimSpace(d.Credentials["script_path"])); err == nil {
-			return meta.Name
+			return meta
 		}
 	}
-	return strings.TrimSpace(d.Name)
+	return scriptcrawler.Metadata{Name: strings.TrimSpace(d.Name), Protocol: scriptcrawler.ProtocolV1}
 }
 
 func (a *AdminServer) handleUpsertCrawler(w http.ResponseWriter, r *http.Request) {
@@ -405,7 +412,7 @@ func (a *AdminServer) handleImportCrawlerScriptFile(w http.ResponseWriter, r *ht
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"scriptPath": scriptPath, "name": meta.Name})
+	writeJSON(w, http.StatusOK, map[string]any{"scriptPath": scriptPath, "name": meta.Name, "protocol": meta.Protocol})
 }
 
 func (a *AdminServer) handleImportCrawlerScriptURL(w http.ResponseWriter, r *http.Request) {
@@ -473,7 +480,7 @@ func (a *AdminServer) handleImportCrawlerScriptURL(w http.ResponseWriter, r *htt
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"scriptPath": scriptPath, "name": meta.Name, "sourceUrl": downloadURL.String()})
+	writeJSON(w, http.StatusOK, map[string]any{"scriptPath": scriptPath, "name": meta.Name, "protocol": meta.Protocol, "sourceUrl": downloadURL.String()})
 }
 
 func crawlerScriptDownloadURL(u *url.URL) *url.URL {

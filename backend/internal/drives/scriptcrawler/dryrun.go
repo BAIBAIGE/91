@@ -59,6 +59,7 @@ type DryRunMediaCheck struct {
 
 type DryRunResult struct {
 	OK         bool              `json:"ok"`
+	Protocol   string            `json:"protocol,omitempty"`
 	Items      []DryRunItem      `json:"items"`
 	MediaCheck *DryRunMediaCheck `json:"mediaCheck,omitempty"`
 	Error      string            `json:"error,omitempty"`
@@ -67,9 +68,11 @@ type DryRunResult struct {
 }
 
 type dryRunLogTail struct {
-	mu      sync.Mutex
-	lines   []string
-	partial string
+	mu         sync.Mutex
+	lines      []string
+	partial    string
+	totalBytes int64
+	suppressed int64
 }
 
 func newDryRunLogTail() *dryRunLogTail {
@@ -80,13 +83,25 @@ func (t *dryRunLogTail) Write(p []byte) (int, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	chunk := strings.ReplaceAll(string(p), "\r\n", "\n")
+	originalLen := len(p)
+	remaining := defaultMaxStderrBytes - t.totalBytes
+	if remaining <= 0 {
+		t.suppressed += int64(originalLen)
+		return originalLen, nil
+	}
+	accepted := p
+	if int64(len(accepted)) > remaining {
+		accepted = accepted[:remaining]
+		t.suppressed += int64(originalLen - len(accepted))
+	}
+	t.totalBytes += int64(len(accepted))
+	chunk := strings.ReplaceAll(string(accepted), "\r\n", "\n")
 	parts := strings.Split(t.partial+chunk, "\n")
-	t.partial = parts[len(parts)-1]
+	t.partial = truncateDryRunLogLine(parts[len(parts)-1])
 	for _, line := range parts[:len(parts)-1] {
 		t.appendLocked(line)
 	}
-	return len(p), nil
+	return originalLen, nil
 }
 
 func (t *dryRunLogTail) snapshot() []string {
@@ -97,6 +112,9 @@ func (t *dryRunLogTail) snapshot() []string {
 	if partial := strings.TrimSpace(t.partial); partial != "" {
 		lines = appendDryRunLogLine(lines, partial)
 	}
+	if t.suppressed > 0 {
+		lines = appendDryRunLogLine(lines, fmt.Sprintf("[stderr truncated: %d bytes suppressed]", t.suppressed))
+	}
 	return lines
 }
 
@@ -105,7 +123,7 @@ func (t *dryRunLogTail) appendLocked(line string) {
 }
 
 func appendDryRunLogLine(lines []string, line string) []string {
-	line = strings.TrimSpace(line)
+	line = truncateDryRunLogLine(strings.TrimSpace(line))
 	if line == "" {
 		return lines
 	}
@@ -113,6 +131,13 @@ func appendDryRunLogLine(lines []string, line string) []string {
 		lines = lines[1:]
 	}
 	return append(lines, line)
+}
+
+func truncateDryRunLogLine(line string) string {
+	if len(line) <= maxStderrLineBytes {
+		return line
+	}
+	return line[:maxStderrLineBytes] + "…"
 }
 
 func DryRun(ctx context.Context, cfg DryRunConfig) *DryRunResult {
@@ -129,6 +154,12 @@ func DryRun(ctx context.Context, cfg DryRunConfig) *DryRunResult {
 		result.Error = fmt.Sprintf("脚本不存在: %v", err)
 		return result
 	}
+	metadata, err := ReadMetadata(scriptPath)
+	if err != nil {
+		result.Error = fmt.Sprintf("脚本元信息无效: %v", err)
+		return result
+	}
+	result.Protocol = metadata.Protocol
 	pythonPath := strings.TrimSpace(cfg.PythonPath)
 	if pythonPath == "" {
 		pythonPath = "python3"
@@ -169,15 +200,26 @@ func DryRun(ctx context.Context, cfg DryRunConfig) *DryRunResult {
 		configJSON = json.RawMessage(raw)
 	}
 	job := Job{
-		Protocol:          "crawler.v1",
+		Protocol:          metadata.Protocol,
 		Mode:              "crawl",
 		RunID:             "dryrun-" + started.UTC().Format("20060102T150405Z"),
 		CrawlerID:         "dryrun",
 		TargetNew:         maxItems,
+		UniqueTarget:      maxItems,
+		CandidateBudget:   maxItems,
 		SeenSourceIDsFile: seenPath,
 		OutputDir:         outputDir,
 		Config:            configJSON,
 		Network:           JobNetwork{ProxyURL: strings.TrimSpace(cfg.ProxyURL)},
+	}
+	if metadata.Protocol == ProtocolV2 {
+		job.Limits = &JobLimits{
+			MaxRuntimeSeconds:           durationSeconds(timeout),
+			DeadlineAt:                  started.Add(timeout).UTC().Format(time.RFC3339),
+			ProgressIntervalSeconds:     durationSeconds(defaultProgressInterval),
+			IdleTimeoutSeconds:          durationSeconds(defaultV2IdleTimeout),
+			CandidateIdleTimeoutSeconds: durationSeconds(defaultCandidateIdle),
+		}
 	}
 	jobPath := filepath.Join(tmpDir, "job.json")
 	jobData, err := json.MarshalIndent(job, "", "  ")
@@ -228,27 +270,76 @@ func DryRun(ctx context.Context, cfg DryRunConfig) *DryRunResult {
 	items := []DryRunItem{}
 	var firstMediaHeaders map[string]string
 	parseFailures := 0
+	v2ItemsSeen := 0
 	scanner := bufio.NewScanner(stdout)
-	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
+	maxLineBytes := maxV1StdoutLineBytes
+	strictV2 := metadata.Protocol == ProtocolV2
+	if strictV2 {
+		maxLineBytes = maxV2StdoutLineBytes
+	}
+	scanner.Buffer(make([]byte, 64*1024), maxLineBytes)
+	var stdoutBytes int64
 	for scanner.Scan() {
 		if runCtx.Err() != nil {
 			break
 		}
-		line := strings.TrimSpace(scanner.Text())
+		rawLine := scanner.Text()
+		stdoutBytes += int64(len(rawLine)) + 1
+		if stdoutBytes > defaultMaxStdoutBytes {
+			result.Error = fmt.Sprintf("脚本 stdout 超过 %d MiB 限制", defaultMaxStdoutBytes/1024/1024)
+			break
+		}
+		line := strings.TrimSpace(rawLine)
 		if line == "" {
+			if strictV2 {
+				result.Error = "crawler.v2 stdout 不能包含空行"
+				break
+			}
 			continue
 		}
 		var event Event
 		if err := json.Unmarshal([]byte(line), &event); err != nil {
 			parseFailures++
+			if strictV2 {
+				result.Error = fmt.Sprintf("crawler.v2 stdout 必须全部为 JSON 对象: %v", err)
+				break
+			}
 			continue
 		}
-		eventType := strings.ToLower(strings.TrimSpace(event.Type))
+		eventType := strings.TrimSpace(event.Type)
+		if !strictV2 {
+			eventType = strings.ToLower(eventType)
+		}
 		item := event.normalizedItem()
-		if eventType == "" && item.hasPayload() {
+		if !strictV2 && eventType == "" && item.hasPayload() {
 			eventType = "item"
 		}
+		if strictV2 && eventType == "item" {
+			if err := validateV2Item(item); err != nil {
+				result.Error = err.Error()
+				break
+			}
+			v2ItemsSeen++
+		}
+		if eventType == "done" && strictV2 {
+			if err := validateDoneStats(event.Stats, v2ItemsSeen); err != nil {
+				result.Error = err.Error()
+				break
+			}
+		}
+		if eventType == "progress" && strictV2 && (event.Checked < 0 || event.Emitted < 0) {
+			result.Error = "crawler.v2 progress.checked 和 progress.emitted 不能为负数"
+			break
+		}
 		if eventType != "item" {
+			if strictV2 && eventType != "progress" && eventType != "done" {
+				if eventType == "" {
+					result.Error = "crawler.v2 事件缺少 type"
+				} else {
+					result.Error = fmt.Sprintf("crawler.v2 不支持事件类型 %q", event.Type)
+				}
+				break
+			}
 			continue
 		}
 		normalized, _, err := normalizeItemForImport(item)
@@ -271,6 +362,9 @@ func DryRun(ctx context.Context, cfg DryRunConfig) *DryRunResult {
 		if len(items) >= maxItems {
 			break
 		}
+	}
+	if scanErr := scanner.Err(); scanErr != nil && result.Error == "" {
+		result.Error = fmt.Sprintf("脚本 stdout 单行超过 %d 字节或读取失败: %v", maxLineBytes, scanErr)
 	}
 	// 拿够了就停掉脚本，避免它继续翻页。给已经自然结束的脚本一个很短
 	// 的宽限期，让 stderr 日志先被管道读完，避免 dry-run 回显偶发为空。
@@ -295,7 +389,7 @@ func DryRun(ctx context.Context, cfg DryRunConfig) *DryRunResult {
 			case runCtx.Err() != nil && ctx.Err() == nil:
 				result.Error = fmt.Sprintf("测试超时（%s），脚本没有输出任何视频", timeout)
 			case parseFailures > 0:
-				result.Error = "脚本 stdout 不是合法的 crawler.v1 JSON Lines（日志应输出到 stderr）"
+				result.Error = fmt.Sprintf("脚本 stdout 不是合法的 %s JSON Lines（日志应输出到 stderr）", metadata.Protocol)
 			default:
 				result.Error = "脚本退出但没有输出任何视频"
 			}

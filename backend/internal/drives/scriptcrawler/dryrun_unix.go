@@ -7,11 +7,11 @@ import (
 	"syscall"
 )
 
-func setDryRunProcAttr(cmd *exec.Cmd) {
+func setCrawlerProcAttr(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 }
 
-func killDryRunProcess(cmd *exec.Cmd) error {
+func killCrawlerProcess(cmd *exec.Cmd) error {
 	if cmd == nil || cmd.Process == nil {
 		return nil
 	}
@@ -22,4 +22,12 @@ func killDryRunProcess(cmd *exec.Cmd) error {
 		return cmd.Process.Kill()
 	}
 	return nil
+}
+
+func setDryRunProcAttr(cmd *exec.Cmd) {
+	setCrawlerProcAttr(cmd)
+}
+
+func killDryRunProcess(cmd *exec.Cmd) error {
+	return killCrawlerProcess(cmd)
 }
