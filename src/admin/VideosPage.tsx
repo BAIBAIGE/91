@@ -1,4 +1,14 @@
-import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type Dispatch,
+  type ReactNode,
+  type SetStateAction,
+} from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import {
   Check,
@@ -16,6 +26,7 @@ import { ConfirmModal } from "./ConfirmModal";
 import { formatBytes } from "./storageFormat";
 import { AdminEmptyVisual } from "./AdminEmptyVisual";
 import { driveKindAbbr, driveKindIconPath, kindLabel } from "./drive/constants";
+import { readAdminVideosPage, withAdminVideosPage } from "./videosSearchParams";
 
 const DESKTOP_VIDEOS_PAGE_SIZE = 50;
 const MOBILE_VIDEOS_PAGE_SIZE = 20;
@@ -27,6 +38,7 @@ const REGEN_PREVIEW_TRACK_TIMEOUT_MS = 30 * 60 * 1000;
 const ADMIN_SEARCH_DEBOUNCE_MS = 500;
 
 type TabKey = "current" | "blacklist";
+type PageSetter = Dispatch<SetStateAction<number>>;
 
 type RegenPreviewState = {
   expiresAt: number;
@@ -58,16 +70,29 @@ const TABS: { key: TabKey; label: string }[] = [
 
 /**
  * 视频管理容器：顶部分段标签在「当前 / 拉黑」两个视图间切换，
- * 激活标签同步到 URL ?tab=。
+ * 激活标签和当前页同步到 URL 的 ?tab= / ?page=。
  */
 export function VideosPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const rawTab = searchParams.get("tab");
   const activeTab: TabKey = rawTab === "blacklist" ? "blacklist" : "current";
+  const page = readAdminVideosPage(searchParams);
+  const setPage = useCallback<PageSetter>((nextPage) => {
+    setSearchParams(
+      (prev) => {
+        const currentPage = readAdminVideosPage(prev);
+        const resolvedPage = typeof nextPage === "function" ? nextPage(currentPage) : nextPage;
+        return withAdminVideosPage(prev, resolvedPage);
+      },
+      { replace: true }
+    );
+  }, [setSearchParams]);
+
   function selectTab(key: TabKey) {
     setSearchParams(
       (prev) => {
         const next = new URLSearchParams(prev);
+        if (key !== activeTab) next.delete("page");
         if (key === "current") next.delete("tab");
         else next.set("tab", key);
         return next;
@@ -81,11 +106,15 @@ export function VideosPage() {
       {activeTab === "current" && (
         <CurrentVideosTab
           tabSelector={<VideoTabSelector activeTab={activeTab} onSelect={selectTab} />}
+          page={page}
+          setPage={setPage}
         />
       )}
       {activeTab === "blacklist" && (
         <BlacklistTab
           tabSelector={<VideoTabSelector activeTab={activeTab} onSelect={selectTab} />}
+          page={page}
+          setPage={setPage}
         />
       )}
     </section>
@@ -121,8 +150,12 @@ function VideoTabSelector({
 
 function CurrentVideosTab({
   tabSelector,
+  page,
+  setPage,
 }: {
   tabSelector: ReactNode;
+  page: number;
+  setPage: PageSetter;
 }) {
   const [list, setList] = useState<api.AdminVideo[]>([]);
   const [drives, setDrives] = useState<api.AdminDrive[]>([]);
@@ -134,7 +167,6 @@ function CurrentVideosTab({
   const [advancedFiltersOpen, setAdvancedFiltersOpen] = useState(false);
   const [draftFilters, setDraftFilters] = useState<VideoAdvancedFilterValues>(() => ({ ...EMPTY_VIDEO_FILTERS }));
   const [appliedFilters, setAppliedFilters] = useState<VideoAdvancedFilterValues>(() => ({ ...EMPTY_VIDEO_FILTERS }));
-  const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
   const [editing, setEditing] = useState<api.AdminVideo | null>(null);
   const [availableTags, setAvailableTags] = useState<api.AdminTag[]>([]);
@@ -221,10 +253,6 @@ function CurrentVideosTab({
       active = false;
     };
   }, [show]);
-
-  useEffect(() => {
-    setPage(1);
-  }, [pageSize]);
 
   useEffect(() => {
     setSelectedIds(new Set());
@@ -698,8 +726,12 @@ function CurrentVideosTab({
 
 function BlacklistTab({
   tabSelector,
+  page,
+  setPage,
 }: {
   tabSelector: ReactNode;
+  page: number;
+  setPage: PageSetter;
 }) {
   const [list, setList] = useState<api.AdminDeletedVideo[]>([]);
   const [drives, setDrives] = useState<api.AdminDrive[]>([]);
@@ -707,7 +739,6 @@ function BlacklistTab({
   const [loadError, setLoadError] = useState("");
   const [keyword, setKeyword] = useState("");
   const [searchKeyword, setSearchKeyword] = useState("");
-  const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
   const [selectMode, setSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -719,6 +750,7 @@ function BlacklistTab({
   const [batchSourceDeleteOpen, setBatchSourceDeleteOpen] = useState(false);
   const [sourceDeleteStarting, setSourceDeleteStarting] = useState(false);
   const pageSize = useVideosPageSize();
+  const previousPageSizeRef = useRef(pageSize);
   const { show } = useToast();
 
   async function refresh() {
@@ -792,8 +824,10 @@ function BlacklistTab({
   }, [sourceDeleteStatus?.running]);
 
   useEffect(() => {
+    if (previousPageSizeRef.current === pageSize) return;
+    previousPageSizeRef.current = pageSize;
     setPage(1);
-  }, [pageSize]);
+  }, [pageSize, setPage]);
 
   useEffect(() => {
     if (keyword === searchKeyword) return;

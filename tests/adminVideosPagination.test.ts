@@ -149,6 +149,13 @@ test("admin video pagination only shows current and total pages", () => {
   );
 });
 
+test("admin video pagination stores the active page in the URL", () => {
+  assert.match(videosPageSource, /const page = readAdminVideosPage\(searchParams\);/);
+  assert.match(videosPageSource, /return withAdminVideosPage\(prev, resolvedPage\);/);
+  assert.match(videosPageSource, /if \(key !== activeTab\) next\.delete\("page"\);/);
+  assert.doesNotMatch(videosPageSource, /const \[page, setPage\] = useState\(1\);/);
+});
+
 test("video pagination keeps its position when the page has fewer rows", () => {
   const currentSource = videosPageSource.slice(
     videosPageSource.indexOf("function CurrentVideosTab"),
