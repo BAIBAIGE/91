@@ -213,12 +213,13 @@ func (p *Proxy) ServeStream(w http.ResponseWriter, r *http.Request, driveID, fil
 		writeStreamError(w, d.Kind(), err)
 		return
 	}
-	if shouldRedirect(d) {
+	forceRelay := forceStreamRelay(r)
+	if shouldRedirect(d) && !forceRelay {
 		p.reportStreamResult(driveID, nil)
 		redirect(w, r, link)
 		return
 	}
-	if err := p.serve(w, r, link); err != nil {
+	if err := p.serve(w, r, link, forceRelay); err != nil {
 		if errors.Is(err, context.Canceled) {
 			// Browser navigation and canceled range requests say nothing about
 			// provider health, so retain the previous observed state.
@@ -293,7 +294,11 @@ func redirect(w http.ResponseWriter, r *http.Request, link *drives.StreamLink) {
 	http.Redirect(w, r, link.URL, http.StatusFound)
 }
 
-func (p *Proxy) serve(w http.ResponseWriter, r *http.Request, link *drives.StreamLink) error {
+func forceStreamRelay(r *http.Request) bool {
+	return r.URL.Query().Get("tripleScreenRelay") == "1"
+}
+
+func (p *Proxy) serve(w http.ResponseWriter, r *http.Request, link *drives.StreamLink, forceRelay bool) error {
 	// 构造上游请求
 	u, err := url.Parse(link.URL)
 	if err != nil {
@@ -320,7 +325,7 @@ func (p *Proxy) serve(w http.ResponseWriter, r *http.Request, link *drives.Strea
 	}
 
 	client := p.http
-	if link.PassThroughRedirects {
+	if link.PassThroughRedirects && !forceRelay {
 		client = p.relay
 	}
 	resp, err := client.Do(req)

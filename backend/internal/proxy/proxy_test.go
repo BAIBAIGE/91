@@ -57,6 +57,32 @@ func TestServeStreamLinkFailureReturnsStructuredErrorAndReportsStatus(t *testing
 	}
 }
 
+func TestServeStreamTripleScreenRelayBypassesRedirectMode(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "video/mp4")
+		_, _ = w.Write([]byte("video-bytes"))
+	}))
+	t.Cleanup(upstream.Close)
+
+	reg := NewRegistry()
+	reg.Set("115", &proxyFakeSimpleDrive{kind: "p115", url: upstream.URL + "/video.mp4"})
+	p := New(reg)
+
+	req := httptest.NewRequest(http.MethodGet, "/p/stream/115/file-1?tripleScreenRelay=1", nil)
+	rr := httptest.NewRecorder()
+	p.ServeStream(rr, req, "115", "file-1")
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rr.Code, http.StatusOK)
+	}
+	if got := rr.Header().Get("Location"); got != "" {
+		t.Fatalf("Location = %q, want no redirect", got)
+	}
+	if got := rr.Body.String(); got != "video-bytes" {
+		t.Fatalf("body = %q", got)
+	}
+}
+
 func TestServeStreamReportsRecoveryAndCoalescesRepeatedSuccess(t *testing.T) {
 	reg := NewRegistry()
 	drv := &proxyResultDrive{

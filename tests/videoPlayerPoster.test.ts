@@ -452,7 +452,14 @@ test("detail player exits body-mounted web fullscreen before route cleanup", () 
 });
 
 test("detail player hides orientation control on iPhone without disabling mobile gestures", () => {
-  assert.match(playerSource, /controls:\s*enableOrientationControl \? \[createOrientationControl\(\)\] : \[\]/);
+  assert.match(
+    playerSource,
+    /controls:\s*createPlayerControls\(\s*enableOrientationControl,\s*enableTripleScreenControl\s*\)/
+  );
+  assert.match(
+    playerSource,
+    /if \(enableOrientationControl\) \{\s*controls\.push\(createOrientationControl\(\)\);\s*\}/
+  );
   assert.match(playerSource, /function shouldEnableMobileOrientationControl\(\)\s*\{\s*return isMobilePlaybackDevice\(\) && !isApplePhoneDevice\(\);/);
   assert.match(playerSource, /function isApplePhoneDevice\(\)\s*\{\s*return \/iPhone\|iPod\/i\.test\(navigator\.userAgent\);/);
   assert.match(playerSource, /function shouldEnableMobileGestures\(\)\s*\{\s*return isMobilePlaybackDevice\(\);/);

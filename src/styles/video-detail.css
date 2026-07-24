@@ -272,6 +272,65 @@
   user-select: none;
 }
 
+.video-player__triple-screen-canvas {
+  position: absolute;
+  inset: 0;
+  z-index: 12;
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: #000;
+  pointer-events: none;
+  filter: brightness(var(--video-player-brightness, 1));
+}
+
+.video-player__triple-screen-canvas[hidden] {
+  display: none;
+}
+
+.art-video-player.art-triple-screen-active .art-subtitle {
+  display: none;
+}
+
+.art-video-player
+  .art-control[data-triple-screen-control][data-triple-screen-eligible="false"] {
+  display: none !important;
+}
+
+.art-video-player .art-control[data-triple-screen-control] {
+  color: rgba(255, 255, 255, 0.88);
+}
+
+.art-video-player
+  .art-control[data-triple-screen-control][aria-pressed="true"] {
+  color: rgba(255, 255, 255, 0.88);
+  opacity: 1;
+}
+
+.video-player__triple-screen-control-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+}
+
+.video-player__triple-screen-control-icon svg {
+  width: 30px;
+  height: 30px;
+}
+
+.video-player__triple-screen-control-icon svg,
+.video-player__triple-screen-control-icon svg * {
+  fill: none;
+}
+
+@media (hover: none) and (pointer: coarse) {
+  .art-video-player .art-control[data-triple-screen-control] {
+    display: none !important;
+  }
+}
+
 .video-player__status {
   position: absolute;
   inset: 0;

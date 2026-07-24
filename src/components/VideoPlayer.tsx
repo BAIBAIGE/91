@@ -12,6 +12,10 @@ import {
   getFullscreenPlayerOrientation,
 } from "@/lib/fullscreenSubtitleLayout";
 import { diagnosePlaybackSource } from "@/lib/playbackError";
+import {
+  isPortraitVideo,
+  TripleScreenRenderer,
+} from "@/lib/tripleScreen";
 import type { VideoSubtitle } from "@/types";
 
 type Props = {
@@ -132,7 +136,10 @@ const COMPACT_SETTING_LAYOUT = {
   itemHeight: 30,
 };
 const ORIENTATION_CONTROL_NAME = "orientationToggle";
+const TRIPLE_SCREEN_CONTROL_NAME = "tripleScreen";
+const TRIPLE_SCREEN_RELAY_QUERY = "tripleScreenRelay";
 const MANUAL_ORIENTATION_CLASS = "art-manual-orientation";
+const TRIPLE_SCREEN_ACTIVE_CLASS = "art-triple-screen-active";
 const FAST_RATE_CLASS = "art-fast-rate-active";
 const FAST_RATE_HINT_CLASS = "video-player__art-rate-hint";
 const PLAYER_GESTURE_HUD_CLASS = "video-player__art-gesture-hud";
@@ -167,6 +174,10 @@ const GESTURE_ACTIVATION_PX = 12;
 const GESTURE_DIRECTION_LOCK_RATIO = 1.2;
 const GESTURE_VERTICAL_SCALE = 1.15;
 const playerGestureHudTimers = new WeakMap<HTMLElement, number>();
+const tripleScreenBindings = new WeakMap<
+  Artplayer,
+  { toggle: () => void; destroy: () => void }
+>();
 
 export function VideoPlayer({
   src,
@@ -380,6 +391,7 @@ function mountArtPlayer({
   const fastActiveRef = { current: false };
   const loadHlsSource = createHlsSourceLoader(onError);
   const enableOrientationControl = shouldEnableMobileOrientationControl();
+  const enableTripleScreenControl = shouldEnableTripleScreenControl();
   const enableWebFullscreen = shouldEnableWebFullscreen(enableOrientationControl);
   let disposed = false;
   let playbackErrorActive = false;
@@ -426,7 +438,10 @@ function mountArtPlayer({
       playsInline: true,
     },
     settings: createPlayerSettings(subtitleState, requestSubtitles),
-    controls: enableOrientationControl ? [createOrientationControl()] : [],
+    controls: createPlayerControls(
+      enableOrientationControl,
+      enableTripleScreenControl
+    ),
     contextmenu: [],
     cssVar: {
       "--art-theme": "var(--video-player-progress)",
@@ -448,7 +463,6 @@ function mountArtPlayer({
   video.loop = DEFAULT_SETTINGS.loop;
   video.playbackRate = DEFAULT_SETTINGS.playbackRate;
   applyPlayerBrightness(art, DEFAULT_SETTINGS.brightness);
-  art.url = src;
 
   async function requestSubtitles() {
     if (
@@ -570,6 +584,9 @@ function mountArtPlayer({
     art,
     video
   );
+  const unbindTripleScreen = enableTripleScreenControl
+    ? bindTripleScreen(art, video, src)
+    : noop;
   const unbindOrientationToggle = enableOrientationControl
     ? bindOrientationToggle(art)
     : noop;
@@ -585,6 +602,9 @@ function mountArtPlayer({
   art.on("video:play", handlePlay);
   art.on("video:pause", resetFastRate);
   art.on("video:ended", resetFastRate);
+  // 所有基于媒体生命周期的监听都挂好后再设置真实地址，避免本地缓存
+  // 极快返回 metadata 时错过方向识别或错误恢复事件。
+  art.url = src;
 
   return () => {
     disposed = true;
@@ -599,6 +619,7 @@ function mountArtPlayer({
     unbindKeyboardHotkeys();
     unbindMobileFullscreenControlAutoHide();
     unbindFullscreenSubtitleLayout();
+    unbindTripleScreen();
     unbindOrientationToggle();
     setPlayerFastRateHint(art, false);
     mount.removeEventListener("contextmenu", preventContextMenu);
@@ -860,6 +881,10 @@ function shouldIgnorePageSpaceHotkey(event: KeyboardEvent) {
 
 function shouldEnableMobileOrientationControl() {
   return isMobilePlaybackDevice() && !isApplePhoneDevice();
+}
+
+function shouldEnableTripleScreenControl() {
+  return !isMobilePlaybackDevice();
 }
 
 function shouldEnableWebFullscreen(enableOrientationControl: boolean) {
@@ -1258,6 +1283,223 @@ function playerGestureHudIcon(kind: PlayerGestureHudKind, value: string) {
 
 function noop() {
   // noop
+}
+
+type PlayerControl = NonNullable<Option["controls"]>[number];
+
+function createPlayerControls(
+  enableOrientationControl: boolean,
+  enableTripleScreenControl: boolean
+): PlayerControl[] {
+  const controls: PlayerControl[] = [];
+  if (enableTripleScreenControl) {
+    controls.push(createTripleScreenControl());
+  }
+  if (enableOrientationControl) {
+    controls.push(createOrientationControl());
+  }
+  return controls;
+}
+
+function createTripleScreenControl(): PlayerControl {
+  return {
+    name: TRIPLE_SCREEN_CONTROL_NAME,
+    position: "right",
+    index: 29,
+    tooltip: "三屏画面",
+    html: `
+      <span class="video-player__triple-screen-control-icon" aria-hidden="true">
+        <svg width="30" height="30" viewBox="6 6 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M10.5 9.875h3.125v12.25H10.5A1.125 1.125 0 0 1 9.375 21V11c0-.621.504-1.125 1.125-1.125z" stroke="currentColor" stroke-width="1.75"/>
+          <path d="M18.25 9.75v12.5h-4.5V9.75h4.5z" stroke="currentColor" stroke-width="1.5"/>
+          <path d="M21.5 9.875c.621 0 1.125.504 1.125 1.125v10c0 .621-.504 1.125-1.125 1.125h-3.125V9.875H21.5z" stroke="currentColor" stroke-width="1.75"/>
+        </svg>
+      </span>
+    `,
+    mounted(element) {
+      element.dataset.tripleScreenControl = "";
+      element.dataset.tripleScreenEligible = "false";
+      element.setAttribute("role", "button");
+      element.setAttribute("tabindex", "0");
+      element.setAttribute("aria-pressed", "false");
+      element.setAttribute("aria-label", "三屏画面");
+      element.setAttribute("title", "三屏画面");
+      this.events.proxy(element, "keydown", (event) => {
+        const keyEvent = event as KeyboardEvent;
+        if (keyEvent.key !== "Enter" && keyEvent.key !== " ") return;
+        keyEvent.preventDefault();
+        tripleScreenBindings.get(this)?.toggle();
+      });
+    },
+    click() {
+      tripleScreenBindings.get(this)?.toggle();
+    },
+  };
+}
+
+function bindTripleScreen(art: Artplayer, video: HTMLVideoElement, src: string) {
+  const player = art.template.$player;
+  const relaySrc = tripleScreenRelaySrc(src);
+  const canvas = document.createElement("canvas");
+  canvas.className = "video-player__triple-screen-canvas";
+  canvas.setAttribute("aria-hidden", "true");
+  player.appendChild(canvas);
+
+  let eligible = false;
+  let pendingRelayEnable:
+    | { time: number; shouldPlay: boolean; url: string }
+    | null = null;
+  const renderer = new TripleScreenRenderer({
+    container: player,
+    video,
+    canvas,
+    onVisibilityChange(visible) {
+      player.classList.toggle(TRIPLE_SCREEN_ACTIVE_CLASS, visible);
+    },
+    onError(error) {
+      console.warn("[triple-screen] render failed", error);
+      player.classList.remove(TRIPLE_SCREEN_ACTIVE_CLASS);
+      updateTripleScreenControl(art, eligible, false);
+      art.notice.show = tripleScreenErrorNotice(error);
+    },
+  });
+
+  function updateEligibility() {
+    eligible = isPortraitVideo(video.videoWidth, video.videoHeight);
+    if (!eligible) renderer.disable();
+    if (pendingRelayEnable && Number.isFinite(pendingRelayEnable.time)) {
+      video.currentTime = pendingRelayEnable.time;
+    }
+    updateTripleScreenControl(art, eligible, renderer.enabled);
+  }
+
+  function enableRenderer(showSuccessNotice: boolean) {
+    const enabled = renderer.enable();
+    updateTripleScreenControl(art, true, enabled);
+    if (enabled && showSuccessNotice) {
+      art.notice.show = "已开启三屏画面";
+    }
+    return enabled;
+  }
+
+  function enableAfterRelayReady() {
+    const pending = pendingRelayEnable;
+    if (!pending || !eligible) return;
+    pendingRelayEnable = null;
+    if (enableRenderer(true) && pending.shouldPlay) {
+      void video.play().catch(() => undefined);
+    }
+  }
+
+  function resetForNewSource() {
+    eligible = false;
+    renderer.disable();
+    player.classList.remove(TRIPLE_SCREEN_ACTIVE_CLASS);
+    updateTripleScreenControl(art, false, false);
+  }
+
+  const binding = {
+    toggle() {
+      if (!eligible) return;
+      if (renderer.enabled) {
+        renderer.disable();
+        updateTripleScreenControl(art, true, false);
+        art.notice.show = "已关闭三屏画面";
+        return;
+      }
+
+      if (relaySrc && !isTripleScreenRelayURL(video.currentSrc || src)) {
+        pendingRelayEnable = {
+          time: Number.isFinite(video.currentTime) ? video.currentTime : 0,
+          shouldPlay: !video.paused,
+          url: relaySrc,
+        };
+        renderer.disable();
+        updateTripleScreenControl(art, true, false);
+        art.notice.show = "正在切换到三屏中转播放";
+        art.url = relaySrc;
+        return;
+      }
+
+      enableRenderer(true);
+    },
+    destroy() {
+      renderer.destroy();
+    },
+  };
+
+  tripleScreenBindings.set(art, binding);
+  art.on("video:loadstart", resetForNewSource);
+  art.on("video:loadedmetadata", updateEligibility);
+  art.on("video:loadeddata", enableAfterRelayReady);
+  art.on("video:canplay", enableAfterRelayReady);
+  updateEligibility();
+
+  return () => {
+    art.off("video:loadstart", resetForNewSource);
+    art.off("video:loadedmetadata", updateEligibility);
+    art.off("video:loadeddata", enableAfterRelayReady);
+    art.off("video:canplay", enableAfterRelayReady);
+    tripleScreenBindings.delete(art);
+    binding.destroy();
+    player.classList.remove(TRIPLE_SCREEN_ACTIVE_CLASS);
+  };
+}
+
+function tripleScreenRelaySrc(src: string) {
+  if (typeof window === "undefined") return null;
+  let url: URL;
+  try {
+    url = new URL(src, window.location.href);
+  } catch {
+    return null;
+  }
+  if (url.origin !== window.location.origin) return null;
+  const pathname = url.pathname.toLowerCase();
+  const canRelay =
+    pathname.startsWith("/p/stream/") ||
+    (pathname.startsWith("/p/share/") && pathname.endsWith("/stream"));
+  if (!canRelay) return null;
+  url.searchParams.set(TRIPLE_SCREEN_RELAY_QUERY, "1");
+  return `${url.pathname}${url.search}${url.hash}`;
+}
+
+function isTripleScreenRelayURL(src: string) {
+  if (!src || typeof window === "undefined") return false;
+  try {
+    return new URL(src, window.location.href).searchParams.get(
+      TRIPLE_SCREEN_RELAY_QUERY
+    ) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function tripleScreenErrorNotice(error: Error) {
+  if (
+    error.name === "SecurityError" ||
+    /cross-origin|cross origin|origin-clean|tainted|security/i.test(error.message)
+  ) {
+    return "当前视频源受跨域限制，无法开启三屏画面";
+  }
+  return "当前浏览器或视频源不支持三屏画面";
+}
+
+function updateTripleScreenControl(
+  art: Artplayer,
+  eligible: boolean,
+  enabled: boolean
+) {
+  const controls = (art as Artplayer & {
+    controls?: Record<string, HTMLElement | undefined>;
+  }).controls;
+  const element = controls?.[TRIPLE_SCREEN_CONTROL_NAME];
+  if (!element) return;
+
+  element.dataset.tripleScreenEligible = eligible ? "true" : "false";
+  element.setAttribute("aria-pressed", enabled ? "true" : "false");
+  element.setAttribute("aria-label", "三屏画面");
+  element.setAttribute("title", "三屏画面");
 }
 
 function createOrientationControl(): NonNullable<Option["controls"]>[number] {
