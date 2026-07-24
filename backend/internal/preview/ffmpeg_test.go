@@ -161,12 +161,15 @@ func TestShortVideoRequiresOnlyOneUsableTeaserSegment(t *testing.T) {
 	}
 }
 
-func TestMediumAndLongVideosStillRequirePlannedTeaserSegments(t *testing.T) {
-	if got := requiredTeaserSegments(30, 4); got != 4 {
-		t.Fatalf("required segments = %d, want planned count at 30 seconds", got)
+func TestMediumAndLongVideosAllowTwoSegmentDegradedTeaser(t *testing.T) {
+	if got := requiredTeaserSegments(30, 4); got != 2 {
+		t.Fatalf("required segments = %d, want two at 30 seconds", got)
 	}
-	if got := requiredTeaserSegments(204, 4); got != 4 {
-		t.Fatalf("required segments = %d, want planned count for longer video", got)
+	if got := requiredTeaserSegments(204, 4); got != 2 {
+		t.Fatalf("required segments = %d, want two for longer video", got)
+	}
+	if got := requiredTeaserSegments(204, 2); got != 2 {
+		t.Fatalf("required segments = %d, want full two-segment plan", got)
 	}
 }
 

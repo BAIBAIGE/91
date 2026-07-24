@@ -453,6 +453,61 @@ func TestThumbWorkerRateLimitHonorsRetryAfter(t *testing.T) {
 	assertCooldownAround(t, worker.Status().CooldownUntil, before, 2*time.Hour)
 }
 
+func TestP115WAFStreamRateLimitKeepsPreviewPending(t *testing.T) {
+	ctx := context.Background()
+	cat, video := seedPreviewTestVideo(t, "preview-p115-waf-405")
+	drv := &previewFakeDrive{
+		kind: "p115",
+		streamErr: &drives.RateLimitError{
+			Provider:   "p115",
+			RetryAfter: time.Hour,
+			Err:        errors.New(`<!doctypehtml><html><title>405</title><p>blocked</p>`),
+		},
+	}
+	worker := NewWorker(&fakeTeaserGenerator{}, cat, drv)
+
+	worker.process(ctx, video)
+	got, err := cat.GetVideo(ctx, video.ID)
+	if err != nil {
+		t.Fatalf("get video: %v", err)
+	}
+	if got.PreviewStatus != "pending" {
+		t.Fatalf("preview status = %q, want pending", got.PreviewStatus)
+	}
+	if worker.Status().CooldownUntil.IsZero() {
+		t.Fatal("preview worker should enter cooldown")
+	}
+}
+
+func TestP115WAFStreamRateLimitKeepsThumbnailPending(t *testing.T) {
+	ctx := context.Background()
+	cat, video := seedPreviewTestVideo(t, "thumb-p115-waf-405")
+	drv := &previewFakeDrive{
+		kind: "p115",
+		streamErr: &drives.RateLimitError{
+			Provider:   "p115",
+			RetryAfter: time.Hour,
+			Err:        errors.New(`<!doctypehtml><html><title>405</title><p>blocked</p>`),
+		},
+	}
+	worker := NewThumbWorker(&fakeThumbGenerator{}, cat, drv)
+
+	retry := worker.process(ctx, video)
+	pending, err := cat.ListVideosByThumbnailStatus(ctx, video.DriveID, "pending", 0)
+	if err != nil {
+		t.Fatalf("list pending thumbnails: %v", err)
+	}
+	if len(pending) != 1 || pending[0].ID != video.ID {
+		t.Fatalf("pending thumbnails = %#v, want only %s", pending, video.ID)
+	}
+	if !retry {
+		t.Fatal("thumbnail should be requeued after cooldown")
+	}
+	if worker.Status().CooldownUntil.IsZero() {
+		t.Fatal("thumbnail worker should enter cooldown")
+	}
+}
+
 func TestThumbWorkerP115MessageOnlyErrorFailsWithoutCooldown(t *testing.T) {
 	ctx := context.Background()
 	cat, video := seedPreviewTestVideo(t, "thumb-p115-message-only")
@@ -647,6 +702,104 @@ func TestGoogleDriveMediaErrorsShouldCooldown(t *testing.T) {
 	}
 }
 
+func TestThumbWorkerPrefersGenerationStream(t *testing.T) {
+	ctx := context.Background()
+	cat, video := seedPreviewTestVideo(t, "thumb-generation-stream")
+	gen := &fakeThumbGenerator{}
+	drv := &generationPreviewDrive{previewFakeDrive: &previewFakeDrive{kind: "p115"}}
+	worker := NewThumbWorker(gen, cat, drv)
+
+	worker.process(ctx, video)
+
+	if gen.thumbnailURL != "https://hls.example/initial.m3u8" {
+		t.Fatalf("thumbnail source = %q", gen.thumbnailURL)
+	}
+	if drv.streamCalls != 0 {
+		t.Fatalf("original stream calls = %d, want 0", drv.streamCalls)
+	}
+	if len(drv.generationRefreshes) != 1 || drv.generationRefreshes[0] {
+		t.Fatalf("generation refresh flags = %#v", drv.generationRefreshes)
+	}
+}
+
+func TestThumbWorkerFallsBackToOriginalAfterGenerationDecodeError(t *testing.T) {
+	ctx := context.Background()
+	cat, video := seedPreviewTestVideo(t, "thumb-generation-fallback")
+	gen := &fakeThumbGenerator{generateErrs: []error{errors.New("invalid HLS data"), nil}}
+	drv := &generationPreviewDrive{previewFakeDrive: &previewFakeDrive{kind: "p115"}}
+	worker := NewThumbWorker(gen, cat, drv)
+
+	worker.process(ctx, video)
+
+	if len(gen.thumbnailURLs) != 2 || gen.thumbnailURLs[0] != "https://hls.example/initial.m3u8" || gen.thumbnailURLs[1] != "https://video.example/clip.mp4" {
+		t.Fatalf("thumbnail sources = %#v", gen.thumbnailURLs)
+	}
+	if drv.streamCalls != 1 {
+		t.Fatalf("original stream calls = %d, want 1", drv.streamCalls)
+	}
+}
+
+func TestThumbWorkerRefreshesRejectedGenerationStreamOnce(t *testing.T) {
+	ctx := context.Background()
+	cat, video := seedPreviewTestVideo(t, "thumb-generation-refresh")
+	forbidden := &drives.RateLimitError{
+		Provider: "p115",
+		Err:      errors.New("ffmpeg thumb: Server returned 403 Forbidden"),
+	}
+	gen := &fakeThumbGenerator{generateErrs: []error{forbidden, nil}}
+	drv := &generationPreviewDrive{previewFakeDrive: &previewFakeDrive{kind: "p115"}}
+	worker := NewThumbWorker(gen, cat, drv)
+
+	worker.process(ctx, video)
+
+	if len(gen.thumbnailURLs) != 2 || gen.thumbnailURLs[1] != "https://hls.example/refreshed.m3u8" {
+		t.Fatalf("thumbnail sources = %#v", gen.thumbnailURLs)
+	}
+	if len(drv.generationRefreshes) != 2 || drv.generationRefreshes[0] || !drv.generationRefreshes[1] {
+		t.Fatalf("generation refresh flags = %#v", drv.generationRefreshes)
+	}
+	if drv.streamCalls != 0 {
+		t.Fatalf("original stream calls = %d, want 0", drv.streamCalls)
+	}
+}
+
+func TestPreviewWorkerPrefersGenerationStreamWithoutOriginalRefreshes(t *testing.T) {
+	ctx := context.Background()
+	cat, video := seedPreviewTestVideo(t, "preview-generation-stream")
+	gen := &fakeTeaserGenerator{}
+	drv := &generationPreviewDrive{previewFakeDrive: &previewFakeDrive{kind: "p115"}}
+	worker := NewWorker(gen, cat, drv)
+
+	worker.process(ctx, video)
+
+	if len(gen.generatedURLs) != 1 || gen.generatedURLs[0] != "https://hls.example/initial.m3u8" {
+		t.Fatalf("preview sources = %#v", gen.generatedURLs)
+	}
+	if gen.refreshCalls != 0 || drv.streamCalls != 0 {
+		t.Fatalf("refresh calls = %d, original stream calls = %d", gen.refreshCalls, drv.streamCalls)
+	}
+}
+
+func TestPreviewWorkerFallsBackWhenGenerationStreamUnavailable(t *testing.T) {
+	ctx := context.Background()
+	cat, video := seedPreviewTestVideo(t, "preview-generation-unavailable")
+	gen := &fakeTeaserGenerator{}
+	drv := &generationPreviewDrive{
+		previewFakeDrive: &previewFakeDrive{kind: "p115"},
+		generationErrs:   []error{drives.ErrGenerationStreamUnavailable},
+	}
+	worker := NewWorker(gen, cat, drv)
+
+	worker.process(ctx, video)
+
+	if len(gen.generatedURLs) != 1 || gen.generatedURLs[0] != "https://video.example/clip.mp4" {
+		t.Fatalf("preview sources = %#v", gen.generatedURLs)
+	}
+	if gen.refreshCalls != 3 || drv.streamCalls != 4 {
+		t.Fatalf("refresh calls = %d, original stream calls = %d; want 3 and 4", gen.refreshCalls, drv.streamCalls)
+	}
+}
+
 func assertCooldownAround(t *testing.T, until time.Time, before time.Time, want time.Duration) {
 	t.Helper()
 	if until.IsZero() {
@@ -719,6 +872,8 @@ type fakeThumbGenerator struct {
 	probeDuration     float64
 	probeErr          error
 	generateErr       error
+	generateErrs      []error
+	thumbnailURLs     []string
 }
 
 func (g *fakeThumbGenerator) Probe(context.Context, *drives.StreamLink) (float64, error) {
@@ -735,6 +890,14 @@ func (g *fakeThumbGenerator) GenerateThumbnail(_ context.Context, link *drives.S
 	g.thumbnailDuration = duration
 	if link != nil {
 		g.thumbnailURL = link.URL
+		g.thumbnailURLs = append(g.thumbnailURLs, link.URL)
+	}
+	if len(g.generateErrs) > 0 {
+		err := g.generateErrs[0]
+		g.generateErrs = g.generateErrs[1:]
+		if err != nil {
+			return "", err
+		}
 	}
 	if g.generateErr != nil {
 		return "", g.generateErr
@@ -747,14 +910,26 @@ type fakeTeaserGenerator struct {
 	generateErr   error
 	generateCalls int
 	refreshCalls  int
+	generateErrs  []error
+	generatedURLs []string
 }
 
 func (g *fakeTeaserGenerator) Probe(context.Context, *drives.StreamLink) (float64, error) {
 	return 0, nil
 }
 
-func (g *fakeTeaserGenerator) Generate(context.Context, *drives.StreamLink, float64) (string, error) {
+func (g *fakeTeaserGenerator) Generate(_ context.Context, link *drives.StreamLink, _ float64) (string, error) {
 	g.generateCalls++
+	if link != nil {
+		g.generatedURLs = append(g.generatedURLs, link.URL)
+	}
+	if len(g.generateErrs) > 0 {
+		err := g.generateErrs[0]
+		g.generateErrs = g.generateErrs[1:]
+		if err != nil {
+			return "", err
+		}
+	}
 	if g.generateErr != nil {
 		return "", g.generateErr
 	}
@@ -785,6 +960,28 @@ type previewFakeDrive struct {
 	streamErr      error
 	ensureDirCalls int
 	uploadCalls    int
+}
+
+type generationPreviewDrive struct {
+	*previewFakeDrive
+	generationErrs      []error
+	generationRefreshes []bool
+}
+
+func (d *generationPreviewDrive) GenerationStreamURL(_ context.Context, _ string, forceRefresh bool) (*drives.StreamLink, error) {
+	d.generationRefreshes = append(d.generationRefreshes, forceRefresh)
+	if len(d.generationErrs) > 0 {
+		err := d.generationErrs[0]
+		d.generationErrs = d.generationErrs[1:]
+		if err != nil {
+			return nil, err
+		}
+	}
+	name := "initial"
+	if forceRefresh {
+		name = "refreshed"
+	}
+	return &drives.StreamLink{URL: "https://hls.example/" + name + ".m3u8"}, nil
 }
 
 func (d *previewFakeDrive) Kind() string {

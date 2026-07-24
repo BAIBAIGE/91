@@ -8,16 +8,39 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	sdk "github.com/SheltonZhu/115driver/pkg/driver"
 	"github.com/video-site/backend/internal/drives"
+	"github.com/video-site/backend/internal/streamhttp"
 )
+
+const (
+	p115HLSMasterBaseURL = "https://115.com/api/video/m3u8/"
+	p115HLSReferer       = "https://115.com/"
+	p115HLSUserAgent     = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126 Safari/537.36"
+	p115HLSCacheTTL      = 10 * time.Minute
+	p115HLSMaxPlaylist   = 1 << 20
+)
+
+type cachedGenerationStream struct {
+	link    *drives.StreamLink
+	expires time.Time
+}
+
+type generationStreamCall struct {
+	done chan struct{}
+	link *drives.StreamLink
+	err  error
+}
 
 type Driver struct {
 	id            string
@@ -30,6 +53,13 @@ type Driver struct {
 	listMu       sync.Mutex
 	lastListAt   time.Time
 	listInterval time.Duration
+
+	generationMu       sync.Mutex
+	pickCodes          map[string]string
+	generationCache    map[string]cachedGenerationStream
+	generationInflight map[string]*generationStreamCall
+	hlsClient          *http.Client
+	hlsMasterBaseURL   string
 }
 
 type Config struct {
@@ -50,12 +80,17 @@ func New(c Config) *Driver {
 		ua = sdk.UA115Browser
 	}
 	return &Driver{
-		id:            c.ID,
-		cookie:        c.Cookie,
-		rootID:        rootID,
-		ua:            ua,
-		uploadTempDir: strings.TrimSpace(c.UploadTempDir),
-		listInterval:  2 * time.Second,
+		id:                 c.ID,
+		cookie:             c.Cookie,
+		rootID:             rootID,
+		ua:                 ua,
+		uploadTempDir:      strings.TrimSpace(c.UploadTempDir),
+		listInterval:       2 * time.Second,
+		pickCodes:          make(map[string]string),
+		generationCache:    make(map[string]cachedGenerationStream),
+		generationInflight: make(map[string]*generationStreamCall),
+		hlsClient:          streamhttp.NewClient(20 * time.Second),
+		hlsMasterBaseURL:   p115HLSMasterBaseURL,
 	}
 }
 
@@ -82,6 +117,7 @@ func (d *Driver) List(ctx context.Context, dirID string) ([]drives.Entry, error)
 	}
 	out := make([]drives.Entry, 0, len(*files))
 	for _, f := range *files {
+		d.rememberPickCode(f.FileID, f.PickCode)
 		out = append(out, fileToEntry(&f, dirID))
 	}
 	return out, nil
@@ -159,7 +195,69 @@ func isTransient115UpstreamError(err error) bool {
 	if err == nil {
 		return false
 	}
-	return drives.ErrorMentionsHTTPStatus(err, http.StatusMethodNotAllowed, http.StatusTooManyRequests)
+	return drives.ErrorMentionsHTTPStatus(err, http.StatusMethodNotAllowed, http.StatusTooManyRequests) ||
+		p115HTMLTitleMentionsStatus(err.Error(), http.StatusMethodNotAllowed, http.StatusTooManyRequests)
+}
+
+// p115HTMLTitleMentionsStatus handles the Aliyun WAF response returned by 115.
+// The SDK exposes that response as an error containing the raw HTML document,
+// for example "<title>405</title>", rather than a structured HTTP status.
+// Keep this provider-specific and require the title to contain only the numeric
+// code so unrelated prose containing "405" is not mistaken for throttling.
+func p115HTMLTitleMentionsStatus(text string, statuses ...int) bool {
+	text = strings.ToLower(text)
+	for searchFrom := 0; searchFrom < len(text); {
+		start := strings.Index(text[searchFrom:], "<title")
+		if start < 0 {
+			return false
+		}
+		start += searchFrom
+		openEnd := strings.IndexByte(text[start:], '>')
+		if openEnd < 0 {
+			return false
+		}
+		openEnd += start
+		closeStart := strings.Index(text[openEnd+1:], "</title>")
+		if closeStart < 0 {
+			return false
+		}
+		closeStart += openEnd + 1
+		title := strings.TrimSpace(text[openEnd+1 : closeStart])
+		for _, status := range statuses {
+			if status > 0 && title == fmt.Sprintf("%d", status) {
+				return true
+			}
+		}
+		searchFrom = closeStart + len("</title>")
+	}
+	return false
+}
+
+func isTransient115StreamError(err error) bool {
+	if isTransient115UpstreamError(err) {
+		return true
+	}
+	if drives.ErrorMentionsHTTPStatus(err,
+		http.StatusForbidden,
+		http.StatusInternalServerError,
+		http.StatusBadGateway,
+		http.StatusServiceUnavailable,
+		http.StatusGatewayTimeout,
+	) {
+		return true
+	}
+	var networkError net.Error
+	if errors.As(err, &networkError) && networkError.Timeout() {
+		return true
+	}
+	// Some SDK layers flatten *url.Error into plain text. Match only concrete
+	// transport failures here; authentication and ordinary API errors remain
+	// permanent failures.
+	text := strings.ToLower(err.Error())
+	return strings.Contains(text, "tls handshake timeout") ||
+		strings.Contains(text, "i/o timeout") ||
+		strings.Contains(text, "connection timed out") ||
+		strings.Contains(text, "connection reset by peer")
 }
 
 // ListDirsOnly 只列指定目录的直接**子目录**，不返回文件条目。专为 admin 后台
@@ -229,6 +327,7 @@ func (d *Driver) Stat(ctx context.Context, fileID string) (*drives.Entry, error)
 	if f == nil {
 		return nil, errors.New("115 stat: not found")
 	}
+	d.rememberPickCode(f.FileID, f.PickCode)
 	e := fileToEntry(f, f.ParentID)
 	return &e, nil
 }
@@ -247,6 +346,7 @@ func (d *Driver) streamURLWithUA(ctx context.Context, fileID string, ua string) 
 	if err != nil {
 		return nil, wrap115StreamTransientError("115 get file", err)
 	}
+	d.rememberPickCode(fileID, f.PickCode)
 	info, ua, err := d.downloadInfo(f.PickCode, ua)
 	if err != nil {
 		return nil, wrap115StreamTransientError("115 download url", err)
@@ -273,6 +373,220 @@ func (d *Driver) streamURLWithUA(ctx context.Context, fileID string, ua string) 
 	}, nil
 }
 
+// GenerationStreamURL resolves 115's online-playback HLS master playlist to a
+// signed media playlist. The account cookie is used only by this Go request;
+// FFmpeg receives the signed child URL plus ordinary UA/Referer headers.
+func (d *Driver) GenerationStreamURL(ctx context.Context, fileID string, forceRefresh bool) (*drives.StreamLink, error) {
+	fileID = strings.TrimSpace(fileID)
+	if fileID == "" {
+		return nil, fmt.Errorf("115 hls: %w: empty file id", drives.ErrGenerationStreamUnavailable)
+	}
+
+	d.generationMu.Lock()
+	if forceRefresh {
+		delete(d.generationCache, fileID)
+	}
+	if cached, ok := d.generationCache[fileID]; ok && time.Now().Before(cached.expires) {
+		link := cloneStreamLink(cached.link)
+		d.generationMu.Unlock()
+		return link, nil
+	}
+	if call, ok := d.generationInflight[fileID]; ok {
+		d.generationMu.Unlock()
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-call.done:
+			return cloneStreamLink(call.link), call.err
+		}
+	}
+	call := &generationStreamCall{done: make(chan struct{})}
+	d.generationInflight[fileID] = call
+	d.generationMu.Unlock()
+
+	link, err := d.resolveGenerationStream(ctx, fileID)
+
+	d.generationMu.Lock()
+	if err == nil && link != nil {
+		d.generationCache[fileID] = cachedGenerationStream{
+			link:    cloneStreamLink(link),
+			expires: time.Now().Add(p115HLSCacheTTL),
+		}
+	}
+	call.link = cloneStreamLink(link)
+	call.err = err
+	delete(d.generationInflight, fileID)
+	close(call.done)
+	d.generationMu.Unlock()
+	return link, err
+}
+
+func (d *Driver) resolveGenerationStream(ctx context.Context, fileID string) (*drives.StreamLink, error) {
+	pickCode := d.rememberedPickCode(fileID)
+	if pickCode == "" {
+		if d.client == nil {
+			return nil, fmt.Errorf("115 hls get file: %w", drives.ErrGenerationStreamUnavailable)
+		}
+		f, err := d.client.GetFile(fileID)
+		if err != nil {
+			return nil, wrap115StreamTransientError("115 hls get file", err)
+		}
+		if f != nil {
+			pickCode = strings.TrimSpace(f.PickCode)
+			d.rememberPickCode(fileID, pickCode)
+		}
+	}
+	if pickCode == "" {
+		return nil, fmt.Errorf("115 hls: %w: missing pick code", drives.ErrGenerationStreamUnavailable)
+	}
+
+	base := strings.TrimSpace(d.hlsMasterBaseURL)
+	if base == "" {
+		base = p115HLSMasterBaseURL
+	}
+	masterURL := strings.TrimRight(base, "/") + "/" + url.PathEscape(pickCode) + ".m3u8"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, masterURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("115 hls request: %w", err)
+	}
+	req.Header.Set("User-Agent", p115HLSUserAgent)
+	req.Header.Set("Referer", p115HLSReferer)
+	req.Header.Set("Cookie", d.cookie)
+	client := d.hlsClient
+	if client == nil {
+		client = streamhttp.NewClient(20 * time.Second)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, wrap115StreamTransientError("115 hls master", err)
+	}
+	defer resp.Body.Close()
+	body, readErr := io.ReadAll(io.LimitReader(resp.Body, p115HLSMaxPlaylist+1))
+	if readErr != nil {
+		return nil, wrap115StreamTransientError("115 hls master read", readErr)
+	}
+	if resp.StatusCode != http.StatusOK {
+		err := fmt.Errorf("115 hls master status=%d", resp.StatusCode)
+		if resp.StatusCode == http.StatusForbidden ||
+			resp.StatusCode == http.StatusMethodNotAllowed ||
+			resp.StatusCode == http.StatusTooManyRequests ||
+			resp.StatusCode >= http.StatusInternalServerError {
+			return nil, wrap115StreamTransientError("115 hls master", err)
+		}
+		return nil, fmt.Errorf("115 hls: %w: status=%d", drives.ErrGenerationStreamUnavailable, resp.StatusCode)
+	}
+	if len(body) > p115HLSMaxPlaylist {
+		return nil, fmt.Errorf("115 hls: %w: playlist too large", drives.ErrGenerationStreamUnavailable)
+	}
+	variantURL, err := selectHLSVariant(masterURL, string(body))
+	if err != nil {
+		return nil, fmt.Errorf("115 hls: %w: %v", drives.ErrGenerationStreamUnavailable, err)
+	}
+	return &drives.StreamLink{
+		URL: variantURL,
+		Headers: http.Header{
+			"User-Agent": {p115HLSUserAgent},
+			"Referer":    {p115HLSReferer},
+		},
+		Expires: time.Now().Add(p115HLSCacheTTL),
+	}, nil
+}
+
+func selectHLSVariant(masterURL, playlist string) (string, error) {
+	base, err := url.Parse(masterURL)
+	if err != nil {
+		return "", err
+	}
+	lines := strings.Split(strings.ReplaceAll(playlist, "\r\n", "\n"), "\n")
+	bestBandwidth := int64(-1)
+	bestURL := ""
+	for i, line := range lines {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(strings.ToUpper(line), "#EXT-X-STREAM-INF:") {
+			continue
+		}
+		bandwidth := hlsAttributeInt64(line, "BANDWIDTH")
+		for j := i + 1; j < len(lines); j++ {
+			candidate := strings.TrimSpace(lines[j])
+			if candidate == "" {
+				continue
+			}
+			if strings.HasPrefix(candidate, "#") {
+				break
+			}
+			resolved, resolveErr := base.Parse(candidate)
+			if resolveErr == nil && allowed115HLSURL(base, resolved) && bandwidth > bestBandwidth {
+				bestBandwidth = bandwidth
+				bestURL = resolved.String()
+			}
+			break
+		}
+	}
+	if bestURL == "" {
+		return "", errors.New("no allowed media variant")
+	}
+	return bestURL, nil
+}
+
+func hlsAttributeInt64(line, name string) int64 {
+	if colon := strings.IndexByte(line, ':'); colon >= 0 {
+		line = line[colon+1:]
+	}
+	prefix := strings.ToUpper(name) + "="
+	for _, field := range strings.Split(line, ",") {
+		field = strings.TrimSpace(field)
+		upper := strings.ToUpper(field)
+		if !strings.HasPrefix(upper, prefix) {
+			continue
+		}
+		value := strings.TrimSpace(field[len(prefix):])
+		n, err := strconv.ParseInt(value, 10, 64)
+		if err == nil {
+			return n
+		}
+	}
+	return 0
+}
+
+func allowed115HLSURL(master, candidate *url.URL) bool {
+	if master == nil || candidate == nil {
+		return false
+	}
+	if !strings.EqualFold(candidate.Scheme, "https") &&
+		!(strings.EqualFold(master.Scheme, "http") && strings.EqualFold(candidate.Scheme, "http")) {
+		return false
+	}
+	host := strings.ToLower(candidate.Hostname())
+	masterHost := strings.ToLower(master.Hostname())
+	return host != "" && (host == masterHost || host == "115.com" || strings.HasSuffix(host, ".115.com"))
+}
+
+func (d *Driver) rememberPickCode(fileID, pickCode string) {
+	fileID = strings.TrimSpace(fileID)
+	pickCode = strings.TrimSpace(pickCode)
+	if fileID == "" || pickCode == "" {
+		return
+	}
+	d.generationMu.Lock()
+	d.pickCodes[fileID] = pickCode
+	d.generationMu.Unlock()
+}
+
+func (d *Driver) rememberedPickCode(fileID string) string {
+	d.generationMu.Lock()
+	defer d.generationMu.Unlock()
+	return d.pickCodes[fileID]
+}
+
+func cloneStreamLink(link *drives.StreamLink) *drives.StreamLink {
+	if link == nil {
+		return nil
+	}
+	clone := *link
+	clone.Headers = link.Headers.Clone()
+	return &clone
+}
+
 func (d *Driver) downloadInfo(pickCode string, ua string) (*sdk.DownloadInfo, string, error) {
 	ua = strings.TrimSpace(ua)
 	if ua == "" {
@@ -287,7 +601,7 @@ func (d *Driver) downloadInfo(pickCode string, ua string) (*sdk.DownloadInfo, st
 
 func wrap115StreamTransientError(op string, err error) error {
 	wrapped := fmt.Errorf("%s: %w", op, err)
-	if !isTransient115UpstreamError(err) {
+	if !isTransient115StreamError(err) {
 		return wrapped
 	}
 	return &drives.RateLimitError{

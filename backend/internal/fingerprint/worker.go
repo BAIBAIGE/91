@@ -228,6 +228,9 @@ func Compute(ctx context.Context, drv drives.Drive, v *catalog.Video, cfg Config
 	if cfg.FullHashMaxSize <= 0 {
 		cfg.FullHashMaxSize = defaultFullHashMaxSize
 	}
+	if cfg.RateLimitCooldown <= 0 {
+		cfg.RateLimitCooldown = defaultCooldown
+	}
 	if hc == nil {
 		hc = streamhttp.NewClient(0)
 	}
@@ -243,8 +246,23 @@ func Compute(ctx context.Context, drv drives.Drive, v *catalog.Video, cfg Config
 	writeHashHeader(h, v.Size, ranges)
 	for _, r := range ranges {
 		data, err := readRange(ctx, hc, link, r)
+		if err != nil && isP115ForbiddenRangeError(drv, err) {
+			// A 115 signed CDN URL can be rejected before its advertised expiry.
+			// Refresh it once and retry the same byte range. A second rejection is
+			// classified as temporary below so the worker cools down rather than
+			// permanently failing the video or repeatedly requesting new links.
+			refreshed, refreshErr := drv.StreamURL(ctx, v.FileID)
+			if refreshErr != nil {
+				err = fmt.Errorf("fingerprint: refresh stream url after range rejection: %w", refreshErr)
+			} else if refreshed == nil || strings.TrimSpace(refreshed.URL) == "" {
+				err = errors.New("fingerprint: refreshed stream url is empty")
+			} else {
+				link = refreshed
+				data, err = readRange(ctx, hc, link, r)
+			}
+		}
 		if err != nil {
-			return "", err
+			return "", classifyP115FingerprintError(drv, cfg.RateLimitCooldown, err)
 		}
 		if int64(len(data)) != r.length {
 			return "", fmt.Errorf("fingerprint: short sample at %d: got %d want %d", r.start, len(data), r.length)
@@ -259,6 +277,67 @@ func Compute(ctx context.Context, drv drives.Drive, v *catalog.Video, cfg Config
 type byteRange struct {
 	start  int64
 	length int64
+}
+
+type rangeResponseError struct {
+	status int
+	start  int64
+	end    int64
+}
+
+func (e *rangeResponseError) Error() string {
+	if e == nil {
+		return "fingerprint: range request failed"
+	}
+	return fmt.Sprintf("fingerprint: range request got status=%d for bytes=%d-%d", e.status, e.start, e.end)
+}
+
+func isP115ForbiddenRangeError(drv drives.Drive, err error) bool {
+	if drv == nil || !strings.EqualFold(drv.Kind(), "p115") || err == nil {
+		return false
+	}
+	var responseErr *rangeResponseError
+	return errors.As(err, &responseErr) && responseErr.status == http.StatusForbidden
+}
+
+func classifyP115FingerprintError(drv drives.Drive, cooldown time.Duration, err error) error {
+	if drv == nil || !strings.EqualFold(drv.Kind(), "p115") || err == nil {
+		return err
+	}
+	var rateLimit *drives.RateLimitError
+	if errors.As(err, &rateLimit) {
+		return err
+	}
+
+	recoverable := false
+	var responseErr *rangeResponseError
+	if errors.As(err, &responseErr) {
+		recoverable = responseErr.status == http.StatusForbidden ||
+			responseErr.status == http.StatusMethodNotAllowed ||
+			responseErr.status == http.StatusTooManyRequests
+	}
+	var timeoutError interface{ Timeout() bool }
+	if errors.As(err, &timeoutError) && timeoutError.Timeout() {
+		recoverable = true
+	}
+	if !recoverable {
+		text := strings.ToLower(err.Error())
+		recoverable = strings.Contains(text, "tls handshake timeout") ||
+			strings.Contains(text, "i/o timeout") ||
+			strings.Contains(text, "connection timed out") ||
+			strings.Contains(text, "connection reset by peer")
+	}
+	if !recoverable {
+		return err
+	}
+	if cooldown <= 0 {
+		cooldown = defaultCooldown
+	}
+	return &drives.RateLimitError{
+		Provider:   "p115",
+		RetryAfter: cooldown,
+		Err:        err,
+	}
 }
 
 func sampleRanges(size, sampleSize, fullHashMax int64) []byteRange {
@@ -358,7 +437,7 @@ func readHTTPRange(ctx context.Context, hc *http.Client, link *drives.StreamLink
 				Err:        fmt.Errorf("remote sample rate limited: status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(body))),
 			}
 		}
-		return nil, fmt.Errorf("fingerprint: range request got status=%d for bytes=%d-%d", resp.StatusCode, r.start, end)
+		return nil, &rangeResponseError{status: resp.StatusCode, start: r.start, end: end}
 	}
 	return io.ReadAll(io.LimitReader(resp.Body, r.length))
 }

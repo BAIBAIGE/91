@@ -7,9 +7,12 @@ import (
 	"encoding/hex"
 	"errors"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -23,7 +26,8 @@ func TestIsTransient115ListError(t *testing.T) {
 		want bool
 	}{
 		{name: "nil", err: nil, want: false},
-		{name: "blocked html without status context", err: errors.New(`<!doctype html><title>405</title>Sorry, your request has been blocked as it may cause potential threats to the server's security.`), want: false},
+		{name: "blocked html status title", err: errors.New(`<!doctypehtml><html lang="zh-cn"><title>405</title>Sorry, your request has been blocked as it may cause potential threats to the server's security.`), want: true},
+		{name: "blocked html status title with whitespace", err: errors.New(`<!doctype html><title class="waf"> 405 </title>blocked`), want: true},
 		{name: "chinese waf", err: errors.New("很抱歉，由于您访问的URL有可能对网站造成安全威胁，您的访问被阻断。"), want: false},
 		{name: "status 405", err: errors.New("request failed with status: 405"), want: true},
 		{name: "rate limit", err: errors.New("429 too many requests"), want: true},
@@ -39,6 +43,173 @@ func TestIsTransient115ListError(t *testing.T) {
 	}
 }
 
+func TestSelectHLSVariantChoosesHighestBandwidthAndResolvesRelativeURL(t *testing.T) {
+	master := "#EXTM3U\r\n" +
+		"#EXT-X-STREAM-INF:BANDWIDTH=800000,RESOLUTION=640x360\r\nlow/index.m3u8\r\n" +
+		"#EXT-X-STREAM-INF:BANDWIDTH=3000000,RESOLUTION=1920x1080\r\nhigh/index.m3u8\r\n"
+	got, err := selectHLSVariant("https://115.com/api/video/master.m3u8", master)
+	if err != nil {
+		t.Fatalf("select variant: %v", err)
+	}
+	if got != "https://115.com/api/video/high/index.m3u8" {
+		t.Fatalf("variant = %q", got)
+	}
+}
+
+func TestSelectHLSVariantRejectsExternalAndHTTPSDowngrade(t *testing.T) {
+	for _, playlist := range []string{
+		"#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1\nhttps://evil.example/video.m3u8\n",
+		"#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1\nhttp://115.com/video.m3u8\n",
+	} {
+		if got, err := selectHLSVariant("https://115.com/master.m3u8", playlist); err == nil {
+			t.Fatalf("variant = %q, want rejection", got)
+		}
+	}
+}
+
+func TestGenerationStreamURLKeepsCookieOutOfReturnedLinkAndCaches(t *testing.T) {
+	var mu sync.Mutex
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		requests++
+		mu.Unlock()
+		if got := r.Header.Get("Cookie"); got != "UID=u;CID=c;SEID=s" {
+			t.Errorf("cookie = %q", got)
+		}
+		if got := r.Header.Get("Referer"); got != p115HLSReferer {
+			t.Errorf("referer = %q", got)
+		}
+		w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
+		_, _ = io.WriteString(w, "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=100\nlow.m3u8\n#EXT-X-STREAM-INF:BANDWIDTH=200\nhigh.m3u8\n")
+	}))
+	t.Cleanup(server.Close)
+
+	driver := New(Config{ID: "115", Cookie: "UID=u;CID=c;SEID=s"})
+	driver.hlsClient = server.Client()
+	driver.hlsMasterBaseURL = server.URL + "/api/video/m3u8"
+	driver.rememberPickCode("file-1", "pick-1")
+
+	first, err := driver.GenerationStreamURL(context.Background(), "file-1", false)
+	if err != nil {
+		t.Fatalf("first generation stream: %v", err)
+	}
+	if first.URL != server.URL+"/api/video/m3u8/high.m3u8" {
+		t.Fatalf("url = %q", first.URL)
+	}
+	if first.Headers.Get("Cookie") != "" {
+		t.Fatalf("returned cookie = %q", first.Headers.Get("Cookie"))
+	}
+	if first.Headers.Get("User-Agent") != p115HLSUserAgent || first.Headers.Get("Referer") != p115HLSReferer {
+		t.Fatalf("returned headers = %#v", first.Headers)
+	}
+
+	second, err := driver.GenerationStreamURL(context.Background(), "file-1", false)
+	if err != nil || second.URL != first.URL {
+		t.Fatalf("cached generation stream = %#v, %v", second, err)
+	}
+	mu.Lock()
+	gotRequests := requests
+	mu.Unlock()
+	if gotRequests != 1 {
+		t.Fatalf("master requests = %d, want 1 cached request", gotRequests)
+	}
+
+	if _, err := driver.GenerationStreamURL(context.Background(), "file-1", true); err != nil {
+		t.Fatalf("force refresh: %v", err)
+	}
+	mu.Lock()
+	gotRequests = requests
+	mu.Unlock()
+	if gotRequests != 2 {
+		t.Fatalf("master requests after refresh = %d, want 2", gotRequests)
+	}
+}
+
+func TestGenerationStreamURLCoalescesConcurrentResolution(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	var mu sync.Mutex
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		mu.Lock()
+		requests++
+		mu.Unlock()
+		once.Do(func() { close(started) })
+		<-release
+		_, _ = io.WriteString(w, "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1\nstream.m3u8\n")
+	}))
+	t.Cleanup(server.Close)
+
+	driver := New(Config{ID: "115", Cookie: "UID=u;CID=c;SEID=s"})
+	driver.hlsClient = server.Client()
+	driver.hlsMasterBaseURL = server.URL
+	driver.rememberPickCode("file-1", "pick")
+
+	type result struct {
+		link *drives.StreamLink
+		err  error
+	}
+	results := make(chan result, 2)
+	go func() {
+		link, err := driver.GenerationStreamURL(context.Background(), "file-1", false)
+		results <- result{link: link, err: err}
+	}()
+	<-started
+	go func() {
+		link, err := driver.GenerationStreamURL(context.Background(), "file-1", false)
+		results <- result{link: link, err: err}
+	}()
+	close(release)
+	for range 2 {
+		got := <-results
+		if got.err != nil || got.link == nil {
+			t.Fatalf("generation stream = %#v, %v", got.link, got.err)
+		}
+	}
+	mu.Lock()
+	gotRequests := requests
+	mu.Unlock()
+	if gotRequests != 1 {
+		t.Fatalf("master requests = %d, want 1", gotRequests)
+	}
+}
+
+func TestGenerationStreamURLClassifiesUnavailableAndRateLimit(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		status          int
+		body            string
+		wantUnavailable bool
+		wantRateLimit   bool
+	}{
+		{name: "missing", status: http.StatusNotFound, wantUnavailable: true},
+		{name: "malformed", status: http.StatusOK, body: "not a playlist", wantUnavailable: true},
+		{name: "waf", status: http.StatusMethodNotAllowed, body: "<title>405</title>", wantRateLimit: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(tc.status)
+				_, _ = io.WriteString(w, tc.body)
+			}))
+			defer server.Close()
+			driver := New(Config{ID: "115", Cookie: "UID=u;CID=c;SEID=s"})
+			driver.hlsClient = server.Client()
+			driver.hlsMasterBaseURL = server.URL
+			driver.rememberPickCode("file-1", "pick")
+			_, err := driver.GenerationStreamURL(context.Background(), "file-1", false)
+			if tc.wantUnavailable != errors.Is(err, drives.ErrGenerationStreamUnavailable) {
+				t.Fatalf("error = %v, unavailable=%v", err, tc.wantUnavailable)
+			}
+			_, isRateLimit := drives.RateLimitRetryAfter(err)
+			if isRateLimit != tc.wantRateLimit {
+				t.Fatalf("error = %v, rate limit=%v", err, isRateLimit)
+			}
+		})
+	}
+}
+
 func TestWrap115StreamTransientError(t *testing.T) {
 	cases := []struct {
 		name          string
@@ -47,7 +218,9 @@ func TestWrap115StreamTransientError(t *testing.T) {
 	}{
 		{name: "unexpected", err: errors.New("unexpected error"), wantRateLimit: false},
 		{name: "405 blocked", err: errors.New("405 request has been blocked"), wantRateLimit: true},
+		{name: "405 waf html", err: errors.New(`<!doctypehtml><html><title>405</title><p>blocked</p>`), wantRateLimit: true},
 		{name: "429", err: errors.New("429 too many requests"), wantRateLimit: true},
+		{name: "tls timeout", err: errors.New("net/http: TLS handshake timeout"), wantRateLimit: true},
 		{name: "blocked", err: errors.New("blocked by waf"), wantRateLimit: false},
 		{name: "auth", err: errors.New("invalid credential"), wantRateLimit: false},
 	}

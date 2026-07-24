@@ -42,6 +42,18 @@ type Drive interface {
 	RootID() string
 }
 
+// GenerationStreamProvider is an optional drive capability for a provider-
+// generated playback stream that is cheaper to seek than the original file.
+// Background thumbnail/preview workers prefer this stream, while ordinary
+// playback and fingerprinting continue to use StreamURL.
+//
+// forceRefresh invalidates any short-lived provider cache after a signed
+// playlist rejection. Implementations must never expose account credentials in
+// the returned StreamLink.
+type GenerationStreamProvider interface {
+	GenerationStreamURL(ctx context.Context, fileID string, forceRefresh bool) (*StreamLink, error)
+}
+
 // Remover is an optional drive capability. It mirrors OpenList's optional
 // Remove interface: callers must type-assert before deleting a source file.
 type Remover interface {
@@ -92,6 +104,11 @@ type StreamLink struct {
 
 // ErrNotSupported 代表某家盘不支持某操作
 var ErrNotSupported = errors.New("operation not supported by this drive")
+
+// ErrGenerationStreamUnavailable means the optional optimized generation
+// stream does not exist for this file. Callers may safely fall back to the
+// original StreamURL without treating the drive as unhealthy.
+var ErrGenerationStreamUnavailable = errors.New("generation stream unavailable")
 
 // RateLimitError 表示上游服务正在限流。RetryAfter 为 0 时由调用方选择默认冷却时间。
 type RateLimitError struct {
