@@ -193,6 +193,7 @@ func (s *Server) RegisterRoutes(r chi.Router, a *auth.Authenticator) {
 		r.Get("/api/video/{id}", s.handleVideoDetail)
 		r.Get("/api/video/{id}/subtitles", s.handleVideoSubtitles)
 		r.Post("/api/video/{id}/share", s.handleCreateVideoShare)
+		r.Put("/api/video/{id}/reaction", s.handleSetVideoReaction)
 		r.Post("/api/video/{id}/like", s.handleLike)
 		r.Delete("/api/video/{id}/like", s.handleUnlike)
 		r.Post("/api/video/{id}/view", s.handleView)
@@ -541,6 +542,45 @@ func (s *Server) handleLike(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"likes": likes})
+}
+
+type setVideoReactionReq struct {
+	VisitID  string                `json:"visitId"`
+	Reaction catalog.VideoReaction `json:"reaction"`
+}
+
+func (s *Server) handleSetVideoReaction(w http.ResponseWriter, r *http.Request) {
+	var body setVideoReactionReq
+	decoder := json.NewDecoder(io.LimitReader(r.Body, 2048))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&body); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		writeErr(w, http.StatusBadRequest, errors.New("request body must contain one JSON object"))
+		return
+	}
+
+	result, err := s.Catalog.SetVisitReaction(
+		r.Context(),
+		routeParam(r, "id"),
+		body.VisitID,
+		body.Reaction,
+	)
+	if err != nil {
+		switch {
+		case errors.Is(err, catalog.ErrInvalidVideoReaction),
+			errors.Is(err, catalog.ErrInvalidVideoReactionVisitID):
+			writeErr(w, http.StatusBadRequest, err)
+		case errors.Is(err, sql.ErrNoRows):
+			writeErr(w, http.StatusNotFound, err)
+		default:
+			writeErr(w, http.StatusInternalServerError, err)
+		}
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
 }
 
 // handleUnlike 取消点赞：likes - 1（保底 0）。

@@ -858,7 +858,7 @@
   transition: all var(--transition-fast);
 }
 
-.vd-actions__pill:hover {
+.vd-actions__pill:hover:not(:disabled) {
   color: var(--text-strong);
   background: rgba(255, 255, 255, 0.06);
   border-color: var(--border-strong);
@@ -873,6 +873,11 @@
   background: var(--accent-softer);
   border-color: var(--border-accent);
   color: var(--accent);
+}
+
+.vd-actions__pill:disabled {
+  cursor: wait;
+  opacity: 0.72;
 }
 
 .vd-actions__count {

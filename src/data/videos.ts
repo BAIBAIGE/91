@@ -1,4 +1,8 @@
 import type { VideoDetail, VideoItem, VideoSubtitle } from "@/types";
+import type {
+  VideoReaction,
+  VideoReactionCounts,
+} from "@/lib/videoReaction";
 
 export type VideoShareClaim = {
   shareId: string;
@@ -165,6 +169,37 @@ export function recordView(id: string): Promise<{ views: number }> {
     `/api/video/${encodeURIComponent(id)}/view`,
     { method: "POST" }
   );
+}
+
+export type VideoReactionResult = VideoReactionCounts & {
+  reaction: VideoReaction;
+};
+
+export async function setVideoVisitReaction(
+  id: string,
+  visitId: string,
+  reaction: VideoReaction
+): Promise<VideoReactionResult> {
+  const result = await apiJSON<VideoReactionResult>(
+    `/api/video/${encodeURIComponent(id)}/reaction`,
+    {
+      method: "PUT",
+      body: JSON.stringify({ visitId, reaction }),
+    }
+  );
+  if (
+    !result ||
+    (result.reaction !== "none" &&
+      result.reaction !== "like" &&
+      result.reaction !== "dislike") ||
+    !Number.isInteger(result.likes) ||
+    result.likes < 0 ||
+    !Number.isInteger(result.dislikes) ||
+    result.dislikes < 0
+  ) {
+    throw new Error("Invalid video reaction response");
+  }
+  return result;
 }
 
 export type UploadVideoInput = {

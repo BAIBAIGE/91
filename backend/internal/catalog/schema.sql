@@ -49,6 +49,22 @@ CREATE INDEX IF NOT EXISTS idx_videos_created ON videos(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_videos_duration ON videos(duration_seconds);
 CREATE INDEX IF NOT EXISTS idx_videos_views ON videos(views DESC);
 
+-- 视频详情页按“本次访问”记录的一张匿名临时选票。visit_id 由每次页面实例
+-- 随机生成，不关联账号、Cookie 或设备；刷新/重新进入会生成新的 visit_id。
+-- 保留 none 行可以让取消操作和重复请求保持幂等。
+CREATE TABLE IF NOT EXISTS video_reaction_visits (
+    video_id   TEXT NOT NULL,
+    visit_id   TEXT NOT NULL,
+    reaction   TEXT NOT NULL DEFAULT 'none'
+                   CHECK (reaction IN ('none', 'like', 'dislike')),
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (video_id, visit_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_video_reaction_visits_video
+    ON video_reaction_visits(video_id);
+
 -- 统一标签池
 CREATE TABLE IF NOT EXISTS tags (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,

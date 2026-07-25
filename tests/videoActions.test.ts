@@ -19,13 +19,20 @@ const infoPanelSource = readFileSync(
   "utf8"
 );
 
-test("detail dislike does not locally decrement persisted likes", () => {
-  const match = /function handleDislike\(\) \{([\s\S]*?)\n  return \(/.exec(
-    actionsSource
+test("detail reactions use one visit-scoped mutually exclusive ballot", () => {
+  assert.match(
+    actionsSource,
+    /const visitId = useMemo\(createVideoReactionVisitId, \[video\.id\]\)/
   );
-  assert.ok(match, "handleDislike block should be present");
-  assert.match(match[1], /setDisliked\(true\)/);
-  assert.doesNotMatch(match[1], /setLikes/);
+  assert.match(actionsSource, /nextVideoReaction\(previousReaction, selected\)/);
+  assert.match(
+    actionsSource,
+    /setVideoVisitReaction\(\s*video\.id,\s*visitId,\s*nextReaction\s*\)/
+  );
+  assert.match(actionsSource, /onClick=\{\(\) => handleReaction\("like"\)\}/);
+  assert.match(actionsSource, /onClick=\{\(\) => handleReaction\("dislike"\)\}/);
+  assert.match(actionsSource, /disabled=\{reactionPending\}/);
+  assert.doesNotMatch(actionsSource, /\/api\/video\/.*\/like/);
 });
 
 test("detail like and dislike buttons are visually separated", () => {
@@ -73,9 +80,28 @@ test("detail playback actions only expose delete as the management action", () =
 test("detail recommendations stay stable when returning from another video", () => {
   assert.match(detailPageSource, /const cachedRelatedVideosByID = new Map<string, VideoDetail\["relatedVideos"\]>\(\)/);
   assert.match(detailPageSource, /function withStableRelatedVideos\(detail: VideoDetail \| null\): VideoDetail \| null/);
-  assert.match(detailPageSource, /const stableDetail = withStableRelatedVideos\(d\)/);
+  assert.match(detailPageSource, /let stableDetail = withStableRelatedVideos\(d\)/);
   assert.match(detailPageSource, /setDetail\(stableDetail\)/);
   assert.doesNotMatch(detailPageSource, /setDetail\(d\)/);
+});
+
+test("detail background refresh preserves confirmed local reaction counts", () => {
+  assert.match(
+    detailPageSource,
+    /const reactionCountsRef = useRef<[\s\S]*VideoReactionCounts/
+  );
+  assert.match(
+    detailPageSource,
+    /localReactionCounts\?\.videoId === stableDetail\.id/
+  );
+  assert.match(
+    detailPageSource,
+    /likes:\s*localReactionCounts\.likes,[\s\S]*dislikes:\s*localReactionCounts\.dislikes/
+  );
+  assert.match(
+    detailPageSource,
+    /reactionCountsRef\.current = \{ videoId: id, \.\.\.counts \}/
+  );
 });
 
 test("detail history navigation renders cached content before background refresh", () => {

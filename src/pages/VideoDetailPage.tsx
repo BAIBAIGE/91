@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   useLocation,
   useNavigate,
@@ -23,6 +23,7 @@ import { useAuth } from "@/admin/AuthContext";
 import { useDocumentScrollLock } from "@/lib/useDocumentScrollLock";
 import { resolveVideoReturnPath } from "@/lib/videoReturnPath";
 import type { TagItem, VideoDetail } from "@/types";
+import type { VideoReactionCounts } from "@/lib/videoReaction";
 
 const DETAIL_CACHE_LIMIT = 20;
 const RELATED_CACHE_LIMIT = 80;
@@ -98,6 +99,9 @@ function VideoDetailContent({ id }: { id?: string }) {
   const [deleteSource, setDeleteSource] = useState(false);
   const [deleteSaving, setDeleteSaving] = useState(false);
   const [deleteError, setDeleteError] = useState("");
+  const reactionCountsRef = useRef<
+    (VideoReactionCounts & { videoId: string }) | null
+  >(null);
 
   useDocumentScrollLock(deleteOpen && isAdmin);
 
@@ -122,7 +126,18 @@ function VideoDetailContent({ id }: { id?: string }) {
     Promise.all([fetchVideoDetail(id), fetchTags()]).then(
       ([d, tagList]) => {
         if (!active) return;
-        const stableDetail = withStableRelatedVideos(d);
+        let stableDetail = withStableRelatedVideos(d);
+        const localReactionCounts = reactionCountsRef.current;
+        if (
+          stableDetail &&
+          localReactionCounts?.videoId === stableDetail.id
+        ) {
+          stableDetail = {
+            ...stableDetail,
+            likes: localReactionCounts.likes,
+            dislikes: localReactionCounts.dislikes,
+          };
+        }
 
         // 请求短暂失败时 fetchVideoDetail 会返回 null；已有快照比错误空态更有用。
         if (!stableDetail && initialSnapshot) {
@@ -197,6 +212,25 @@ function VideoDetailContent({ id }: { id?: string }) {
     // 失败静默忽略，不打扰用户播放体验
     recordView(detail.id).catch(() => undefined);
   }
+
+  const handleReactionCountsChange = useCallback(
+    (counts: VideoReactionCounts) => {
+      if (id) {
+        reactionCountsRef.current = { videoId: id, ...counts };
+      }
+      setDetail((current) => {
+        if (!current) return current;
+        const nextDetail = {
+          ...current,
+          likes: counts.likes,
+          dislikes: counts.dislikes,
+        };
+        rememberVideoDetail({ detail: nextDetail, tags });
+        return nextDetail;
+      });
+    },
+    [tags]
+  );
 
   const loadSubtitles = useCallback(() => {
     if (!id) return Promise.resolve([]);
@@ -326,6 +360,7 @@ function VideoDetailContent({ id }: { id?: string }) {
                   onDeleteVideo={handleOpenDelete}
                   deleteSaving={deleteSaving}
                   canDelete={isAdmin}
+                  onReactionCountsChange={handleReactionCountsChange}
                 />
               </section>
 
