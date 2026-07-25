@@ -1,5 +1,3 @@
-# 91
-
 <p align="center">
   <img width="120" height="120" alt="91" src="https://github.com/user-attachments/assets/5b323c94-bbd3-4dce-bbc8-adc86935b7de" />
 </p>
@@ -8,43 +6,18 @@
   😄 个人私有视频站 😄
 </p>
 
-<p align="center">
-  <a href="#快速开始">快速开始</a> ·
-  <a href="#功能特性">功能特性</a> ·
-  <a href="#预览图">预览图</a> ·
-  <a href="#数据存放位置">数据目录</a> ·
-  <a href="#许可证">许可证</a>
-</p>
-
-
 ## 功能特性
 
-- **多后端支持** — 兼容 115 云盘、PikPak 云盘、123网盘、联通网盘、光鸭网盘、OneDrive、Google Drive、标准 WebDAV 和本地存储
-- **低带宽播放** — 115 云盘、PikPak 云盘、123网盘、联通网盘、光鸭网盘、OneDrive 支持302模式，在线播放视频时，不占用服务器带宽；WebDAV 会遵循上游响应，返回3xx时由浏览器直连，返回200/206（例如 OpenList Crypt）时由服务器中转；Google Drive 走服务器中转
-- **封面 & 预览片段** — 自动为每个视频生成封面图和预览片段，首页快速选片
-- **一次性视频分享** — 登录后可生成免登录播放链接；链接仅首次打开有效，刷新、关闭或再次打开后无法继续观看
-- **爬虫脚本** — 项目支持导入自定义脚本，但是有一些规范，具体可以参考 [SpiderFor91](https://github.com/Just-Spider/SpiderFor91)，项目不再内置任何爬虫脚本
+- **多网盘接入** — 支持115、PikPak、123网盘、联通网盘、光鸭网盘、OneDrive、Google Drive、WebDAV 和本地存储
+- **低带宽播放** — 115、PikPak、123网盘、联通网盘、光鸭网盘、OneDrive 支持302模式，播放视频不消耗带宽
 - **短视频模式** — 一键切换抖音风格，沉浸刷片
+- **视频分享** — 视频支持一次性分享，"看完即焚"
+- **爬虫脚本** — 支持导入自定义脚本，但是有一些规范，具体可以参考 [SpiderFor91](https://github.com/Just-Spider/SpiderFor91)
 
 ## 预览图
-
-### 电脑端
-
-<p>
-  <img width="49%" alt="首页" src="https://github.com/user-attachments/assets/9808fceb-760b-4dd5-b7d2-8622b95b90d5" />
-  <img width="49%" alt="播放页" src="https://github.com/user-attachments/assets/859db4aa-1fba-44f2-bb46-1db07c2f964f" />
-</p>
-
-<p>
-  <img width="49%" alt="主题切换" src="https://github.com/user-attachments/assets/96bea37a-8764-413e-9b70-1856b4ae0cd2" />
-  <img width="49%" alt="管理页" src="https://github.com/user-attachments/assets/29c1e27a-7651-4dfc-93dd-556331844214" />
-</p>
-
-### 手机端
-
-<p align="center">
-  <img width="1284" height="1134" alt="手机端" src="https://github.com/user-attachments/assets/bdb7a86c-a4e5-483e-a307-e02c0bb34dac" />
-</p>
+<img src="ReadMeImage/home.webp" alt="首页展示" width="100%" />
+<img src="ReadMeImage/player.webp" alt="视频播放页展示" width="100%" />
+<img src="ReadMeImage/admin.webp" alt="后台展示" width="100%" />
 
 ## 快速开始
 
@@ -55,18 +28,9 @@ sudo apt update && sudo apt install -y curl ca-certificates
 curl -fsSL https://raw.githubusercontent.com/nianzhibai/91/main/install.sh -o install.sh
 sudo bash install.sh
 ```
-
-部署完成后访问：
-
-| 地址 | 说明 |
-|------|------|
-| `http://服务器IP:9191/` | 前台 |
-| `http://服务器IP:9191/admin` | 后台管理 |
-
-**注意：如果首次访问，显示502，可以运行 `91 restart` 重启一下服务**
+部署完成后访问：`http://服务器IP:9191/`
 
 安装后自动注册 `91` 管理命令：
-
 ```bash
 91            # 打开管理菜单
 91 status     # 查看运行状态
@@ -75,89 +39,30 @@ sudo bash install.sh
 91 restart    # 重启服务
 91 stop       # 停止服务
 ```
-
-**已部署用户升级：**
-
-```bash
-91 update
-```
-
-### 使用 Nginx 反向代理注意
-nginx配置中需要添加下面字段
-```nginx
-    location / {
-        proxy_pass http://127.0.0.1:9191;
-
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $remote_addr;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
-```
-如果不配置真实 IP 请求头，后端可能把所有请求都识别为 Nginx 或本机 IP，登录失败触发封禁时，可能会封到本机地址，导致所有用户都无法登录
-
-
 ### 方式二：Docker Compose 部署
 
 **1. 准备目录**
-
 ```bash
-mkdir -p video-site-91 && cd video-site-91
+mkdir video-site-91 && cd video-site-91
 ```
-
 **2. 创建 `docker-compose.yml`**
-
-```yaml
-services:
-  video-site-91:
-    image: ghcr.io/nianzhibai/91:stable
-    container_name: video-site-91
-    ports:
-      - "9191:9191"
-    volumes:
-      - ./data:/opt/video-site-91/data
-    restart: unless-stopped
-```
-创建yml文件后运行下面指令
-```bash
-docker compose pull
-docker compose up -d
-```
-
-如果想固定某个 Release 版本，可以改成明确的 tag，例如：
-
-```yaml
-image: ghcr.io/nianzhibai/91:v0.0.6
-```
-
-或直接拉取仓库内置配置：
-
+拉取仓库内置docker-compose.yml：
 ```bash
 curl -fsSL https://raw.githubusercontent.com/nianzhibai/91/main/docker-compose.yml -o docker-compose.yml
 ```
-
 **3. 启动**
-
 ```bash
 docker compose up -d
 ```
-
 **常用命令：**
-
 ```bash
-docker compose logs -f       # 查看日志
-docker compose pull          # 拉取最新正式版 stable 镜像
-docker compose up -d         # 更新并重启
+docker compose pull && docker compose up -d   # 更新并重启
+docker compose logs -f                        # 查看日志
 ```
-
-> 所有配置、数据库、封面、预览及上传文件均保存在 `./data/` 目录下。
-> 从旧版本升级 Docker 部署时，执行 `docker compose pull && docker compose up -d` 即可；`./data/` 不会被镜像更新覆盖。
-
 
 ## 数据存放位置
 
 ### 一键脚本部署
-
 | 路径 | 内容 |
 |------|------|
 | `/opt/video-site-91/config.yaml` | 配置文件、管理员账号、网盘凭证 |
@@ -165,32 +70,40 @@ docker compose up -d         # 更新并重启
 | `/opt/video-site-91/data/previews/` | 封面图和预览片段 |
 
 ### Docker Compose 部署
-
 | 路径 | 内容 |
 |------|------|
 | `./data/config.yaml` | 配置文件、管理员账号、网盘凭证 |
 | `./data/video-site.db` | SQLite 数据库 |
 | `./data/previews/` | 封面图和预览片段 |
-| `./data/uploads/` | 本地上传的视频文件 |
 
+## 其他说明
+
+### 短视频模式
+> ios设备不建议使用短视频模式
+
+### 分享链接
+> 视频支持生成分享链接，链接只能打开一次，链接分享的视频无需登录即可播放
+
+<img src="ReadMeImage/share.webp" alt="分享页面展示" width="100%" />
+
+### 三屏画面
+> 只有竖屏视频支持三屏画面，只有电脑端支持三屏画面，三屏画面播放视频走的视频服务器代理
+
+<table>
+  <tr>
+    <td width="50%"><img src="ReadMeImage/single-screen.webp" alt="单个画面展示" width="100%" /></td>
+    <td width="50%"><img src="ReadMeImage/triple-screen.webp" alt="三屏画面展示" width="100%" /></td>
+  </tr>
+  <tr>
+    <td align="center">单屏画面</td>
+    <td align="center">三屏画面</td>
+  </tr>
+</table>
 
 ## 使用须知
 
-- 本项目仅面向**个人私有部署**
+- **本项目仅面向个人私有部署**
 - **请遵守法律**
-
-
-## PR提交规范
-欢迎大家提交PR，一起来完善这个项目，但是这里要说明一下PR提交的规范
-1. 一个PR的功能改动要单一，不建议一个PR修改了大量功能。单个PR单个功能修改，这样也更容易Merge
-2. 完善项目的PR比新增功能的PR更容易Merge（例如：例如你发现开发者没有实现爬取的视频上传到某个网盘，并且你有这个需求，此时你可以实现一下这个功能然后提交PR，也感谢你为开发者分担工作量）
-3. 新增功能的PR不容易Merge，因为某些功能的需求可能不是所有人都需要的，如果一味的不断增加功能，会让项目变得过于庞大。当然如果你肯定你的新功能和想法很好，并且相信将会对于项目有很大的改善，那么热烈欢迎你的PR
-
-
-## 许可证
-
-本项目基于 [MIT License](LICENSE) 开源
-
 
 ## 致谢
 

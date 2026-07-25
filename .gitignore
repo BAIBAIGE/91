@@ -47,3 +47,6 @@ __pycache__/
 /image005.png
 /image006.png
 /image02.png
+
+# README 截图原图（仓库内只提交压缩后的 .webp）
+ReadMeImage/*.png
