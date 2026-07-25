@@ -325,7 +325,7 @@ func TestSubtitleLookupAliasesUsesFilenameThenVideoIDThenTitle(t *testing.T) {
 	}
 }
 
-func TestFilterSupportedSubtitlesOrdersByDurationThenChineseConfidence(t *testing.T) {
+func TestFilterSupportedSubtitlesDropsDurationMismatchThenOrdersByChineseConfidence(t *testing.T) {
 	subs := []subtitles.Subtitle{
 		{ID: "mismatch", Name: "中字", Ext: "srt", Language: "", URL: "https://sub.example/mismatch.srt", DurationSeconds: 900},
 		{ID: "unknown", Name: "unknown", Ext: "srt", Language: "zh-CN", URL: "https://sub.example/unknown.srt"},
@@ -336,7 +336,7 @@ func TestFilterSupportedSubtitlesOrdersByDurationThenChineseConfidence(t *testin
 	}
 
 	got := filterSupportedSubtitles(subs, 1000)
-	want := []string{"exact-zh", "exact-en", "close", "unknown", "mismatch"}
+	want := []string{"exact-zh", "exact-en", "close", "unknown"}
 	if len(got) != len(want) {
 		t.Fatalf("subtitles = %#v, want %d supported items", got, len(want))
 	}

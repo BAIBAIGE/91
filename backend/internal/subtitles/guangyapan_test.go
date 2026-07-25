@@ -133,7 +133,7 @@ func TestSubtitleLookupKeyPriority(t *testing.T) {
 	}
 }
 
-func TestGuangYaPanClientUsesFilenameAliasAndDurationFallback(t *testing.T) {
+func TestGuangYaPanClientUsesPreferredAliasFilenameAndDurationFallback(t *testing.T) {
 	var requests []map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]any
@@ -165,9 +165,9 @@ func TestGuangYaPanClientUsesFilenameAliasAndDurationFallback(t *testing.T) {
 		t.Fatalf("Subtitles: %v", err)
 	}
 	if len(requests) != 3 {
-		t.Fatalf("requests = %#v, want filename, alias, then zero-duration alias", requests)
+		t.Fatalf("requests = %#v, want alias, filename, then zero-duration alias", requests)
 	}
-	wantNames := []string{"long original HND-970 title.mp4", "HND-970", "HND-970"}
+	wantNames := []string{"HND-970", "long original HND-970 title.mp4", "HND-970"}
 	wantDurations := []float64{7256, 7256, 0}
 	for i := range requests {
 		if requests[i]["name"] != wantNames[i] || requests[i]["duration"] != wantDurations[i] || requests[i]["gcid"] != "sampled-hash" {
@@ -176,6 +176,50 @@ func TestGuangYaPanClientUsesFilenameAliasAndDurationFallback(t *testing.T) {
 	}
 	if got := subtitleIDsForTest(subs); !reflect.DeepEqual(got, []string{"unknown", "close"}) {
 		t.Fatalf("subtitle IDs = %#v, want duration-compatible fallback results", got)
+	}
+}
+
+func TestGuangYaPanClientPrefersAVCodeAndDropsIncompatibleResults(t *testing.T) {
+	var requests []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		name, _ := body["name"].(string)
+		requests = append(requests, name)
+		list := []map[string]any{}
+		switch name {
+		case "MIMK-284":
+			list = []map[string]any{
+				{"cid": "correct", "name": "MIMK-284.srt", "ext": "srt", "duration": 9295000, "url": "https://sub.example/MIMK-284.srt"},
+				{"cid": "wrong-duration", "name": "DLDSS-493.srt", "ext": "srt", "duration": 8695000, "url": "https://sub.example/DLDSS-493.srt"},
+			}
+		case "www.example@MIMK-284.restored-S_2_prob4.mp4":
+			list = []map[string]any{
+				{"cid": "wrong-name", "name": "START-397.srt", "ext": "srt", "duration": 9336000, "url": "https://sub.example/START-397.srt"},
+			}
+		}
+		writeSubtitleJSON(t, w, map[string]any{"code": 0, "data": map[string]any{"list": list}})
+	}))
+	defer server.Close()
+
+	client := NewGuangYaPanClient(GuangYaPanConfig{BaseURL: server.URL})
+	subs, err := client.Subtitles(context.Background(), Request{
+		FileID:          "file-1",
+		FileName:        "www.example@MIMK-284.restored-S_2_prob4.mp4",
+		LookupNames:     []string{"MIMK-284"},
+		SampledSHA256:   "sampled-hash",
+		DurationSeconds: 9336,
+	})
+	if err != nil {
+		t.Fatalf("Subtitles: %v", err)
+	}
+	if !reflect.DeepEqual(requests, []string{"MIMK-284"}) {
+		t.Fatalf("lookup requests = %#v, want AV code only after a usable match", requests)
+	}
+	if got := subtitleIDsForTest(subs); !reflect.DeepEqual(got, []string{"correct"}) {
+		t.Fatalf("subtitle IDs = %#v, want only duration-compatible AV-code result", got)
 	}
 }
 

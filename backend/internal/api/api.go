@@ -994,6 +994,9 @@ func filterSupportedSubtitles(subs []subtitles.Subtitle, videoDuration int) []su
 		if strings.TrimSpace(sub.URL) == "" {
 			continue
 		}
+		if !subtitles.DurationCompatible(videoDuration, sub.DurationSeconds) {
+			continue
+		}
 		out = append(out, sub)
 	}
 	sort.SliceStable(out, func(i, j int) bool {
@@ -1026,14 +1029,7 @@ func subtitleDurationOrder(subtitleDuration, videoDuration int) (group, delta in
 	if delta < 0 {
 		delta = -delta
 	}
-	tolerance := int(float64(videoDuration) * 0.02)
-	if tolerance < 30 {
-		tolerance = 30
-	}
-	if tolerance > 120 {
-		tolerance = 120
-	}
-	if delta <= tolerance {
+	if subtitles.DurationCompatible(videoDuration, subtitleDuration) {
 		return 0, delta
 	}
 	return 2, delta

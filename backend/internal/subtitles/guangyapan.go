@@ -90,6 +90,7 @@ func (c *GuangYaPanClient) Subtitles(ctx context.Context, req Request) ([]Subtit
 		if err != nil {
 			return nil, err
 		}
+		subs = filterDurationCompatibleSubtitles(subs, duration)
 		if len(subs) > 0 {
 			return subs, nil
 		}
@@ -113,7 +114,7 @@ func (c *GuangYaPanClient) Subtitles(ctx context.Context, req Request) ([]Subtit
 	if err != nil {
 		return nil, err
 	}
-	return filterZeroDurationSubtitles(subs, duration), nil
+	return filterDurationCompatibleSubtitles(subs, duration), nil
 }
 
 func (c *GuangYaPanClient) query(ctx context.Context, lookupKey, name string, duration int) ([]Subtitle, error) {
@@ -189,7 +190,11 @@ func subtitleLookupKey(req Request) (string, error) {
 }
 
 func subtitleLookupNames(req Request) []string {
-	candidates := append([]string{req.FileName}, req.LookupNames...)
+	// LookupNames are semantic aliases supplied by the catalog. At present they
+	// are extracted AV codes, which are more reliable than noisy release names.
+	candidates := make([]string, 0, len(req.LookupNames)+1)
+	candidates = append(candidates, req.LookupNames...)
+	candidates = append(candidates, req.FileName)
 	out := make([]string, 0, len(candidates))
 	seen := make(map[string]struct{}, len(candidates))
 	for _, candidate := range candidates {
@@ -212,31 +217,14 @@ func subtitleLookupNames(req Request) []string {
 	return out
 }
 
-func filterZeroDurationSubtitles(subs []Subtitle, videoDuration int) []Subtitle {
-	if videoDuration <= 0 {
-		return subs
-	}
-	tolerance := int(float64(videoDuration) * 0.02)
-	if tolerance < 30 {
-		tolerance = 30
-	}
-	if tolerance > 120 {
-		tolerance = 120
-	}
+func filterDurationCompatibleSubtitles(subs []Subtitle, videoDuration int) []Subtitle {
 	out := make([]Subtitle, 0, len(subs))
 	for _, sub := range subs {
-		if sub.DurationSeconds <= 0 || absInt(sub.DurationSeconds-videoDuration) <= tolerance {
+		if DurationCompatible(videoDuration, sub.DurationSeconds) {
 			out = append(out, sub)
 		}
 	}
 	return out
-}
-
-func absInt(value int) int {
-	if value < 0 {
-		return -value
-	}
-	return value
 }
 
 type guangYaPanSubtitleResponse struct {
