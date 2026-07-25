@@ -182,6 +182,19 @@ func TestDryRunRejectsNonJSONStdout(t *testing.T) {
 	}
 }
 
+func TestDryRunHonorsConfiguredStdoutLimit(t *testing.T) {
+	script := writeDryRunScript(t, `printf '12345678901\n'`)
+	result := DryRun(context.Background(), DryRunConfig{
+		PythonPath:     "/bin/sh",
+		ScriptPath:     script,
+		SkipMediaProbe: true,
+		MaxStdoutBytes: 10,
+	})
+	if result.OK || !strings.Contains(result.Error, "10 字节") {
+		t.Fatalf("result = %+v, want configured stdout limit error", result)
+	}
+}
+
 func TestDryRunTimesOut(t *testing.T) {
 	script := writeDryRunScript(t, `sleep 30`)
 	start := time.Now()

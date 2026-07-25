@@ -1349,14 +1349,21 @@ function bindTripleScreen(art: Artplayer, video: HTMLVideoElement, src: string) 
   let pendingRelayEnable:
     | { time: number; shouldPlay: boolean; url: string }
     | null = null;
+  let activePlaybackSrc = src;
+  let pendingEnableSuccessNotice = false;
   const renderer = new TripleScreenRenderer({
     container: player,
     video,
     canvas,
     onVisibilityChange(visible) {
       player.classList.toggle(TRIPLE_SCREEN_ACTIVE_CLASS, visible);
+      if (visible && pendingEnableSuccessNotice) {
+        pendingEnableSuccessNotice = false;
+        art.notice.show = "已开启三屏画面";
+      }
     },
     onError(error) {
+      pendingEnableSuccessNotice = false;
       console.warn("[triple-screen] render failed", error);
       player.classList.remove(TRIPLE_SCREEN_ACTIVE_CLASS);
       updateTripleScreenControl(art, eligible, false);
@@ -1364,27 +1371,62 @@ function bindTripleScreen(art: Artplayer, video: HTMLVideoElement, src: string) 
     },
   });
 
+  function rememberRequestedSource() {
+    const requested = nonBlobPlaybackURL(art.url) ||
+      nonBlobPlaybackURL(video.currentSrc);
+    if (requested) activePlaybackSrc = requested;
+  }
+
+  function pendingSourceMatches(url: string) {
+    const requested = nonBlobPlaybackURL(art.url);
+    if (requested) return samePlaybackURL(requested, url);
+    const current = nonBlobPlaybackURL(video.currentSrc);
+    if (current) return samePlaybackURL(current, url);
+    return samePlaybackURL(activePlaybackSrc, url);
+  }
+
+  function clearPendingRelayEnable() {
+    pendingRelayEnable = null;
+    pendingEnableSuccessNotice = false;
+  }
+
   function updateEligibility() {
+    rememberRequestedSource();
     eligible = isPortraitVideo(video.videoWidth, video.videoHeight);
-    if (!eligible) renderer.disable();
-    if (pendingRelayEnable && Number.isFinite(pendingRelayEnable.time)) {
+    if (
+      pendingRelayEnable &&
+      (!eligible || !pendingSourceMatches(pendingRelayEnable.url))
+    ) {
+      clearPendingRelayEnable();
+    }
+    if (!eligible) {
+      renderer.disable();
+      pendingEnableSuccessNotice = false;
+    }
+    if (
+      pendingRelayEnable &&
+      Number.isFinite(pendingRelayEnable.time)
+    ) {
       video.currentTime = pendingRelayEnable.time;
     }
     updateTripleScreenControl(art, eligible, renderer.enabled);
   }
 
   function enableRenderer(showSuccessNotice: boolean) {
+    pendingEnableSuccessNotice = showSuccessNotice;
     const enabled = renderer.enable();
+    if (!enabled) pendingEnableSuccessNotice = false;
     updateTripleScreenControl(art, true, enabled);
-    if (enabled && showSuccessNotice) {
-      art.notice.show = "已开启三屏画面";
-    }
     return enabled;
   }
 
   function enableAfterRelayReady() {
     const pending = pendingRelayEnable;
-    if (!pending || !eligible) return;
+    if (!pending) return;
+    if (!eligible || !pendingSourceMatches(pending.url)) {
+      clearPendingRelayEnable();
+      return;
+    }
     pendingRelayEnable = null;
     if (enableRenderer(true) && pending.shouldPlay) {
       void video.play().catch(() => undefined);
@@ -1392,6 +1434,14 @@ function bindTripleScreen(art: Artplayer, video: HTMLVideoElement, src: string) 
   }
 
   function resetForNewSource() {
+    rememberRequestedSource();
+    if (
+      pendingRelayEnable &&
+      !pendingSourceMatches(pendingRelayEnable.url)
+    ) {
+      clearPendingRelayEnable();
+    }
+    pendingEnableSuccessNotice = false;
     eligible = false;
     renderer.disable();
     player.classList.remove(TRIPLE_SCREEN_ACTIVE_CLASS);
@@ -1402,13 +1452,14 @@ function bindTripleScreen(art: Artplayer, video: HTMLVideoElement, src: string) 
     toggle() {
       if (!eligible) return;
       if (renderer.enabled) {
+        pendingEnableSuccessNotice = false;
         renderer.disable();
         updateTripleScreenControl(art, true, false);
         art.notice.show = "已关闭三屏画面";
         return;
       }
 
-      if (relaySrc && !isTripleScreenRelayURL(video.currentSrc || src)) {
+      if (relaySrc && !isTripleScreenRelayURL(activePlaybackSrc)) {
         pendingRelayEnable = {
           time: Number.isFinite(video.currentTime) ? video.currentTime : 0,
           shouldPlay: !video.paused,
@@ -1417,6 +1468,7 @@ function bindTripleScreen(art: Artplayer, video: HTMLVideoElement, src: string) 
         renderer.disable();
         updateTripleScreenControl(art, true, false);
         art.notice.show = "正在切换到三屏中转播放";
+        activePlaybackSrc = relaySrc;
         art.url = relaySrc;
         return;
       }
@@ -1424,6 +1476,7 @@ function bindTripleScreen(art: Artplayer, video: HTMLVideoElement, src: string) 
       enableRenderer(true);
     },
     destroy() {
+      clearPendingRelayEnable();
       renderer.destroy();
     },
   };
@@ -1472,6 +1525,21 @@ function isTripleScreenRelayURL(src: string) {
     ) === "1";
   } catch {
     return false;
+  }
+}
+
+function nonBlobPlaybackURL(src: unknown) {
+  if (typeof src !== "string" || !src || src.startsWith("blob:")) return "";
+  return src;
+}
+
+function samePlaybackURL(left: string, right: string) {
+  if (!left || !right || typeof window === "undefined") return left === right;
+  try {
+    return new URL(left, window.location.href).href ===
+      new URL(right, window.location.href).href;
+  } catch {
+    return left === right;
   }
 }
 

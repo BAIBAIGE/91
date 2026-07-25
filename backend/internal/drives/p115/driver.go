@@ -24,11 +24,13 @@ import (
 )
 
 const (
-	p115HLSMasterBaseURL = "https://115.com/api/video/m3u8/"
-	p115HLSReferer       = "https://115.com/"
-	p115HLSUserAgent     = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126 Safari/537.36"
-	p115HLSCacheTTL      = 10 * time.Minute
-	p115HLSMaxPlaylist   = 1 << 20
+	p115HLSMasterBaseURL          = "https://115.com/api/video/m3u8/"
+	p115HLSReferer                = "https://115.com/"
+	p115HLSUserAgent              = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126 Safari/537.36"
+	p115HLSCacheTTL               = 10 * time.Minute
+	p115HLSMaxPlaylist            = 1 << 20
+	p115PickCodeCacheMaxEntries   = 4096
+	p115GenerationCacheMaxEntries = 1024
 )
 
 type cachedGenerationStream struct {
@@ -37,9 +39,10 @@ type cachedGenerationStream struct {
 }
 
 type generationStreamCall struct {
-	done chan struct{}
-	link *drives.StreamLink
-	err  error
+	done    chan struct{}
+	refresh bool
+	link    *drives.StreamLink
+	err     error
 }
 
 type Driver struct {
@@ -238,7 +241,6 @@ func isTransient115StreamError(err error) bool {
 		return true
 	}
 	if drives.ErrorMentionsHTTPStatus(err,
-		http.StatusForbidden,
 		http.StatusInternalServerError,
 		http.StatusBadGateway,
 		http.StatusServiceUnavailable,
@@ -383,15 +385,17 @@ func (d *Driver) GenerationStreamURL(ctx context.Context, fileID string, forceRe
 	}
 
 	d.generationMu.Lock()
+	now := time.Now()
+	d.pruneGenerationCacheLocked(now)
 	if forceRefresh {
 		delete(d.generationCache, fileID)
 	}
-	if cached, ok := d.generationCache[fileID]; ok && time.Now().Before(cached.expires) {
+	if cached, ok := d.generationCache[fileID]; ok && now.Before(cached.expires) {
 		link := cloneStreamLink(cached.link)
 		d.generationMu.Unlock()
 		return link, nil
 	}
-	if call, ok := d.generationInflight[fileID]; ok {
+	if call, ok := d.generationInflight[fileID]; ok && (!forceRefresh || call.refresh) {
 		d.generationMu.Unlock()
 		select {
 		case <-ctx.Done():
@@ -400,22 +404,31 @@ func (d *Driver) GenerationStreamURL(ctx context.Context, fileID string, forceRe
 			return cloneStreamLink(call.link), call.err
 		}
 	}
-	call := &generationStreamCall{done: make(chan struct{})}
+	// A forced refresh must not join an older non-refresh resolution: that
+	// resolution may be the source of the signed URL that was just rejected.
+	// Replacing the active call also makes subsequent ordinary callers join the
+	// refresh instead of receiving the stale result.
+	call := &generationStreamCall{done: make(chan struct{}), refresh: forceRefresh}
 	d.generationInflight[fileID] = call
 	d.generationMu.Unlock()
 
 	link, err := d.resolveGenerationStream(ctx, fileID)
 
 	d.generationMu.Lock()
-	if err == nil && link != nil {
-		d.generationCache[fileID] = cachedGenerationStream{
-			link:    cloneStreamLink(link),
-			expires: time.Now().Add(p115HLSCacheTTL),
+	if active := d.generationInflight[fileID]; active == call {
+		if err == nil && link != nil {
+			now := time.Now()
+			d.pruneGenerationCacheLocked(now)
+			d.makeGenerationCacheRoomLocked()
+			d.generationCache[fileID] = cachedGenerationStream{
+				link:    cloneStreamLink(link),
+				expires: now.Add(p115HLSCacheTTL),
+			}
 		}
+		delete(d.generationInflight, fileID)
 	}
 	call.link = cloneStreamLink(link)
 	call.err = err
-	delete(d.generationInflight, fileID)
 	close(call.done)
 	d.generationMu.Unlock()
 	return link, err
@@ -467,12 +480,18 @@ func (d *Driver) resolveGenerationStream(ctx context.Context, fileID string) (*d
 	}
 	if resp.StatusCode != http.StatusOK {
 		err := fmt.Errorf("115 hls master status=%d", resp.StatusCode)
-		if resp.StatusCode == http.StatusForbidden ||
-			resp.StatusCode == http.StatusMethodNotAllowed ||
+		if resp.StatusCode == http.StatusMethodNotAllowed ||
 			resp.StatusCode == http.StatusTooManyRequests ||
 			resp.StatusCode >= http.StatusInternalServerError {
 			return nil, wrap115StreamTransientError("115 hls master", err)
 		}
+		// The generation stream is an optional optimization, so a rejection
+		// here must not cool down the whole drive. Falling back to the ordinary
+		// download URL keeps media generation working when only online playback
+		// is refused, and lets a genuinely invalid cookie surface as the
+		// permanent authentication failure it is.
+		log.Printf("[p115] hls generation unavailable drive=%s file=%s status=%d; falling back to the download url",
+			d.id, fileID, resp.StatusCode)
 		return nil, fmt.Errorf("115 hls: %w: status=%d", drives.ErrGenerationStreamUnavailable, resp.StatusCode)
 	}
 	if len(body) > p115HLSMaxPlaylist {
@@ -480,6 +499,8 @@ func (d *Driver) resolveGenerationStream(ctx context.Context, fileID string) (*d
 	}
 	variantURL, err := selectHLSVariant(masterURL, string(body))
 	if err != nil {
+		log.Printf("[p115] hls generation unavailable drive=%s file=%s master_host=%s: %v",
+			d.id, fileID, req.URL.Hostname(), err)
 		return nil, fmt.Errorf("115 hls: %w: %v", drives.ErrGenerationStreamUnavailable, err)
 	}
 	return &drives.StreamLink{
@@ -488,6 +509,9 @@ func (d *Driver) resolveGenerationStream(ctx context.Context, fileID string) (*d
 			"User-Agent": {p115HLSUserAgent},
 			"Referer":    {p115HLSReferer},
 		},
+		// Expires is a conservative local reuse deadline, not a claim about
+		// the provider signature's exact expiry. A 403 still triggers the
+		// caller's force-refresh path before this deadline.
 		Expires: time.Now().Add(p115HLSCacheTTL),
 	}, nil
 }
@@ -568,6 +592,11 @@ func (d *Driver) rememberPickCode(fileID, pickCode string) {
 		return
 	}
 	d.generationMu.Lock()
+	if _, exists := d.pickCodes[fileID]; !exists && len(d.pickCodes) >= p115PickCodeCacheMaxEntries {
+		// Losing a pick code only costs one GetFile call. Clearing at the hard
+		// bound keeps a long-lived driver from retaining every file ever seen.
+		clear(d.pickCodes)
+	}
 	d.pickCodes[fileID] = pickCode
 	d.generationMu.Unlock()
 }
@@ -576,6 +605,33 @@ func (d *Driver) rememberedPickCode(fileID string) string {
 	d.generationMu.Lock()
 	defer d.generationMu.Unlock()
 	return d.pickCodes[fileID]
+}
+
+func (d *Driver) pruneGenerationCacheLocked(now time.Time) {
+	for fileID, cached := range d.generationCache {
+		if !now.Before(cached.expires) {
+			delete(d.generationCache, fileID)
+		}
+	}
+}
+
+func (d *Driver) makeGenerationCacheRoomLocked() {
+	if len(d.generationCache) < p115GenerationCacheMaxEntries {
+		return
+	}
+	var (
+		oldestID      string
+		oldestExpires time.Time
+	)
+	for fileID, cached := range d.generationCache {
+		if oldestID == "" || cached.expires.Before(oldestExpires) {
+			oldestID = fileID
+			oldestExpires = cached.expires
+		}
+	}
+	if oldestID != "" {
+		delete(d.generationCache, oldestID)
+	}
 }
 
 func cloneStreamLink(link *drives.StreamLink) *drives.StreamLink {

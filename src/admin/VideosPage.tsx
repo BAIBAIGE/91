@@ -299,6 +299,9 @@ function CurrentVideosTab({
   const listItems = list;
   const editingVideo = editing ? (listItems.find((v) => v.id === editing.id) ?? editing) : null;
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  useEffect(() => {
+    if (!loading && page > totalPages) setPage(totalPages);
+  }, [loading, page, totalPages, setPage]);
   const showPagination = totalPages > 1;
   const placeholderRows = showPagination ? Math.max(0, pageSize - listItems.length) : 0;
   const activeAdvancedFilterCount = countVideoAdvancedFilters(appliedFilters);
@@ -840,6 +843,9 @@ function BlacklistTab({
 
   const driveNameMap = new Map(drives.map((d) => [d.id, d.name || d.id]));
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  useEffect(() => {
+    if (!loading && page > totalPages) setPage(totalPages);
+  }, [loading, page, totalPages, setPage]);
   const showPagination = totalPages > 1;
   const placeholderRows = showPagination ? Math.max(0, pageSize - list.length) : 0;
   const sourceDeleteRunning = !!sourceDeleteStatus?.running;

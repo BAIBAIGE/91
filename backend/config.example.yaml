@@ -48,6 +48,11 @@ preview:
   # 预览视频宽度
   width: 480
 
+proxy:
+  # 是否允许播放器为“三屏画面”请求服务端全量中转视频流。
+  # 关闭后，支持直链的网盘仍保持 302，避免客户端主动消耗服务端上行带宽。
+  allow_forced_relay: true
+
 # 盘列表。上线后请通过管理后台添加，本文件可留空。
 # kind 支持 quark / p115 / p123 / pikpak / wopan / guangyapan / onedrive / googledrive / webdav / localstorage。
 # OneDrive 示例：

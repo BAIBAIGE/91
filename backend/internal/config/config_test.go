@@ -118,6 +118,36 @@ func TestLoadDefaultNightlyCronHour(t *testing.T) {
 	}
 }
 
+func TestLoadForcedRelayDefaultsEnabledAndCanBeDisabled(t *testing.T) {
+	t.Run("default", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "config.yaml")
+		if err := os.WriteFile(path, []byte(`{}`), 0o644); err != nil {
+			t.Fatalf("write config: %v", err)
+		}
+		cfg, err := Load(path)
+		if err != nil {
+			t.Fatalf("load config: %v", err)
+		}
+		if !cfg.Proxy.AllowsForcedRelay() {
+			t.Fatal("forced relay should remain enabled by default")
+		}
+	})
+
+	t.Run("disabled", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "config.yaml")
+		if err := os.WriteFile(path, []byte("proxy:\n  allow_forced_relay: false\n"), 0o644); err != nil {
+			t.Fatalf("write config: %v", err)
+		}
+		cfg, err := Load(path)
+		if err != nil {
+			t.Fatalf("load config: %v", err)
+		}
+		if cfg.Proxy.AllowsForcedRelay() {
+			t.Fatal("forced relay should honor an explicit false value")
+		}
+	})
+}
+
 func TestLoadInvalidNightlyCronHourFallsBack(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(path, []byte(`

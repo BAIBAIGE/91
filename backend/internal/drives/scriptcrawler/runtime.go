@@ -39,14 +39,21 @@ func (c *Crawler) executeScript(
 	defer stdout.Close()
 
 	maxLineBytes := maxV1StdoutLineBytes
-	strictV2 := c.cfg.Protocol == ProtocolV2
+	strictV2 := c.protocol == ProtocolV2
 	if strictV2 {
 		maxLineBytes = maxV2StdoutLineBytes
 	}
 	outputCh := scanScriptOutput(runCtx, stdout, maxLineBytes, c.cfg.MaxStdoutBytes)
 
-	candidateTimer := time.NewTimer(c.cfg.CandidateIdleTimeout)
-	defer candidateTimer.Stop()
+	runTimeout := c.effectiveRunTimeout()
+	candidateIdleTimeout := c.effectiveCandidateIdleTimeout()
+	var candidateTimer *time.Timer
+	var candidateC <-chan time.Time
+	if candidateIdleTimeout > 0 {
+		candidateTimer = time.NewTimer(candidateIdleTimeout)
+		candidateC = candidateTimer.C
+		defer candidateTimer.Stop()
+	}
 	var idleTimer *time.Timer
 	var idleC <-chan time.Time
 	if strictV2 {
@@ -71,11 +78,11 @@ func (c *Crawler) executeScript(
 			if err := parentCtx.Err(); err != nil {
 				return err
 			}
-			return fmt.Errorf("scriptcrawler: maximum runtime exceeded (%s)", c.cfg.RunTimeout)
+			return fmt.Errorf("scriptcrawler: maximum runtime exceeded (%s)", runTimeout)
 
-		case <-candidateTimer.C:
+		case <-candidateC:
 			c.stopScript(cmd, stdout)
-			return fmt.Errorf("scriptcrawler: no item event received for %s", c.cfg.CandidateIdleTimeout)
+			return fmt.Errorf("scriptcrawler: no item event received for %s", candidateIdleTimeout)
 
 		case <-idleC:
 			c.stopScript(cmd, stdout)
@@ -92,7 +99,7 @@ func (c *Crawler) executeScript(
 					return err
 				}
 				if runCtx.Err() != nil {
-					return fmt.Errorf("scriptcrawler: maximum runtime exceeded (%s)", c.cfg.RunTimeout)
+					return fmt.Errorf("scriptcrawler: maximum runtime exceeded (%s)", runTimeout)
 				}
 				if waitErr != nil {
 					return fmt.Errorf("scriptcrawler: script exited unsuccessfully: %w", waitErr)
@@ -161,7 +168,7 @@ func (c *Crawler) executeScript(
 					if err := parentCtx.Err(); err != nil {
 						return err
 					}
-					return fmt.Errorf("scriptcrawler: maximum runtime exceeded (%s)", c.cfg.RunTimeout)
+					return fmt.Errorf("scriptcrawler: maximum runtime exceeded (%s)", runTimeout)
 				}
 				if itemErr != nil {
 					log.Printf("[scriptcrawler] drive=%s item failed source_id=%q title=%q: %v", c.cfg.Driver.ID(), item.SourceID, item.Title, itemErr)
@@ -172,7 +179,7 @@ func (c *Crawler) executeScript(
 					result.Skipped++
 				}
 				emit(progress)
-				resetTimer(candidateTimer, c.cfg.CandidateIdleTimeout)
+				resetTimer(candidateTimer, candidateIdleTimeout)
 				if strictV2 {
 					resetTimer(idleTimer, c.cfg.IdleTimeout)
 				}
@@ -205,7 +212,6 @@ func (c *Crawler) executeScript(
 						c.stopScript(cmd, stdout)
 						return err
 					}
-					resetTimer(idleTimer, c.cfg.IdleTimeout)
 					stopTimer(candidateTimer)
 					idleC = nil
 					stopTimer(idleTimer)
@@ -315,9 +321,9 @@ func validateDoneStats(raw json.RawMessage, expectedEmitted int) error {
 }
 
 func (c *Crawler) stopScript(cmd *exec.Cmd, stdout io.Closer) {
-	_ = killCrawlerProcess(cmd)
+	terminated := killCrawlerProcess(cmd) == nil
 	_ = stdout.Close()
-	if err := cmd.Wait(); err != nil && !isExpectedKilledProcess(err) {
+	if err := cmd.Wait(); err != nil && !isExpectedKilledProcess(err, terminated) {
 		log.Printf("[scriptcrawler] drive=%s wait after stop: %v", c.cfg.Driver.ID(), err)
 	}
 }
@@ -325,11 +331,6 @@ func (c *Crawler) stopScript(cmd *exec.Cmd, stdout io.Closer) {
 func waitForScript(cmd *exec.Cmd, stdout io.Closer) error {
 	_ = stdout.Close()
 	return cmd.Wait()
-}
-
-func isExpectedKilledProcess(err error) bool {
-	var exitErr *exec.ExitError
-	return errors.As(err, &exitErr)
 }
 
 func resetTimer(timer *time.Timer, duration time.Duration) {

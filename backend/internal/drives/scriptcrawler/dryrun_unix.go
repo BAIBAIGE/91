@@ -3,6 +3,7 @@
 package scriptcrawler
 
 import (
+	"errors"
 	"os/exec"
 	"syscall"
 )
@@ -22,6 +23,19 @@ func killCrawlerProcess(cmd *exec.Cmd) error {
 		return cmd.Process.Kill()
 	}
 	return nil
+}
+
+// isExpectedKilledProcess reports whether a wait error only reflects the
+// backend's own termination. The wait status is precise here, so the caller's
+// terminated hint is unnecessary: a script that failed on its own before the
+// stop request still carries its exit code and stays visible in the logs.
+func isExpectedKilledProcess(err error, _ bool) bool {
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) {
+		return false
+	}
+	status, ok := exitErr.Sys().(syscall.WaitStatus)
+	return ok && status.Signaled() && status.Signal() == syscall.SIGKILL
 }
 
 func setDryRunProcAttr(cmd *exec.Cmd) {

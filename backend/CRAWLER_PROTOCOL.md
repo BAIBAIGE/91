@@ -14,7 +14,13 @@ CRAWLER_PROTOCOL = "crawler.v2"
 - Both values must be plain string literals, not computed values or concatenations.
 - `CRAWLER_NAME` must be non-empty and at most 80 characters.
 - `CRAWLER_PROTOCOL` must be exactly `"crawler.v2"` for a new script.
-- The backend reads these constants statically when importing the file.
+- Both must be assigned at module level (no indentation) within the **first 200
+  lines** of the file. The backend scans only that preamble, so a declaration
+  below it would otherwise be ignored silently; the import is rejected instead.
+  Assignments inside functions, classes, comments and docstrings are skipped, so
+  documentation examples further down the file are harmless.
+- The backend reads these constants statically when importing the file and
+  refreshes them from disk before every scheduled/manual run.
 
 ## 2. Entry point
 
@@ -272,3 +278,7 @@ The backend enforces these safeguards for `crawler.v2`:
 - Maximum time without a valid heartbeat event: 5 minutes.
 - A terminal `done` event on natural success.
 - Process exit within 5 seconds after `done`.
+
+For backward compatibility, the 3-hour runtime and 30-minute no-candidate
+defaults are not imposed on legacy `crawler.v1` scripts. A caller-supplied
+context deadline or explicitly configured backend limit can still stop v1.

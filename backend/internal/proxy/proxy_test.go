@@ -83,6 +83,24 @@ func TestServeStreamTripleScreenRelayBypassesRedirectMode(t *testing.T) {
 	}
 }
 
+func TestServeStreamCanDisableClientRequestedRelay(t *testing.T) {
+	reg := NewRegistry()
+	reg.Set("115", &proxyFakeSimpleDrive{kind: "p115", url: "https://cdn.example/video.mp4"})
+	p := New(reg)
+	p.SetAllowForcedRelay(false)
+
+	req := httptest.NewRequest(http.MethodGet, "/p/stream/115/file-1?tripleScreenRelay=1", nil)
+	rr := httptest.NewRecorder()
+	p.ServeStream(rr, req, "115", "file-1")
+
+	if rr.Code != http.StatusFound {
+		t.Fatalf("status = %d, want %d", rr.Code, http.StatusFound)
+	}
+	if got := rr.Header().Get("Location"); got != "https://cdn.example/video.mp4" {
+		t.Fatalf("Location = %q", got)
+	}
+}
+
 func TestServeStreamReportsRecoveryAndCoalescesRepeatedSuccess(t *testing.T) {
 	reg := NewRegistry()
 	drv := &proxyResultDrive{

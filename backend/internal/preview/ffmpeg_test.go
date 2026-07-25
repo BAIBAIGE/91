@@ -3,7 +3,9 @@ package preview
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
+	"log"
 	"math"
 	"net/http"
 	"net/http/httptest"
@@ -153,22 +155,25 @@ func TestTeaserSegmentFallbackRequiresPlannedSegmentCount(t *testing.T) {
 }
 
 func TestShortVideoRequiresOnlyOneUsableTeaserSegment(t *testing.T) {
-	if got := requiredTeaserSegments(12, 3); got != 1 {
+	if got := requiredTeaserSegments(12, 3, false); got != 1 {
 		t.Fatalf("required segments = %d, want 1 for short video", got)
 	}
-	if got := requiredTeaserSegments(29.999, 3); got != 1 {
+	if got := requiredTeaserSegments(29.999, 3, true); got != 1 {
 		t.Fatalf("required segments = %d, want 1 below 30 seconds", got)
 	}
 }
 
-func TestMediumAndLongVideosAllowTwoSegmentDegradedTeaser(t *testing.T) {
-	if got := requiredTeaserSegments(30, 4); got != 2 {
+func TestMediumAndLongVideosRequireFullPlanBeforeExplicitDegradation(t *testing.T) {
+	if got := requiredTeaserSegments(30, 4, false); got != 4 {
+		t.Fatalf("required segments = %d, want full four-segment plan", got)
+	}
+	if got := requiredTeaserSegments(30, 4, true); got != 2 {
 		t.Fatalf("required segments = %d, want two at 30 seconds", got)
 	}
-	if got := requiredTeaserSegments(204, 4); got != 2 {
+	if got := requiredTeaserSegments(204, 4, true); got != 2 {
 		t.Fatalf("required segments = %d, want two for longer video", got)
 	}
-	if got := requiredTeaserSegments(204, 2); got != 2 {
+	if got := requiredTeaserSegments(204, 2, true); got != 2 {
 		t.Fatalf("required segments = %d, want full two-segment plan", got)
 	}
 }
@@ -370,5 +375,108 @@ func TestPrepareFFmpegLinkDoesNotLeakWebDAVCredentialsToRedirectTarget(t *testin
 	}
 	if got := targetHeaders.Get("User-Agent"); got != "video-site-webdav" {
 		t.Fatalf("target User-Agent = %q, want video-site-webdav", got)
+	}
+}
+
+// newTeaserStubGenerator builds a Generator whose ffmpeg produces usable output
+// for the first okSegments segment invocations and leaves the output file empty
+// afterwards, which is the "damaged source" shape the degraded teaser path is
+// meant to handle.
+func newTeaserStubGenerator(t *testing.T, okSegments int) *Generator {
+	t.Helper()
+	dir := t.TempDir()
+	counter := filepath.Join(dir, "segment-count")
+	ffmpeg := filepath.Join(dir, "ffmpeg")
+	script := fmt.Sprintf(`#!/bin/sh
+out=""
+for arg in "$@"; do out="$arg"; done
+case " $* " in
+  *" -f concat "*)
+    printf 'concat-output' > "$out"
+    exit 0
+    ;;
+esac
+count=$(cat %[1]q 2>/dev/null || echo 0)
+count=$((count + 1))
+printf '%%s' "$count" > %[1]q
+if [ "$count" -le %[2]d ]; then
+  printf 'segment-output' > "$out"
+fi
+exit 0
+`, counter, okSegments)
+	if err := os.WriteFile(ffmpeg, []byte(script), 0o755); err != nil {
+		t.Fatalf("write ffmpeg stub: %v", err)
+	}
+
+	ffprobe := filepath.Join(dir, "ffprobe")
+	probeScript := "#!/bin/sh\n" +
+		`printf '%s' '{"streams":[{"codec_type":"video","duration":"3.0"}],"format":{"duration":"3.0"}}'` + "\n"
+	if err := os.WriteFile(ffprobe, []byte(probeScript), 0o755); err != nil {
+		t.Fatalf("write ffprobe stub: %v", err)
+	}
+
+	return New(Config{
+		FFmpegPath:  ffmpeg,
+		FFprobePath: ffprobe,
+		Width:       480,
+		LocalDir:    filepath.Join(dir, "preview"),
+	})
+}
+
+func TestGenerateSequentialAcceptsDegradedTeaserAndLogsIt(t *testing.T) {
+	gen := newTeaserStubGenerator(t, 2)
+	link := &drives.StreamLink{URL: filepath.Join(t.TempDir(), "video.mp4")}
+
+	var logs strings.Builder
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+
+	path, err := gen.generateSequential(context.Background(), 204, func(int) (*drives.StreamLink, error) {
+		return link, nil
+	})
+	if err != nil {
+		t.Fatalf("generate sequential: %v", err)
+	}
+	if path == "" {
+		t.Fatal("expected a teaser path for the degraded result")
+	}
+	t.Cleanup(func() { _ = os.Remove(path) })
+	if !strings.Contains(logs.String(), "degraded teaser accepted segments=2/4") {
+		t.Fatalf("logs = %q, want an explicit degraded-teaser record", logs.String())
+	}
+}
+
+func TestGenerateSequentialRejectsTeaserBelowDegradedFloor(t *testing.T) {
+	gen := newTeaserStubGenerator(t, 1)
+	link := &drives.StreamLink{URL: filepath.Join(t.TempDir(), "video.mp4")}
+
+	_, err := gen.generateSequential(context.Background(), 204, func(int) (*drives.StreamLink, error) {
+		return link, nil
+	})
+	if err == nil {
+		t.Fatal("expected an error: one usable segment is below the degraded floor")
+	}
+	if !strings.Contains(err.Error(), "only generated 1/4 teaser segments") {
+		t.Fatalf("error = %v, want the generated/planned segment count", err)
+	}
+}
+
+func TestGenerateSequentialKeepsFullPlanWhenEverySegmentWorks(t *testing.T) {
+	gen := newTeaserStubGenerator(t, 4)
+	link := &drives.StreamLink{URL: filepath.Join(t.TempDir(), "video.mp4")}
+
+	var logs strings.Builder
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+
+	path, err := gen.generateSequential(context.Background(), 204, func(int) (*drives.StreamLink, error) {
+		return link, nil
+	})
+	if err != nil {
+		t.Fatalf("generate sequential: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Remove(path) })
+	if strings.Contains(logs.String(), "degraded teaser") {
+		t.Fatalf("logs = %q, want no degradation for a healthy source", logs.String())
 	}
 }

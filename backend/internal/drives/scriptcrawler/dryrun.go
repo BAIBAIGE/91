@@ -38,6 +38,8 @@ type DryRunConfig struct {
 	// SkipMediaProbe 跳过视频直链可达性探测（单测注入用）。
 	SkipMediaProbe bool
 	HTTPClient     *http.Client
+	MaxStdoutBytes int64
+	MaxStderrBytes int64
 }
 
 type DryRunItem struct {
@@ -73,10 +75,17 @@ type dryRunLogTail struct {
 	partial    string
 	totalBytes int64
 	suppressed int64
+	maxBytes   int64
 }
 
-func newDryRunLogTail() *dryRunLogTail {
-	return &dryRunLogTail{lines: make([]string, 0, dryRunLogTailLines)}
+func newDryRunLogTail(maxBytes int64) *dryRunLogTail {
+	if maxBytes <= 0 {
+		maxBytes = defaultMaxStderrBytes
+	}
+	return &dryRunLogTail{
+		lines:    make([]string, 0, dryRunLogTailLines),
+		maxBytes: maxBytes,
+	}
 }
 
 func (t *dryRunLogTail) Write(p []byte) (int, error) {
@@ -84,7 +93,7 @@ func (t *dryRunLogTail) Write(p []byte) (int, error) {
 	defer t.mu.Unlock()
 
 	originalLen := len(p)
-	remaining := defaultMaxStderrBytes - t.totalBytes
+	remaining := t.maxBytes - t.totalBytes
 	if remaining <= 0 {
 		t.suppressed += int64(originalLen)
 		return originalLen, nil
@@ -171,6 +180,10 @@ func DryRun(ctx context.Context, cfg DryRunConfig) *DryRunResult {
 	timeout := cfg.Timeout
 	if timeout <= 0 {
 		timeout = defaultDryRunTimeout
+	}
+	maxStdoutBytes := cfg.MaxStdoutBytes
+	if maxStdoutBytes <= 0 {
+		maxStdoutBytes = defaultMaxStdoutBytes
 	}
 
 	tmpDir, err := os.MkdirTemp("", "crawler-dryrun-")
@@ -259,7 +272,7 @@ func DryRun(ctx context.Context, cfg DryRunConfig) *DryRunResult {
 		result.Error = fmt.Sprintf("启动脚本失败: %v", err)
 		return result
 	}
-	logTail := newDryRunLogTail()
+	logTail := newDryRunLogTail(cfg.MaxStderrBytes)
 	cmd.Stderr = logTail
 	if err := cmd.Start(); err != nil {
 		_ = stdout.Close()
@@ -285,8 +298,8 @@ func DryRun(ctx context.Context, cfg DryRunConfig) *DryRunResult {
 		}
 		rawLine := scanner.Text()
 		stdoutBytes += int64(len(rawLine)) + 1
-		if stdoutBytes > defaultMaxStdoutBytes {
-			result.Error = fmt.Sprintf("脚本 stdout 超过 %d MiB 限制", defaultMaxStdoutBytes/1024/1024)
+		if stdoutBytes > maxStdoutBytes {
+			result.Error = fmt.Sprintf("脚本 stdout 超过 %d 字节限制", maxStdoutBytes)
 			break
 		}
 		line := strings.TrimSpace(rawLine)

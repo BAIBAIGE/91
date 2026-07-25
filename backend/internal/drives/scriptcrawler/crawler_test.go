@@ -97,12 +97,13 @@ func TestCrawlerRunOnceImportsLocalFileAndSkipsExisting(t *testing.T) {
 
 	t.Setenv("GO_WANT_SCRIPTCRAWLER_HELPER", "1")
 	c := NewCrawler(CrawlerConfig{
-		Driver:      drv,
-		Catalog:     cat,
-		CrawlerName: "Demo Crawler",
-		PythonPath:  wrapper,
-		FFprobePath: writeScriptCrawlerFFprobeStub(t, tmp, true),
-		ScriptPath:  dummyScript,
+		Driver:              drv,
+		Catalog:             cat,
+		CrawlerName:         "Demo Crawler",
+		PythonPath:          wrapper,
+		FFprobePath:         writeScriptCrawlerFFprobeStub(t, tmp, true),
+		ScriptPath:          dummyScript,
+		SkipProtocolRefresh: true,
 	})
 	res, err := c.RunOnce(ctx, 1)
 	if err != nil {
@@ -165,12 +166,13 @@ func TestCrawlerRunOnceMarksPreviewDisabledWhenConfigured(t *testing.T) {
 
 	t.Setenv("GO_WANT_SCRIPTCRAWLER_HELPER", "1")
 	c := NewCrawler(CrawlerConfig{
-		Driver:         drv,
-		Catalog:        cat,
-		PythonPath:     wrapper,
-		FFprobePath:    writeScriptCrawlerFFprobeStub(t, tmp, true),
-		ScriptPath:     dummyScript,
-		DisablePreview: true,
+		Driver:              drv,
+		Catalog:             cat,
+		PythonPath:          wrapper,
+		FFprobePath:         writeScriptCrawlerFFprobeStub(t, tmp, true),
+		ScriptPath:          dummyScript,
+		SkipProtocolRefresh: true,
+		DisablePreview:      true,
 	})
 	res, err := c.RunOnce(ctx, 1)
 	if err != nil {
@@ -236,12 +238,13 @@ func TestCrawlerRunOnceUsesCurrentDrivePreviewSwitch(t *testing.T) {
 
 	t.Setenv("GO_WANT_SCRIPTCRAWLER_HELPER", "1")
 	c := NewCrawler(CrawlerConfig{
-		Driver:         drv,
-		Catalog:        cat,
-		PythonPath:     wrapper,
-		FFprobePath:    writeScriptCrawlerFFprobeStub(t, tmp, true),
-		ScriptPath:     dummyScript,
-		DisablePreview: true,
+		Driver:              drv,
+		Catalog:             cat,
+		PythonPath:          wrapper,
+		FFprobePath:         writeScriptCrawlerFFprobeStub(t, tmp, true),
+		ScriptPath:          dummyScript,
+		SkipProtocolRefresh: true,
+		DisablePreview:      true,
 	})
 	res, err := c.RunOnce(ctx, 1)
 	if err != nil {
@@ -287,11 +290,12 @@ func TestCrawlerRunOnceUsesDefaultCrawlerNamespace(t *testing.T) {
 
 	t.Setenv("GO_WANT_SCRIPTCRAWLER_HELPER", "1")
 	c := NewCrawler(CrawlerConfig{
-		Driver:      drv,
-		Catalog:     cat,
-		PythonPath:  wrapper,
-		FFprobePath: writeScriptCrawlerFFprobeStub(t, tmp, true),
-		ScriptPath:  dummyScript,
+		Driver:              drv,
+		Catalog:             cat,
+		PythonPath:          wrapper,
+		FFprobePath:         writeScriptCrawlerFFprobeStub(t, tmp, true),
+		ScriptPath:          dummyScript,
+		SkipProtocolRefresh: true,
 	})
 	res, err := c.RunOnce(ctx, 1)
 	if err != nil {
@@ -348,12 +352,13 @@ func TestCrawlerRunOncePassesAbsoluteJobPathsWhenWorkDirDiffers(t *testing.T) {
 	t.Setenv("GO_WANT_SCRIPTCRAWLER_HELPER", "1")
 	t.Setenv("GO_WANT_SCRIPTCRAWLER_ASSERT_ABS", "1")
 	c := NewCrawler(CrawlerConfig{
-		Driver:      drv,
-		Catalog:     cat,
-		PythonPath:  wrapper,
-		FFprobePath: writeScriptCrawlerFFprobeStub(t, tmp, true),
-		ScriptPath:  dummyScript,
-		WorkDir:     scriptDir,
+		Driver:              drv,
+		Catalog:             cat,
+		PythonPath:          wrapper,
+		FFprobePath:         writeScriptCrawlerFFprobeStub(t, tmp, true),
+		ScriptPath:          dummyScript,
+		SkipProtocolRefresh: true,
+		WorkDir:             scriptDir,
 	})
 	res, err := c.RunOnce(ctx, 1)
 	if err != nil {
@@ -406,12 +411,13 @@ func TestCrawlerRunOnceImportsSimpleMediaURLWithoutSourceID(t *testing.T) {
 	t.Setenv("GO_WANT_SCRIPTCRAWLER_SIMPLE", "1")
 	t.Setenv("GO_SCRIPTCRAWLER_MEDIA_URL", srv.URL+"/video.mp4?token=first")
 	c := NewCrawler(CrawlerConfig{
-		Driver:      drv,
-		Catalog:     cat,
-		PythonPath:  wrapper,
-		FFprobePath: writeScriptCrawlerFFprobeStub(t, tmp, true),
-		ScriptPath:  dummyScript,
-		HTTPClient:  srv.Client(),
+		Driver:              drv,
+		Catalog:             cat,
+		PythonPath:          wrapper,
+		FFprobePath:         writeScriptCrawlerFFprobeStub(t, tmp, true),
+		ScriptPath:          dummyScript,
+		SkipProtocolRefresh: true,
+		HTTPClient:          srv.Client(),
 	})
 	res, err := c.RunOnce(ctx, 1)
 	if err != nil {
@@ -502,12 +508,13 @@ func TestCrawlerRunOnceSkipsThenRestoresRetainedLocalVideo(t *testing.T) {
 	t.Setenv("GO_WANT_SCRIPTCRAWLER_SIMPLE", "1")
 	t.Setenv("GO_SCRIPTCRAWLER_MEDIA_URL", srv.URL+"/video.mp4?token=restore")
 	c := NewCrawler(CrawlerConfig{
-		Driver:      drv,
-		Catalog:     cat,
-		PythonPath:  wrapper,
-		FFprobePath: writeScriptCrawlerFFprobeStub(t, tmp, true),
-		ScriptPath:  dummyScript,
-		HTTPClient:  srv.Client(),
+		Driver:              drv,
+		Catalog:             cat,
+		PythonPath:          wrapper,
+		FFprobePath:         writeScriptCrawlerFFprobeStub(t, tmp, true),
+		ScriptPath:          dummyScript,
+		SkipProtocolRefresh: true,
+		HTTPClient:          srv.Client(),
 	})
 	res, err := c.RunOnce(ctx, 1)
 	if err != nil {
@@ -647,11 +654,12 @@ func TestCrawlerRunOnceSkipsFingerprintDuplicateAndContinues(t *testing.T) {
 	t.Setenv("GO_WANT_SCRIPTCRAWLER_HELPER", "1")
 	t.Setenv("GO_WANT_SCRIPTCRAWLER_DUP_UNIQUE", "1")
 	c := NewCrawler(CrawlerConfig{
-		Driver:      drv,
-		Catalog:     cat,
-		PythonPath:  wrapper,
-		FFprobePath: writeScriptCrawlerFFprobeStub(t, tmp, true),
-		ScriptPath:  dummyScript,
+		Driver:              drv,
+		Catalog:             cat,
+		PythonPath:          wrapper,
+		FFprobePath:         writeScriptCrawlerFFprobeStub(t, tmp, true),
+		ScriptPath:          dummyScript,
+		SkipProtocolRefresh: true,
 	})
 	res, err := c.RunOnce(ctx, 1)
 	if err != nil {
@@ -895,12 +903,13 @@ func TestCrawlerRunOnceRejectsInvalidDownloadedVideo(t *testing.T) {
 
 	t.Setenv("GO_WANT_SCRIPTCRAWLER_HELPER", "1")
 	c := NewCrawler(CrawlerConfig{
-		Driver:      drv,
-		Catalog:     cat,
-		CrawlerName: "Demo Crawler",
-		PythonPath:  wrapper,
-		FFprobePath: writeScriptCrawlerFFprobeStub(t, tmp, false),
-		ScriptPath:  dummyScript,
+		Driver:              drv,
+		Catalog:             cat,
+		CrawlerName:         "Demo Crawler",
+		PythonPath:          wrapper,
+		FFprobePath:         writeScriptCrawlerFFprobeStub(t, tmp, false),
+		ScriptPath:          dummyScript,
+		SkipProtocolRefresh: true,
 	})
 	res, err := c.RunOnce(ctx, 1)
 	if err != nil {
@@ -955,13 +964,14 @@ func TestCrawlerRunOnceDownloadsHLSMediaURL(t *testing.T) {
 	ffmpegArgsFile := filepath.Join(tmp, "ffmpeg-args.txt")
 	t.Setenv("GO_SCRIPTCRAWLER_FFMPEG_ARGS_FILE", ffmpegArgsFile)
 	c := NewCrawler(CrawlerConfig{
-		Driver:      drv,
-		Catalog:     cat,
-		CrawlerName: "Demo Crawler",
-		PythonPath:  wrapper,
-		FFmpegPath:  writeScriptCrawlerFFmpegStub(t, tmp),
-		FFprobePath: writeScriptCrawlerFFprobeStub(t, tmp, true),
-		ScriptPath:  dummyScript,
+		Driver:              drv,
+		Catalog:             cat,
+		CrawlerName:         "Demo Crawler",
+		PythonPath:          wrapper,
+		FFmpegPath:          writeScriptCrawlerFFmpegStub(t, tmp),
+		FFprobePath:         writeScriptCrawlerFFprobeStub(t, tmp, true),
+		ScriptPath:          dummyScript,
+		SkipProtocolRefresh: true,
 	})
 	res, err := c.RunOnce(ctx, 1)
 	if err != nil {

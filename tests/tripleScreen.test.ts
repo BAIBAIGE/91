@@ -98,6 +98,19 @@ test("triple screen switches backend stream routes to same-origin relay", () => 
   assert.match(playerSource, /pathname\.startsWith\("\/p\/stream\/"\)/);
   assert.match(playerSource, /pathname\.startsWith\("\/p\/share\/"\)[\s\S]*?pathname\.endsWith\("\/stream"\)/);
   assert.match(playerSource, /art\.url = relaySrc/);
+  assert.match(playerSource, /activePlaybackSrc = relaySrc/);
+  assert.match(
+    playerSource,
+    /pendingSourceMatches\(pendingRelayEnable\.url\)/
+  );
+  assert.match(
+    playerSource,
+    /function clearPendingRelayEnable\(\)[\s\S]*?pendingRelayEnable = null/
+  );
+  assert.doesNotMatch(
+    playerSource,
+    /isTripleScreenRelayURL\(video\.currentSrc \|\| src\)/
+  );
 });
 
 test("triple screen renderer reuses one video texture and follows presented frames", () => {
@@ -114,6 +127,15 @@ test("triple screen renderer reuses one video texture and follows presented fram
   assert.match(rendererSource, /this\.video\.paused/);
   assert.match(rendererSource, /this\.video\.addEventListener\("seeked"/);
   assert.match(rendererSource, /this\.canvas\.remove\(\)/);
+  const drawFrameSource = rendererSource.slice(
+    rendererSource.indexOf("private drawFrame()"),
+    rendererSource.indexOf("private scheduleFrame()")
+  );
+  assert.doesNotMatch(drawFrameSource, /gl\.getError\(\)/);
+  assert.match(
+    playerSource,
+    /if \(visible && pendingEnableSuccessNotice\)[\s\S]*?已开启三屏画面/
+  );
 });
 
 test("triple screen canvas stays between the media and player overlays", () => {

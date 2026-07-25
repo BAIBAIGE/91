@@ -6,6 +6,7 @@ import (
 	"crypto/sha1"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -176,6 +177,108 @@ func TestGenerationStreamURLCoalescesConcurrentResolution(t *testing.T) {
 	}
 }
 
+func TestGenerationStreamURLForceRefreshSupersedesOrdinaryInflight(t *testing.T) {
+	firstStarted := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	var releaseOnce sync.Once
+
+	var mu sync.Mutex
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		mu.Lock()
+		requests++
+		requestNumber := requests
+		mu.Unlock()
+		if requestNumber == 1 {
+			close(firstStarted)
+			<-releaseFirst
+			_, _ = io.WriteString(w, "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1\nstale.m3u8\n")
+			return
+		}
+		_, _ = io.WriteString(w, "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1\nfresh.m3u8\n")
+	}))
+	t.Cleanup(func() {
+		releaseOnce.Do(func() { close(releaseFirst) })
+		server.Close()
+	})
+
+	driver := New(Config{ID: "115", Cookie: "UID=u;CID=c;SEID=s"})
+	driver.hlsClient = server.Client()
+	driver.hlsMasterBaseURL = server.URL
+	driver.rememberPickCode("file-1", "pick")
+
+	type result struct {
+		link *drives.StreamLink
+		err  error
+	}
+	ordinaryResult := make(chan result, 1)
+	go func() {
+		link, err := driver.GenerationStreamURL(context.Background(), "file-1", false)
+		ordinaryResult <- result{link: link, err: err}
+	}()
+	<-firstStarted
+
+	refreshResult := make(chan result, 1)
+	go func() {
+		link, err := driver.GenerationStreamURL(context.Background(), "file-1", true)
+		refreshResult <- result{link: link, err: err}
+	}()
+
+	select {
+	case got := <-refreshResult:
+		if got.err != nil || got.link == nil || !strings.HasSuffix(got.link.URL, "/fresh.m3u8") {
+			t.Fatalf("refreshed generation stream = %#v, %v", got.link, got.err)
+		}
+	case <-time.After(2 * time.Second):
+		releaseOnce.Do(func() { close(releaseFirst) })
+		t.Fatal("forced refresh joined the older in-flight resolution")
+	}
+
+	releaseOnce.Do(func() { close(releaseFirst) })
+	if got := <-ordinaryResult; got.err != nil || got.link == nil || !strings.HasSuffix(got.link.URL, "/stale.m3u8") {
+		t.Fatalf("ordinary generation stream = %#v, %v", got.link, got.err)
+	}
+
+	cached, err := driver.GenerationStreamURL(context.Background(), "file-1", false)
+	if err != nil || cached == nil || !strings.HasSuffix(cached.URL, "/fresh.m3u8") {
+		t.Fatalf("cached generation stream = %#v, %v; want refreshed link", cached, err)
+	}
+	mu.Lock()
+	gotRequests := requests
+	mu.Unlock()
+	if gotRequests != 2 {
+		t.Fatalf("master requests = %d, want 2", gotRequests)
+	}
+}
+
+func TestGenerationCachePrunesExpiredEntriesAndEvictsAtCapacity(t *testing.T) {
+	driver := New(Config{ID: "115"})
+	now := time.Now()
+	driver.generationCache["expired"] = cachedGenerationStream{expires: now.Add(-time.Second)}
+	driver.generationCache["valid"] = cachedGenerationStream{expires: now.Add(time.Minute)}
+	driver.pruneGenerationCacheLocked(now)
+	if _, ok := driver.generationCache["expired"]; ok {
+		t.Fatal("expired generation stream remained cached")
+	}
+	if _, ok := driver.generationCache["valid"]; !ok {
+		t.Fatal("valid generation stream was pruned")
+	}
+
+	clear(driver.generationCache)
+	for i := 0; i < p115GenerationCacheMaxEntries; i++ {
+		driver.generationCache[fmt.Sprintf("file-%d", i)] = cachedGenerationStream{
+			expires: now.Add(time.Duration(i+1) * time.Second),
+		}
+	}
+	driver.makeGenerationCacheRoomLocked()
+	if got := len(driver.generationCache); got != p115GenerationCacheMaxEntries-1 {
+		t.Fatalf("generation cache entries = %d, want %d after eviction", got, p115GenerationCacheMaxEntries-1)
+	}
+	if _, ok := driver.generationCache["file-0"]; ok {
+		t.Fatal("oldest generation cache entry was not evicted")
+	}
+}
+
 func TestGenerationStreamURLClassifiesUnavailableAndRateLimit(t *testing.T) {
 	for _, tc := range []struct {
 		name            string
@@ -187,6 +290,9 @@ func TestGenerationStreamURLClassifiesUnavailableAndRateLimit(t *testing.T) {
 		{name: "missing", status: http.StatusNotFound, wantUnavailable: true},
 		{name: "malformed", status: http.StatusOK, body: "not a playlist", wantUnavailable: true},
 		{name: "waf", status: http.StatusMethodNotAllowed, body: "<title>405</title>", wantRateLimit: true},
+		// Online playback being refused must leave the ordinary download URL
+		// usable instead of cooling the drive down as if it were throttled.
+		{name: "forbidden", status: http.StatusForbidden, wantUnavailable: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -220,6 +326,7 @@ func TestWrap115StreamTransientError(t *testing.T) {
 		{name: "405 blocked", err: errors.New("405 request has been blocked"), wantRateLimit: true},
 		{name: "405 waf html", err: errors.New(`<!doctypehtml><html><title>405</title><p>blocked</p>`), wantRateLimit: true},
 		{name: "429", err: errors.New("429 too many requests"), wantRateLimit: true},
+		{name: "403 authentication", err: errors.New("403 forbidden"), wantRateLimit: false},
 		{name: "tls timeout", err: errors.New("net/http: TLS handshake timeout"), wantRateLimit: true},
 		{name: "blocked", err: errors.New("blocked by waf"), wantRateLimit: false},
 		{name: "auth", err: errors.New("invalid credential"), wantRateLimit: false},
@@ -245,6 +352,20 @@ func TestWrap115StreamTransientError(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestRememberPickCodeStaysBounded(t *testing.T) {
+	driver := New(Config{ID: "115"})
+	for i := 0; i <= p115PickCodeCacheMaxEntries; i++ {
+		fileID := fmt.Sprintf("file-%d", i)
+		driver.rememberPickCode(fileID, "pick-"+fileID)
+	}
+	if got := len(driver.pickCodes); got > p115PickCodeCacheMaxEntries {
+		t.Fatalf("pick-code cache entries = %d, max = %d", got, p115PickCodeCacheMaxEntries)
+	}
+	if got := driver.rememberedPickCode(fmt.Sprintf("file-%d", p115PickCodeCacheMaxEntries)); got == "" {
+		t.Fatal("most recently remembered pick code was evicted")
 	}
 }
 

@@ -369,6 +369,9 @@ export class TripleScreenRenderer {
       if (!isPositiveFinite(this.maxTextureSize)) {
         throw new Error("WebGL texture size limit unavailable");
       }
+      if (gl.getError() !== gl.NO_ERROR) {
+        throw new Error("WebGL resource initialization failed");
+      }
       return true;
     } catch (error) {
       this.releaseResources(true);
@@ -471,9 +474,6 @@ export class TripleScreenRenderer {
       gl.uniform1i(this.samplerLocation, 0);
       gl.drawElements(gl.TRIANGLES, 18, gl.UNSIGNED_SHORT, 0);
 
-      if (gl.getError() !== gl.NO_ERROR) {
-        throw new Error("WebGL failed to render the video frame");
-      }
       this.setVisible(true);
       return true;
     } catch (error) {

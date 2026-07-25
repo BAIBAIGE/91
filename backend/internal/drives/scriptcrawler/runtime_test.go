@@ -22,7 +22,8 @@ func newRuntimeTestCrawler(t *testing.T, body, protocol string, mutate func(*Cra
 	t.Cleanup(func() { _ = cat.Close() })
 	drv := New(Config{ID: "runtime-test", RootDir: filepath.Join(tmp, "crawler")})
 	scriptPath := filepath.Join(tmp, "crawler.py")
-	if err := os.WriteFile(scriptPath, []byte("#!/bin/sh\n"+body), 0o755); err != nil {
+	metadata := "#!/bin/sh\nCRAWLER_NAME=\"Runtime Test\"\nCRAWLER_PROTOCOL=\"" + protocol + "\"\n"
+	if err := os.WriteFile(scriptPath, []byte(metadata+body), 0o755); err != nil {
 		t.Fatalf("write script: %v", err)
 	}
 	cfg := CrawlerConfig{
@@ -40,6 +41,47 @@ func newRuntimeTestCrawler(t *testing.T, body, protocol string, mutate func(*Cra
 		mutate(&cfg)
 	}
 	return NewCrawler(cfg)
+}
+
+func TestCrawlerV1DefaultsKeepLegacyTimeoutsDisabled(t *testing.T) {
+	crawler := newRuntimeTestCrawler(t, `exit 0`, ProtocolV1, func(cfg *CrawlerConfig) {
+		cfg.RunTimeout = 0
+		cfg.CandidateIdleTimeout = 0
+	})
+	if got := crawler.effectiveRunTimeout(); got != 0 {
+		t.Fatalf("v1 effective run timeout = %s, want disabled", got)
+	}
+	if got := crawler.effectiveCandidateIdleTimeout(); got != 0 {
+		t.Fatalf("v1 effective candidate idle timeout = %s, want disabled", got)
+	}
+}
+
+func TestCrawlerRunOnceReloadsProtocolMetadata(t *testing.T) {
+	crawler := newRuntimeTestCrawler(t, `exit 0`, ProtocolV1, nil)
+	script := `#!/bin/sh
+CRAWLER_NAME="Runtime Test"
+CRAWLER_PROTOCOL="crawler.v2"
+echo '{"type":"done","stats":{"checked":0,"emitted":0}}'
+`
+	if err := os.WriteFile(crawler.cfg.ScriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("rewrite script: %v", err)
+	}
+
+	result, err := crawler.RunOnce(context.Background(), 1)
+	if err != nil {
+		t.Fatalf("run once: %v", err)
+	}
+	data, err := os.ReadFile(result.JobFile)
+	if err != nil {
+		t.Fatalf("read job: %v", err)
+	}
+	var job Job
+	if err := json.Unmarshal(data, &job); err != nil {
+		t.Fatalf("decode job: %v", err)
+	}
+	if job.Protocol != ProtocolV2 || job.Limits == nil {
+		t.Fatalf("job protocol=%q limits=%+v, want refreshed v2 metadata", job.Protocol, job.Limits)
+	}
 }
 
 func TestCrawlerV2WritesLimitsAndAcceptsDone(t *testing.T) {
@@ -174,5 +216,51 @@ func TestScanScriptOutputEnforcesLineAndTotalLimits(t *testing.T) {
 	second := <-totalOutput
 	if first.err != nil || second.err == nil || !strings.Contains(second.err.Error(), "stdout exceeded") {
 		t.Fatalf("outputs = %+v / %+v", first, second)
+	}
+}
+
+func TestCrawlerRunOnceKeepsConfiguredProtocolWhenRefreshIsSkipped(t *testing.T) {
+	crawler := newRuntimeTestCrawler(t, `echo '{"type":"done","stats":{"checked":0,"emitted":0}}'`,
+		ProtocolV2, func(cfg *CrawlerConfig) {
+			cfg.SkipProtocolRefresh = true
+		})
+	// The script on disk declares v1 while the config asks for v2. Skipping the
+	// refresh must keep the configured protocol rather than reading the file.
+	script := `#!/bin/sh
+CRAWLER_NAME="Runtime Test"
+CRAWLER_PROTOCOL="crawler.v1"
+echo '{"type":"done","stats":{"checked":0,"emitted":0}}'
+`
+	if err := os.WriteFile(crawler.cfg.ScriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("rewrite script: %v", err)
+	}
+
+	result, err := crawler.RunOnce(context.Background(), 1)
+	if err != nil {
+		t.Fatalf("run once: %v", err)
+	}
+	var job Job
+	data, err := os.ReadFile(result.JobFile)
+	if err != nil {
+		t.Fatalf("read job: %v", err)
+	}
+	if err := json.Unmarshal(data, &job); err != nil {
+		t.Fatalf("decode job: %v", err)
+	}
+	if job.Protocol != ProtocolV2 {
+		t.Fatalf("job protocol = %q, want configured %q", job.Protocol, ProtocolV2)
+	}
+}
+
+func TestCrawlerRunOnceRejectsUnreadableProtocolMetadata(t *testing.T) {
+	crawler := newRuntimeTestCrawler(t, `exit 0`, ProtocolV2, nil)
+	if err := os.WriteFile(crawler.cfg.ScriptPath, []byte("print('no metadata')\n"), 0o755); err != nil {
+		t.Fatalf("rewrite script: %v", err)
+	}
+	// Running under a stale protocol would silently drop the v2 safeguards, so
+	// an unreadable script must fail the run instead.
+	if _, err := crawler.RunOnce(context.Background(), 1); err == nil ||
+		!strings.Contains(err.Error(), "script metadata") {
+		t.Fatalf("run once error = %v, want script metadata failure", err)
 	}
 }

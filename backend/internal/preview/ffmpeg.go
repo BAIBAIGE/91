@@ -551,7 +551,7 @@ func (g *Generator) generateSequential(ctx context.Context, duration float64, li
 
 	candidates := teaserCandidateStarts(duration, starts, eachSec)
 	targetSegments := len(starts)
-	requiredSegments := requiredTeaserSegments(duration, targetSegments)
+	requiredSegments := requiredTeaserSegments(duration, targetSegments, false)
 	var lastErr error
 	for i, start := range candidates {
 		if len(segmentPaths) >= targetSegments {
@@ -568,10 +568,15 @@ func (g *Generator) generateSequential(ctx context.Context, duration float64, li
 		segmentPaths = append(segmentPaths, seg)
 	}
 	if len(segmentPaths) < requiredSegments {
-		if lastErr != nil {
-			return "", fmt.Errorf("only generated %d/%d teaser segments: %w", len(segmentPaths), targetSegments, lastErr)
+		degradedRequired := requiredTeaserSegments(duration, targetSegments, true)
+		if lastErr == nil || len(segmentPaths) < degradedRequired {
+			if lastErr != nil {
+				return "", fmt.Errorf("only generated %d/%d teaser segments: %w", len(segmentPaths), targetSegments, lastErr)
+			}
+			return "", fmt.Errorf("only generated %d/%d teaser segments", len(segmentPaths), targetSegments)
 		}
-		return "", fmt.Errorf("only generated %d/%d teaser segments", len(segmentPaths), targetSegments)
+		log.Printf("[preview] degraded teaser accepted segments=%d/%d duration=%.1fs: %v",
+			len(segmentPaths), targetSegments, duration, lastErr)
 	}
 
 	if len(segmentPaths) == 1 {
@@ -636,17 +641,17 @@ func (g *Generator) generateSequential(ctx context.Context, duration float64, li
 	return tmpPath, nil
 }
 
-func requiredTeaserSegments(duration float64, targetSegments int) int {
+func requiredTeaserSegments(duration float64, targetSegments int, degraded bool) int {
 	if targetSegments <= 0 {
 		return 0
 	}
 	if duration > 0 && duration < 30 {
 		return 1
 	}
-	// A damaged or sparsely encoded source can have valid video at only some
-	// timestamps. Keep the normal four-segment target, but accept two valid
-	// segments as a degraded teaser instead of discarding usable output.
-	if targetSegments > 2 {
+	// The normal path must produce the complete plan. Only after eligible
+	// per-timestamp retries have failed may a damaged or sparsely encoded
+	// source be accepted as an explicitly logged degraded teaser.
+	if degraded && targetSegments > 2 {
 		return 2
 	}
 	return targetSegments

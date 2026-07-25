@@ -93,6 +93,9 @@ type Entry struct {
 type StreamLink struct {
 	URL     string
 	Headers http.Header
+	// Expires is the deadline through which callers may reuse this link. It can
+	// be a conservative local deadline when a provider does not expose the
+	// signed URL's exact expiry.
 	Expires time.Time
 
 	// PassThroughRedirects tells the online playback proxy to make the first

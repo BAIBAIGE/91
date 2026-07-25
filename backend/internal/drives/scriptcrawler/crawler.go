@@ -48,10 +48,18 @@ const (
 )
 
 type CrawlerConfig struct {
-	Driver               *Driver
-	Catalog              *catalog.Catalog
-	CrawlerName          string
-	Protocol             string
+	Driver      *Driver
+	Catalog     *catalog.Catalog
+	CrawlerName string
+	// Protocol is the protocol to start from. Every run re-reads it from the
+	// script itself, so this is the value used before the first run and
+	// whenever SkipProtocolRefresh keeps the script from being consulted.
+	Protocol string
+	// SkipProtocolRefresh keeps Protocol authoritative instead of re-reading
+	// the script's metadata on each run. Test harnesses that point ScriptPath
+	// at a stub set this; production crawlers must leave it false so an edited
+	// script cannot keep running under its previously declared protocol.
+	SkipProtocolRefresh  bool
 	PythonPath           string
 	FFmpegPath           string
 	FFprobePath          string
@@ -73,11 +81,19 @@ type CrawlerConfig struct {
 }
 
 type Crawler struct {
-	cfg   CrawlerConfig
-	runMu sync.Mutex
+	cfg                          CrawlerConfig
+	runTimeoutExplicit           bool
+	candidateIdleTimeoutExplicit bool
+
+	// protocol is the protocol resolved for the current run. It is refreshed
+	// from the script under runMu, so cfg stays immutable after construction.
+	protocol string
+	runMu    sync.Mutex
 }
 
 func NewCrawler(cfg CrawlerConfig) *Crawler {
+	runTimeoutExplicit := cfg.RunTimeout > 0
+	candidateIdleTimeoutExplicit := cfg.CandidateIdleTimeout > 0
 	if strings.TrimSpace(cfg.PythonPath) == "" {
 		cfg.PythonPath = "python3"
 	}
@@ -124,7 +140,26 @@ func NewCrawler(cfg CrawlerConfig) *Crawler {
 		}
 		cfg.HTTPClient = &http.Client{Transport: transport}
 	}
-	return &Crawler{cfg: cfg}
+	return &Crawler{
+		cfg:                          cfg,
+		runTimeoutExplicit:           runTimeoutExplicit,
+		candidateIdleTimeoutExplicit: candidateIdleTimeoutExplicit,
+		protocol:                     cfg.Protocol,
+	}
+}
+
+func (c *Crawler) effectiveRunTimeout() time.Duration {
+	if c.protocol == ProtocolV2 || c.runTimeoutExplicit {
+		return c.cfg.RunTimeout
+	}
+	return 0
+}
+
+func (c *Crawler) effectiveCandidateIdleTimeout() time.Duration {
+	if c.protocol == ProtocolV2 || c.candidateIdleTimeoutExplicit {
+		return c.cfg.CandidateIdleTimeout
+	}
+	return 0
 }
 
 type CrawlResult struct {
@@ -310,8 +345,19 @@ func (c *Crawler) RunOnce(ctx context.Context, targetNew int) (*CrawlResult, err
 	if _, err := os.Stat(c.cfg.ScriptPath); err != nil {
 		return nil, fmt.Errorf("scriptcrawler: script not found: %w", err)
 	}
-	if c.cfg.Protocol != ProtocolV1 && c.cfg.Protocol != ProtocolV2 {
-		return nil, fmt.Errorf("scriptcrawler: unsupported protocol %q", c.cfg.Protocol)
+	// A crawler script can be replaced in place between runs. Refresh the
+	// protocol from the file itself so a scheduled run validates exactly what
+	// dry-run just validated, instead of the protocol seen when the drive was
+	// attached.
+	if !c.cfg.SkipProtocolRefresh {
+		metadata, err := ReadMetadata(c.cfg.ScriptPath)
+		if err != nil {
+			return nil, fmt.Errorf("scriptcrawler: script metadata: %w", err)
+		}
+		c.protocol = metadata.Protocol
+	}
+	if c.protocol != ProtocolV1 && c.protocol != ProtocolV2 {
+		return nil, fmt.Errorf("scriptcrawler: unsupported protocol %q", c.protocol)
 	}
 	if targetNew <= 0 {
 		targetNew = DefaultTargetNew
@@ -357,12 +403,20 @@ func (c *Crawler) RunOnce(ctx context.Context, targetNew int) (*CrawlResult, err
 	result.SeenSnapshot = seenCount
 	emit(CrawlProgress{})
 
-	deadline := time.Now().Add(c.cfg.RunTimeout).UTC()
+	runTimeout := c.effectiveRunTimeout()
+	var deadline time.Time
+	if runTimeout > 0 {
+		deadline = time.Now().Add(runTimeout).UTC()
+	}
 	if err := c.writeJobFile(jobPath, runID, targetNew, candidateBudget, seenPath, deadline); err != nil {
 		return result, fmt.Errorf("scriptcrawler: write job: %w", err)
 	}
 
-	runCtx, cancel := context.WithDeadline(ctx, deadline)
+	runCtx := ctx
+	cancel := func() {}
+	if !deadline.IsZero() {
+		runCtx, cancel = context.WithDeadline(ctx, deadline)
+	}
 	defer cancel()
 	if err := c.executeScript(runCtx, ctx, jobPath, targetNew, candidateBudget, result, emit); err != nil {
 		return result, err
@@ -418,7 +472,7 @@ func (c *Crawler) writeJobFile(path, runID string, targetNew, candidateBudget in
 		return fmt.Errorf("resolve output dir: %w", err)
 	}
 	job := Job{
-		Protocol:          c.cfg.Protocol,
+		Protocol:          c.protocol,
 		Mode:              "crawl",
 		RunID:             runID,
 		CrawlerID:         c.cfg.Driver.ID(),
@@ -430,7 +484,7 @@ func (c *Crawler) writeJobFile(path, runID string, targetNew, candidateBudget in
 		Config:            cfg,
 		Network:           JobNetwork{ProxyURL: strings.TrimSpace(c.cfg.ProxyURL)},
 	}
-	if c.cfg.Protocol == ProtocolV2 {
+	if c.protocol == ProtocolV2 {
 		job.Limits = &JobLimits{
 			MaxRuntimeSeconds:           durationSeconds(c.cfg.RunTimeout),
 			DeadlineAt:                  deadline.UTC().Format(time.RFC3339),

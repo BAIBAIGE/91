@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/video-site/backend/internal/drives"
@@ -70,6 +71,8 @@ type Proxy struct {
 	http    *http.Client
 	relay   *http.Client
 
+	allowForcedRelay atomic.Bool
+
 	statusMu       sync.Mutex
 	statusReporter StreamStatusReporter
 	reportedStatus map[string]string
@@ -92,7 +95,7 @@ type driveInitError struct {
 }
 
 func New(r *Registry) *Proxy {
-	return &Proxy{
+	p := &Proxy{
 		Registry:       r,
 		cache:          make(map[string]cachedLink),
 		reportedStatus: make(map[string]string),
@@ -100,6 +103,14 @@ func New(r *Registry) *Proxy {
 		http:           streamhttp.NewClient(0), // 流式不设超时
 		relay:          streamhttp.NewNoRedirectClient(0),
 	}
+	p.allowForcedRelay.Store(true)
+	return p
+}
+
+// SetAllowForcedRelay lets operators retain redirect-only bandwidth policy.
+// Authentication remains mandatory regardless of this setting.
+func (p *Proxy) SetAllowForcedRelay(allow bool) {
+	p.allowForcedRelay.Store(allow)
 }
 
 // SetDriveInitError keeps a configured-but-unavailable drive visible to the
@@ -213,7 +224,7 @@ func (p *Proxy) ServeStream(w http.ResponseWriter, r *http.Request, driveID, fil
 		writeStreamError(w, d.Kind(), err)
 		return
 	}
-	forceRelay := forceStreamRelay(r)
+	forceRelay := p.allowForcedRelay.Load() && forceStreamRelay(r)
 	if shouldRedirect(d) && !forceRelay {
 		p.reportStreamResult(driveID, nil)
 		redirect(w, r, link)

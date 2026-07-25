@@ -25,6 +25,7 @@ type Config struct {
 	Storage Storage `yaml:"storage"`
 	Scanner Scanner `yaml:"scanner"`
 	Preview Preview `yaml:"preview"`
+	Proxy   Proxy   `yaml:"proxy"`
 	Nightly Nightly `yaml:"nightly"`
 	Drives  []Drive `yaml:"drives"`
 }
@@ -187,6 +188,17 @@ type Preview struct {
 	DurationSeconds int    `yaml:"duration_seconds"`
 	Width           int    `yaml:"width"`
 	Segments        int    `yaml:"segments"`
+}
+
+type Proxy struct {
+	// AllowForcedRelay controls whether authenticated playback clients may ask
+	// the backend to relay an otherwise redirectable stream. nil preserves the
+	// historical/default behavior (enabled).
+	AllowForcedRelay *bool `yaml:"allow_forced_relay"`
+}
+
+func (p Proxy) AllowsForcedRelay() bool {
+	return p.AllowForcedRelay == nil || *p.AllowForcedRelay
 }
 
 // Nightly 是凌晨流水线（扫盘 → 爬虫 → 迁移 → 去重维护）的调度配置。

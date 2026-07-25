@@ -156,6 +156,19 @@ test("admin video pagination stores the active page in the URL", () => {
   assert.doesNotMatch(videosPageSource, /const \[page, setPage\] = useState\(1\);/);
 });
 
+test("admin video pagination clamps stale deep links after totals load", () => {
+  const currentSource = videosPageSource.slice(
+    videosPageSource.indexOf("function CurrentVideosTab"),
+    videosPageSource.indexOf("// ---------- 拉黑视频 ----------")
+  );
+  const blacklistSource = videosPageSource.slice(videosPageSource.indexOf("function BlacklistTab"));
+  // Both tabs must wait for the load to settle before clamping, otherwise the
+  // initial total of 0 would discard the page restored from the URL.
+  const clamp = /!loading\s*&&\s*page\s*>\s*totalPages[\s\S]{0,40}setPage\(totalPages\)/;
+  assert.match(currentSource, clamp);
+  assert.match(blacklistSource, clamp);
+});
+
 test("video pagination keeps its position when the page has fewer rows", () => {
   const currentSource = videosPageSource.slice(
     videosPageSource.indexOf("function CurrentVideosTab"),
