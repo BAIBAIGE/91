@@ -13,6 +13,12 @@ import {
 } from "@/lib/fullscreenSubtitleLayout";
 import { diagnosePlaybackSource } from "@/lib/playbackError";
 import {
+  escapeHtml,
+  formatSubtitleLabel,
+  formatSubtitleOptionLabel,
+  formatSubtitleTooltipLabel,
+} from "@/lib/subtitleLabel";
+import {
   isPortraitVideo,
   TripleScreenRenderer,
 } from "@/lib/tripleScreen";
@@ -944,6 +950,9 @@ function createLoopSetting() {
   };
 }
 
+/** ArtPlayer 设置面板宽度默认为 200px，字幕列表需要更宽一些。 */
+const SUBTITLE_PANEL_WIDTH = 240;
+
 type PlayerSubtitle = VideoSubtitle & { type: "vtt" | "srt" | "ass" };
 type PlayerSetting = NonNullable<Option["settings"]>[number];
 type SubtitleLoadStatus = "idle" | "loading" | "loaded" | "empty" | "error";
@@ -970,7 +979,7 @@ function subtitleOption(
 ): NonNullable<Option["subtitle"]> {
   return {
     url: subtitle.url,
-    name: subtitleTrackLabel(subtitle),
+    name: formatSubtitleLabel(subtitle),
     type: subtitle.type,
     encoding: "utf-8",
     escape: true,
@@ -1026,6 +1035,9 @@ function createSubtitleSetting(
     name: "online-subtitle",
     html: "字幕",
     tooltip,
+    // 二级面板要放下字幕名，比 ArtPlayer 默认的 200px 宽一些；
+    // 240px 在 360px 宽的手机竖屏里仍然放得下。
+    width: SUBTITLE_PANEL_WIDTH,
     selector: [
       {
         name: "online-subtitle-option-off",
@@ -1035,7 +1047,7 @@ function createSubtitleSetting(
       },
       ...subtitles.map((subtitle, index) => ({
         name: `online-subtitle-option-${index}`,
-        html: subtitleTrackLabel(subtitle, index),
+        html: subtitleOptionHtml(subtitle, index),
         value: String(index),
         default: false,
       })),
@@ -1057,22 +1069,24 @@ function createSubtitleSetting(
       const index = Number(value);
       const subtitle = subtitles[index];
       if (!subtitle) {
-        return this.option.subtitle?.name || "字幕";
+        return escapeHtml(this.option.subtitle?.name || "字幕");
       }
 
       setSubtitleVisible(this, true);
       void this.subtitle.switch(subtitle.url, subtitleOption(subtitle));
-      return subtitleTrackLabel(subtitle, index);
+      return escapeHtml(formatSubtitleTooltipLabel(subtitle, index));
     },
   };
 }
 
-function subtitleTrackLabel(subtitle: PlayerSubtitle, index?: number) {
-  return (
-    subtitle.label ||
-    subtitle.name ||
-    (typeof index === "number" ? `字幕 ${index + 1}` : "在线字幕")
-  );
+/**
+ * ArtPlayer 用 insertAdjacentHTML / innerHTML 渲染设置项，而字幕名字来自
+ * 第三方接口，必须转义后再交给它。完整名字放在 title 里，悬停仍可查看。
+ */
+function subtitleOptionHtml(subtitle: PlayerSubtitle, index: number) {
+  const label = escapeHtml(formatSubtitleOptionLabel(subtitle, index));
+  const title = escapeHtml(formatSubtitleLabel(subtitle, index));
+  return `<span class="video-player__subtitle-option" title="${title}">${label}</span>`;
 }
 
 function setSubtitleVisible(art: Artplayer, visible: boolean) {

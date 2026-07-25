@@ -144,6 +144,49 @@
   display: none;
 }
 
+/*
+ * 设置面板宽度是 ArtPlayer 写死的内联样式，且 .art-setting-item-left 默认
+ * flex-shrink: 0。字幕名字过长时，居中的一行会被左右两头同时裁掉，只剩中间
+ * 一段。这里允许收缩并交给省略号处理，作为 JS 截断之外的兜底。
+ */
+.video-player
+  .art-video-player
+  .art-settings
+  .art-setting-panel
+  .art-setting-item[data-name^="online-subtitle-option-"]
+  > .art-setting-item-left {
+  min-width: 0;
+  flex-shrink: 1;
+}
+
+.video-player__subtitle-option {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* 主面板“字幕”一行右侧显示当前轨道名，同样不能把整行挤出面板。 */
+.video-player
+  .art-video-player
+  .art-settings
+  .art-setting-panel
+  .art-setting-item[data-name="online-subtitle"]
+  > .art-setting-item-right {
+  min-width: 0;
+}
+
+.video-player
+  .art-video-player
+  .art-settings
+  .art-setting-panel
+  .art-setting-item[data-name="online-subtitle"]
+  .art-setting-item-right-tooltip {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* 全屏时让字幕跟随 object-fit: contain 后的实际画面下缘，而不是视口底部。 */
 .art-video-player.art-fullscreen,
 .art-video-player.art-fullscreen-web,
