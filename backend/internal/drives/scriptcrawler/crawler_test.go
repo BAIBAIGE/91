@@ -1011,6 +1011,154 @@ func TestCrawlerRunOnceDownloadsHLSMediaURL(t *testing.T) {
 	}
 }
 
+func TestPruneCrawlDirKeepsRecentHistory(t *testing.T) {
+	dir := t.TempDir()
+	writeFile := func(name string) string {
+		t.Helper()
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, []byte("x"), 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+		return path
+	}
+	var seenNames, jobNames []string
+	for i := 0; i < crawlHistoryKeep+3; i++ {
+		runID := fmt.Sprintf("20250101T00000%dZ", i)
+		seenNames = append(seenNames, "seen-"+runID+".txt")
+		jobNames = append(jobNames, "job-"+runID+".json")
+		writeFile(seenNames[i])
+		writeFile(jobNames[i])
+	}
+	freshPart := writeFile("seen-20250102T000000Z.txt.part")
+	stalePart := writeFile("job-20240101T000000Z.json.part")
+	old := time.Now().Add(-2 * crawlPartMaxAge)
+	if err := os.Chtimes(stalePart, old, old); err != nil {
+		t.Fatalf("age stale part: %v", err)
+	}
+	unrelated := writeFile("notes.txt")
+	matchingDir := filepath.Join(dir, "seen-20250103T000000Z.txt")
+	if err := os.Mkdir(matchingDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	pruneCrawlDir(dir)
+
+	pruned := append(append([]string{}, seenNames[:3]...), jobNames[:3]...)
+	for _, name := range pruned {
+		if _, err := os.Stat(filepath.Join(dir, name)); !os.IsNotExist(err) {
+			t.Fatalf("%s should be pruned, stat err=%v", name, err)
+		}
+	}
+	kept := append(append([]string{}, seenNames[3:]...), jobNames[3:]...)
+	for _, name := range kept {
+		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
+			t.Fatalf("%s should survive: %v", name, err)
+		}
+	}
+	if _, err := os.Stat(freshPart); err != nil {
+		t.Fatalf("fresh .part should survive: %v", err)
+	}
+	if _, err := os.Stat(stalePart); !os.IsNotExist(err) {
+		t.Fatalf("stale .part should be removed, stat err=%v", err)
+	}
+	if _, err := os.Stat(unrelated); err != nil {
+		t.Fatalf("unrelated file should survive: %v", err)
+	}
+	if _, err := os.Stat(matchingDir); err != nil {
+		t.Fatalf("directory should survive: %v", err)
+	}
+}
+
+func TestCrawlerRunOncePrunesCrawlHistory(t *testing.T) {
+	ctx := context.Background()
+	tmp := t.TempDir()
+	cat, err := catalog.Open(filepath.Join(tmp, "catalog.db"))
+	if err != nil {
+		t.Fatalf("open catalog: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := cat.Close(); err != nil {
+			t.Fatalf("close catalog: %v", err)
+		}
+	})
+	drv := New(Config{ID: "demo", RootDir: filepath.Join(tmp, "crawler")})
+	if err := drv.Init(ctx); err != nil {
+		t.Fatalf("driver init: %v", err)
+	}
+	crawlDir := drv.CrawlDir()
+	var staleSeen, staleJobs []string
+	for i := 0; i < crawlHistoryKeep+2; i++ {
+		runID := fmt.Sprintf("20250101T00000%dZ", i)
+		staleSeen = append(staleSeen, "seen-"+runID+".txt")
+		staleJobs = append(staleJobs, "job-"+runID+".json")
+		for _, name := range []string{staleSeen[i], staleJobs[i]} {
+			if err := os.WriteFile(filepath.Join(crawlDir, name), []byte("x"), 0o644); err != nil {
+				t.Fatalf("seed %s: %v", name, err)
+			}
+		}
+	}
+	dummyScript := filepath.Join(tmp, "helper-script")
+	if err := os.WriteFile(dummyScript, []byte("helper"), 0o755); err != nil {
+		t.Fatalf("write dummy script: %v", err)
+	}
+	wrapper := filepath.Join(tmp, "helper-wrapper.sh")
+	wrapperScript := fmt.Sprintf("#!/bin/sh\nexec %q -test.run=TestScriptCrawlerHelperProcess \"$@\"\n", os.Args[0])
+	if err := os.WriteFile(wrapper, []byte(wrapperScript), 0o755); err != nil {
+		t.Fatalf("write helper wrapper: %v", err)
+	}
+
+	t.Setenv("GO_WANT_SCRIPTCRAWLER_HELPER", "1")
+	c := NewCrawler(CrawlerConfig{
+		Driver:              drv,
+		Catalog:             cat,
+		CrawlerName:         "Demo Crawler",
+		PythonPath:          wrapper,
+		FFprobePath:         writeScriptCrawlerFFprobeStub(t, tmp, true),
+		ScriptPath:          dummyScript,
+		SkipProtocolRefresh: true,
+	})
+	res, err := c.RunOnce(ctx, 1)
+	if err != nil {
+		t.Fatalf("run once: %v", err)
+	}
+
+	for _, name := range []string{staleSeen[0], staleSeen[1], staleJobs[0], staleJobs[1]} {
+		if _, err := os.Stat(filepath.Join(crawlDir, name)); !os.IsNotExist(err) {
+			t.Fatalf("%s should be pruned, stat err=%v", name, err)
+		}
+	}
+	for i := 2; i < len(staleSeen); i++ {
+		for _, name := range []string{staleSeen[i], staleJobs[i]} {
+			if _, err := os.Stat(filepath.Join(crawlDir, name)); err != nil {
+				t.Fatalf("%s should survive: %v", name, err)
+			}
+		}
+	}
+	if _, err := os.Stat(res.SeenFile); err != nil {
+		t.Fatalf("current run seen file: %v", err)
+	}
+	if _, err := os.Stat(res.JobFile); err != nil {
+		t.Fatalf("current run job file: %v", err)
+	}
+	entries, err := os.ReadDir(crawlDir)
+	if err != nil {
+		t.Fatalf("read crawl dir: %v", err)
+	}
+	seenCount, jobCount := 0, 0
+	for _, entry := range entries {
+		name := entry.Name()
+		if strings.HasPrefix(name, "seen-") && strings.HasSuffix(name, ".txt") {
+			seenCount++
+		}
+		if strings.HasPrefix(name, "job-") && strings.HasSuffix(name, ".json") {
+			jobCount++
+		}
+	}
+	if seenCount != crawlHistoryKeep+1 || jobCount != crawlHistoryKeep+1 {
+		t.Fatalf("crawl dir = %d seen / %d job files, want %d each", seenCount, jobCount, crawlHistoryKeep+1)
+	}
+}
+
 func TestScriptCrawlerHelperProcess(t *testing.T) {
 	if os.Getenv("GO_WANT_SCRIPTCRAWLER_HELPER") != "1" {
 		return

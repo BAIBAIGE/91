@@ -18,6 +18,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -45,6 +46,8 @@ const (
 	maxV1StdoutLineBytes       = 4 * 1024 * 1024
 	maxV2StdoutLineBytes       = 1024 * 1024
 	maxStderrLineBytes         = 8 * 1024
+	crawlHistoryKeep           = 5
+	crawlPartMaxAge            = 24 * time.Hour
 )
 
 type CrawlerConfig struct {
@@ -390,6 +393,7 @@ func (c *Crawler) RunOnce(ctx context.Context, targetNew int) (*CrawlResult, err
 	if err := os.MkdirAll(crawlDir, 0o755); err != nil {
 		return result, err
 	}
+	pruneCrawlDir(crawlDir)
 	runID := time.Now().UTC().Format("20060102T150405Z")
 	seenPath := filepath.Join(crawlDir, "seen-"+runID+".txt")
 	jobPath := filepath.Join(crawlDir, "job-"+runID+".json")
@@ -457,6 +461,46 @@ func (c *Crawler) writeSeenSourceIDs(ctx context.Context, path string) (int, err
 		return 0, err
 	}
 	return len(seen), nil
+}
+
+// pruneCrawlDir bounds the .crawl history. Every run writes a fresh
+// seen-/job- file pair, so a scheduled crawler would otherwise accumulate
+// them forever. The newest crawlHistoryKeep of each kind survive for
+// post-mortem debugging. Stale .part leftovers from interrupted writes are
+// removed once they are old enough to not belong to a live run.
+func pruneCrawlDir(dir string) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	var seenFiles, jobFiles []string
+	now := time.Now()
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		switch {
+		case strings.HasSuffix(name, ".part"):
+			if info, err := entry.Info(); err == nil && now.Sub(info.ModTime()) > crawlPartMaxAge {
+				_ = os.Remove(filepath.Join(dir, name))
+			}
+		case strings.HasPrefix(name, "seen-") && strings.HasSuffix(name, ".txt"):
+			seenFiles = append(seenFiles, name)
+		case strings.HasPrefix(name, "job-") && strings.HasSuffix(name, ".json"):
+			jobFiles = append(jobFiles, name)
+		}
+	}
+	for _, group := range [][]string{seenFiles, jobFiles} {
+		if len(group) <= crawlHistoryKeep {
+			continue
+		}
+		// Run IDs are UTC timestamps, so lexical order is chronological.
+		sort.Strings(group)
+		for _, name := range group[:len(group)-crawlHistoryKeep] {
+			_ = os.Remove(filepath.Join(dir, name))
+		}
+	}
 }
 
 func (c *Crawler) writeJobFile(path, runID string, targetNew, candidateBudget int, seenPath string, deadline time.Time) error {
