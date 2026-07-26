@@ -4724,21 +4724,32 @@
 .admin-blacklist-filename {
   display: block;
   min-width: 0;
-  word-break: break-all;
-  overflow-wrap: anywhere;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .admin-blacklist-filecell {
   display: flex;
   min-width: 0;
   align-items: center;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 6px;
+}
+
+@media (min-width: 769px) {
+  /* auto 表格布局会按内容宽度撑列，超长文件名会把表格撑破 860px；
+     max-width: 0 让该列只吃表格分配的剩余宽度，从而触发单行省略号 */
+  .admin-blacklist-table td[data-label="文件名"] {
+    width: 100%;
+    max-width: 0;
+  }
 }
 
 .admin-blacklist-reason-pill {
   display: inline-flex;
   align-items: center;
+  flex: none;
   min-height: 22px;
   padding: 2px 8px;
   border: 1px solid var(--warning-border, rgba(205, 132, 38, 0.38));
@@ -4759,6 +4770,7 @@
   font-size: var(--font-xs);
   line-height: 1.35;
   text-align: right;
+  white-space: nowrap;
 }
 
 .admin-blacklist-actions {
@@ -4766,7 +4778,7 @@
   align-items: center;
   justify-content: flex-end;
   gap: 6px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
 }
 
 .admin-blacklist-delete-source-btn {
@@ -5115,6 +5127,19 @@
     grid-column: 1 / -1;
   }
 
+  /* 卡片视图空间有限，文件名与操作按钮沿用换行布局，仅桌面表格要求单行 */
+  .admin-blacklist-filecell {
+    flex-wrap: wrap;
+  }
+
+  .admin-blacklist-filename {
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+    word-break: break-all;
+    overflow-wrap: anywhere;
+  }
+
   .admin-blacklist-table:not(.admin-drives-table) td.is-actions {
     grid-column: 2;
     align-content: center;
@@ -5125,6 +5150,7 @@
 
   .admin-blacklist-actions {
     justify-content: flex-end;
+    flex-wrap: wrap;
   }
 
   .admin-blacklist-table:not(.admin-drives-table) td.is-actions::before {

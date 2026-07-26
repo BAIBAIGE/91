@@ -1058,7 +1058,7 @@ function BlacklistTab({
                 >
                   <td data-label="文件名">
                     <div className="admin-blacklist-filecell">
-                      <span className="admin-blacklist-filename">{v.fileName || <span className="admin-text-faint">（无文件名）</span>}</span>
+                      <span className="admin-blacklist-filename" title={v.fileName || undefined}>{v.fileName || <span className="admin-text-faint">（无文件名）</span>}</span>
                       {v.reason === "duplicate" && <span className="admin-blacklist-reason-pill">重复文件</span>}
                       {v.driveId === "local-upload" && (
                         <span className="admin-blacklist-reason-pill">本地上传</span>
