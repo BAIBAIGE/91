@@ -4,6 +4,7 @@ import { Clock, HardDrive, RefreshCw, ThumbsUp, Eye } from "lucide-react";
 import * as api from "./api";
 import { useToast } from "./ToastContext";
 import { ConfirmModal } from "./ConfirmModal";
+import { AdminEmptyVisual } from "./AdminEmptyVisual";
 import { formatBytes } from "./storageFormat";
 
 // 疑似重复复核：夜间内容级查重把拿不准的视频对（SSIM 0.80~0.92）排进队列，
@@ -14,7 +15,7 @@ type Tab = "pending" | "merged" | "dismissed";
 
 const TAB_LABELS: Record<Tab, string> = {
   pending: "待复核",
-  merged: "已合并",
+  merged: "已去重",
   dismissed: "已忽略",
 };
 
@@ -79,7 +80,7 @@ export function DuplicateReviewsPage() {
     setResolvingId(pair.id);
     try {
       await api.resolveDuplicateReview(pair.id, action);
-      show(action === "dismiss" ? "已标记为非重复" : "已合并，重复版本已删除", "success");
+      show(action === "dismiss" ? "已标记为非重复" : "已保留所选版本，重复版本已拉黑", "success");
       setMergeConfirm(null);
       await refresh();
     } catch (e) {
@@ -97,8 +98,8 @@ export function DuplicateReviewsPage() {
   }
 
   return (
-    <div className="admin-page">
-      <div className="admin-users-toolbar">
+    <div className="admin-page admin-duperev-page">
+      <div className="admin-users-toolbar admin-duperev-toolbar">
         <div className="admin-tags-filter-tabs" role="tablist" aria-label="复核状态">
           {(Object.keys(TAB_LABELS) as Tab[]).map((key) => (
             <button
@@ -112,11 +113,6 @@ export function DuplicateReviewsPage() {
               <span className="admin-tags-filter-tab__text">{TAB_LABELS[key]}</span>
             </button>
           ))}
-        </div>
-        <div className="admin-users-toolbar-actions">
-          <button className="admin-btn" onClick={() => refresh()} disabled={loading}>
-            <RefreshCw size={13} className={loading ? "admin-spin" : undefined} /> 刷新
-          </button>
         </div>
       </div>
 
@@ -134,30 +130,31 @@ export function DuplicateReviewsPage() {
           </button>
         </div>
       ) : items.length === 0 ? (
-        <div className="admin-duperev-empty">
-          {tab === "pending"
-            ? "暂无待复核的疑似重复。夜间维护发现拿不准的视频对时会自动排进来。"
-            : "暂无记录。"}
-        </div>
+        <AdminEmptyVisual
+          variant="empty"
+          text={
+            tab === "pending"
+              ? "暂无待复核的疑似重复，夜间维护发现拿不准的视频对时会自动排进来"
+              : "暂无记录"
+          }
+          className="admin-empty-state admin-empty-state--plain"
+        />
       ) : (
         <div className="admin-duperev-list">
           {items.map((pair) => (
             <div key={pair.id} className="admin-duperev-card">
               <div className="admin-duperev-card__meta">
-                <span className="admin-status is-pending">
-                  相似度中位 {(pair.medianSsim * 100).toFixed(1)}%
-                </span>
+                {tab === "pending" && (
+                  <span className="admin-status is-pending">
+                    相似度中位 {(pair.medianSsim * 100).toFixed(1)}%
+                  </span>
+                )}
                 <span className="admin-duperev-card__meta-item">
                   最低 {(pair.minSsim * 100).toFixed(1)}% · {pair.comparisons} 帧对比
                 </span>
                 <span className="admin-duperev-card__meta-item">
                   <Clock size={12} /> {formatTime(pair.updatedAt)}
                 </span>
-                {tab !== "pending" && (
-                  <span className={`admin-status ${pair.status === "merged" ? "is-ok" : "is-error"}`}>
-                    {pair.status === "merged" ? "已合并" : "已忽略"}
-                  </span>
-                )}
               </div>
               <div className="admin-duperev-card__videos">
                 {[
@@ -208,7 +205,7 @@ export function DuplicateReviewsPage() {
                         </div>
                       </>
                     ) : (
-                      <div className="admin-duperev-video__missing">视频已删除</div>
+                      <div className="admin-duperev-video__missing">视频已拉黑</div>
                     )}
                   </div>
                 ))}
@@ -221,7 +218,7 @@ export function DuplicateReviewsPage() {
                     disabled={resolvingId === pair.id}
                     onClick={() => resolve(pair, "dismiss")}
                   >
-                    不是重复，忽略
+                    不是重复并忽略
                   </button>
                 </div>
               )}
@@ -268,17 +265,9 @@ export function DuplicateReviewsPage() {
       <ConfirmModal
         open={mergeConfirm !== null}
         danger
-        title="合并重复视频"
-        message={mergeConfirm ? `保留「${mergeConfirm.keep.title}」，删除「${mergeConfirm.remove.title}」？` : ""}
-        details={
-          mergeConfirm
-            ? [
-                `保留：${mergeConfirm.keep.driveId} · ${formatBytes(mergeConfirm.keep.size)}`,
-                `删除：${mergeConfirm.remove.driveId} · ${formatBytes(mergeConfirm.remove.size)}（打重复墓碑，可在黑名单恢复；不删网盘源文件）`,
-              ]
-            : undefined
-        }
-        confirmText="确认合并"
+        hideIcon
+        title="视频去重"
+        message={mergeConfirm ? `保留「${mergeConfirm.keep.title}」，拉黑「${mergeConfirm.remove.title}」？` : ""}
         loading={mergeConfirm !== null && resolvingId === mergeConfirm.pair.id}
         onCancel={() => setMergeConfirm(null)}
         onConfirm={() => {

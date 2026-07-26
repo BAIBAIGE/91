@@ -7609,6 +7609,24 @@
 
 /* ---------- 疑似重复复核 ---------- */
 
+.admin-duperev-toolbar {
+  justify-content: center;
+}
+
+/* 空状态时页面撑满视口剩余高度，让表情图落在页面正中（与拉黑页同款） */
+.admin-duperev-page {
+  display: flex;
+  flex-direction: column;
+  min-height: calc(100vh - (var(--space-7) * 2));
+}
+
+.admin-duperev-page > .admin-empty-state--plain {
+  box-sizing: border-box;
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 0 16px 48px;
+}
+
 .admin-duperev-list {
   display: flex;
   flex-direction: column;
@@ -7747,16 +7765,6 @@
 .admin-duperev-card__actions {
   display: flex;
   justify-content: flex-end;
-}
-
-.admin-duperev-empty {
-  padding: var(--space-6);
-  text-align: center;
-  color: var(--text-muted);
-  background: var(--bg-surface);
-  border: 1px dashed var(--border-subtle);
-  border-radius: 10px;
-  font-size: var(--font-sm);
 }
 
 @media (max-width: 860px) {
