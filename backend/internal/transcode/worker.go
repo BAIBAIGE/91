@@ -152,16 +152,57 @@ func (w *Worker) doneCount() int {
 }
 
 func (w *Worker) process(ctx context.Context, v *catalog.Video) error {
-	localPath, cleanup, err := w.fetchSource(ctx, v)
+	// 候选列表是任务开始时的快照，条目排队期间可能已被其它途径处理
+	// （如单条工具、上一次被打断的任务）。以库里当前状态为准防止重复
+	// 转码；读失败不阻塞，继续按快照处理。
+	if cur, err := w.cat.GetVideo(ctx, v.ID); err == nil &&
+		(cur.TranscodeStatus == "ready" || cur.TranscodeStatus == "skipped") {
+		return nil
+	}
+
+	link, err := w.drv.StreamURL(ctx, v.FileID)
+	if err != nil {
+		return fmt.Errorf("resolve source: %w", err)
+	}
+
+	if path, ok := localSourcePath(link); ok {
+		info, err := ProbeFile(ctx, w.cfg.FFprobePath, path)
+		if err != nil {
+			return err
+		}
+		return w.finish(ctx, v, info, path)
+	}
+
+	// 云盘文件先远程探测（只读容器元数据，不整文件下载）。编码本就兼容
+	// 的直接标 skipped——绝大多数 mp4 在这一步零下载跳过。
+	info, probeErr := ProbeURL(ctx, w.cfg.FFprobePath, link.URL, link.Headers)
+	if probeErr == nil && !NeedsTranscode(info, v.Ext) {
+		log.Printf("[transcode] drive=%s video=%s compatible (%s), skip", w.drv.ID(), v.ID, info.FormatName)
+		return w.cat.UpdateVideoTranscode(ctx, v.ID, "skipped", "", "", 0)
+	}
+	if probeErr != nil && extAssumedPlayable(v.Ext) {
+		// mp4/m4v 只为甄别编码才进候选：远程探测失败时不能整文件下载兜
+		// 底，否则一次系统性探测失败会把全库 mp4 拉一遍。标 failed 留在
+		// 候选里，下次开始转码时自动重试。
+		return fmt.Errorf("remote probe: %w", probeErr)
+	}
+
+	// 走到这里要么确认需要转码，要么是容器本就不兼容的老候选（avi/mov/
+	// mkv…）探测失败——都下载整文件，以本地探测结果为准。
+	localPath, cleanup, err := w.download(ctx, v, link)
 	if err != nil {
 		return fmt.Errorf("fetch source: %w", err)
 	}
 	defer cleanup()
-
-	info, err := ProbeFile(ctx, w.cfg.FFprobePath, localPath)
+	info, err = ProbeFile(ctx, w.cfg.FFprobePath, localPath)
 	if err != nil {
 		return err
 	}
+	return w.finish(ctx, v, info, localPath)
+}
+
+// finish 拿到权威探测结果和本地可读路径后完成剩余流程：跳过或转码+上传。
+func (w *Worker) finish(ctx context.Context, v *catalog.Video, info MediaInfo, localPath string) error {
 	if !NeedsTranscode(info, v.Ext) {
 		log.Printf("[transcode] drive=%s video=%s compatible (%s), skip", w.drv.ID(), v.ID, info.FormatName)
 		return w.cat.UpdateVideoTranscode(ctx, v.ID, "skipped", "", "", 0)
@@ -194,22 +235,31 @@ func (w *Worker) process(ctx context.Context, v *catalog.Video) error {
 	return w.cat.UpdateVideoTranscode(ctx, v.ID, "ready", "", fileID, stat.Size())
 }
 
-// fetchSource 把原始文件准备成本地路径。本地存储直接复用源路径（cleanup
-// 不删除源文件）；云盘则整文件下载到 WorkDir。
-func (w *Worker) fetchSource(ctx context.Context, v *catalog.Video) (string, func(), error) {
-	link, err := w.drv.StreamURL(ctx, v.FileID)
-	if err != nil {
-		return "", nil, err
-	}
+// localSourcePath 判断 StreamLink 是否指向本地文件（本地存储盘），是则
+// 返回本地路径。
+func localSourcePath(link *drives.StreamLink) (string, bool) {
 	u, err := url.Parse(link.URL)
-	if isLocal := err == nil && u.Scheme != "http" && u.Scheme != "https"; isLocal {
-		path := link.URL
-		if err == nil && u.Scheme == "file" {
-			path = u.Path
-		}
-		return path, func() {}, nil
+	if err != nil || u.Scheme == "http" || u.Scheme == "https" {
+		return "", false
 	}
+	if u.Scheme == "file" {
+		return u.Path, true
+	}
+	return link.URL, true
+}
 
+// extAssumedPlayable 是"容器本身浏览器可播、只为甄别里面编码才进转码
+// 候选"的扩展名。这些文件不做整文件下载兜底（见 process）。
+func extAssumedPlayable(ext string) bool {
+	switch strings.ToLower(strings.TrimSpace(ext)) {
+	case "mp4", "m4v":
+		return true
+	}
+	return false
+}
+
+// download 把云盘文件整文件下载到 WorkDir，返回本地路径和清理函数。
+func (w *Worker) download(ctx context.Context, v *catalog.Video, link *drives.StreamLink) (string, func(), error) {
 	tmpPath := filepath.Join(w.cfg.WorkDir, sanitizeFileName(v.ID)+".src.tmp")
 	cleanup := func() { os.Remove(tmpPath) }
 	if err := w.downloadTo(ctx, link, tmpPath); err != nil {

@@ -226,10 +226,13 @@ func (c *Catalog) UpdatePreview(ctx context.Context, id, previewLocal, status st
 }
 
 // transcodeCandidateWhereSQL 圈定"可能需要浏览器兼容性转码"的视频：
-// mp4/webm/m4v 默认浏览器可播不进候选；strm 是远程引用没有本体。
-// 其余扩展名都先入候选，由转码 worker probe 实际编码后决定转码还是跳过
-// （skipped）。failed 也保留在候选里，重新点开始转码时会自动重试。
-const transcodeCandidateWhereSQL = `COALESCE(ext, '') NOT IN ('mp4', 'webm', 'm4v', 'strm')
+// webm 容器规范上只允许 vp8/vp9/av1 + vorbis/opus，浏览器必播，不进候选；
+// strm 是远程引用没有本体。mp4/m4v 虽然容器兼容，但里面可能装着
+// MPEG-4 Part 2 / HEVC 等浏览器解不了的视频轨（表现为黑屏有声音），
+// 所以也进候选，由转码 worker 先远程 probe 实际编码，兼容的直接标
+// skipped（不下载文件），不兼容的才转码。failed 也保留在候选里，
+// 重新点开始转码时会自动重试。
+const transcodeCandidateWhereSQL = `COALESCE(ext, '') NOT IN ('webm', 'strm')
 	AND COALESCE(transcode_status, '') IN ('', 'pending', 'failed')`
 
 // ListTranscodeCandidates 列出某盘所有转码候选视频。limit<=0 表示不限制。

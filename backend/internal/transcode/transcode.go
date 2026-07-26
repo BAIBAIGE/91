@@ -9,8 +9,11 @@ package transcode
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net/http"
 	"os/exec"
+	"sort"
 	"strings"
 	"time"
 )
@@ -78,17 +81,62 @@ func containerCompatible(formatName, ext string) bool {
 
 // ProbeFile 用 ffprobe 探测本地文件的容器与音视频编码。
 func ProbeFile(ctx context.Context, ffprobePath, path string) (MediaInfo, error) {
+	return probe(ctx, ffprobePath, nil, path)
+}
+
+// ProbeURL 用 ffprobe 直接探测远程流（http/https）的容器与音视频编码，
+// 不把文件下载到本地。MP4 只需读 moov 等头尾元数据（ffprobe 通过 Range
+// 请求 seek），流量通常在 MB 级。headers 原样传给 ffprobe，携带网盘直链
+// 需要的 Cookie / User-Agent / Referer 等。
+func ProbeURL(ctx context.Context, ffprobePath, rawURL string, headers http.Header) (MediaInfo, error) {
+	var extra []string
+	if h := formatFFmpegHeaders(headers); h != "" {
+		extra = append(extra, "-headers", h)
+	}
+	return probe(ctx, ffprobePath, extra, rawURL)
+}
+
+// formatFFmpegHeaders 把 http.Header 拼成 ffmpeg/-headers 要求的
+// "Key: value\r\n" 逐行格式。key 排序保证输出稳定。
+func formatFFmpegHeaders(h http.Header) string {
+	if len(h) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(h))
+	for k := range h {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var b strings.Builder
+	for _, k := range keys {
+		for _, v := range h[k] {
+			b.WriteString(k)
+			b.WriteString(": ")
+			b.WriteString(v)
+			b.WriteString("\r\n")
+		}
+	}
+	return b.String()
+}
+
+func probe(ctx context.Context, ffprobePath string, extraArgs []string, input string) (MediaInfo, error) {
 	ctx2, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx2, ffprobePath,
-		"-v", "error",
+	args := []string{"-v", "error"}
+	args = append(args, extraArgs...)
+	args = append(args,
 		"-show_entries", "format=format_name",
 		"-show_entries", "stream=codec_type,codec_name",
 		"-of", "json",
-		path,
+		input,
 	)
+	cmd := exec.CommandContext(ctx2, ffprobePath, args...)
 	out, err := cmd.Output()
 	if err != nil {
+		var ee *exec.ExitError
+		if errors.As(err, &ee) && len(ee.Stderr) > 0 {
+			return MediaInfo{}, fmt.Errorf("transcode: ffprobe: %w: %s", err, tailOf(string(ee.Stderr), 300))
+		}
 		return MediaInfo{}, fmt.Errorf("transcode: ffprobe: %w", err)
 	}
 	var parsed struct {
