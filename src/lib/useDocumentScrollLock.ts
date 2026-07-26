@@ -39,7 +39,6 @@ function lockDocumentScroll() {
   const body = document.body;
   const scrollX = window.scrollX;
   const scrollY = window.scrollY;
-  const scrollbarWidth = Math.max(0, window.innerWidth - root.clientWidth);
   const bodyPaddingRight = Number.parseFloat(window.getComputedStyle(body).paddingRight) || 0;
 
   scrollLockSnapshot = {
@@ -57,6 +56,12 @@ function lockDocumentScroll() {
     bodyPaddingRight: body.style.paddingRight,
   };
 
+  // Compensation must be based on the body's own layout width, not
+  // documentElement.clientWidth: with `scrollbar-gutter: stable` on <html>,
+  // hiding the scrollbar keeps the gutter reserved (the body does not widen),
+  // yet the root's clientWidth still grows by the scrollbar width — padding
+  // derived from it would shift the whole page left.
+  const bodyWidthBeforeLock = body.getBoundingClientRect().width;
   root.style.overflow = "hidden";
   root.style.overscrollBehavior = "none";
   body.style.position = "fixed";
@@ -65,8 +70,9 @@ function lockDocumentScroll() {
   body.style.width = "100%";
   body.style.overflow = "hidden";
   body.style.overscrollBehavior = "none";
-  if (scrollbarWidth > 0) {
-    body.style.paddingRight = `${bodyPaddingRight + scrollbarWidth}px`;
+  const widthGain = body.getBoundingClientRect().width - bodyWidthBeforeLock;
+  if (widthGain > 0) {
+    body.style.paddingRight = `${bodyPaddingRight + widthGain}px`;
   }
 }
 
