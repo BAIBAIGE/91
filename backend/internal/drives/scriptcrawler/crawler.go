@@ -760,7 +760,7 @@ func (c *Crawler) processItem(ctx context.Context, item Item) (bool, error) {
 	if thumbReady {
 		v.ThumbnailURL = "/p/thumb/" + v.ID
 	}
-	if duplicate, err := c.findNearDuplicateVideo(ctx, v, commonThumbPath); err != nil {
+	if duplicate, err := c.findNearDuplicateVideo(ctx, v, commonThumbPath, videoPath); err != nil {
 		_ = os.Remove(videoPath)
 		if thumbPath != "" {
 			_ = os.Remove(thumbPath)
@@ -784,7 +784,7 @@ func (c *Crawler) processItem(ctx context.Context, item Item) (bool, error) {
 				}
 				return false, fmt.Errorf("delete smaller near duplicate %s: %w", duplicate.video.ID, err)
 			}
-			log.Printf("[scriptcrawler] drive=%s source_id=%s replacing_smaller_near_duplicate=%s old_size=%d new_size=%d title_similarity=%.3f thumbnail_ssim=%.3f title=%q duration=%d", c.cfg.Driver.ID(), sourceID, duplicate.video.ID, duplicate.video.Size, v.Size, duplicate.titleSimilarity, duplicate.thumbnailSSIM, title, v.DurationSeconds)
+			log.Printf("[scriptcrawler] drive=%s source_id=%s replacing_smaller_near_duplicate=%s old_size=%d new_size=%d title_similarity=%.3f thumbnail_ssim=%.3f content_ssim=%.3f title=%q duration=%d", c.cfg.Driver.ID(), sourceID, duplicate.video.ID, duplicate.video.Size, v.Size, duplicate.titleSimilarity, duplicate.thumbnailSSIM, duplicate.contentSSIM, title, v.DurationSeconds)
 		} else {
 			_ = os.Remove(videoPath)
 			if thumbPath != "" {
@@ -796,7 +796,7 @@ func (c *Crawler) processItem(ctx context.Context, item Item) (bool, error) {
 			if markErr := c.cfg.Catalog.MarkCrawlerSourceSeen(ctx, Kind, c.cfg.Driver.ID(), sourceID, "duplicate", duplicate.video.ID, sampled, size); markErr != nil {
 				log.Printf("[scriptcrawler] drive=%s source_id=%s mark near duplicate seen: %v", c.cfg.Driver.ID(), sourceID, markErr)
 			}
-			log.Printf("[scriptcrawler] drive=%s source_id=%s near_duplicate_of=%s old_size=%d new_size=%d title_similarity=%.3f thumbnail_ssim=%.3f title=%q duration=%d", c.cfg.Driver.ID(), sourceID, duplicate.video.ID, duplicate.video.Size, v.Size, duplicate.titleSimilarity, duplicate.thumbnailSSIM, title, v.DurationSeconds)
+			log.Printf("[scriptcrawler] drive=%s source_id=%s near_duplicate_of=%s old_size=%d new_size=%d title_similarity=%.3f thumbnail_ssim=%.3f content_ssim=%.3f title=%q duration=%d", c.cfg.Driver.ID(), sourceID, duplicate.video.ID, duplicate.video.Size, v.Size, duplicate.titleSimilarity, duplicate.thumbnailSSIM, duplicate.contentSSIM, title, v.DurationSeconds)
 			return false, nil
 		}
 	}

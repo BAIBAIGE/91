@@ -51,7 +51,10 @@ cmd/
     generation.go           封面 / 预览视频的重生入口
     blacklist.go            历史「隐藏」视频迁移为黑名单墓碑
     tag_maintenance.go      启动期标签迁移与清理
-    video_maintenance.go    本地上传文件名迁移
+    video_maintenance.go    本地上传文件名迁移 + 夜间全库去重（精确指纹、标题/封面近重复）
+    video_maintenance_content.go
+                            夜间内容级去重通道：时长相等的视频比较 teaser 对齐帧
+  dedupe-dryrun/            只读预演内容级去重会删哪些视频，不写库不删文件
   diag-115/ list-115-yingshi/ list-yingshi-children/ trace-parents/
                             一次性诊断工具，读库里的 115 cookie 列目录 / 追父目录，不参与服务运行
 
@@ -97,7 +100,7 @@ internal/
   crawlerupload/            把爬虫落地的视频迁移到目标网盘并改写 catalog 行
   tagging/                  标签匹配规则、番号识别
   fixedtags/                内置标签包及其匹配规则
-  mediasim/                 标题相似度 + 封面 SSIM，供近重复判定使用
+  mediasim/                 标题相似度 + 封面 SSIM + teaser 帧签名，供近重复判定使用
   mediaasset/               封面 / 预览视频的本地路径与文件名规则
   videoname/                扫描、上传、爬虫迁移共用的文件名与标题规则
   storageusage/             磁盘与各网盘占用统计
@@ -283,8 +286,9 @@ flowchart LR
 1. **同盘同文件**：`(drive_id, file_id)` 生成稳定视频 ID，重复扫描只更新同一行。
 2. **入库时**：优先用网盘侧 `content_hash`，没有则退化为 `file_name + size_bytes`。
 3. **跨盘文件级**：`size_bytes + sampled_sha256` 相同的视频，前台只展示最早入库的那条。夜间 Phase 5 会清理非展示项的本地封面和预览并重置为 `pending`，**不删网盘源文件、不删元数据行**；若展示项以后被移除，这些副本会重新进入生成队列。
+4. **跨盘内容级**（夜间 Phase 5）：teaser 选段起点只由时长决定，所以时长几乎相等（≥120 秒、相差 ≤2 秒）的两个视频即使压制、水印、标题、封面完全不同，teaser 对齐帧也来自同一源画面。对这类候选比较对齐帧灰度 SSIM，中位数 ≥0.92 判重（全库实测负样本几乎全部 <0.5），保留体积最大者，其余打重复墓碑并清理本地资产；0.80~0.92 只记 near-miss 日志供人工复核，纯色/黑场帧不参与统计。上线前可用 `go run ./cmd/dedupe-dryrun` 只读预演。
 
-爬虫另有一层入库前的近重复判定（标题相似度 + 封面 SSIM + 时长容差），用于拦截转码或裁剪过的同源视频。
+爬虫另有一层入库前的近重复判定：标题相似度 + 封面 SSIM 拦截同源重发；标题对不上时走同样的内容级通道（用候选 teaser 的选段时间戳从刚下载的本地视频抽帧比对），拦截「站外压缩版 vs 网盘原版」这类跨源重复，避免先上传网盘再等夜间清理。
 
 ### 7. 鉴权与分享
 

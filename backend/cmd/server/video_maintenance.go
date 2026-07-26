@@ -25,6 +25,11 @@ type duplicateVideoMaintenanceStats struct {
 	NearSSIMComparisons int
 	NearGroups          int
 	NearDeleted         int
+	ContentCandidates   int
+	ContentComparisons  int
+	ContentNearMisses   int
+	ContentGroups       int
+	ContentDeleted      int
 }
 
 type nearDuplicateMaintenanceStats struct {
@@ -94,8 +99,29 @@ func (a *App) cleanupDuplicateVideoAssets(ctx context.Context) error {
 	stats.NearGroups = nearStats.Groups
 	stats.NearDeleted = nearStats.Deleted
 
-	log.Printf("[dedupe-maintenance] videos=%d exact_groups=%d exact_deleted=%d near_candidates=%d near_ssim_comparisons=%d near_groups=%d near_deleted=%d",
-		stats.VideosScanned, stats.ExactGroups, stats.ExactDeleted, stats.NearCandidates, stats.NearSSIMComparisons, stats.NearGroups, stats.NearDeleted)
+	remainingAfterNear := make([]*catalog.Video, 0, len(remaining))
+	for _, v := range remaining {
+		if v == nil {
+			continue
+		}
+		if _, ok := deleted[v.ID]; ok {
+			continue
+		}
+		remainingAfterNear = append(remainingAfterNear, v)
+	}
+	contentStats, err := a.cleanupContentDuplicateVideos(ctx, localDir, remainingAfterNear, deleted)
+	if err != nil {
+		return err
+	}
+	stats.ContentCandidates = contentStats.Candidates
+	stats.ContentComparisons = contentStats.Comparisons
+	stats.ContentNearMisses = contentStats.NearMisses
+	stats.ContentGroups = contentStats.Groups
+	stats.ContentDeleted = contentStats.Deleted
+
+	log.Printf("[dedupe-maintenance] videos=%d exact_groups=%d exact_deleted=%d near_candidates=%d near_ssim_comparisons=%d near_groups=%d near_deleted=%d content_candidates=%d content_comparisons=%d content_near_misses=%d content_groups=%d content_deleted=%d",
+		stats.VideosScanned, stats.ExactGroups, stats.ExactDeleted, stats.NearCandidates, stats.NearSSIMComparisons, stats.NearGroups, stats.NearDeleted,
+		stats.ContentCandidates, stats.ContentComparisons, stats.ContentNearMisses, stats.ContentGroups, stats.ContentDeleted)
 	return nil
 }
 
@@ -612,11 +638,27 @@ func localGeneratedPreviewReady(localDir string, v *catalog.Video) bool {
 	if localDir == "" {
 		return true
 	}
+	_, ok := localGeneratedPreviewPath(localDir, v)
+	return ok
+}
+
+// localGeneratedPreviewPath 返回本地 teaser 的实际路径；仅当预览就绪、
+// 路径落在 localDir 内且文件存在时才可用。
+func localGeneratedPreviewPath(localDir string, v *catalog.Video) (string, bool) {
+	if v == nil || strings.TrimSpace(v.PreviewStatus) != "ready" || strings.TrimSpace(v.PreviewLocal) == "" {
+		return "", false
+	}
+	if strings.TrimSpace(localDir) == "" {
+		return "", false
+	}
 	clean, ok := localPathWithin(localDir, v.PreviewLocal)
 	if !ok {
-		return false
+		return "", false
 	}
-	return regularFileExists(clean)
+	if !regularFileExists(clean) {
+		return "", false
+	}
+	return clean, true
 }
 
 func localGeneratedThumbnailPath(localDir string, v *catalog.Video) (string, bool) {
