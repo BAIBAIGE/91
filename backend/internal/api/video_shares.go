@@ -429,7 +429,12 @@ func (s *Server) serveSubtitleSelection(
 		return
 	}
 	if int64(len(data)) > maxSubtitleBytes {
-		writeErr(w, http.StatusBadGateway, errors.New("subtitle file is too large"))
+		writeErr(w, http.StatusBadGateway, errSubtitleTooLarge)
+		return
+	}
+	data, err = normalizeSubtitleUTF8(data, resp.Header.Get("Content-Type"), maxSubtitleBytes)
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, err)
 		return
 	}
 	w.Header().Set("Content-Type", subtitleContentType(sub.Ext))

@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"golang.org/x/text/encoding/simplifiedchinese"
 
 	"github.com/video-site/backend/internal/auth"
 	"github.com/video-site/backend/internal/catalog"
@@ -440,12 +441,17 @@ func TestHandleSubtitleFileProxiesSelectedSubtitle(t *testing.T) {
 		t.Fatalf("seed video: %v", err)
 	}
 
+	const subtitleText = "1\n00:00:00,000 --> 00:00:01,000\n中文字幕\n"
+	subtitleBytes, err := simplifiedchinese.GB18030.NewEncoder().Bytes([]byte(subtitleText))
+	if err != nil {
+		t.Fatalf("encode GB18030 subtitle: %v", err)
+	}
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/movie.srt" {
 			t.Fatalf("unexpected upstream path %s", r.URL.Path)
 		}
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		_, _ = w.Write([]byte("1\n00:00:00,000 --> 00:00:01,000\nhello\n"))
+		w.Header().Set("Content-Type", "application/octet-stream")
+		_, _ = w.Write(subtitleBytes)
 	}))
 	defer upstream.Close()
 
@@ -467,7 +473,7 @@ func TestHandleSubtitleFileProxiesSelectedSubtitle(t *testing.T) {
 	if got := rr.Header().Get("Content-Type"); !strings.HasPrefix(got, "text/plain") {
 		t.Fatalf("content-type = %q, want text/plain", got)
 	}
-	if got := rr.Body.String(); got != "1\n00:00:00,000 --> 00:00:01,000\nhello\n" {
+	if got := rr.Body.String(); got != subtitleText {
 		t.Fatalf("body = %q", got)
 	}
 }
