@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { ChevronDown, ChevronRight } from "lucide-react";
+import { ChevronRight, FolderX } from "lucide-react";
 import * as api from "../api";
 import { useToast } from "../ToastContext";
 
@@ -48,6 +48,7 @@ export function SkipDirsPanel({ drive, onSaved }: SkipDirsPanelProps) {
     <div className="admin-detail-card">
       <header className="admin-detail-card__title">
         <div className="admin-detail-card__title-left">
+          <FolderX size={16} />
           <span>扫描跳过目录</span>
         </div>
         <button
@@ -60,19 +61,17 @@ export function SkipDirsPanel({ drive, onSaved }: SkipDirsPanelProps) {
         </button>
       </header>
 
-      <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
-        <div className="admin-detail-tree-container">
-          <DirTreeNode
-            driveId={drive.id}
-            id=""
-            name={drive.name || "存储"}
-            depth={0}
-            initiallyOpen
-            ancestorSkipped={false}
-            selected={selected}
-            onToggle={toggle}
-          />
-        </div>
+      <div className="admin-detail-tree-container">
+        <DirTreeNode
+          driveId={drive.id}
+          id=""
+          name={drive.name || "存储"}
+          depth={0}
+          initiallyOpen
+          ancestorSkipped={false}
+          selected={selected}
+          onToggle={toggle}
+        />
       </div>
     </div>
   );
@@ -135,76 +134,43 @@ function DirTreeNode({
   }
 
   return (
-    <div
-      style={{
-        paddingLeft: depth <= 1 ? 0 : 16,
-        opacity: dimmed && !isSelected ? 0.55 : 1,
-      }}
-    >
+    <div>
       {!isRoot && (
         <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: "6px",
-            padding: "4px 6px",
-            borderRadius: "4px",
-            background: isSelected ? "var(--accent-soft, rgba(255,140,0,0.12))" : "transparent",
-          }}
+          className={`admin-skipdirs-row${dimmed && !isSelected ? " is-dimmed" : ""}`}
         >
           <button
             type="button"
             onClick={handleToggleOpen}
-            style={{
-              border: "none",
-              background: "transparent",
-              cursor: "pointer",
-              padding: 0,
-              display: "inline-flex",
-              alignItems: "center",
-            }}
+            className={`admin-skipdirs-toggle${open ? " is-open" : ""}`}
             aria-label={open ? "折叠" : "展开"}
+            aria-expanded={open}
           >
-            {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+            <ChevronRight size={14} />
           </button>
 
           <input
             type="checkbox"
+            className="admin-skipdirs-checkbox"
             checked={isSelected}
             onChange={() => onToggle(id)}
             aria-label={`跳过目录 ${name}`}
           />
 
-          <span
-            style={{
-              fontSize: "13px",
-              cursor: "pointer",
-              userSelect: "none",
-              fontWeight: 400,
-            }}
-            onClick={handleToggleOpen}
-          >
+          <span className="admin-skipdirs-name" title={name} onClick={handleToggleOpen}>
             {name}
           </span>
+
+          {isSelected && <span className="admin-skipdirs-flag">已跳过</span>}
         </div>
       )}
 
       {open && (
-        <div>
-          {loading && (
-            <div className="admin-text-faint" style={{ fontSize: "12px", padding: "4px 28px" }}>
-              加载中...
-            </div>
-          )}
-          {error && (
-            <div style={{ fontSize: "12px", padding: "4px 28px", color: "var(--danger, #d33)" }}>
-              {error}
-            </div>
-          )}
+        <div className={isRoot ? undefined : "admin-skipdirs-children"}>
+          {loading && <div className="admin-skipdirs-status">加载中...</div>}
+          {error && <div className="admin-skipdirs-status is-error">{error}</div>}
           {loaded && !error && children.length === 0 && (
-            <div className="admin-text-faint" style={{ fontSize: "12px", padding: "4px 28px" }}>
-              （无子目录）
-            </div>
+            <div className="admin-skipdirs-status">（无子目录）</div>
           )}
           {children.map((child) => (
             <DirTreeNode

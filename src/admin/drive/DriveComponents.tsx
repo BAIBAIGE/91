@@ -1,4 +1,4 @@
-import { PlayCircle } from "lucide-react";
+import { Activity } from "lucide-react";
 import * as api from "../api";
 import { formatBytes } from "../storageFormat";
 import {
@@ -194,7 +194,7 @@ export function DriveGenerationPanel({
     <div className="admin-detail-card">
       <header className="admin-detail-card__title">
         <div className="admin-detail-card__title-left">
-          <PlayCircle size={16} />
+          <Activity size={16} />
           <span>生成状态</span>
         </div>
         <div className="admin-detail-actions-inline">
