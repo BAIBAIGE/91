@@ -122,6 +122,43 @@ func TestCompareFrameSignatures(t *testing.T) {
 	}
 }
 
+func TestCompareFrameSignaturesCross(t *testing.T) {
+	base := make([][]byte, 0, FrameSignatureMaxFrames)
+	for i := 0; i < FrameSignatureMaxFrames; i++ {
+		base = append(base, randomFrame(int64(i+10)))
+	}
+	// 模拟 teaser 兜底段错位：右侧第一段（3 帧）换成无关画面，其余帧循环移位。
+	shifted := make([][]byte, 0, FrameSignatureMaxFrames)
+	for i := 0; i < 3; i++ {
+		shifted = append(shifted, randomFrame(int64(i+900)))
+	}
+	shifted = append(shifted, base[:FrameSignatureMaxFrames-3]...)
+
+	aligned := CompareFrameSignatures(&FrameSignature{Frames: base}, &FrameSignature{Frames: shifted})
+	if aligned.IsContentDuplicate() {
+		t.Fatalf("misaligned pair unexpectedly matched aligned rule: %+v", aligned)
+	}
+	cross := CompareFrameSignaturesCross(&FrameSignature{Frames: base}, &FrameSignature{Frames: shifted})
+	if !cross.IsContentDuplicate() {
+		t.Fatalf("misaligned duplicate not caught by cross rule: %+v", cross)
+	}
+
+	other := make([][]byte, 0, FrameSignatureMaxFrames)
+	for i := 0; i < FrameSignatureMaxFrames; i++ {
+		other = append(other, randomFrame(int64(i+500)))
+	}
+	crossDiff := CompareFrameSignaturesCross(&FrameSignature{Frames: base}, &FrameSignature{Frames: other})
+	if crossDiff.IsContentDuplicate() {
+		t.Fatalf("unrelated pair matched cross rule: %+v", crossDiff)
+	}
+
+	// 帧数不足时不可判定。
+	short := &FrameSignature{Frames: base[:ContentDuplicateCrossMinFrames-1]}
+	if c := CompareFrameSignaturesCross(short, &FrameSignature{Frames: base}); c.IsContentDuplicate() {
+		t.Fatalf("short signature matched cross rule: %+v", c)
+	}
+}
+
 func TestContentDuplicateRuleBoundaries(t *testing.T) {
 	cases := []struct {
 		cmp      FrameSignatureComparison

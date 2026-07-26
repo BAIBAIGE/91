@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import {
   Film,
+  GitCompare,
   HardDrive,
   Home,
   MoreVertical,
@@ -126,6 +127,19 @@ export function AdminLayout() {
               </span>
               <span className="admin-nav__text">
                 <span className="admin-nav__title">视频管理</span>
+              </span>
+            </NavLink>
+            <NavLink
+              to="/admin/duplicate-reviews"
+              className={({ isActive }) =>
+                `admin-nav__link ${isActive ? "is-active" : ""}`
+              }
+            >
+              <span className="admin-nav__icon" aria-hidden="true">
+                <GitCompare size={15} />
+              </span>
+              <span className="admin-nav__text">
+                <span className="admin-nav__title">重复复核</span>
               </span>
             </NavLink>
             <NavLink

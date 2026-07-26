@@ -16,6 +16,18 @@ const (
 	minCoreTitleRunes = 12
 )
 
+// 近重复判定（标题 + 封面通道）的统一阈值。爬虫导入与夜间维护共用，
+// 避免两处各自定义后漂移。
+const (
+	// NearDuplicateTitleThreshold 标题相似度下限。
+	NearDuplicateTitleThreshold = 0.90
+	// NearDuplicateThumbSSIMThreshold 封面 SSIM 下限。
+	NearDuplicateThumbSSIMThreshold = 0.95
+	// NearDuplicateDurationToleranceSeconds 近重复候选的时长容差（秒），
+	// 标题/封面通道与内容级通道共用。
+	NearDuplicateDurationToleranceSeconds = 2
+)
+
 var titleCoreSeparators = []string{
 	" - ",
 	" -- ",

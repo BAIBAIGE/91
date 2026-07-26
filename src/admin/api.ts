@@ -761,6 +761,49 @@ export function regenPreview(id: string) {
   );
 }
 
+// ---------- 疑似重复复核 ----------
+
+export type DuplicateReviewVideo = {
+  id: string;
+  title: string;
+  driveId: string;
+  size: number;
+  durationSeconds: number;
+  thumbnailUrl: string;
+  views: number;
+  likes: number;
+  createdAt: number;
+};
+
+export type DuplicateReviewPair = {
+  id: number;
+  medianSsim: number;
+  minSsim: number;
+  comparisons: number;
+  status: "pending" | "merged" | "dismissed";
+  createdAt: number;
+  updatedAt: number;
+  left: DuplicateReviewVideo | null;
+  right: DuplicateReviewVideo | null;
+};
+
+export function listDuplicateReviews(status: string, page: number) {
+  const params = new URLSearchParams({ status, page: String(page) });
+  return request<{ items: DuplicateReviewPair[]; total: number }>(
+    `/duplicate-reviews?${params.toString()}`
+  );
+}
+
+export function resolveDuplicateReview(
+  id: number,
+  action: "keep-left" | "keep-right" | "dismiss"
+) {
+  return request<{ ok: boolean }>(
+    `/duplicate-reviews/${id}/resolve`,
+    { method: "POST", body: JSON.stringify({ action }) }
+  );
+}
+
 // ---------- Tags ----------
 
 export type AdminTag = {

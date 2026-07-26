@@ -31,6 +31,18 @@ const (
 	// ContentDuplicateMinComparisons 有效对齐比较帧数下限，不足视为证据不够。
 	ContentDuplicateMinComparisons = 6
 
+	// 交叉匹配（错位召回）：teaser 某段生成失败回退到备选起点时，两个真重复
+	// 的对齐帧会整段错位，对齐中位数骤降。此时改用双向逐帧最优匹配判定。
+	// 只在时长精确相等时启用（调用方保证），且单帧强匹配线远高于对齐阈值，
+	// 避免把"同场景不同片段"的静态画面对（对齐规则刻意留在疑似区的）捞进来。
+	//
+	// ContentDuplicateCrossFrameSSIM 单帧视为强匹配的下限。
+	ContentDuplicateCrossFrameSSIM = 0.95
+	// ContentDuplicateCrossMinRatio 双向强匹配帧占比下限。
+	ContentDuplicateCrossMinRatio = 0.75
+	// ContentDuplicateCrossMinFrames 双向各自的有效帧数下限。
+	ContentDuplicateCrossMinFrames = 8
+
 	// informativeFrameMinStdDev 亮度标准差低于该值的帧（黑场、纯色渐变）
 	// 与任何同类帧的 SSIM 都接近 1，必须排除在比较之外。
 	informativeFrameMinStdDev = 6.0
@@ -112,6 +124,83 @@ func CompareFrameSignatures(a, b *FrameSignature) FrameSignatureComparison {
 		out.MedianSSIM = sorted[mid]
 	} else {
 		out.MedianSSIM = (sorted[mid-1] + sorted[mid]) / 2
+	}
+	return out
+}
+
+// FrameSignatureCrossComparison 是双向逐帧最优匹配的结果。
+type FrameSignatureCrossComparison struct {
+	LeftFrames  int     // 左侧有效帧数
+	RightFrames int     // 右侧有效帧数
+	LeftStrong  int     // 左侧在右侧找到 ≥CrossFrameSSIM 匹配的帧数
+	RightStrong int     // 右侧在左侧找到 ≥CrossFrameSSIM 匹配的帧数
+	MedianBest  float64 // 左侧逐帧最优分的中位数（仅用于日志）
+}
+
+// IsContentDuplicate 判定错位场景下的内容重复：双向都有足够多的帧
+// 在对方找到强匹配。调用方须保证两视频时长精确相等。
+func (c FrameSignatureCrossComparison) IsContentDuplicate() bool {
+	if c.LeftFrames < ContentDuplicateCrossMinFrames || c.RightFrames < ContentDuplicateCrossMinFrames {
+		return false
+	}
+	return float64(c.LeftStrong) >= ContentDuplicateCrossMinRatio*float64(c.LeftFrames) &&
+		float64(c.RightStrong) >= ContentDuplicateCrossMinRatio*float64(c.RightFrames)
+}
+
+// CompareFrameSignaturesCross 计算双向逐帧最优匹配，只在对齐规则未命中且
+// 时长精确相等时值得调用（O(n²) 帧比较）。
+func CompareFrameSignaturesCross(a, b *FrameSignature) FrameSignatureCrossComparison {
+	out := FrameSignatureCrossComparison{}
+	if a == nil || b == nil {
+		return out
+	}
+	leftFrames := informativeOnly(a.Frames)
+	rightFrames := informativeOnly(b.Frames)
+	out.LeftFrames = len(leftFrames)
+	out.RightFrames = len(rightFrames)
+	if len(leftFrames) == 0 || len(rightFrames) == 0 {
+		return out
+	}
+	rightBest := make([]float64, len(rightFrames))
+	leftBest := make([]float64, 0, len(leftFrames))
+	for _, left := range leftFrames {
+		best := 0.0
+		for j, right := range rightFrames {
+			score := ssimLuma(left, right)
+			if score > best {
+				best = score
+			}
+			if score > rightBest[j] {
+				rightBest[j] = score
+			}
+		}
+		leftBest = append(leftBest, best)
+		if best >= ContentDuplicateCrossFrameSSIM {
+			out.LeftStrong++
+		}
+	}
+	for _, best := range rightBest {
+		if best >= ContentDuplicateCrossFrameSSIM {
+			out.RightStrong++
+		}
+	}
+	sorted := append([]float64(nil), leftBest...)
+	sort.Float64s(sorted)
+	mid := len(sorted) / 2
+	if len(sorted)%2 == 1 {
+		out.MedianBest = sorted[mid]
+	} else {
+		out.MedianBest = (sorted[mid-1] + sorted[mid]) / 2
+	}
+	return out
+}
+
+func informativeOnly(frames [][]byte) [][]byte {
+	out := make([][]byte, 0, len(frames))
+	for _, f := range frames {
+		if informativeFrame(f) {
+			out = append(out, f)
+		}
 	}
 	return out
 }

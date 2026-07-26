@@ -12,12 +12,8 @@ import (
 	"github.com/video-site/backend/internal/preview"
 )
 
-const (
-	nearDuplicateTitleThreshold           = 0.90
-	nearDuplicateSSIMThreshold            = 0.95
-	nearDuplicateDurationToleranceSeconds = 2
-	nearDuplicateCandidateLimit           = 200
-)
+// 阈值统一定义在 mediasim（NearDuplicate* / ContentDuplicate*），与夜间维护共用。
+const nearDuplicateCandidateLimit = 200
 
 type nearDuplicateMatch struct {
 	video           *catalog.Video
@@ -38,7 +34,7 @@ func (c *Crawler) findNearDuplicateVideo(ctx context.Context, source *catalog.Vi
 		return nil, nil
 	}
 
-	candidates, err := c.cfg.Catalog.ListNearDuplicateVideoCandidates(ctx, source, nearDuplicateDurationToleranceSeconds, nearDuplicateCandidateLimit)
+	candidates, err := c.cfg.Catalog.ListNearDuplicateVideoCandidates(ctx, source, mediasim.NearDuplicateDurationToleranceSeconds, nearDuplicateCandidateLimit)
 	if err != nil {
 		return nil, err
 	}
@@ -66,7 +62,7 @@ func (c *Crawler) findTitleThumbDuplicate(source *catalog.Video, sourceThumbPath
 			continue
 		}
 		titleScore := mediasim.TitleSimilarity(source.Title, candidate.Title)
-		if titleScore < nearDuplicateTitleThreshold {
+		if titleScore < mediasim.NearDuplicateTitleThreshold {
 			continue
 		}
 		candidateThumbPath := mediaasset.ThumbnailPathInDir(commonThumbDir, candidate.ID)
@@ -78,7 +74,7 @@ func (c *Crawler) findTitleThumbDuplicate(source *catalog.Video, sourceThumbPath
 			log.Printf("[scriptcrawler] drive=%s source_id=%s candidate=%s thumbnail ssim failed: %v", c.cfg.Driver.ID(), source.ID, candidate.ID, err)
 			continue
 		}
-		if ssimScore >= nearDuplicateSSIMThreshold {
+		if ssimScore >= mediasim.NearDuplicateThumbSSIMThreshold {
 			return &nearDuplicateMatch{
 				video:           candidate,
 				titleSimilarity: titleScore,
@@ -138,6 +134,17 @@ func (c *Crawler) findContentDuplicate(ctx context.Context, source *catalog.Vide
 				video:       candidate,
 				contentSSIM: cmp.MedianSSIM,
 			}, nil
+		}
+		// 候选 teaser 含兜底段时对齐帧整段错位，时长精确相等时用交叉匹配兜底。
+		if candidate.DurationSeconds == source.DurationSeconds {
+			if cross := mediasim.CompareFrameSignaturesCross(sourceSig, candidateSig); cross.IsContentDuplicate() {
+				log.Printf("[scriptcrawler] drive=%s source_id=%s content duplicate (cross) candidate=%s strong=%d/%d,%d/%d median_best=%.3f",
+					c.cfg.Driver.ID(), source.ID, candidate.ID, cross.LeftStrong, cross.LeftFrames, cross.RightStrong, cross.RightFrames, cross.MedianBest)
+				return &nearDuplicateMatch{
+					video:       candidate,
+					contentSSIM: cross.MedianBest,
+				}, nil
+			}
 		}
 		if cmp.IsContentNearMiss() {
 			log.Printf("[scriptcrawler] drive=%s source_id=%s content near-miss candidate=%s median_ssim=%.3f min_ssim=%.3f comparisons=%d candidate_title=%q",

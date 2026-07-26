@@ -158,6 +158,95 @@ func TestCleanupContentDuplicateVideos(t *testing.T) {
 	}
 }
 
+// TestCleanupContentDuplicateVideosNearMissQueuesReview 构造相似度落在疑似区
+// （0.80~0.92）的一对：不自动删除，但要写入复核队列。
+func TestCleanupContentDuplicateVideosNearMissQueuesReview(t *testing.T) {
+	ctx := context.Background()
+	localDir := t.TempDir()
+	cat, err := catalog.Open(filepath.Join(t.TempDir(), "catalog.db"))
+	if err != nil {
+		t.Fatalf("open catalog: %v", err)
+	}
+	t.Cleanup(func() { _ = cat.Close() })
+
+	base := syntheticFrames(77)
+	// ±73 均匀噪声 → 单帧 SSIM ≈ 0.86，落在疑似区。
+	noisy := make([][]byte, len(base))
+	for k, f := range base {
+		frame := make([]byte, len(f))
+		rng := rand.New(rand.NewSource(int64(4000 + k)))
+		for j := range f {
+			v := int(f[j]) + rng.Intn(147) - 73
+			if v < 0 {
+				v = 0
+			}
+			if v > 255 {
+				v = 255
+			}
+			frame[j] = byte(v)
+		}
+		noisy[k] = frame
+	}
+
+	now := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
+	sigByPath := map[string]*mediasim.FrameSignature{}
+	videos := make([]*catalog.Video, 0, 2)
+	for i, seed := range []struct {
+		id     string
+		frames [][]byte
+	}{
+		{id: "gray-a", frames: base},
+		{id: "gray-b", frames: noisy},
+	} {
+		teaser := filepath.Join(localDir, seed.id+".mp4")
+		if err := os.WriteFile(teaser, []byte("teaser"), 0o644); err != nil {
+			t.Fatalf("write teaser: %v", err)
+		}
+		sigByPath[teaser] = &mediasim.FrameSignature{Frames: seed.frames}
+		v := &catalog.Video{
+			ID: seed.id, DriveID: "115", FileID: "file-" + seed.id, Title: "标题 " + seed.id,
+			Size: int64(1000 + i), DurationSeconds: 400, PreviewLocal: teaser, PreviewStatus: "ready",
+			PublishedAt: now, CreatedAt: now.Add(time.Duration(i) * time.Second), UpdatedAt: now,
+		}
+		if err := cat.UpsertVideo(ctx, v); err != nil {
+			t.Fatalf("seed %s: %v", seed.id, err)
+		}
+		videos = append(videos, v)
+	}
+
+	restore := contentSignatureExtractor
+	contentSignatureExtractor = func(ctx context.Context, ffmpegPath, teaserPath string) (*mediasim.FrameSignature, error) {
+		return sigByPath[teaserPath], nil
+	}
+	t.Cleanup(func() { contentSignatureExtractor = restore })
+
+	app := &App{
+		cfg: &config.Config{Storage: config.Storage{LocalPreviewDir: localDir}},
+		cat: cat,
+	}
+	deleted := map[string]struct{}{}
+	stats, err := app.cleanupContentDuplicateVideos(ctx, localDir, videos, deleted)
+	if err != nil {
+		t.Fatalf("cleanup: %v", err)
+	}
+	if stats.Deleted != 0 {
+		t.Fatalf("stats = %+v, near-miss must not delete", stats)
+	}
+	if stats.NearMisses != 1 {
+		t.Fatalf("stats = %+v, want 1 near miss", stats)
+	}
+	pairs, total, err := cat.ListDuplicateReviewPairs(ctx, catalog.DuplicateReviewStatusPending, 1, 10)
+	if err != nil || total != 1 || len(pairs) != 1 {
+		t.Fatalf("review queue total=%d err=%v, want 1", total, err)
+	}
+	if pairs[0].LeftVideoID != "gray-a" || pairs[0].RightVideoID != "gray-b" {
+		t.Fatalf("queued pair = (%s, %s)", pairs[0].LeftVideoID, pairs[0].RightVideoID)
+	}
+	if pairs[0].MedianSSIM < 0.80 || pairs[0].MedianSSIM >= 0.92 {
+		t.Fatalf("queued median = %f, expected in near-miss band", pairs[0].MedianSSIM)
+	}
+}
+
 func TestCleanupContentDuplicateVideosNearMissDoesNotDelete(t *testing.T) {
 	ctx := context.Background()
 	localDir := t.TempDir()

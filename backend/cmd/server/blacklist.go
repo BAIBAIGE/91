@@ -451,6 +451,7 @@ func removeLocalVideoAssets(localDir string, v *catalog.Video) error {
 	}
 	candidates = append(candidates, mediaasset.PreviewPathCandidates(localDir, v.ID)...)
 	candidates = append(candidates, mediaasset.ThumbnailPathCandidates(localDir, v.ID)...)
+	candidates = append(candidates, mediaasset.FrameSignaturePath(localDir, v.ID))
 	seen := make(map[string]struct{}, len(candidates))
 	for _, candidate := range candidates {
 		clean, ok := localPathWithin(localDir, candidate)

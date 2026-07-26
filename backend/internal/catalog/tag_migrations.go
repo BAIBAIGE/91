@@ -247,6 +247,11 @@ CREATE TABLE IF NOT EXISTS deleted_videos (
 	if err := c.addColumnIfMissing(ctx, "admin_sessions", "user_id", "INTEGER DEFAULT 0"); err != nil {
 		return err
 	}
+	// video_content_samples 是被废弃的内容采样实验遗留表，代码已无引用；
+	// 现行内容级查重基于 teaser 帧签名（mediasim），不落库。
+	if _, err := c.db.ExecContext(ctx, `DROP TABLE IF EXISTS video_content_samples`); err != nil {
+		return err
+	}
 	return nil
 }
 

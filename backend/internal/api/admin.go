@@ -50,8 +50,11 @@ type AdminServer struct {
 	// 处理完候选列表后任务自然结束。
 	OnStartDriveTranscode func(driveID string) (bool, string)
 	// OnStopDriveTranscode 手动停止某盘正在进行的转码任务。返回是否有任务被停。
-	OnStopDriveTranscode           func(driveID string) bool
-	OnDeleteVideo                  func(ctx context.Context, videoID string, deleteSource bool) (DeleteVideoResult, error)
+	OnStopDriveTranscode func(driveID string) bool
+	OnDeleteVideo        func(ctx context.Context, videoID string, deleteSource bool) (DeleteVideoResult, error)
+	// OnMergeDuplicateVideo 疑似重复复核的合并动作：保留 keepID，把 removeID
+	// 按重复墓碑删除并清理本地资产（与夜间自动去重同一条删除路径）。
+	OnMergeDuplicateVideo          func(ctx context.Context, keepID, removeID string) error
 	OnStartBlacklistSourceDelete   func(BlacklistSourceDeleteRequest) bool
 	GetBlacklistSourceDeleteStatus func() BlacklistSourceDeleteStatus
 	OnStartTagRetag                func() bool
@@ -234,6 +237,9 @@ func (a *AdminServer) Register(r chi.Router) {
 			r.Delete("/videos/{id}", a.handleDeleteVideo)
 			r.Post("/videos/regen-preview", a.handleRegenAllPreviews)
 			r.Post("/videos/{id}/regen-preview", a.handleRegenPreview)
+			// 疑似重复复核（夜间内容级查重的 near-miss 队列）
+			r.Get("/duplicate-reviews", a.handleListDuplicateReviews)
+			r.Post("/duplicate-reviews/{id}/resolve", a.handleResolveDuplicateReview)
 			// 黑名单（被拉黑/手动删除、扫盘不再入库的视频）
 			r.Get("/blacklist", a.handleListBlacklist)
 			r.Get("/blacklist/source-delete/status", a.handleBlacklistSourceDeleteStatus)

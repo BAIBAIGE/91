@@ -37,9 +37,8 @@ import (
 const (
 	fingerprintReconcileInterval = time.Minute
 
-	videoMaintenanceTitleThreshold           = 0.90
-	videoMaintenanceSSIMThreshold            = 0.95
-	videoMaintenanceDurationToleranceSeconds = 2
+	// 近重复阈值统一定义在 mediasim（NearDuplicate* / ContentDuplicate*），
+	// 爬虫导入与夜间维护共用同一组常量。
 
 	blacklistSourceDeletePace            = 250 * time.Millisecond
 	blacklistSourceDeleteDefaultCooldown = 30 * time.Second
@@ -254,6 +253,9 @@ func main() {
 		},
 		OnDeleteVideo: func(reqCtx context.Context, videoID string, deleteSource bool) (api.DeleteVideoResult, error) {
 			return app.deleteVideo(reqCtx, videoID, deleteSource)
+		},
+		OnMergeDuplicateVideo: func(reqCtx context.Context, keepID, removeID string) error {
+			return app.mergeDuplicateVideo(reqCtx, keepID, removeID)
 		},
 		OnStartBlacklistSourceDelete: func(req api.BlacklistSourceDeleteRequest) bool {
 			return app.startBlacklistSourceDelete(ctx, req)

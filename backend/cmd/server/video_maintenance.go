@@ -27,6 +27,7 @@ type duplicateVideoMaintenanceStats struct {
 	NearDeleted         int
 	ContentCandidates   int
 	ContentComparisons  int
+	ContentCrossMatched int
 	ContentNearMisses   int
 	ContentGroups       int
 	ContentDeleted      int
@@ -115,13 +116,20 @@ func (a *App) cleanupDuplicateVideoAssets(ctx context.Context) error {
 	}
 	stats.ContentCandidates = contentStats.Candidates
 	stats.ContentComparisons = contentStats.Comparisons
+	stats.ContentCrossMatched = contentStats.CrossMatched
 	stats.ContentNearMisses = contentStats.NearMisses
 	stats.ContentGroups = contentStats.Groups
 	stats.ContentDeleted = contentStats.Deleted
 
-	log.Printf("[dedupe-maintenance] videos=%d exact_groups=%d exact_deleted=%d near_candidates=%d near_ssim_comparisons=%d near_groups=%d near_deleted=%d content_candidates=%d content_comparisons=%d content_near_misses=%d content_groups=%d content_deleted=%d",
+	if pruned, err := a.cat.PruneDuplicateReviewPairs(ctx); err != nil {
+		log.Printf("[dedupe-maintenance] prune duplicate review pairs: %v", err)
+	} else if pruned > 0 {
+		log.Printf("[dedupe-maintenance] pruned %d stale duplicate review pairs", pruned)
+	}
+
+	log.Printf("[dedupe-maintenance] videos=%d exact_groups=%d exact_deleted=%d near_candidates=%d near_ssim_comparisons=%d near_groups=%d near_deleted=%d content_candidates=%d content_comparisons=%d content_cross_matched=%d content_near_misses=%d content_groups=%d content_deleted=%d",
 		stats.VideosScanned, stats.ExactGroups, stats.ExactDeleted, stats.NearCandidates, stats.NearSSIMComparisons, stats.NearGroups, stats.NearDeleted,
-		stats.ContentCandidates, stats.ContentComparisons, stats.ContentNearMisses, stats.ContentGroups, stats.ContentDeleted)
+		stats.ContentCandidates, stats.ContentComparisons, stats.ContentCrossMatched, stats.ContentNearMisses, stats.ContentGroups, stats.ContentDeleted)
 	return nil
 }
 
@@ -281,7 +289,7 @@ func (a *App) cleanupNearDuplicateVideos(ctx context.Context, localDir string, v
 		if right.video == nil {
 			continue
 		}
-		for duration := right.video.DurationSeconds - videoMaintenanceDurationToleranceSeconds; duration <= right.video.DurationSeconds+videoMaintenanceDurationToleranceSeconds; duration++ {
+		for duration := right.video.DurationSeconds - mediasim.NearDuplicateDurationToleranceSeconds; duration <= right.video.DurationSeconds+mediasim.NearDuplicateDurationToleranceSeconds; duration++ {
 			byBucket := bucketIndex[duration]
 			if len(byBucket) == 0 {
 				continue
@@ -304,7 +312,7 @@ func (a *App) cleanupNearDuplicateVideos(ctx context.Context, localDir string, v
 						continue
 					}
 					titleScore := mediasim.TitleSimilarity(left.video.Title, right.video.Title)
-					if titleScore < videoMaintenanceTitleThreshold {
+					if titleScore < mediasim.NearDuplicateTitleThreshold {
 						continue
 					}
 					stats.SSIMComparisons++
@@ -313,7 +321,7 @@ func (a *App) cleanupNearDuplicateVideos(ctx context.Context, localDir string, v
 						log.Printf("[dedupe-maintenance] thumbnail ssim failed left=%s right=%s: %v", left.video.ID, right.video.ID, err)
 						continue
 					}
-					if ssimScore >= videoMaintenanceSSIMThreshold {
+					if ssimScore >= mediasim.NearDuplicateThumbSSIMThreshold {
 						sets.union(i, j)
 					}
 				}
@@ -421,7 +429,7 @@ func collectNearDuplicateMaintenanceCandidates(localDir string, videos []*catalo
 }
 
 func nearDuplicateTitlePrefilter(left, right videoMaintenanceCandidate) bool {
-	if !titleLengthCouldReachThreshold(left.titleKeys, right.titleKeys, videoMaintenanceTitleThreshold) {
+	if !titleLengthCouldReachThreshold(left.titleKeys, right.titleKeys, mediasim.NearDuplicateTitleThreshold) {
 		return false
 	}
 	return qGramContainment(left.titleQGrams, right.titleQGrams) >= 0.45
@@ -772,77 +780,6 @@ func (s *videoMaintenanceDisjointSet) union(a, b int) {
 	}
 	s.parent[rootB] = rootA
 	s.rank[rootA]++
-}
-
-func cleanupDuplicatePreviewAsset(localDir, previewLocal string) (clear bool, removed bool, missing bool, skippedUnsafe bool, err error) {
-	clean, ok := localPathWithin(localDir, previewLocal)
-	if !ok {
-		if strings.TrimSpace(previewLocal) != "" {
-			return false, false, false, true, nil
-		}
-		return false, false, false, false, nil
-	}
-	removed, missing, err = removeRegularFileIfExists(clean)
-	if err != nil {
-		return false, false, false, false, err
-	}
-	return true, removed, missing, false, nil
-}
-
-func cleanupDuplicateThumbnailAsset(localDir, videoID, thumbnailURL string) (clear bool, removed bool, missing bool, err error) {
-	if thumbnailURL != "/p/thumb/"+videoID {
-		return false, false, false, nil
-	}
-	candidates := mediaasset.ThumbnailPathCandidates(localDir, videoID)
-	seen := make(map[string]struct{}, len(candidates))
-	anyChecked := false
-	allMissing := true
-	for _, candidate := range candidates {
-		clean, ok := localPathWithin(localDir, candidate)
-		if !ok {
-			continue
-		}
-		if _, ok := seen[clean]; ok {
-			continue
-		}
-		seen[clean] = struct{}{}
-		anyChecked = true
-		removedOne, missingOne, removeErr := removeRegularFileIfExists(clean)
-		if removeErr != nil {
-			return false, false, false, removeErr
-		}
-		if removedOne {
-			removed = true
-		}
-		if !missingOne {
-			allMissing = false
-		}
-	}
-	if !anyChecked {
-		return false, false, false, nil
-	}
-	missing = allMissing && !removed
-	return true, removed, missing, nil
-}
-
-func removeRegularFileIfExists(path string) (removed bool, missing bool, err error) {
-	info, err := os.Stat(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return false, true, nil
-		}
-		return false, false, err
-	}
-	if !info.Mode().IsRegular() {
-		return false, false, nil
-	}
-	if err := os.Remove(path); err != nil {
-		if os.IsNotExist(err) {
-			return false, true, nil
-		}
-		return false, false, err
-	}
-	return true, false, nil
 }
 
 func localPathWithin(root, path string) (string, bool) {

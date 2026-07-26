@@ -217,3 +217,21 @@ CREATE TABLE IF NOT EXISTS users (
     banned     INTEGER NOT NULL DEFAULT 0,       -- 1 = 被封禁
     created_at INTEGER NOT NULL
 );
+
+-- 内容级查重疑似区（near-miss）复核队列：夜间维护写入，管理后台裁决。
+-- (left_video_id, right_video_id) 按字典序归一化，同一对只存一行；
+-- status=dismissed 的对不会被夜间维护重新写回。
+CREATE TABLE IF NOT EXISTS duplicate_review_pairs (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    left_video_id  TEXT NOT NULL,
+    right_video_id TEXT NOT NULL,
+    median_ssim    REAL NOT NULL DEFAULT 0,
+    min_ssim       REAL NOT NULL DEFAULT 0,
+    comparisons    INTEGER NOT NULL DEFAULT 0,
+    status         TEXT NOT NULL DEFAULT 'pending', -- pending / merged / dismissed
+    created_at     INTEGER NOT NULL,
+    updated_at     INTEGER NOT NULL,
+    UNIQUE(left_video_id, right_video_id)
+);
+CREATE INDEX IF NOT EXISTS idx_duplicate_review_pairs_status
+    ON duplicate_review_pairs(status, updated_at DESC);
