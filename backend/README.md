@@ -1,4 +1,15 @@
-# backend
+## 快速开始
+
+依赖：**Go 1.23+**、**ffmpeg / ffprobe**（封面、预览视频、指纹、内容级去重都靠它，必装；路径可在配置里改）。SQLite 用纯 Go 驱动（modernc），无需系统库；依赖已 vendored，可离线构建。跑爬虫需要 `python3`。
+
+```bash
+cd backend
+go run ./cmd/server        # 首次启动自动从 config.example.yaml 生成 config.yaml，监听 127.0.0.1:9192
+go test ./...              # 单元测试；缺 ffmpeg / python3 时相关测试自动跳过
+go build -o server ./cmd/server
+```
+
+前端开发在仓库根目录 `npm run dev`，vite 会把 `/api`、`/p`、`/admin/api` 代理到 9192。所有配置项及注释见 [config.example.yaml](config.example.yaml)，正文只在涉及行为时提及个别配置。
 
 ## 目录
 
@@ -54,7 +65,7 @@ cmd/
     video_maintenance.go    本地上传文件名迁移 + 夜间全库去重（精确指纹、标题/封面近重复）
     video_maintenance_content.go
                             夜间内容级去重通道：时长相等的视频比较 teaser 对齐帧
-  dedupe-dryrun/            只读预演内容级去重会删哪些视频，不写库不删文件
+  dedupe-dryrun/            预演内容级去重会删哪些视频（默认只读；-apply 真正执行）
   diag-115/ list-115-yingshi/ list-yingshi-children/ trace-parents/
                             一次性诊断工具，读库里的 115 cookie 列目录 / 追父目录，不参与服务运行
 
@@ -65,11 +76,12 @@ internal/
     shorts_feed.go          短视频模式取流
     video_shares.go         一次性免登录分享链接
     storage_usage*.go       存储占用接口（含 unix / windows 分支）
-    admin_*.go              管理后台：登录、网盘、爬虫、视频、标签、用户、设置
+    admin_*.go              管理后台：登录、网盘、爬虫、视频、重复复核、标签、用户、设置
   auth/                     管理员 session、密码哈希、登录失败封禁
   catalog/                  SQLite 元数据层
     catalog.go              视频、网盘、扫描状态
     tag_*.go                标签 CRUD、匹配、分类、迁移、维护
+    duplicate_review.go     疑似重复复核队列
     users.go video_shares.go
   config/                   YAML 配置与默认值
   drives/
@@ -106,6 +118,7 @@ internal/
   storageusage/             磁盘与各网盘占用统计
 
 CRAWLER_PROTOCOL.md         crawler.v2 脚本协议
+DEDUP.md                    去重体系：信号、阈值、时机与流程图
 config.example.yaml         配置模板
 vendor/                     依赖已 vendored，可离线构建
 ```
@@ -116,6 +129,7 @@ vendor/                     依赖已 vendored，可离线构建
 config.yaml                 首次启动从 config.example.yaml 复制
 data/video-site.db          SQLite 主库
 data/previews/              封面与预览视频（storage.local_preview_dir）
+data/previews/framesigs/    内容级去重的帧签名缓存（约 110KB/视频，删了会自动重建）
 data/uploads/               站内上传的视频
 data/scriptcrawlers/        爬虫落地的视频
 data/crawler-scripts/       后台导入的爬虫 .py 脚本
@@ -161,7 +175,7 @@ flowchart TB
     end
 
     MIG["crawlerupload<br/>爬虫产物迁移到目标网盘"]
-    DEDUP["夜间去重维护<br/>清理重复视频的本地资产"]
+    DEDUP["夜间去重维护<br/>全库硬去重（DEDUP.md）"]
 
     BOOT --> SCAN
     CRON --> SCAN
@@ -259,7 +273,7 @@ sequenceDiagram
 新视频入库即入队，队列按 video ID 去重，避免同一视频重复排队；每处理完一条 worker 休眠 500ms 节流。
 
 - **封面**：`ffprobe` 探时长 → `ffmpeg` 抽帧。
-- **预览视频**：30 秒以下最多 3 段、30 秒及以上固定 4 段，每段 3 秒。取点区间按时长分档：10 分钟以上在 20%–80% 之间均匀取，30 秒到 10 分钟避开片头片尾（5% 或 3 秒起、85% 前结束），30 秒以下从 10% 起。拼接后校验确有视频流；段数不足时只有在明确的降级路径下才接受 2 段，并留日志。
+- **预览视频**：30 秒以下最多 3 段、30 秒及以上固定 4 段，每段 3 秒。取点区间按时长分档：10 分钟以上在 20%–80% 之间均匀取，30 秒到 10 分钟避开片头片尾（5% 或 3 秒起、85% 前结束），30 秒以下从 10% 起。拼接后校验确有视频流；段数不足时只有在明确的降级路径下才接受 2 段，并留日志。⚠️ **选段起点只由时长决定**——这是内容级去重（[DEDUP.md](DEDUP.md)）帧对齐的正确性依赖，改选段算法必须同步评估那边。
 - **指纹**：读少量 Range 片段算 `sampled_sha256`，用于跨盘去重。除入库即时入队外，还有每分钟一次的补扫协程捞 `pending`。
 - **转码**：不自动跑，由后台按盘手动启动。
 
@@ -281,20 +295,27 @@ flowchart LR
 
 最近一次成功启动的日期写在 `settings` 表的 `nightly.last_run_date`，重启后不会因为进程在 `cron_hour` 内崩溃过就重跑一遍。流水线没有固定时长上限 —— 网盘冷却可能让某个阶段跑很久。标签匹配**不在**流水线里全库重算，它是事件驱动的：新视频入库和管理员改标签规则时即时刷新。
 
-### 6. 去重的三层
+### 6. 去重体系
 
-1. **同盘同文件**：`(drive_id, file_id)` 生成稳定视频 ID，重复扫描只更新同一行。
-2. **入库时**：优先用网盘侧 `content_hash`，没有则退化为 `file_name + size_bytes`。
-3. **跨盘文件级**：`content_hash` 或 `size_bytes + sampled_sha256` 相同的视频，前台列表和封面/预览生成队列只认最早入库的那条（软过滤，行还在库里）；夜间 Phase 5 再把同 `size + sampled_sha256` 的组硬去重——按本地资产完整度、入库时间选保留项，其余打重复墓碑并清理本地资产，**不删网盘源文件**，墓碑同时阻止后续扫描重新入库。
-4. **跨盘内容级**（夜间 Phase 5）：teaser 选段起点只由时长决定，所以时长几乎相等（≥120 秒、相差 ≤2 秒）的两个视频即使压制、水印、标题、封面完全不同，teaser 对齐帧也来自同一源画面。对这类候选比较对齐帧灰度 SSIM，中位数 ≥0.92 判重（全库实测负样本几乎全部 <0.5），保留体积最大者，其余打重复墓碑并清理本地资产；纯色/黑场帧不参与统计。teaser 某段回退到备选起点造成整段错位时，对时长精确相等的候选再用双向逐帧最优匹配兜底（单帧 ≥0.95、双向 ≥75% 帧强匹配）。帧签名按 `(teaser size, mtime)` 缓存在 `previews/framesigs/`，teaser 重新生成自动失效；上线前可用 `go run ./cmd/dedupe-dryrun` 只读预演。
-5. **人工复核**：0.80~0.92 的疑似对写入 `duplicate_review_pairs`，后台「重复复核」页并排展示两个版本，一键"保留此版本"（另一方按重复墓碑删除，走与夜间相同的删除路径）或"不是重复，忽略"（之后夜间不会再写回这一对）。
+去重分布在视频生命周期四个时机，外加人工复核兜底——完整的信号定义、阈值、判定流程图见 **[DEDUP.md](DEDUP.md)**。一段话版本：
 
-爬虫另有一层入库前的近重复判定：标题相似度 + 封面 SSIM 拦截同源重发；标题对不上时走同样的内容级通道（用候选 teaser 的选段时间戳从刚下载的本地视频抽帧比对），拦截「站外压缩版 vs 网盘原版」这类跨源重复，避免先上传网盘再等夜间清理。
+- **字节级**：`(drive_id, file_id)` 恒等；`content_hash` / `sampled_sha256` 抓完全相同的文件（扫描与爬虫导入时跳过、前台软过滤、夜间 Phase 5 硬去重）。
+- **内容级**：teaser 选段只由时长决定，时长几乎相等的视频比较对齐帧 SSIM（中位数 ≥0.92 判重，时长精确相等时另有交叉匹配兜底），能抓标题、封面完全对不上的跨源转码副本；爬虫导入时同样启用，重复视频在上传网盘前就被挡下。
+- **人工兜底**：0.80~0.92 的疑似对进 `duplicate_review_pairs`，后台「重复复核」页并排裁决。
+- **删除语义**：一律打 `reason=duplicate` 墓碑 + 指向保留项，清理本地资产，**不删网盘源文件**，墓碑阻止重新入库，可在黑名单恢复。
 
 ### 7. 鉴权与分享
+
+用户体系两级：`admin` / `user`，没有开放注册，账号由管理后台创建（首次部署时引导设置管理员）。前台的浏览、播放、上传、点赞全部要求登录；`admin` 额外能进管理后台。
 
 前台接口、`/p/stream`、`/p/preview`、`/p/thumb` 全部在鉴权组内，代理路由同样要登录，防止绕过 API 直接拉流。管理接口再加一层管理员校验。
 
 登录失败 3 次永久封禁来源 IP，只能后台手动解除；只信任本机代理传来的 `X-Forwarded-For` / `X-Real-IP`。
 
 一次性分享是独立链路：`POST /api/share/consume` 用一次性 token 换一个 HttpOnly 分享会话，之后 `/p/share/{shareID}/*` 每次请求都校验该会话，且只能访问绑定的那一个视频。链接首次打开后即失效。
+
+### 8. 日志与排查
+
+- 一键脚本部署（systemd）：`journalctl -u video-site-backend` / `-u video-site-frontend`；`start.sh` 模式日志在 `$LOG_DIR`（默认 `/tmp/video-site-91/`）。
+- 后端日志按模块带前缀，直接 grep：`[scanner]`、`[scriptcrawler]`、`[nightly]`、`[dedupe-maintenance]`、`[duplicate-review]`、`[local-upload-maintenance]` 等。爬虫 Python 子进程的输出并入后端日志。
+- 常见排查入口：网盘异常看后台网盘页的健康状态与 `lastError`；预览/封面卡住多半是上游限流，等冷却期过或看 `[nightly]` 是否在等队列排空；去重删了什么搜 `duplicate deleted`，拿不准的对搜 `near-miss`。
