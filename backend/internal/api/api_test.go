@@ -1645,6 +1645,119 @@ func TestShortsFeedStoreEvictsLeastRecentlyUsedSession(t *testing.T) {
 	}
 }
 
+func TestHandleShortsNextResumesFeedAfterServerRestart(t *testing.T) {
+	ctx := context.Background()
+	cat, err := catalog.Open(t.TempDir() + "/catalog.db")
+	if err != nil {
+		t.Fatalf("open catalog: %v", err)
+	}
+	t.Cleanup(func() { _ = cat.Close() })
+
+	now := time.Now()
+	for index := 0; index < 7; index++ {
+		id := "restart-" + strconv.Itoa(index)
+		if err := cat.UpsertVideo(ctx, &catalog.Video{
+			ID: id, DriveID: "drive", FileID: "file-" + id, Title: id,
+			PublishedAt: now, CreatedAt: now, UpdatedAt: now,
+		}); err != nil {
+			t.Fatalf("seed %s: %v", id, err)
+		}
+	}
+
+	requestBatch := func(server *Server, path string) shortsFeedResponse {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		rr := httptest.NewRecorder()
+		server.handleShortsNext(rr, req)
+		if rr.Code != http.StatusOK {
+			t.Fatalf("status = %d, body = %s", rr.Code, rr.Body.String())
+		}
+		var response shortsFeedResponse
+		if err := json.NewDecoder(rr.Body).Decode(&response); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		return response
+	}
+
+	serverA := &Server{Catalog: cat}
+	first := requestBatch(serverA, "/api/shorts/next?count=3")
+	if first.FeedToken == "" || len(first.Items) != 3 {
+		t.Fatalf("first response = %#v, want 3 items with token", first)
+	}
+
+	// 模拟后端重启：同一个库、新的 Server（内存会话表为空）
+	serverB := &Server{Catalog: cat}
+	resumed := requestBatch(
+		serverB,
+		"/api/shorts/next?feedToken="+first.FeedToken+"&cursor="+strconv.Itoa(first.NextCursor)+"&count=4",
+	)
+	if len(resumed.Items) != 4 || !resumed.RoundComplete {
+		t.Fatalf("resumed response = %#v, want final 4 items of the same round", resumed)
+	}
+	seen := make(map[string]struct{}, 7)
+	for _, item := range append(append([]ShortsItemDTO{}, first.Items...), resumed.Items...) {
+		if _, duplicate := seen[item.ID]; duplicate {
+			t.Fatalf("resumed round repeated video %s", item.ID)
+		}
+		seen[item.ID] = struct{}{}
+	}
+	if len(seen) != 7 {
+		t.Fatalf("round covered %d unique videos, want 7", len(seen))
+	}
+
+	// 重启后的快照顺序与重启前完全一致：重放首批得到相同条目
+	replayed := requestBatch(serverB, "/api/shorts/next?feedToken="+first.FeedToken+"&cursor=0&count=3")
+	for index := range first.Items {
+		if replayed.Items[index].ID != first.Items[index].ID {
+			t.Fatalf("replayed item %d = %s, want %s", index, replayed.Items[index].ID, first.Items[index].ID)
+		}
+	}
+}
+
+func TestHandleShortsNextExpiresPersistedFeedAfterRestart(t *testing.T) {
+	ctx := context.Background()
+	cat, err := catalog.Open(t.TempDir() + "/catalog.db")
+	if err != nil {
+		t.Fatalf("open catalog: %v", err)
+	}
+	t.Cleanup(func() { _ = cat.Close() })
+
+	now := time.Now()
+	if err := cat.UpsertVideo(ctx, &catalog.Video{
+		ID: "persisted-video", DriveID: "drive", FileID: "file", Title: "persisted video",
+		PublishedAt: now, CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	clock := now
+	serverA := &Server{Catalog: cat, shortsFeedNow: func() time.Time { return clock }}
+	firstReq := httptest.NewRequest(http.MethodGet, "/api/shorts/next?count=1", nil)
+	firstRR := httptest.NewRecorder()
+	serverA.handleShortsNext(firstRR, firstReq)
+	var first shortsFeedResponse
+	if err := json.NewDecoder(firstRR.Body).Decode(&first); err != nil {
+		t.Fatalf("decode first: %v", err)
+	}
+
+	// 重启后持久化快照依然要按 TTL 过期，不能变成永久令牌
+	clock = clock.Add(shortsFeedTTL)
+	serverB := &Server{Catalog: cat, shortsFeedNow: func() time.Time { return clock }}
+	expiredReq := httptest.NewRequest(
+		http.MethodGet,
+		"/api/shorts/next?feedToken="+first.FeedToken+"&cursor="+strconv.Itoa(first.NextCursor)+"&count=1",
+		nil,
+	)
+	expiredRR := httptest.NewRecorder()
+	serverB.handleShortsNext(expiredRR, expiredReq)
+	if expiredRR.Code != http.StatusGone {
+		t.Fatalf("expired status = %d, want %d; body = %s", expiredRR.Code, http.StatusGone, expiredRR.Body.String())
+	}
+	if ids, _, err := cat.LoadShortsFeed(ctx, first.FeedToken); err != nil || ids != nil {
+		t.Fatalf("expired persisted session = (%#v, %v), want pruned", ids, err)
+	}
+}
+
 func TestHandleUpdateVideoTagsRejectsUnknownTags(t *testing.T) {
 	ctx := context.Background()
 	cat, err := catalog.Open(t.TempDir() + "/catalog.db")

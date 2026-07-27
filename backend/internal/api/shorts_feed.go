@@ -5,6 +5,7 @@ import (
 	crand "crypto/rand"
 	"encoding/hex"
 	"errors"
+	"log"
 	"math/rand/v2"
 	"net/http"
 	"strconv"
@@ -152,6 +153,12 @@ func (s *Server) shortsNow() time.Time {
 
 func (s *Server) storeShortsFeed(token string, videoIDs []string) {
 	now := s.shortsNow()
+	s.rememberShortsFeed(token, videoIDs, now)
+	s.persistShortsFeed(token, videoIDs, now)
+}
+
+// rememberShortsFeed 把快照放进内存会话表（含 TTL 清理与 LRU 淘汰）。
+func (s *Server) rememberShortsFeed(token string, videoIDs []string, now time.Time) {
 	s.shortsFeedMu.Lock()
 	defer s.shortsFeedMu.Unlock()
 
@@ -182,18 +189,79 @@ func (s *Server) storeShortsFeed(token string, videoIDs []string) {
 	}
 }
 
+// persistShortsFeed 尽力而为地把快照落盘：失败只影响重启后的续播，
+// 不影响当前内存会话，因此记录日志后继续。TTL 与数量上限的持久层
+// 清理也在写入时顺带完成。
+func (s *Server) persistShortsFeed(token string, videoIDs []string, now time.Time) {
+	if s.Catalog == nil {
+		return
+	}
+	ctx := context.Background()
+	if err := s.Catalog.SaveShortsFeed(ctx, token, videoIDs, now); err != nil {
+		log.Printf("shorts: persist feed session: %v", err)
+		return
+	}
+	if err := s.Catalog.PruneShortsFeeds(ctx, now.Add(-shortsFeedTTL), maxShortsFeedSessions); err != nil {
+		log.Printf("shorts: prune persisted feed sessions: %v", err)
+	}
+}
+
 func (s *Server) loadShortsFeed(token string) ([]string, error) {
 	now := s.shortsNow()
 	s.shortsFeedMu.Lock()
-	defer s.shortsFeedMu.Unlock()
-
 	s.pruneShortsFeedsLocked(now)
-	feed := s.shortsFeeds[token]
-	if feed == nil {
+	if feed := s.shortsFeeds[token]; feed != nil {
+		feed.lastAccess = now
+		videoIDs := feed.videoIDs
+		s.shortsFeedMu.Unlock()
+		s.touchPersistedShortsFeed(token, now)
+		return videoIDs, nil
+	}
+	s.shortsFeedMu.Unlock()
+
+	// 内存里没有（进程重启或被 LRU 淘汰）：尝试从持久化快照恢复同一轮次。
+	videoIDs := s.loadPersistedShortsFeed(token, now)
+	if videoIDs == nil {
 		return nil, errShortsFeedExpired
 	}
-	feed.lastAccess = now
-	return feed.videoIDs, nil
+	s.rememberShortsFeed(token, videoIDs, now)
+	return videoIDs, nil
+}
+
+// loadPersistedShortsFeed 读取并校验持久化快照；确定过期时顺带删除，
+// 读取出错时保留数据（等 TTL 清理），只当作会话失效处理。
+func (s *Server) loadPersistedShortsFeed(token string, now time.Time) []string {
+	if s.Catalog == nil {
+		return nil
+	}
+	ctx := context.Background()
+	videoIDs, lastAccess, err := s.Catalog.LoadShortsFeed(ctx, token)
+	if err != nil {
+		log.Printf("shorts: load persisted feed session: %v", err)
+		return nil
+	}
+	if videoIDs == nil {
+		return nil
+	}
+	if len(videoIDs) == 0 || now.Sub(lastAccess) >= shortsFeedTTL {
+		if err := s.Catalog.DeleteShortsFeed(ctx, token); err != nil {
+			log.Printf("shorts: delete expired feed session: %v", err)
+		}
+		return nil
+	}
+	if err := s.Catalog.TouchShortsFeed(ctx, token, now); err != nil {
+		log.Printf("shorts: touch persisted feed session: %v", err)
+	}
+	return videoIDs
+}
+
+func (s *Server) touchPersistedShortsFeed(token string, now time.Time) {
+	if s.Catalog == nil {
+		return
+	}
+	if err := s.Catalog.TouchShortsFeed(context.Background(), token, now); err != nil {
+		log.Printf("shorts: touch persisted feed session: %v", err)
+	}
 }
 
 func (s *Server) pruneShortsFeedsLocked(now time.Time) {

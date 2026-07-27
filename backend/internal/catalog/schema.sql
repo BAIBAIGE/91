@@ -235,3 +235,14 @@ CREATE TABLE IF NOT EXISTS duplicate_review_pairs (
 );
 CREATE INDEX IF NOT EXISTS idx_duplicate_review_pairs_status
     ON duplicate_review_pairs(status, updated_at DESC);
+
+-- 短视频随机 feed 会话快照：token → 洗牌后的可见视频 id 列表（JSON 数组）。
+-- 持久化让后端重启/更新不再使旧 token 失效，前端可从上次游标续播同一轮。
+-- 过期与数量上限由 API 层在写入时清理。
+CREATE TABLE IF NOT EXISTS shorts_feed_sessions (
+    token       TEXT PRIMARY KEY,
+    video_ids   TEXT NOT NULL,
+    last_access INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_shorts_feed_sessions_last_access
+    ON shorts_feed_sessions(last_access);
