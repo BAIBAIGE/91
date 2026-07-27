@@ -30,11 +30,35 @@ type ShortsDebugSample = {
   errorCode: number | null;
 };
 
+/**
+ * iOS 循环重启状态机的即时快照。活跃 slide 注册一个读取器，面板按采样周期
+ * 拉取——重播卡住时可以直接看出停在哪一步：迟迟等不到 seeked（barrier 没打）、
+ * 等不到重启后的呈现帧（awaiting 一直为真），还是已经退到 load() 自救（reloaded）。
+ */
+export type ShortsLoopDebugState = {
+  pending: boolean;
+  awaitingFrame: boolean;
+  reloaded: boolean;
+  attempt: number;
+  barrierSet: boolean;
+};
+
+export type ShortsLoopDebugProbe = () => ShortsLoopDebugState;
+
+/** iOS 备用元素的预载进度：滑动前它是否已经把下一条拉起来。 */
+type ShortsStandbySample = {
+  present: boolean;
+  readyState: number;
+  bufferedEnd: number;
+};
+
 type ShortsDebugHudProps = {
   activeIndex: number;
   itemCount: number;
   itemId: string | null;
   getActiveVideo: () => HTMLVideoElement | null;
+  getStandbyVideo: () => HTMLVideoElement | null;
+  getLoopState: () => ShortsLoopDebugState | null;
   windowStart: number;
   windowEnd: number;
   activeReadyForPreload: boolean;
@@ -48,6 +72,8 @@ const SAMPLE_INTERVAL_MS = 500;
 
 export function ShortsDebugHud(props: ShortsDebugHudProps) {
   const [sample, setSample] = useState<ShortsDebugSample | null>(null);
+  const [standby, setStandby] = useState<ShortsStandbySample | null>(null);
+  const [loop, setLoop] = useState<ShortsLoopDebugState | null>(null);
   const propsRef = useRef(props);
   propsRef.current = props;
 
@@ -82,7 +108,23 @@ export function ShortsDebugHud(props: ShortsDebugHudProps) {
       frameCallbackId = video.requestVideoFrameCallback(onFrame);
     };
 
+    const collectStandbySample = () => {
+      const video = propsRef.current.getStandbyVideo();
+      if (!video) {
+        setStandby({ present: false, readyState: -1, bufferedEnd: 0 });
+        return;
+      }
+      const lastRange = video.buffered.length - 1;
+      setStandby({
+        present: true,
+        readyState: video.readyState,
+        bufferedEnd: lastRange >= 0 ? video.buffered.end(lastRange) : 0,
+      });
+    };
+
     const collectSample = () => {
+      collectStandbySample();
+      setLoop(propsRef.current.getLoopState());
       const video = propsRef.current.getActiveVideo();
       observePresentedFrames(video);
 
@@ -187,6 +229,23 @@ export function ShortsDebugHud(props: ShortsDebugHudProps) {
     sample?.hasVideo
       ? `${sample.videoWidth}x${sample.videoHeight}` +
         `${sample.presentedFps !== null ? ` fps≈${sample.presentedFps}` : ""} muted=${muted}`
+      : "",
+    usesIOSSharedVideo && loop
+      ? `loop=${
+          loop.pending
+            ? `restarting att=${loop.attempt}` +
+              `${loop.awaitingFrame ? " awaiting-frame" : ""}` +
+              `${loop.barrierSet ? " barrier" : " NO-BARRIER"}` +
+              `${loop.reloaded ? " reloaded" : ""}`
+            : `idle att=${loop.attempt}`
+        }`
+      : "",
+    usesIOSSharedVideo && standby
+      ? `standby=${
+          standby.present
+            ? `ready=${standby.readyState} buf=${standby.bufferedEnd.toFixed(1)}s`
+            : "none"
+        }`
       : "",
     `ios-shared=${usesIOSSharedVideo} doc-scroll=${usesDocumentScroll}`,
   ].filter(Boolean);

@@ -212,6 +212,13 @@ body.shorts-document-scroll::before {
 .shorts-slide[data-active="true"] .shorts-slide__poster {
   transform: scale(1);
   opacity: 1;
+}
+
+/* 阴影只给静态海报，绝不给 <video>：WebKit 一旦要对视频元素应用 CSS
+   filter，就没法把视频层直接交给合成器，每一帧都要多走一遍滤镜。海报是
+   静态图，滤镜只算一次。视频背后本来就是它自己海报的模糊 + 压暗版本，
+   纯黑阴影压上去几乎没有对比，去掉在观感上看不出来。 */
+.shorts-slide[data-active="true"] .shorts-slide__poster {
   filter: drop-shadow(0 20px 50px rgba(0, 0, 0, 0.95));
 }
 

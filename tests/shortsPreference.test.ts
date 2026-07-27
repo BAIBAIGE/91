@@ -610,6 +610,91 @@ test("shorts reuses one persistent media element across iOS slides", () => {
   assert.doesNotMatch(shortsPageSource, /key=\{item\.id\}[\s\S]{0,300}document\.createElement\("video"\)/);
 });
 
+// The iOS branch used to have no preloading at all: the single media element
+// only got the next `src` after the swipe settled, so drive link resolution,
+// the moov atom fetch and the first-frame decode all ran serially in front of
+// the user. A second persistent element now warms the next video up front and
+// the two swap roles on swipe, which keeps the "never recreate the node"
+// constraint that WebKit's per-element audio grant depends on.
+test("iOS preloads the next video on a standby element and promotes it on swipe", () => {
+  assert.match(
+    shortsPageSource,
+    /const iosStandbyVideoRef = useRef<HTMLVideoElement \| null>\(null\);/
+  );
+  // Preloading starts on the same high/low watermark the desktop branch uses,
+  // so it never steals bandwidth from a still-buffering active video.
+  assert.match(
+    shortsPageSource,
+    /if \(!useIOSSharedVideo \|\| iosStandbyPreloadDisabled \|\| !activeReadyForPreload\) \{\s*return;\s*\}\s*const nextIndex = activeIndex \+ 1;/
+  );
+  assert.match(
+    shortsPageSource,
+    /standby\.dataset\.shortsVideoId = nextItem\.id;\s*standby\.poster = nextItem\.poster;\s*standby\.src = nextItem\.videoSrc;\s*standby\.load\(\);/
+  );
+  // The standby parks inside the next slide's slot, so landing there is a pure
+  // ref swap with no DOM move and no src reset.
+  assert.match(
+    shortsPageSource,
+    /if \(standby\.parentElement !== nextSlot\) nextSlot\.appendChild\(standby\);/
+  );
+  // The queue may legitimately repeat a video id, so the swap is anchored to
+  // the index the standby was prepared for. Matching on id alone would promote
+  // the standby while still on the same slide and restart playback from 0.
+  assert.match(
+    shortsPageSource,
+    /iosStandbyVideoIndexRef\.current === activeIndex &&\s*preloaded\.dataset\.shortsVideoId === item\.id\s*\) \{[\s\S]*?iosSharedVideoRef\.current = preloaded;\s*iosStandbyVideoRef\.current = demoted;\s*iosStandbyVideoIndexRef\.current = iosSharedVideoIndexRef\.current;/
+  );
+  // Re-appending an element that already sits in the slot is a remove+insert
+  // that needlessly disturbs the WebKit playback pipeline.
+  assert.match(
+    shortsPageSource,
+    /if \(video\.parentElement !== slot\) slot\.appendChild\(video\);/
+  );
+});
+
+test("the iOS standby element stays silent and never autoplays off-screen", () => {
+  assert.match(
+    shortsPageSource,
+    /function applyIOSVideoRole\([\s\S]*?video\.autoplay = false;\s*video\.removeAttribute\("autoplay"\);\s*applyVideoMutedState\(video, true\);/
+  );
+  assert.match(
+    shortsPageSource,
+    /const standbyVideo = iosStandbyVideoRef\.current;\s*if \(standbyVideo\) applyVideoMutedState\(standbyVideo, true\);/
+  );
+});
+
+// `?iosPreload=0` must disable the standby completely — not merely skip its
+// src — so a device can A/B whether the second media element is what starves
+// the active video's loop restart of buffer.
+test("iOS standby preload has a kill switch for on-device A/B", () => {
+  assert.match(
+    shortsPlatformSource,
+    /export function isIOSStandbyPreloadDisabled\(\)[\s\S]*?get\("iosPreload"\) === "0"/
+  );
+  assert.match(
+    shortsPageSource,
+    /const \[iosStandbyPreloadDisabled\] = useState\(isIOSStandbyPreloadDisabled\);/
+  );
+  // The element itself must not even be created when the switch is off.
+  assert.match(
+    shortsPageSource,
+    /if \(!iosStandbyPreloadDisabled\) \{\s*applyIOSVideoRole\(acquireIOSVideoElement\(iosStandbyVideoRef\), "standby"\);/
+  );
+});
+
+// WebKit accounts the unmuted-playback grant per media element, so the element
+// that takes over playback later must collect it inside the same user gesture.
+test("the sound toggle also grants unmuted playback to the iOS standby element", () => {
+  assert.match(
+    shortsPageSource,
+    /const standbyVideo = iosStandbyVideoRef\.current;\s*if \(standbyVideo && standbyVideo !== activeVideo\) \{\s*unlockVideoAudioPlayback\(standbyVideo\);/
+  );
+  assert.match(
+    shortsPageSource,
+    /function unlockVideoAudioPlayback\([\s\S]*?request = video\.play\(\);[\s\S]*?video\.pause\(\);/
+  );
+});
+
 test("stale iOS play work cannot control a later shared source", () => {
   assert.match(shortsPageSource, /let disposed = false;/);
   assert.match(shortsPageSource, /disposed = true;/);
@@ -629,9 +714,13 @@ test("iOS loops restart under app control and progress follows presented frames"
   assert.match(shortsPageSource, /const loopRestartPendingRef = useRef\(false\);/);
   assert.match(shortsPageSource, /const handleIOSLoopEnded = \(\) => \{/);
   assert.match(shortsPageSource, /video\.addEventListener\("ended", handleIOSLoopEnded\);/);
+  // Same restart sequence as before — mark the round pending, reset the
+  // progress readout, arm the spinner, then seek back to 0. The spinner is now
+  // armed through the deferred helper so a fast restart shows nothing at all;
+  // see "iOS loop restart defers the buffering spinner instead of blinking".
   assert.match(
     shortsPageSource,
-    /loopRestartPendingRef\.current = true;[\s\S]*?setCurrentTime\(0\);[\s\S]*?setIsBuffering\(true\);[\s\S]*?video\.currentTime = 0;/
+    /loopRestartPendingRef\.current = true;[\s\S]*?setCurrentTime\(0\);[\s\S]*?scheduleBufferingIndicator\([\s\S]*?video\.currentTime = 0;/
   );
   assert.match(
     shortsPageSource,
@@ -728,8 +817,62 @@ test("shorts buffering state survives stalled and self-heals on real progress", 
   const waitingEnd = shortsPageSource.indexOf("const cacheAvailableSource", waitingStart);
   assert.ok(waitingStart >= 0 && waitingEnd > waitingStart);
   const waitingBlock = shortsPageSource.slice(waitingStart, waitingEnd);
-  assert.match(waitingBlock, /SHORTS_BUFFERING_INDICATOR_DELAY_MS/);
+  // The deferred-indicator timer now lives in a shared helper so the iOS loop
+  // restart can reuse it; handleWaiting must still go through it rather than
+  // lighting the spinner up synchronously.
+  assert.match(waitingBlock, /scheduleBufferingIndicator\(/);
+  assert.doesNotMatch(waitingBlock, /setIsBuffering\(true\)/);
   assert.match(waitingBlock, /hasStartedPlayingRef\.current/);
+  assert.match(
+    shortsPageSource,
+    /const scheduleBufferingIndicator = useCallback\([\s\S]*?SHORTS_BUFFERING_INDICATOR_DELAY_MS\)/
+  );
+});
+
+// A short video loops often, and iOS drives every loop through a manual
+// seek-and-await-first-frame restart. Lighting the spinner up the moment
+// `ended` fires made it blink on every single lap even when the restart landed
+// in a few dozen milliseconds; Android's native loop is seamless.
+test("iOS loop restart defers the buffering spinner instead of blinking every lap", () => {
+  const endedStart = shortsPageSource.indexOf("const handleIOSLoopEnded = () => {");
+  const endedEnd = shortsPageSource.indexOf(
+    "const retryRestartWhenReady",
+    endedStart
+  );
+  assert.ok(endedStart >= 0 && endedEnd > endedStart);
+  const endedBlock = shortsPageSource.slice(endedStart, endedEnd);
+  assert.doesNotMatch(endedBlock, /setIsBuffering\(true\)/);
+  assert.match(
+    endedBlock,
+    /scheduleBufferingIndicator\(\s*\(\) => canContinueRestart\(attempt\) && loopRestartAwaitingFrameRef\.current\s*\)/
+  );
+
+  // The `play` event fired by the restart would otherwise re-light it
+  // synchronously and undo the deferral.
+  const playStart = shortsPageSource.indexOf("const handleIOSLoopPlay = () => {");
+  const playEnd = shortsPageSource.indexOf("video.addEventListener(\"ended\"", playStart);
+  assert.ok(playStart >= 0 && playEnd > playStart);
+  const playBlock = shortsPageSource.slice(playStart, playEnd);
+  assert.doesNotMatch(playBlock, /setIsBuffering\(true\)/);
+  assert.match(playBlock, /const attempt = loopRestartAttemptRef\.current;/);
+  assert.match(playBlock, /scheduleBufferingIndicator\(/);
+  assert.match(playBlock, /startFrameWatchdog\(attempt\);/);
+});
+
+// Applying a CSS filter to a <video> drops WebKit out of the direct video
+// compositing path: every frame has to be rendered into a layer and filtered.
+// The shadow stays on the static poster, where it costs one pass.
+test("the active slide never puts a CSS filter on the playing video", () => {
+  const activeRule =
+    /\.shorts-slide\[data-active="true"\] \.shorts-slide__video,\s*\.shorts-slide\[data-active="true"\] \.shorts-slide__poster \{[\s\S]*?\}/.exec(
+      shortsCssSource
+    );
+  assert.ok(activeRule, "active video/poster rule should exist");
+  assert.doesNotMatch(activeRule[0], /filter:/);
+  assert.match(
+    shortsCssSource,
+    /\.shorts-slide\[data-active="true"\] \.shorts-slide__poster \{\s*filter: drop-shadow/
+  );
 });
 
 test("shorts grants preload only after the active video really started", () => {

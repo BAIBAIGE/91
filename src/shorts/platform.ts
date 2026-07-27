@@ -5,6 +5,16 @@ export function shouldUseDocumentScrollForShorts() {
   return isIPhoneBrowserShell();
 }
 
+/**
+ * `?iosPreload=0` 关掉 iOS 备用元素预载（连元素本身都不创建）。
+ * 用来隔离"预载抢媒体资源"是否是循环重播失败的原因：同一台机器、同一条
+ * 视频，带不带这个参数各看一轮循环即可对照。
+ */
+export function isIOSStandbyPreloadDisabled() {
+  if (typeof window === "undefined") return false;
+  return new URLSearchParams(window.location.search).get("iosPreload") === "0";
+}
+
 export function isWindowsPlatform() {
   if (typeof navigator === "undefined") return false;
   const platform = navigator.platform || "";
