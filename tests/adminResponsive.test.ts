@@ -708,7 +708,8 @@ test("blacklist source files can be deleted by one serialized background task", 
   assert.match(status, /font-size\s*:\s*var\(--font-xs\)/);
   assert.match(button, /white-space\s*:\s*nowrap/);
   assert.match(rowActions, /display\s*:\s*flex/);
-  assert.match(rowActions, /flex-wrap\s*:\s*wrap/);
+  // 桌面端黑名单操作列保持单行（8be7ebd）；移动端媒体查询里仍允许换行
+  assert.match(rowActions, /flex-wrap\s*:\s*nowrap/);
   assert.match(rowDelete, /white-space\s*:\s*nowrap/);
 });
 

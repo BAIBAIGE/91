@@ -57,5 +57,15 @@ test("document scroll lock restores existing inline document styles", () => {
     assert.match(scrollLockSource, new RegExp(`${property}:`));
     assert.match(scrollLockSource, new RegExp(`snapshot\\.${property}`));
   }
-  assert.match(scrollLockSource, /window\.innerWidth - root\.clientWidth/);
+  // 3b66f6c 起补偿量改用 body 自身宽度增量测量：scrollbar-gutter: stable 下
+  // root.clientWidth 会随滚动条隐藏而变宽，按它补偿会把整页左移。
+  assert.match(
+    scrollLockSource,
+    /const bodyWidthBeforeLock = body\.getBoundingClientRect\(\)\.width;/
+  );
+  assert.match(
+    scrollLockSource,
+    /const widthGain = body\.getBoundingClientRect\(\)\.width - bodyWidthBeforeLock;\s*if \(widthGain > 0\) \{\s*body\.style\.paddingRight = `\$\{bodyPaddingRight \+ widthGain\}px`;/
+  );
+  assert.doesNotMatch(scrollLockSource, /window\.innerWidth - root\.clientWidth/);
 });
