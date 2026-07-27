@@ -18,12 +18,38 @@ const shareClipboardSource = readFileSync(
   new URL("../src/lib/videoShareClipboard.ts", import.meta.url),
   "utf8"
 );
+const shortsFeedSource = readFileSync(
+  new URL("../src/shorts/shortsFeed.ts", import.meta.url),
+  "utf8"
+);
+const useShortsFeedSource = readFileSync(
+  new URL("../src/shorts/useShortsFeed.ts", import.meta.url),
+  "utf8"
+);
+const mediaBufferSource = readFileSync(
+  new URL("../src/shorts/mediaBuffer.ts", import.meta.url),
+  "utf8"
+);
+const shortsPlatformSource = readFileSync(
+  new URL("../src/shorts/platform.ts", import.meta.url),
+  "utf8"
+);
+const useShortsKeyboardSource = readFileSync(
+  new URL("../src/shorts/useShortsKeyboard.tsx", import.meta.url),
+  "utf8"
+);
+const slideGesturesSource = readFileSync(
+  new URL("../src/shorts/useShortsSlideGestures.ts", import.meta.url),
+  "utf8"
+);
 
 test("shorts does not keep recommendation preference from likes or watch time", () => {
   assert.doesNotMatch(shortsPageSource, /currentTime\s*>=\s*3/);
   assert.doesNotMatch(shortsPageSource, /onPreferenceReady/);
   assert.doesNotMatch(shortsPageSource, /preferredFromVideoId/);
   assert.doesNotMatch(videosDataSource, /preferredFromVideoId/);
+  // feed 层同样不允许偷偷记录偏好画像
+  assert.doesNotMatch(shortsFeedSource + useShortsFeedSource, /preferred|watchTime|seenIds/i);
 
   const match = /const handleLikeToggle[\s\S]*?const hasLiked/.exec(
     shortsPageSource
@@ -38,9 +64,9 @@ test("shorts does not keep recommendation preference from likes or watch time", 
 
 test("shorts progress dragging uses immediate pointer state", () => {
   assert.match(shortsPageSource, /const scrubbingRef = useRef\(false\)/);
-  assert.match(shortsPageSource, /scrubbingRef\.current = true;/);
-  assert.match(shortsPageSource, /if \(!scrubbingRef\.current\) return;/);
-  assert.doesNotMatch(shortsPageSource, /if \(!scrubbing\) return;/);
+  assert.match(slideGesturesSource, /scrubbingRef\.current = true;/);
+  assert.match(slideGesturesSource, /if \(!options\.scrubbingRef\.current\) return;/);
+  assert.doesNotMatch(shortsPageSource + slideGesturesSource, /if \(!scrubbing\) return;/);
   assert.match(shortsPageSource, /function getSeekDuration/);
   assert.match(shortsPageSource, /onLostPointerCapture=\{handleProgressPointerEnd\}/);
 });
@@ -61,31 +87,35 @@ test("mobile shorts scrubbing time is shown at the top", () => {
 });
 
 test("shorts horizontal video swipe seeks relative to the current playback time", () => {
-  assert.match(shortsPageSource, /const SHORTS_SEEK_ACTIVATION_PX = 12;/);
-  assert.match(shortsPageSource, /const SHORTS_SEEK_DIRECTION_LOCK_RATIO = 1\.2;/);
-  assert.match(shortsPageSource, /type ShortsTouchSeekState = \{/);
-  assert.match(shortsPageSource, /startTime: video\.currentTime \|\| 0/);
-  assert.match(shortsPageSource, /video\.addEventListener\("touchmove", handleTouchMove, \{ passive: false \}\);/);
+  assert.match(slideGesturesSource, /const SHORTS_SEEK_ACTIVATION_PX = 12;/);
+  assert.match(slideGesturesSource, /const SHORTS_SEEK_DIRECTION_LOCK_RATIO = 1\.2;/);
+  assert.match(slideGesturesSource, /type ShortsTouchSeekState = \{/);
+  assert.match(slideGesturesSource, /startTime: video\.currentTime \|\| 0/);
+  assert.match(slideGesturesSource, /video\.addEventListener\("touchmove", handleTouchMove, \{ passive: false \}\);/);
+  // 相对快进的换算与方向锁的行为用例见 shortsGestures.test.ts
   assert.match(
-    shortsPageSource,
-    /touchSeekState\.startTime \+\s*\(dx \/ Math\.max\(1,\s*rect\.width\)\) \* seekDuration/
+    slideGesturesSource,
+    /input\.startTime \+ \(input\.dx \/ Math\.max\(1, input\.width\)\) \* input\.duration/
   );
-  assert.match(shortsPageSource, /suppressNextClickRef\.current = true;/);
-  assert.match(shortsPageSource, /if \(suppressNextClickRef\.current\) \{/);
-  assert.doesNotMatch(shortsPageSource, /touch\.clientX - rect\.left\) \/ Math\.max\(1,\s*rect\.width\)/);
+  assert.match(slideGesturesSource, /suppressNextClickRef\.current = true;/);
+  assert.match(slideGesturesSource, /if \(suppressNextClickRef\.current\) \{/);
+  assert.doesNotMatch(
+    shortsPageSource + slideGesturesSource,
+    /touch\.clientX - rect\.left\) \/ Math\.max\(1,\s*rect\.width\)/
+  );
 });
 
 test("shorts long-press release does not become a click that pauses playback", () => {
   assert.match(
-    shortsPageSource,
+    slideGesturesSource,
     /const handleTouchEnd = \(event: TouchEvent\) => \{[\s\S]*?const wasFastPress = active;[\s\S]*?if \(wasSeeking \|\| wasFastPress\) \{\s*suppressNextSyntheticClick\(\);/
   );
   assert.match(
-    shortsPageSource,
+    slideGesturesSource,
     /function suppressNextSyntheticClick\(\) \{[\s\S]*?suppressNextClickRef\.current = true;[\s\S]*?SHORTS_SYNTHETIC_CLICK_RESET_MS/
   );
   assert.match(
-    shortsPageSource,
+    slideGesturesSource,
     /if \(suppressNextClickRef\.current\) \{\s*suppressNextClickRef\.current = false;\s*clearSuppressNextClickResetTimer\(\);[\s\S]*?return;/
   );
 });
@@ -126,15 +156,15 @@ test("shorts preserves a user pause while the active video is still loading", ()
     /const canContinue = \(\) =>[\s\S]*?!isVideoPausedByUser\(index\);/
   );
   assert.match(
-    shortsPageSource,
-    /userPausedIndexRef\.current === target\.videoIndex \|\|\s*\(target\.video\.paused && target\.video\.readyState >= 3\)/
+    useShortsKeyboardSource,
+    /isVideoPausedByUser\(target\.videoIndex\) \|\|\s*\(target\.video\.paused && target\.video\.readyState >= 3\)/
   );
   assert.match(
-    shortsPageSource,
+    useShortsKeyboardSource,
     /setUserPausedForIndex\(target\.videoIndex, false\);\s*target\.video\.play\(\)\.catch/
   );
   assert.match(
-    shortsPageSource,
+    useShortsKeyboardSource,
     /setUserPausedForIndex\(target\.videoIndex, true\);\s*target\.video\.pause\(\);/
   );
   assert.match(
@@ -165,38 +195,47 @@ test("shorts retries interrupted active playback and exposes rejected autoplay",
     /const markPlayBlocked = \(\) => \{[\s\S]*?setIsBuffering\(false\);[\s\S]*?setPaused\(true\);/
   );
   assert.match(shortsPageSource, /autoPlay=\{isActive\}/);
+  // \u81ea\u52a8\u64ad\u653e\u88ab\u62d2\u540e\u7684\u9996\u6b21\u70b9\u51fb\uff1a\u5224\u5b9a\u4e0e\u6062\u590d\u5728 slide\uff0c\u5206\u53d1\u65f6\u5e8f\u5728\u624b\u52bf hook
   assert.match(
     shortsPageSource,
-    /if \(video\?\.paused && !isBuffering\) \{[\s\S]*?video\.play\(\)\.catch[\s\S]*?\/\/ \u5355\u51fb\u6302\u8d77/
+    /function shouldResumeImmediatelyOnClick\(\) \{[\s\S]*?video\?\.paused && !isBuffering/
+  );
+  assert.match(
+    shortsPageSource,
+    /function handleImmediateResume\(\) \{[\s\S]*?video\.play\(\)\.catch/
+  );
+  assert.match(
+    slideGesturesSource,
+    /if \(options\.shouldResumeImmediately\(\)\) \{[\s\S]*?options\.onImmediateResume\(\);[\s\S]*?return;[\s\S]*?\/\/ \u5355\u51fb\u6302\u8d77/
   );
 });
 
 test("shorts keyboard play pause does not show a toast", () => {
-  const keyboardBlock = /else if \(e\.key === " "\) \{[\s\S]*?\} else if \(e\.key === "m"/.exec(shortsPageSource);
+  const keyboardBlock = /else if \(e\.key === " "\) \{[\s\S]*?\} else if \(e\.key === "m"/.exec(useShortsKeyboardSource);
   assert.ok(keyboardBlock, "space key handler should be present");
   assert.doesNotMatch(keyboardBlock[0], /showHud\("播放"|showHud\("暂停"/);
 });
 
 test("shorts double space likes without toggling playback", () => {
-  assert.match(shortsPageSource, /const SHORTS_KEYBOARD_DOUBLE_SPACE_MS = 280;/);
+  assert.match(useShortsKeyboardSource, /const SHORTS_KEYBOARD_DOUBLE_SPACE_MS = 280;/);
   assert.match(
-    shortsPageSource,
+    useShortsKeyboardSource,
     /let pendingSpaceTimer: number \| null = null;[\s\S]*?let pendingSpaceTarget:/
   );
   assert.match(
-    shortsPageSource,
+    useShortsKeyboardSource,
     /pendingSpaceTimer = window\.setTimeout\(\(\) => \{[\s\S]*?toggleKeyboardPlayback\(target\);[\s\S]*?SHORTS_KEYBOARD_DOUBLE_SPACE_MS/
   );
   assert.match(
-    shortsPageSource,
+    useShortsKeyboardSource,
     /pendingSpaceTimer !== null &&[\s\S]*?pendingSpaceTarget\.video === activeVideo[\s\S]*?clearKeyboardSpaceTimer\(\);[\s\S]*?likeActiveVideo\(videoIndex\);[\s\S]*?return;/
   );
   assert.match(
-    shortsPageSource,
+    useShortsKeyboardSource,
     /const keyboardLikeHandlersRef = useRef<Map<number, \(\) => void>>\(new Map\(\)\);/
   );
   assert.match(
-    shortsPageSource,
+    useShortsKeyboardSource,
     /const likeActiveVideo = \(videoIndex: number\) => \{\s*keyboardLikeHandlersRef\.current\.get\(videoIndex\)\?\.\(\);/
   );
   assert.match(
@@ -211,10 +250,10 @@ test("shorts double space likes without toggling playback", () => {
     shortsPageSource,
     /registerKeyboardLikeHandler\(index, handleKeyboardLike\);[\s\S]*?registerKeyboardLikeHandler\(index, null\);/
   );
-  assert.doesNotMatch(shortsPageSource, /new MouseEvent\("click"/);
+  assert.doesNotMatch(shortsPageSource + useShortsKeyboardSource, /new MouseEvent\("click"/);
   assert.match(shortsPageSource, /data-shorts-like=""/);
   assert.match(
-    shortsPageSource,
+    useShortsKeyboardSource,
     /window\.removeEventListener\("blur", handleWindowBlur\);[\s\S]*?clearKeyboardSpaceTimer\(\);/
   );
 });
@@ -228,37 +267,37 @@ test("shorts keeps the full heart animation when reduced motion is enabled", () 
 
 test("desktop held arrow-key seeking previews progress and commits once", () => {
   assert.match(
-    shortsPageSource,
+    useShortsKeyboardSource,
     /type ShortsKeyboardSeekPreview = \{[\s\S]*?videoIndex: number;[\s\S]*?currentTime: number;[\s\S]*?duration: number;/
   );
   assert.match(
-    shortsPageSource,
+    useShortsKeyboardSource,
     /const baseTime = canContinuePendingTarget[\s\S]*?pendingTarget\.currentTime[\s\S]*?: activeVideo\.currentTime;[\s\S]*?const currentTime = clamp\(baseTime \+ delta, 0, duration\);/
   );
   assert.match(
-    shortsPageSource,
+    useShortsKeyboardSource,
     /setKeyboardSeekPreview\(\{ videoIndex, currentTime, duration \}\);/
   );
   assert.match(
-    shortsPageSource,
+    useShortsKeyboardSource,
     /const handleKeyUp = \(e: KeyboardEvent\) => \{[\s\S]*?keyboardSeekHeldKeysRef\.current\.delete\(e\.key\);[\s\S]*?size === 0\) finishKeyboardSeek\(\)/
   );
-  const previewStart = shortsPageSource.indexOf("const previewKeyboardSeek");
-  const keydownStart = shortsPageSource.indexOf("const handleKeyDown", previewStart);
+  const previewStart = useShortsKeyboardSource.indexOf("const previewKeyboardSeek");
+  const keydownStart = useShortsKeyboardSource.indexOf("const handleKeyDown", previewStart);
   assert.ok(previewStart >= 0 && keydownStart > previewStart);
   assert.doesNotMatch(
-    shortsPageSource.slice(previewStart, keydownStart),
+    useShortsKeyboardSource.slice(previewStart, keydownStart),
     /\.currentTime\s*=/
   );
   assert.match(
-    shortsPageSource,
+    useShortsKeyboardSource,
     /const commitKeyboardSeek = \(\) => \{[\s\S]*?target\.video\.currentTime = nextTime;/
   );
   assert.match(
-    shortsPageSource,
+    useShortsKeyboardSource,
     /SHORTS_KEYBOARD_SEEK_IDLE_COMMIT_MS[\s\S]*?scheduleKeyboardSeekIdleCommit/
   );
-  assert.match(shortsPageSource, /window\.addEventListener\("keyup", handleKeyUp\);/);
+  assert.match(useShortsKeyboardSource, /window\.addEventListener\("keyup", handleKeyUp\);/);
   assert.match(
     shortsPageSource,
     /className="shorts-keyboard-seek-time" aria-live="polite"[\s\S]*?formatClock\(keyboardSeekPreview\.currentTime\)[\s\S]*?formatClock\(keyboardSeekPreview\.duration\)/
@@ -333,7 +372,7 @@ test("shorts loading spinner covers video buffering and initial feed loading", (
 
 test("shorts preloads the next two original videos only after the active video has comfortable buffer", () => {
   assert.match(shortsPageSource, /const \[activeReadyForPreload, setActiveReadyForPreload\] = useState\(false\);/);
-  assert.match(shortsPageSource, /const ACTIVE_PRELOAD_BUFFER_SECONDS = 12;/);
+  assert.match(mediaBufferSource, /const ACTIVE_PRELOAD_BUFFER_SECONDS = 12;/);
   assert.match(shortsPageSource, /const PRELOAD_AHEAD_COUNT = 2;/);
   assert.match(
     shortsPageSource,
@@ -352,55 +391,68 @@ test("shorts preloads the next two original videos only after the active video h
 });
 
 test("shorts preload grant uses high/low watermark hysteresis", () => {
-  // 高水位 12s 授权、低水位 4s 收回，之间维持现状，避免阈值附近抖动
-  assert.match(shortsPageSource, /const ACTIVE_PRELOAD_KEEP_SECONDS = 4;/);
+  // 高水位 12s 授权、低水位 4s 收回，之间维持现状，避免阈值附近抖动。
+  // 判定本身的行为矩阵见 shortsMediaBuffer.test.ts；这里钉住页面接线。
+  assert.match(mediaBufferSource, /const ACTIVE_PRELOAD_KEEP_SECONDS = 4;/);
   assert.match(
     shortsPageSource,
     /\} else if \(videoBufferIsCritical\(currentVideo\)\) \{[\s\S]*?onActiveNeedsPriority\(index\);/
   );
-  assert.match(shortsPageSource, /function videoBufferIsCritical\(video: HTMLVideoElement\)/);
+  assert.match(mediaBufferSource, /function videoBufferIsCritical\(video: BufferedMediaProbe\)/);
   // 已缓冲到片尾时既视为健康也不视为告急，避免临近结尾误收回授权
-  assert.match(shortsPageSource, /function videoBufferedToEnd\(video: HTMLVideoElement\)/);
+  assert.match(mediaBufferSource, /function videoBufferedToEnd\(video: BufferedMediaProbe\)/);
   assert.match(
-    shortsPageSource,
+    mediaBufferSource,
     /if \(videoBufferedToEnd\(video\)\) return true;[\s\S]*?>= ACTIVE_PRELOAD_BUFFER_SECONDS;/
   );
   assert.match(
-    shortsPageSource,
+    mediaBufferSource,
     /if \(videoBufferedToEnd\(video\)\) return false;[\s\S]*?< ACTIVE_PRELOAD_KEEP_SECONDS;/
   );
 });
 
 test("shorts only advances viewed cursors and waits for queue end before starting a new feed", () => {
-  assert.doesNotMatch(shortsPageSource, /seenIdsRef|saveSeenIds/);
+  assert.doesNotMatch(shortsPageSource + shortsFeedSource + useShortsFeedSource, /seenIdsRef|saveSeenIds/);
   assert.match(
-    shortsPageSource,
+    useShortsFeedSource,
     /const persistedFeedHighIndexRef = useRef\(-1\);/
   );
   assert.match(
-    shortsPageSource,
+    useShortsFeedSource,
     /if \(activeIndex > persistedFeedHighIndexRef\.current\) \{\s*persistedFeedHighIndexRef\.current = activeIndex;\s*saveShortsFeedState\(\{\s*feedToken: active\.feedToken,\s*cursor: active\.feedCursor,/
   );
-  assert.doesNotMatch(
-    shortsPageSource,
-    /setCacheWindowHighIndex\(\(prev\) => Math\.max\(prev, activeIndex\)\);\s*saveShortsFeedState/
+  // 续播书签只归 feed hook 管；页面的缓存窗口推进不得写书签
+  assert.doesNotMatch(shortsPageSource, /saveShortsFeedState/);
+  // 换轮时机的行为矩阵见 shortsFeedLogic.test.ts 的 planShortsPrefetch 用例
+  assert.match(
+    shortsFeedSource,
+    /if \(input\.roundComplete\) \{\s*return input\.remainingAfterActive > 0 \? "none" : "new-round";/
   );
   assert.match(
-    shortsPageSource,
-    /if \(roundComplete\) \{[\s\S]*?if \(remaining > 0\) return;[\s\S]*?requestFeedRef\.current = EMPTY_SHORTS_FEED;/
+    useShortsFeedSource,
+    /if \(plan === "new-round"\) \{\s*requestFeedRef\.current = EMPTY_SHORTS_FEED;\s*setRoundComplete\(false\);\s*\}\s*void loadMore\(\);/
   );
 });
 
 test("shorts distinguishes feed failures from a genuinely empty library", () => {
+  // 恢复流程（令牌失效 / 快照耗尽 / 空库）的行为用例见 shortsFeedLogic.test.ts
   assert.match(
-    shortsPageSource,
-    /if \(resp\.total === 0\) \{[\s\S]*?setEmpty\(true\);[\s\S]*?setItems\(\[\]\);[\s\S]*?setActiveIndex\(0\);[\s\S]*?setRoundComplete\(false\);[\s\S]*?requestFeedRef\.current = EMPTY_SHORTS_FEED;[\s\S]*?clearShortsFeedState\(\);[\s\S]*?return;/
+    shortsFeedSource,
+    /if \(resp\.total === 0\) \{\s*return \{ kind: "empty" \};/
+  );
+  assert.match(
+    useShortsFeedSource,
+    /if \(outcome\.kind === "empty"\) \{\s*setEmpty\(true\);[\s\S]*?setItems\(\[\]\);\s*onQueueResetRef\.current\(\);[\s\S]*?setRoundComplete\(false\);\s*requestFeedRef\.current = EMPTY_SHORTS_FEED;\s*clearShortsFeedState\(\);\s*return;/
   );
   assert.match(
     shortsPageSource,
+    /const handleQueueReset = useCallback\(\(\) => setActiveIndex\(0\), \[\]\);/
+  );
+  assert.match(
+    useShortsFeedSource,
     /useEffect\(\(\) => \{\s*if \(empty\) return;\s*const active = items\[activeIndex\];/
   );
-  assert.match(shortsPageSource, /catch \{\s*setLoadError\(true\);/);
+  assert.match(useShortsFeedSource, /catch \{\s*setLoadError\(true\);/);
   assert.match(shortsPageSource, /短视频加载失败，请检查网络后重试/);
   assert.match(shortsPageSource, /onClick=\{\(\) => void loadMore\(\)\}/);
   assert.doesNotMatch(
@@ -492,11 +544,12 @@ test("shorts like action does not display a count", () => {
 test("shorts keeps buffered sources inside a six video window", () => {
   assert.match(shortsPageSource, /const \[cacheableSourceIds, setCacheableSourceIds\] = useState<Set<string>>/);
   assert.match(shortsPageSource, /setCacheableSourceIds\(\(prev\) => \{/);
-  assert.match(shortsPageSource, /const VIDEO_WINDOW_SIZE = 6;/);
-  assert.doesNotMatch(shortsPageSource, /VIDEO_WINDOW_BACKWARD_BIAS/);
+  assert.match(mediaBufferSource, /const VIDEO_WINDOW_SIZE = 6;/);
+  assert.doesNotMatch(shortsPageSource + mediaBufferSource, /VIDEO_WINDOW_BACKWARD_BIAS/);
   assert.match(shortsPageSource, /const \[cacheWindowHighIndex, setCacheWindowHighIndex\] = useState\(-1\);/);
   assert.match(shortsPageSource, /setCacheWindowHighIndex\(\(prev\) => Math\.max\(prev, activeIndex\)\);/);
-  assert.match(shortsPageSource, /function getVideoWindowBounds\(highestViewedIndex: number, itemCount: number\)/);
+  // 窗口边界计算的行为用例见 shortsMediaBuffer.test.ts
+  assert.match(mediaBufferSource, /function getVideoWindowBounds\(highestViewedIndex: number, itemCount: number\)/);
   assert.match(
     shortsPageSource,
     /const videoWindow = getVideoWindowBounds\(cacheWindowHighIndex, items\.length\);/
@@ -534,9 +587,9 @@ test("shorts keeps buffered sources inside a six video window", () => {
 
 test("shorts reuses one persistent media element across iOS slides", () => {
   assert.match(shortsPageSource, /const useIOSSharedVideo = shouldUseIOSSharedVideo\(\);/);
-  assert.match(shortsPageSource, /function shouldUseIOSSharedVideo\(\)/);
-  assert.match(shortsPageSource, /\\biPhone\\b\|\\biPad\\b\|\\biPod\\b/);
-  assert.match(shortsPageSource, /navigator\.platform === "MacIntel" && navigator\.maxTouchPoints > 1/);
+  assert.match(shortsPlatformSource, /function shouldUseIOSSharedVideo\(\)/);
+  assert.match(shortsPlatformSource, /\\biPhone\\b\|\\biPad\\b\|\\biPod\\b/);
+  assert.match(shortsPlatformSource, /navigator\.platform === "MacIntel" && navigator\.maxTouchPoints > 1/);
   assert.match(
     shortsPageSource,
     /const shouldPreload =\s*!useIOSSharedVideo &&\s*activeReadyForPreload/
@@ -746,7 +799,7 @@ test("Windows viewport resize keeps the current short aligned", () => {
     /const isWindowsShortsPlatform = isWindowsPlatform\(\);/
   );
   assert.match(
-    shortsPageSource,
+    shortsPlatformSource,
     /function isWindowsPlatform\(\) \{[\s\S]*?\/\^Win\/i\.test\(platform\) \|\| \/\\bWindows\\b\/i\.test\(ua\);/
   );
   assert.match(

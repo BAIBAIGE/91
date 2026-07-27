@@ -10,6 +10,10 @@ const shortsPageSource = readFileSync(
   new URL("../src/pages/ShortsPage.tsx", import.meta.url),
   "utf8"
 );
+const shortsPlatformSource = readFileSync(
+  new URL("../src/shorts/platform.ts", import.meta.url),
+  "utf8"
+);
 const indexHtml = readFileSync(
   new URL("../index.html", import.meta.url),
   "utf8"
@@ -31,8 +35,8 @@ test("shorts page wrapper is not position:fixed (breaks iOS <video> compositing)
 });
 
 test("iPhone browser uses document scrolling without manual fullscreen controls", () => {
-  assert.match(shortsPageSource, /function shouldUseDocumentScrollForShorts\(\)/);
-  assert.match(shortsPageSource, /function isIPhoneBrowserShell\(\)/);
+  assert.match(shortsPlatformSource, /function shouldUseDocumentScrollForShorts\(\)/);
+  assert.match(shortsPlatformSource, /function isIPhoneBrowserShell\(\)/);
   assert.match(shortsPageSource, /root:\s*null/);
   assert.doesNotMatch(shortsPageSource, /supportsElementFullscreenAPI/);
   assert.doesNotMatch(shortsPageSource, /requestFullscreen/);

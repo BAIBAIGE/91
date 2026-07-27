@@ -14,17 +14,32 @@ import {
   VolumeX,
   EyeOff,
   Info,
-  Sparkles,
   AlertCircle,
   Share2,
 } from "lucide-react";
+import { hideVideo, type ShortsItem } from "@/data/videos";
 import {
-  fetchShortsNext,
-  hideVideo,
-  ShortsFeedExpiredError,
-  type ShortsFeedItem,
-  type ShortsItem,
-} from "@/data/videos";
+  clamp,
+  getVideoWindowBounds,
+  videoBufferIsCritical,
+  videoHasBufferedData,
+  videoHasComfortableBuffer,
+} from "@/shorts/mediaBuffer";
+import {
+  isWindowsPlatform,
+  shouldUseDocumentScrollForShorts,
+  shouldUseIOSSharedVideo,
+} from "@/shorts/platform";
+import {
+  isShortsDebugEnabled,
+  ShortsDebugHud,
+} from "@/shorts/ShortsDebugHud";
+import { useShortsFeed } from "@/shorts/useShortsFeed";
+import {
+  useShortsKeyboard,
+  type ShortsKeyboardSeekPreview,
+} from "@/shorts/useShortsKeyboard";
+import { useShortsSlideGestures } from "@/shorts/useShortsSlideGestures";
 import { AdminEmptyVisual } from "@/admin/AdminEmptyVisual";
 import { useAuth } from "@/admin/AuthContext";
 import {
@@ -33,34 +48,8 @@ import {
 } from "@/lib/videoShareClipboard";
 import "@/styles/shorts.css";
 
-// 只保存固定大小的服务端 feed 令牌和已实际看到的游标。
-const SHORTS_FEED_STORAGE_KEY = "shorts_feed_v2";
-
-// 每次向后端取多少条续到队列尾。值不要太大避免一次返回过多浪费；
-// 也不要太小导致频繁请求和滑动卡顿。
-const BATCH_SIZE = 5;
-
-// 当队列里"还没看过的视频"少于这个数时，提前请求下一批。
-const PREFETCH_THRESHOLD = 2;
-
-// 当前视频至少有这么多秒的前向缓冲后，才允许后续视频开始预加载。
-const ACTIVE_PRELOAD_BUFFER_SECONDS = 12;
-
 // 当前视频流畅播放后，向后预加载多少条视频。
 const PRELOAD_AHEAD_COUNT = 2;
-
-// 预加载授权一旦发出，只有当前视频前向缓冲跌破这个秒数（或发生 stall）
-// 才收回。高低水位之间不动作，避免缓冲量在 12s 附近波动时
-// 反复绑定/剥离后续视频的 src、丢弃已预加载的数据。
-const ACTIVE_PRELOAD_KEEP_SECONDS = 4;
-
-// 维护一个固定大小的视频窗口：窗口内才 mount 真实 <video> 壳。
-// 当前屏先绑定 src；后续预加载要等当前屏缓冲健康后才开始。
-// 窗口内只要已经产生过可复用缓冲，就保留 src 复用浏览器缓存。
-const VIDEO_WINDOW_SIZE = 6;
-
-const SHORTS_SEEK_ACTIVATION_PX = 12;
-const SHORTS_SEEK_DIRECTION_LOCK_RATIO = 1.2;
 
 // iOS 的 AVPlayer 在向后 seek 以开始下一轮时，偶尔会保持“逻辑上正在播放”
 // 但迟迟没有新画面。先走普通 seek；超过这个时间仍未呈现首帧时，才对同一
@@ -70,93 +59,24 @@ const IOS_LOOP_RELOAD_TIMEOUT_MS = 6000;
 // WebKit 会在极短的解码抖动中发 waiting。延迟一点再展示，避免视频画面
 // 仍在连续推进时闪出或残留加载图标。
 const SHORTS_BUFFERING_INDICATOR_DELAY_MS = 180;
-// touchend / mouseup 之后浏览器还会补发 click。长按倍速和拖动进度已经
-// 消费了这次手势，必须拦住这个合成 click，否则单击逻辑会把视频暂停。
-const SHORTS_SYNTHETIC_CLICK_RESET_MS = 700;
-const SHORTS_KEYBOARD_SEEK_SECONDS = 5;
-// 浏览器失焦时可能收不到 keyup；最后一次重复按键后自动提交，避免目标悬空。
-const SHORTS_KEYBOARD_SEEK_IDLE_COMMIT_MS = 1500;
-const SHORTS_KEYBOARD_SEEK_RELEASE_HIDE_MS = 400;
-const SHORTS_KEYBOARD_DOUBLE_SPACE_MS = 280;
-
-type ShortsKeyboardSeekKey = "ArrowLeft" | "ArrowRight";
-
-type ShortsKeyboardSeekPreview = {
-  videoIndex: number;
-  currentTime: number;
-  duration: number;
-};
-
-type ShortsKeyboardSeekTarget = ShortsKeyboardSeekPreview & {
-  video: HTMLVideoElement;
-};
-
-type ShortsFeedState = {
-  feedToken: string;
-  cursor: number;
-};
-
-type QueuedShortsItem = ShortsFeedItem & {
-  feedToken: string;
-};
-
-const EMPTY_SHORTS_FEED: ShortsFeedState = { feedToken: "", cursor: 0 };
-
-function loadShortsFeedState(): ShortsFeedState {
-  try {
-    const raw = localStorage.getItem(SHORTS_FEED_STORAGE_KEY);
-    if (!raw) return EMPTY_SHORTS_FEED;
-    const parsed = JSON.parse(raw);
-    if (
-      !parsed ||
-      typeof parsed.feedToken !== "string" ||
-      parsed.feedToken.length === 0 ||
-      parsed.feedToken.length > 128 ||
-      !Number.isInteger(parsed.cursor) ||
-      parsed.cursor < 0
-    ) {
-      return EMPTY_SHORTS_FEED;
-    }
-    return { feedToken: parsed.feedToken, cursor: parsed.cursor };
-  } catch {
-    return EMPTY_SHORTS_FEED;
-  }
-}
-
-function saveShortsFeedState(feed: ShortsFeedState) {
-  try {
-    localStorage.setItem(SHORTS_FEED_STORAGE_KEY, JSON.stringify(feed));
-  } catch {
-    // 隐私模式或存储不可用时只影响刷新后的续播，不影响当前 feed。
-  }
-}
-
-function clearShortsFeedState() {
-  try {
-    localStorage.removeItem(SHORTS_FEED_STORAGE_KEY);
-  } catch {
-    // ignore
-  }
-}
 
 export default function ShortsPage() {
   const { isAdmin } = useAuth();
   const navigate = useNavigate();
-  // 已加入页面的视频队列（按出现顺序）
-  const [items, setItems] = useState<QueuedShortsItem[]>([]);
   // 当前在视口里的视频索引
   const [activeIndex, setActiveIndex] = useState(0);
+  // 队列因空库被丢弃时回到第一屏
+  const handleQueueReset = useCallback(() => setActiveIndex(0), []);
+  // 已加入页面的视频队列（按出现顺序）与拉取状态
+  const { items, loading, empty, loadError, loadMore } = useShortsFeed(
+    activeIndex,
+    handleQueueReset
+  );
   // 是否静音；首次必须静音才能 autoplay，用户点击后切换
   const [muted, setMuted] = useState(true);
   // 全局 Toast / HUD 提醒文字
   const [hudText, setHudText] = useState<{ id: number; text: string; icon?: React.ReactNode } | null>(null);
   const hudTimeoutRef = useRef<number | null>(null);
-  const [keyboardSeekPreview, setKeyboardSeekPreview] =
-    useState<ShortsKeyboardSeekPreview | null>(null);
-  const keyboardSeekTargetRef = useRef<ShortsKeyboardSeekTarget | null>(null);
-  const keyboardSeekHeldKeysRef = useRef<Set<ShortsKeyboardSeekKey>>(new Set());
-  const keyboardSeekCommitTimerRef = useRef<number | null>(null);
-  const keyboardSeekHideTimerRef = useRef<number | null>(null);
 
   const showHud = useCallback((text: string, icon?: React.ReactNode) => {
     if (hudTimeoutRef.current) window.clearTimeout(hudTimeoutRef.current);
@@ -196,39 +116,13 @@ export default function ShortsPage() {
       next ? <VolumeX size={16} /> : <Volume2 size={16} />
     );
   }, [activeIndex, muted, showHud]);
-  const handleMuteButtonClickRef = useRef(handleMuteButtonClick);
-  handleMuteButtonClickRef.current = handleMuteButtonClick;
 
   // 组件卸载时清理 HUD 定时器
   useEffect(() => {
     return () => {
       if (hudTimeoutRef.current) window.clearTimeout(hudTimeoutRef.current);
-      if (keyboardSeekHideTimerRef.current !== null) {
-        window.clearTimeout(keyboardSeekHideTimerRef.current);
-      }
-      if (keyboardSeekCommitTimerRef.current !== null) {
-        window.clearTimeout(keyboardSeekCommitTimerRef.current);
-      }
-      keyboardSeekTargetRef.current = null;
-      keyboardSeekHeldKeysRef.current.clear();
     };
   }, []);
-
-  // 是否正在加载下一批，避免并发请求
-  const [loading, setLoading] = useState(false);
-  const loadingRef = useRef(false);
-  // 后端报告"本轮已耗尽"，下次请求前会自动重置
-  const [roundComplete, setRoundComplete] = useState(false);
-  // 没有任何视频可放（库为空 / 全部隐藏）
-  const [empty, setEmpty] = useState(false);
-  // 请求失败和真实空库必须分开，不能再把断网误报为"没有视频"。
-  const [loadError, setLoadError] = useState(false);
-  const [initialFeedState] = useState(loadShortsFeedState);
-  // 指向已经取到队列尾部的位置；只在内存中预取，不直接写 localStorage。
-  const requestFeedRef = useRef<ShortsFeedState>(initialFeedState);
-  // 当前页面队列中已经写入续播书签的最远索引。回滑只用于回看，不能让
-  // localStorage 中的 token/cursor 倒退到旧视频或上一轮随机队列。
-  const persistedFeedHighIndexRef = useRef(-1);
 
   const containerRef = useRef<HTMLDivElement | null>(null);
   const itemsLengthRef = useRef(items.length);
@@ -238,17 +132,6 @@ export default function ShortsPage() {
   const videoRefCallbacks = useRef<
     Map<number, (el: HTMLVideoElement | null) => void>
   >(new Map());
-  const keyboardLikeHandlersRef = useRef<Map<number, () => void>>(new Map());
-  const registerKeyboardLikeHandler = useCallback(
-    (index: number, handler: (() => void) | null) => {
-      if (handler) {
-        keyboardLikeHandlersRef.current.set(index, handler);
-      } else {
-        keyboardLikeHandlersRef.current.delete(index);
-      }
-    },
-    []
-  );
   const iosSharedVideoRef = useRef<HTMLVideoElement | null>(null);
   const iosSharedVideoSlots = useRef<Map<number, HTMLDivElement>>(new Map());
   const iosSharedVideoSlotCallbacks = useRef<
@@ -266,6 +149,8 @@ export default function ShortsPage() {
   );
   const [cacheWindowHighIndex, setCacheWindowHighIndex] = useState(-1);
 
+  // ?debug=1 时叠加只读观测面板；开关在页面生命周期内固定。
+  const [debugHudEnabled] = useState(isShortsDebugEnabled);
   // iPhone 浏览器里改用页面滚动，让 Safari 工具栏能随刷动收起。
   const useDocumentScroll = shouldUseDocumentScrollForShorts();
   // Windows 短视频页只保留静音图标；不挂载桌面 hover 音量条，避免点击
@@ -326,6 +211,20 @@ export default function ShortsPage() {
     (index: number) => userPausedIndexRef.current === index,
     []
   );
+
+  // 键盘快捷键：↑↓切换、空格播放/暂停（双空格点赞）、←→累计快进、M/L
+  const { keyboardSeekPreview, registerKeyboardLikeHandler } =
+    useShortsKeyboard({
+      containerRef,
+      activeIndexRef,
+      itemsLengthRef,
+      getVideoAtIndex,
+      isVideoPausedByUser,
+      setUserPausedForIndex,
+      onToggleMute: handleMuteButtonClick,
+      showHud,
+      isWindowsShortsPlatform,
+    });
 
   useEffect(() => {
     updateUserPausedIndex(null);
@@ -398,126 +297,11 @@ export default function ShortsPage() {
     []
   );
 
-  /**
-   * 向后端 token/cursor feed 请求下一批视频。GET 本身会重试；令牌因
-   * 后端重启或超时失效时自动开新一轮。只有真实空库才设置 empty。
-   */
-  const loadMore = useCallback(async () => {
-    if (loadingRef.current) return;
-    loadingRef.current = true;
-    setLoading(true);
-    setLoadError(false);
-    try {
-      let requestFeed = requestFeedRef.current;
-      for (let recoveryAttempt = 0; recoveryAttempt < 3; recoveryAttempt += 1) {
-        let resp;
-        try {
-          resp = await fetchShortsNext(
-            requestFeed.feedToken,
-            requestFeed.cursor,
-            BATCH_SIZE
-          );
-        } catch (error) {
-          if (
-            error instanceof ShortsFeedExpiredError &&
-            requestFeed.feedToken
-          ) {
-            requestFeed = EMPTY_SHORTS_FEED;
-            requestFeedRef.current = requestFeed;
-            clearShortsFeedState();
-            continue;
-          }
-          throw error;
-        }
-
-        if (resp.total === 0) {
-          setEmpty(true);
-          // 库在旧队列播放期间可能被清空。丢弃已经失效的队列并停止换轮，
-          // 否则末条视频的预取 effect 会持续请求同一个空库。
-          setItems([]);
-          setActiveIndex(0);
-          persistedFeedHighIndexRef.current = -1;
-          setRoundComplete(false);
-          requestFeedRef.current = EMPTY_SHORTS_FEED;
-          clearShortsFeedState();
-          return;
-        }
-
-        requestFeed = {
-          feedToken: resp.feedToken,
-          cursor: resp.nextCursor,
-        };
-        requestFeedRef.current = requestFeed;
-
-        // A snapshot can become empty if its remaining videos were deleted or
-        // hidden. Start a fresh snapshot instead of showing an empty-library lie.
-        if (resp.items.length === 0 && resp.roundComplete) {
-          requestFeed = EMPTY_SHORTS_FEED;
-          requestFeedRef.current = requestFeed;
-          continue;
-        }
-        if (resp.items.length === 0) {
-          throw new Error("Shorts feed returned no items before completion");
-        }
-
-        setEmpty(false);
-        setItems((prev) => {
-          const existing = new Set(
-            prev.map((item) => `${item.feedToken}:${item.feedCursor}`)
-          );
-          const fresh = resp.items
-            .map((item) => ({ ...item, feedToken: resp.feedToken }))
-            .filter(
-              (item) =>
-                !existing.has(`${item.feedToken}:${item.feedCursor}`)
-            );
-          return [...prev, ...fresh];
-        });
-        setRoundComplete(resp.roundComplete);
-        return;
-      }
-      throw new Error("Unable to create a playable shorts feed");
-    } catch {
-      setLoadError(true);
-    } finally {
-      loadingRef.current = false;
-      setLoading(false);
-    }
-  }, []);
-
-  // 首次加载
+  // 记录实际到达过的最远索引，驱动固定大小的视频缓存窗口。
   useEffect(() => {
-    void loadMore();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // 只提交首次进入过的最远视频游标。预取不会跳过未观看条目；回滑也不会
-  // 让书签倒退。刷新页面后从本次实际到达过的最远视频之后恢复。
-  useEffect(() => {
-    if (empty) return;
-    const active = items[activeIndex];
-    if (!active) return;
-
+    if (!items[activeIndex]) return;
     setCacheWindowHighIndex((prev) => Math.max(prev, activeIndex));
-    if (activeIndex > persistedFeedHighIndexRef.current) {
-      persistedFeedHighIndexRef.current = activeIndex;
-      saveShortsFeedState({
-        feedToken: active.feedToken,
-        cursor: active.feedCursor,
-      });
-    }
-
-    const remaining = items.length - 1 - activeIndex;
-    if (remaining < PREFETCH_THRESHOLD && !loading && !loadError) {
-      if (roundComplete) {
-        // 最后一批仍在队列中时不提前换轮；真正滑到最后一条才开新 feed。
-        if (remaining > 0) return;
-        requestFeedRef.current = EMPTY_SHORTS_FEED;
-        setRoundComplete(false);
-      }
-      void loadMore();
-    }
-  }, [activeIndex, items, loading, loadError, empty, roundComplete, loadMore]);
+  }, [activeIndex, items]);
 
   // 全屏与窗口模式的可用高度不同。Chrome/Edge 退出全屏后会保留原来的
   // scrollTop 像素值，而每条 slide 的 100svh 已经变矮；索引越靠后，误差
@@ -634,291 +418,6 @@ export default function ShortsPage() {
       applyVideoMutedState(video, muted);
     });
   }, [muted, items.length, useIOSSharedVideo]);
-
-  // 键盘快捷键监听
-  useEffect(() => {
-    let pendingSpaceTimer: number | null = null;
-    let pendingSpaceTarget: {
-      videoIndex: number;
-      video: HTMLVideoElement;
-    } | null = null;
-
-    const clearKeyboardSeekCommitTimer = () => {
-      if (keyboardSeekCommitTimerRef.current === null) return;
-      window.clearTimeout(keyboardSeekCommitTimerRef.current);
-      keyboardSeekCommitTimerRef.current = null;
-    };
-
-    const scheduleKeyboardSeekPreviewHide = (delay: number) => {
-      if (keyboardSeekHideTimerRef.current !== null) {
-        window.clearTimeout(keyboardSeekHideTimerRef.current);
-      }
-      keyboardSeekHideTimerRef.current = window.setTimeout(() => {
-        keyboardSeekHideTimerRef.current = null;
-        setKeyboardSeekPreview(null);
-      }, delay);
-    };
-
-    const getCurrentVideoAtIndex = (videoIndex: number) => {
-      if (useIOSSharedVideo && videoIndex === activeIndexRef.current) {
-        return iosSharedVideoRef.current ?? undefined;
-      }
-      return videoRefs.current.get(videoIndex);
-    };
-
-    const clearKeyboardSpaceTimer = () => {
-      if (pendingSpaceTimer !== null) {
-        window.clearTimeout(pendingSpaceTimer);
-      }
-      pendingSpaceTimer = null;
-      pendingSpaceTarget = null;
-    };
-
-    const getActiveLikeButton = (videoIndex: number) =>
-      containerRef.current?.querySelector<HTMLButtonElement>(
-        `[data-index="${videoIndex}"] [data-shorts-like]`
-      ) ?? null;
-
-    const likeActiveVideo = (videoIndex: number) => {
-      keyboardLikeHandlersRef.current.get(videoIndex)?.();
-    };
-
-    const toggleKeyboardPlayback = (target: {
-      videoIndex: number;
-      video: HTMLVideoElement;
-    }) => {
-      if (
-        activeIndexRef.current !== target.videoIndex ||
-        getCurrentVideoAtIndex(target.videoIndex) !== target.video
-      ) {
-        return;
-      }
-
-      const shouldResume =
-        userPausedIndexRef.current === target.videoIndex ||
-        (target.video.paused && target.video.readyState >= 3);
-      if (shouldResume) {
-        setUserPausedForIndex(target.videoIndex, false);
-        target.video.play().catch(() => undefined);
-      } else {
-        setUserPausedForIndex(target.videoIndex, true);
-        target.video.pause();
-      }
-    };
-
-    const scheduleKeyboardSpaceToggle = (
-      videoIndex: number,
-      video: HTMLVideoElement
-    ) => {
-      pendingSpaceTarget = { videoIndex, video };
-      pendingSpaceTimer = window.setTimeout(() => {
-        const target = pendingSpaceTarget;
-        pendingSpaceTimer = null;
-        pendingSpaceTarget = null;
-        if (target) toggleKeyboardPlayback(target);
-      }, SHORTS_KEYBOARD_DOUBLE_SPACE_MS);
-    };
-
-    const discardKeyboardSeek = () => {
-      clearKeyboardSeekCommitTimer();
-      keyboardSeekTargetRef.current = null;
-      keyboardSeekHeldKeysRef.current.clear();
-    };
-
-    const commitKeyboardSeek = () => {
-      const target = keyboardSeekTargetRef.current;
-      if (!target) return false;
-
-      discardKeyboardSeek();
-      const currentVideo = getCurrentVideoAtIndex(target.videoIndex);
-      if (
-        activeIndexRef.current === target.videoIndex &&
-        currentVideo === target.video
-      ) {
-        const duration =
-          Number.isFinite(target.video.duration) && target.video.duration > 0
-            ? target.video.duration
-            : target.duration;
-        const nextTime = clamp(target.currentTime, 0, duration);
-        try {
-          // 长按期间只更新预览；在左右键全部松开后才执行这一次真实 seek。
-          target.video.currentTime = nextTime;
-        } catch {
-          // ignore（部分 ready state 下设置会抛错）
-        }
-      }
-      return true;
-    };
-
-    const finishKeyboardSeek = () => {
-      if (!commitKeyboardSeek()) return;
-      scheduleKeyboardSeekPreviewHide(SHORTS_KEYBOARD_SEEK_RELEASE_HIDE_MS);
-    };
-
-    const scheduleKeyboardSeekIdleCommit = () => {
-      clearKeyboardSeekCommitTimer();
-      keyboardSeekCommitTimerRef.current = window.setTimeout(() => {
-        keyboardSeekCommitTimerRef.current = null;
-        finishKeyboardSeek();
-      }, SHORTS_KEYBOARD_SEEK_IDLE_COMMIT_MS);
-    };
-
-    const previewKeyboardSeek = (
-      delta: number,
-      key: ShortsKeyboardSeekKey
-    ) => {
-      const videoIndex = activeIndexRef.current;
-      const activeVideo = getCurrentVideoAtIndex(videoIndex);
-      const duration = activeVideo?.duration ?? 0;
-      if (!activeVideo || !Number.isFinite(duration) || duration <= 0) return;
-
-      if (keyboardSeekHideTimerRef.current !== null) {
-        window.clearTimeout(keyboardSeekHideTimerRef.current);
-        keyboardSeekHideTimerRef.current = null;
-      }
-
-      const pendingTarget = keyboardSeekTargetRef.current;
-      const canContinuePendingTarget =
-        pendingTarget?.videoIndex === videoIndex &&
-        pendingTarget.video === activeVideo;
-      if (pendingTarget && !canContinuePendingTarget) {
-        discardKeyboardSeek();
-      }
-
-      keyboardSeekHeldKeysRef.current.add(key);
-      const baseTime = canContinuePendingTarget
-        ? pendingTarget.currentTime
-        : activeVideo.currentTime;
-      const currentTime = clamp(baseTime + delta, 0, duration);
-      const nextTarget = { videoIndex, video: activeVideo, currentTime, duration };
-      keyboardSeekTargetRef.current = nextTarget;
-      setKeyboardSeekPreview({ videoIndex, currentTime, duration });
-      if (!isWindowsShortsPlatform) {
-        showHud(
-          delta > 0 ? "+5秒" : "-5秒",
-          <Sparkles size={16} />
-        );
-      }
-      scheduleKeyboardSeekIdleCommit();
-    };
-
-    const handleKeyDown = (e: KeyboardEvent) => {
-      const activeEl = document.activeElement;
-      if (
-        activeEl &&
-        (activeEl.tagName === "INPUT" ||
-          activeEl.tagName === "TEXTAREA" ||
-          activeEl.tagName === "SELECT" ||
-          (activeEl instanceof HTMLElement && activeEl.isContentEditable))
-      ) {
-        return;
-      }
-
-      if (e.key === "ArrowDown") {
-        e.preventDefault();
-        finishKeyboardSeek();
-        const nextIdx = activeIndexRef.current + 1;
-        if (nextIdx < itemsLengthRef.current) {
-          const nextSlide = containerRef.current?.querySelector(`[data-index="${nextIdx}"]`);
-          if (nextSlide) {
-            nextSlide.scrollIntoView({ behavior: "smooth" });
-          }
-        }
-      } else if (e.key === "ArrowUp") {
-        e.preventDefault();
-        finishKeyboardSeek();
-        const prevIdx = activeIndexRef.current - 1;
-        if (prevIdx >= 0) {
-          const prevSlide = containerRef.current?.querySelector(`[data-index="${prevIdx}"]`);
-          if (prevSlide) {
-            prevSlide.scrollIntoView({ behavior: "smooth" });
-          }
-        }
-      } else if (e.key === " ") {
-        e.preventDefault();
-        finishKeyboardSeek();
-        if (e.repeat) return;
-        const videoIndex = activeIndexRef.current;
-        const activeVideo = getCurrentVideoAtIndex(videoIndex);
-        if (!activeVideo) {
-          clearKeyboardSpaceTimer();
-          return;
-        }
-
-        if (
-          pendingSpaceTimer !== null &&
-          pendingSpaceTarget?.videoIndex === videoIndex &&
-          pendingSpaceTarget.video === activeVideo
-        ) {
-          clearKeyboardSpaceTimer();
-          likeActiveVideo(videoIndex);
-          return;
-        }
-
-        clearKeyboardSpaceTimer();
-        scheduleKeyboardSpaceToggle(videoIndex, activeVideo);
-      } else if (e.key === "m" || e.key === "M") {
-        e.preventDefault();
-        finishKeyboardSeek();
-        if (e.repeat) return;
-        handleMuteButtonClickRef.current();
-      } else if (e.key === "l" || e.key === "L") {
-        e.preventDefault();
-        finishKeyboardSeek();
-        if (e.repeat) return;
-        getActiveLikeButton(activeIndexRef.current)?.click();
-      } else if (e.key === "ArrowRight") {
-        e.preventDefault();
-        previewKeyboardSeek(
-          SHORTS_KEYBOARD_SEEK_SECONDS,
-          "ArrowRight"
-        );
-      } else if (e.key === "ArrowLeft") {
-        e.preventDefault();
-        previewKeyboardSeek(
-          -SHORTS_KEYBOARD_SEEK_SECONDS,
-          "ArrowLeft"
-        );
-      }
-    };
-
-    const handleKeyUp = (e: KeyboardEvent) => {
-      if (e.key !== "ArrowRight" && e.key !== "ArrowLeft") return;
-      if (!keyboardSeekTargetRef.current) return;
-
-      e.preventDefault();
-      keyboardSeekHeldKeysRef.current.delete(e.key);
-      if (keyboardSeekHeldKeysRef.current.size === 0) finishKeyboardSeek();
-    };
-
-    const handleVisibilityChange = () => {
-      if (!document.hidden) return;
-      finishKeyboardSeek();
-      clearKeyboardSpaceTimer();
-    };
-
-    const handleWindowBlur = () => {
-      finishKeyboardSeek();
-      clearKeyboardSpaceTimer();
-    };
-
-    window.addEventListener("keydown", handleKeyDown);
-    window.addEventListener("keyup", handleKeyUp);
-    window.addEventListener("blur", handleWindowBlur);
-    document.addEventListener("visibilitychange", handleVisibilityChange);
-    return () => {
-      window.removeEventListener("keydown", handleKeyDown);
-      window.removeEventListener("keyup", handleKeyUp);
-      window.removeEventListener("blur", handleWindowBlur);
-      document.removeEventListener("visibilitychange", handleVisibilityChange);
-      clearKeyboardSpaceTimer();
-    };
-  }, [
-    isWindowsShortsPlatform,
-    setUserPausedForIndex,
-    showHud,
-    useIOSSharedVideo,
-  ]);
 
   // 页面卸载时暂停所有
   useEffect(() => {
@@ -1142,6 +641,22 @@ export default function ShortsPage() {
         </div>
       )}
 
+      {debugHudEnabled && (
+        <ShortsDebugHud
+          activeIndex={activeIndex}
+          itemCount={items.length}
+          itemId={items[activeIndex]?.id ?? null}
+          getActiveVideo={() => getVideoAtIndex(activeIndexRef.current) ?? null}
+          windowStart={videoWindow.start}
+          windowEnd={videoWindow.end}
+          activeReadyForPreload={activeReadyForPreload}
+          cachedSourceCount={cacheableSourceIds.size}
+          muted={muted}
+          usesIOSSharedVideo={useIOSSharedVideo}
+          usesDocumentScroll={useDocumentScroll}
+        />
+      )}
+
       <div className="shorts-feed" ref={containerRef}>
         {loading && items.length === 0 && !empty && !loadError && (
           <div className="shorts-empty shorts-loading" aria-live="polite">
@@ -1301,14 +816,6 @@ type SlideProps = {
   showHud: (text: string, icon?: React.ReactNode) => void;
 };
 
-type ShortsTouchSeekState = {
-  startX: number;
-  startY: number;
-  startTime: number;
-  mode: "seek" | null;
-  targetTime: number;
-};
-
 /**
  * 一屏短视频。
  *
@@ -1392,8 +899,6 @@ function ShortsSlide({
   const [scrubbing, setScrubbing] = useState(false);
   const scrubbingRef = useRef(false);
   const lastKeyboardSeekPreviewTimeRef = useRef<number | null>(null);
-  // 拖动开始时是否在播：用于拖完后判断要不要 resume
-  const wasPlayingRef = useRef(true);
 
   useLayoutEffect(() => {
     if (keyboardSeekPreview) {
@@ -1475,13 +980,6 @@ function ShortsSlide({
     x: number;
     y: number;
   } | null>(null);
-
-  // 单击和双击的延迟分发：第一次点击挂在定时器里，
-  // 300ms 内有第二次就当双击点赞，否则当单击 toggle play
-  const clickTimerRef = useRef<number | null>(null);
-  const lastClickAtRef = useRef(0);
-  const suppressNextClickRef = useRef(false);
-  const suppressNextClickResetTimerRef = useRef<number | null>(null);
 
   // isLiked 取自父组件的全局集合，这样切走再切回 / 同一 id 重复出现仍能保持视觉态。
   useEffect(() => {
@@ -2274,172 +1772,6 @@ function ShortsSlide({
     usesSharedVideo,
   ]);
 
-  // 长按 2 倍速：直接绑原生事件
-  useEffect(() => {
-    const video = getVideoElement();
-    if (!video) return;
-    let timer: number | null = null;
-    let active = false;
-    let touchSeekState: ShortsTouchSeekState | null = null;
-
-    const clearTimer = () => {
-      if (timer !== null) {
-        window.clearTimeout(timer);
-        timer = null;
-      }
-    };
-    const start = () => {
-      if (video.paused || video.ended) return;
-      clearTimer();
-      timer = window.setTimeout(() => {
-        timer = null;
-        if (video.paused || video.ended) return;
-        video.playbackRate = 2;
-        active = true;
-        setFastActive(true);
-      }, 400);
-    };
-    const end = () => {
-      clearTimer();
-      if (active) {
-        active = false;
-        video.playbackRate = 1;
-        setFastActive(false);
-      }
-    };
-
-    const resetTouchSeek = () => {
-      if (touchSeekState?.mode === "seek") {
-        scrubbingRef.current = false;
-        setScrubbing(false);
-      }
-      touchSeekState = null;
-    };
-
-    const cancelFastForTouchSeek = () => {
-      clearTimer();
-      if (active) {
-        active = false;
-        video.playbackRate = 1;
-        setFastActive(false);
-      }
-    };
-
-    const handleTouchStart = (event: TouchEvent) => {
-      if (event.touches.length !== 1) return;
-      const touch = event.touches[0];
-      touchSeekState = {
-        startX: touch.clientX,
-        startY: touch.clientY,
-        startTime: video.currentTime || 0,
-        mode: null,
-        targetTime: video.currentTime || 0,
-      };
-      start();
-    };
-
-    const handleTouchMove = (event: TouchEvent) => {
-      if (!touchSeekState) return;
-      if (event.touches.length !== 1) {
-        resetTouchSeek();
-        end();
-        return;
-      }
-
-      const touch = event.touches[0];
-      const dx = touch.clientX - touchSeekState.startX;
-      const dy = touch.clientY - touchSeekState.startY;
-      const absX = Math.abs(dx);
-      const absY = Math.abs(dy);
-
-      if (!touchSeekState.mode) {
-        if (absX < SHORTS_SEEK_ACTIVATION_PX && absY < SHORTS_SEEK_ACTIVATION_PX) {
-          return;
-        }
-        cancelFastForTouchSeek();
-        if (absX < absY * SHORTS_SEEK_DIRECTION_LOCK_RATIO) {
-          touchSeekState = null;
-          return;
-        }
-        touchSeekState.mode = "seek";
-        scrubbingRef.current = true;
-        setScrubbing(true);
-        clearClickTimer();
-      }
-
-      event.preventDefault();
-      const seekDuration = getSeekDuration(video);
-      if (!seekDuration) return;
-      const rect = video.getBoundingClientRect();
-      const next = clamp(
-        touchSeekState.startTime +
-          (dx / Math.max(1, rect.width)) * seekDuration,
-        0,
-        seekDuration
-      );
-      touchSeekState.targetTime = next;
-      setCurrentTime(next);
-      try {
-        video.currentTime = next;
-      } catch {
-        // ignore
-      }
-    };
-
-    const handleTouchEnd = (event: TouchEvent) => {
-      const wasSeeking = touchSeekState?.mode === "seek";
-      const wasFastPress = active;
-      if (wasSeeking) {
-        event.preventDefault();
-      }
-      if (wasSeeking || wasFastPress) {
-        suppressNextSyntheticClick();
-      }
-      resetTouchSeek();
-      end();
-    };
-
-    const handleTouchCancel = () => {
-      resetTouchSeek();
-      end();
-    };
-
-    const handleMouseDown = (event: MouseEvent) => {
-      if (event.button === 0) start();
-    };
-
-    const handleMouseUp = (event: MouseEvent) => {
-      if (event.button !== 0) return;
-      const wasFastPress = active;
-      if (wasFastPress) suppressNextSyntheticClick();
-      end();
-    };
-
-    video.addEventListener("touchstart", handleTouchStart, { passive: true });
-    video.addEventListener("touchmove", handleTouchMove, { passive: false });
-    video.addEventListener("touchend", handleTouchEnd);
-    video.addEventListener("touchcancel", handleTouchCancel);
-    video.addEventListener("mousedown", handleMouseDown);
-    video.addEventListener("mouseup", handleMouseUp);
-    video.addEventListener("mouseleave", end);
-    video.addEventListener("pause", end);
-    video.addEventListener("ended", end);
-
-    return () => {
-      clearTimer();
-      resetTouchSeek();
-      video.removeEventListener("touchstart", handleTouchStart);
-      video.removeEventListener("touchmove", handleTouchMove);
-      video.removeEventListener("touchend", handleTouchEnd);
-      video.removeEventListener("touchcancel", handleTouchCancel);
-      video.removeEventListener("mousedown", handleMouseDown);
-      video.removeEventListener("mouseup", handleMouseUp);
-      video.removeEventListener("mouseleave", end);
-      video.removeEventListener("pause", end);
-      video.removeEventListener("ended", end);
-    };
-  }, [getVideoElement, shouldMount]);
-
   function togglePlayInternal() {
     const video = getVideoElement();
     if (!video) return;
@@ -2462,98 +1794,48 @@ function ShortsSlide({
     }
   }
 
-  function clearClickTimer() {
-    if (clickTimerRef.current !== null) {
-      window.clearTimeout(clickTimerRef.current);
-      clickTimerRef.current = null;
-    }
-  }
-
-  function clearSuppressNextClickResetTimer() {
-    if (suppressNextClickResetTimerRef.current === null) return;
-    window.clearTimeout(suppressNextClickResetTimerRef.current);
-    suppressNextClickResetTimerRef.current = null;
-  }
-
-  function suppressNextSyntheticClick() {
-    clearClickTimer();
-    clearSuppressNextClickResetTimer();
-    suppressNextClickRef.current = true;
-    // 少数 WebKit 版本在长按后不会生成 click，届时自动失效，避免误吞掉
-    // 用户之后真正的一次轻点。
-    suppressNextClickResetTimerRef.current = window.setTimeout(() => {
-      suppressNextClickRef.current = false;
-      suppressNextClickResetTimerRef.current = null;
-    }, SHORTS_SYNTHETIC_CLICK_RESET_MS);
-  }
-
-  /**
-   * 单击 / 双击分发：
-   * - 第一次点击：挂一个 280ms 定时器，到时如果还没第二次点击就 toggle 播放
-   * - 第二次点击（280ms 内）：清掉定时器，当作双击点赞，不切换播放状态
-   */
-  function handleSlideClick(e: React.MouseEvent<HTMLElement>) {
-    // 隐藏状态下不处理点击
-    if (isMarkedHidden) return;
-    if (suppressNextClickRef.current) {
-      suppressNextClickRef.current = false;
-      clearSuppressNextClickResetTimer();
-      clearClickTimer();
-      e.preventDefault();
-      e.stopPropagation();
-      return;
-    }
-
-    const now = Date.now();
-    const delta = now - lastClickAtRef.current;
-    lastClickAtRef.current = now;
-
-    // 双击命中
-    if (delta < 280 && clickTimerRef.current !== null) {
-      clearClickTimer();
-      // 在双击位置弹心形动画
-      const rect = e.currentTarget.getBoundingClientRect();
-      handleDoubleClickLike(e.clientX - rect.left, e.clientY - rect.top);
-      return;
-    }
-
-    // Safari 的有声播放权限按 media element 授予。自动播放被拒后，
-    // 用户第一次点击必须在这个原始 click 回调内直接 play()，
-    // 不能等 280ms 的单/双击定时器，否则会丢失用户激活。
+  // Safari 的有声播放权限按 media element 授予。自动播放被拒后，用户的
+  // 首次点击必须在原始 click 回调内直接 play()；分发时序见 useShortsSlideGestures。
+  function shouldResumeImmediatelyOnClick() {
     const video = getVideoElement();
-    if (video?.paused && !isBuffering) {
-      clearClickTimer();
-      clickTimerRef.current = window.setTimeout(() => {
-        clickTimerRef.current = null;
-      }, 280);
-      onUserPausedChange(index, false);
-      setPaused(false);
-      if (video.readyState < HTMLMediaElement.HAVE_FUTURE_DATA) {
-        setIsBuffering(true);
-      }
-      video.play().catch(() => {
-        if (getVideoElement() !== video || !isActiveRef.current) return;
-        setPaused(true);
-        setIsBuffering(false);
-      });
-      return;
-    }
-
-    // 单击挂起，等是否有第二次
-    clearClickTimer();
-    clickTimerRef.current = window.setTimeout(() => {
-      clickTimerRef.current = null;
-      togglePlayInternal();
-    }, 280);
+    return Boolean(video?.paused && !isBuffering);
   }
 
-  // 组件卸载时清理定时器
-  useEffect(() => {
-    return () => {
-      clearClickTimer();
-      clearSuppressNextClickResetTimer();
-    };
-  }, []);
+  function handleImmediateResume() {
+    const video = getVideoElement();
+    if (!video) return;
+    onUserPausedChange(index, false);
+    setPaused(false);
+    if (video.readyState < HTMLMediaElement.HAVE_FUTURE_DATA) {
+      setIsBuffering(true);
+    }
+    video.play().catch(() => {
+      if (getVideoElement() !== video || !isActiveRef.current) return;
+      setPaused(true);
+      setIsBuffering(false);
+    });
+  }
+
+  // 手势输入：长按倍速、横滑快进、单/双击分发、进度条拖动
+  const {
+    handleSlideClick,
+    handleProgressPointerDown,
+    handleProgressPointerMove,
+    handleProgressPointerEnd,
+  } = useShortsSlideGestures({
+    getVideoElement,
+    shouldMount,
+    disabled: isMarkedHidden,
+    scrubbingRef,
+    setScrubbing,
+    setFastActive,
+    setCurrentTime,
+    getSeekDuration,
+    onSingleTap: togglePlayInternal,
+    onDoubleTap: handleDoubleClickLike,
+    shouldResumeImmediately: shouldResumeImmediatelyOnClick,
+    onImmediateResume: handleImmediateResume,
+  });
 
   function handleDoubleClickLike(x: number, y: number) {
     // 触发飞心动画（每次都给一个新 key 强制重启动画）
@@ -2671,53 +1953,6 @@ function ShortsSlide({
       });
   }
 
-  // ---- 进度条拖动 ----
-  // 触摸进度条时：暂停 → 跟随手指更新 currentTime → 松手 resume
-  function handleProgressPointerDown(e: React.PointerEvent<HTMLDivElement>) {
-    e.preventDefault();
-    e.stopPropagation();
-    const video = getVideoElement();
-    const seekDuration = getSeekDuration(video);
-    if (!video || !seekDuration) return;
-    try {
-      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-    } catch {
-      // ignore
-    }
-    wasPlayingRef.current = !video.paused;
-    if (!video.paused) {
-      try {
-        video.pause();
-      } catch {
-        // ignore
-      }
-    }
-    scrubbingRef.current = true;
-    setScrubbing(true);
-    applyProgressFromEvent(e, seekDuration);
-  }
-  function handleProgressPointerMove(e: React.PointerEvent<HTMLDivElement>) {
-    if (!scrubbingRef.current) return;
-    e.preventDefault();
-    e.stopPropagation();
-    applyProgressFromEvent(e);
-  }
-  function handleProgressPointerEnd(e: React.PointerEvent<HTMLDivElement>) {
-    if (!scrubbingRef.current) return;
-    e.preventDefault();
-    e.stopPropagation();
-    try {
-      (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
-    } catch {
-      // ignore
-    }
-    const video = getVideoElement();
-    scrubbingRef.current = false;
-    setScrubbing(false);
-    if (video && wasPlayingRef.current) {
-      video.play().catch(() => undefined);
-    }
-  }
   function getSeekDuration(video: HTMLVideoElement | null) {
     if (duration > 0) return duration;
     if (video && Number.isFinite(video.duration) && video.duration > 0) {
@@ -2725,23 +1960,6 @@ function ShortsSlide({
       return video.duration;
     }
     return 0;
-  }
-  function applyProgressFromEvent(
-    e: React.PointerEvent<HTMLDivElement>,
-    knownDuration?: number
-  ) {
-    const video = getVideoElement();
-    const seekDuration = knownDuration ?? getSeekDuration(video);
-    if (!video || !seekDuration) return;
-    const rect = e.currentTarget.getBoundingClientRect();
-    const ratio = clamp((e.clientX - rect.left) / rect.width, 0, 1);
-    const next = ratio * seekDuration;
-    setCurrentTime(next);
-    try {
-      video.currentTime = next;
-    } catch {
-      // ignore（部分 ready state 下设置会抛错）
-    }
   }
 
   const progressCurrentTime = keyboardSeekPreview?.currentTime ?? currentTime;
@@ -3046,17 +2264,6 @@ function stabilizeVideoAfterAudioToggle(
   }
 }
 
-function shouldUseDocumentScrollForShorts() {
-  return isIPhoneBrowserShell();
-}
-
-function isWindowsPlatform() {
-  if (typeof navigator === "undefined") return false;
-  const platform = navigator.platform || "";
-  const ua = navigator.userAgent || "";
-  return /^Win/i.test(platform) || /\bWindows\b/i.test(ua);
-}
-
 type WebkitFullscreenDocument = Document & {
   webkitFullscreenElement?: Element | null;
   webkitExitFullscreen?: () => Promise<void> | void;
@@ -3080,92 +2287,8 @@ function exitDocumentFullscreen(): Promise<void> | null {
   }
 }
 
-function shouldUseIOSSharedVideo() {
-  if (typeof navigator === "undefined") return false;
-  const ua = navigator.userAgent || "";
-  if (/\biPhone\b|\biPad\b|\biPod\b/.test(ua)) return true;
-  // iPadOS 在“请求桌面网站”模式下会伪装成 Macintosh。
-  return navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1;
-}
-
 function preventMediaContextMenu(event: Event) {
   event.preventDefault();
-}
-
-function isIPhoneBrowserShell() {
-  if (typeof window === "undefined" || typeof navigator === "undefined") {
-    return false;
-  }
-  const ua = navigator.userAgent || "";
-  return /\biPhone\b|\biPod\b/.test(ua) && !isStandaloneDisplayMode();
-}
-
-function isStandaloneDisplayMode() {
-  if (typeof window === "undefined" || typeof navigator === "undefined") {
-    return false;
-  }
-  const nav = navigator as Navigator & { standalone?: boolean };
-  return (
-    nav.standalone === true ||
-    window.matchMedia?.("(display-mode: standalone)").matches === true ||
-    window.matchMedia?.("(display-mode: fullscreen)").matches === true
-  );
-}
-
-function clamp(n: number, min: number, max: number) {
-  return n < min ? min : n > max ? max : n;
-}
-
-function getVideoWindowBounds(highestViewedIndex: number, itemCount: number) {
-  const size = Math.min(VIDEO_WINDOW_SIZE, itemCount);
-  if (size <= 0 || highestViewedIndex < 0) return { start: 0, end: -1 };
-
-  const end = clamp(highestViewedIndex, 0, itemCount - 1);
-  const start = Math.max(0, end - size + 1);
-  return { start, end };
-}
-
-/** 已经缓冲到片尾（含误差余量），不会再因网络卡顿 */
-function videoBufferedToEnd(video: HTMLVideoElement) {
-  const duration = Number.isFinite(video.duration) ? video.duration : 0;
-  if (duration <= 0) return false;
-  const remaining = Math.max(0, duration - (video.currentTime || 0));
-  return bufferedAheadSeconds(video) >= remaining - 0.25;
-}
-
-function videoHasBufferedData(video: HTMLVideoElement) {
-  for (let i = 0; i < video.buffered.length; i += 1) {
-    if (video.buffered.end(i) > video.buffered.start(i)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-/** 前向缓冲健康（达到高水位或已缓冲到结尾），可以放心预加载后续视频 */
-function videoHasComfortableBuffer(video: HTMLVideoElement) {
-  if (video.readyState < 3) return false;
-  if (videoBufferedToEnd(video)) return true;
-  return bufferedAheadSeconds(video) >= ACTIVE_PRELOAD_BUFFER_SECONDS;
-}
-
-/** 前向缓冲告急（跌破低水位且没缓冲到结尾），应收回预加载授权 */
-function videoBufferIsCritical(video: HTMLVideoElement) {
-  if (video.readyState < 3) return true;
-  if (videoBufferedToEnd(video)) return false;
-  return bufferedAheadSeconds(video) < ACTIVE_PRELOAD_KEEP_SECONDS;
-}
-
-function bufferedAheadSeconds(video: HTMLVideoElement) {
-  const current = video.currentTime || 0;
-  for (let i = 0; i < video.buffered.length; i += 1) {
-    const start = video.buffered.start(i);
-    const end = video.buffered.end(i);
-    if (start <= current + 0.25 && end > current) {
-      return Math.max(0, end - current);
-    }
-  }
-  return 0;
 }
 
 function formatClock(seconds: number) {
