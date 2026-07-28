@@ -503,9 +503,11 @@ test("shorts hide action is icon-only and advances without a toast", () => {
     shortsPageSource,
     /已选择不再展示，正在滑至下一首/
   );
+  // 依赖必须是空数组：这个回调传给每一条 slide，依赖 items.length 会让它
+  // 每取回一批就换新引用，把 ShortsSlide 的 memo 整片击穿。
   assert.match(
     shortsPageSource,
-    /const handleHideSuccess = useCallback\(\(idx: number\) => \{[\s\S]*?nextSlide\.scrollIntoView\(\{ behavior: "smooth" \}\);[\s\S]*?\}, \[items\.length\]\);/
+    /const handleHideSuccess = useCallback\(\(idx: number\) => \{\s*const nextIdx = idx \+ 1;\s*if \(nextIdx < itemsLengthRef\.current\) \{[\s\S]*?nextSlide\.scrollIntoView\(\{ behavior: "smooth" \}\);[\s\S]*?\}, \[\]\);/
   );
 });
 
@@ -583,6 +585,39 @@ test("shorts keeps buffered sources inside a six video window", () => {
   assert.doesNotMatch(playbackBlock[0], /currentTime\s*=\s*0/);
   assert.match(shortsPageSource, /shouldEagerLoad=\{shouldEagerLoad\}/);
   assert.match(shortsPageSource, /preload=\{shouldLoad \? \(shouldEagerLoad \? "auto" : "metadata"\) : "none"\}/);
+});
+
+test("shorts caps how many slides keep real content in the DOM", () => {
+  // 队列只增不减，内容窗口必须是常量半径，否则每条 slide 的模糊层和海报
+  // 位图会随刷动时长线性堆积。
+  assert.match(shortsPageSource, /const SLIDE_CONTENT_WINDOW_RADIUS = 3;/);
+  assert.match(
+    shortsPageSource,
+    /const shouldRenderContent =\s*Math\.abs\(preloadOffset\) <= SLIDE_CONTENT_WINDOW_RADIUS \|\|\s*shouldMount \|\|\s*shouldRetainCached;/
+  );
+  assert.match(shortsPageSource, /shouldRenderContent=\{shouldRenderContent\}/);
+
+  // 空壳仍然是一个等高的 [data-shorts-slide]：滚动高度和吸附点不变，
+  // IntersectionObserver 也照样能观测到它，滑回来才重新长出内容。
+  const shellReturn =
+    /if \(!shouldRenderContent\) \{\s*return \(\s*<article([\s\S]*?)\/>\s*\);\s*\}/.exec(
+      shortsPageSource
+    );
+  assert.ok(shellReturn, "out-of-window slides should render a bare shell");
+  assert.match(shellReturn[1], /className="shorts-slide"/);
+  assert.match(shellReturn[1], /data-shorts-slide=""/);
+  assert.match(shellReturn[1], /data-index=\{index\}/);
+  assert.doesNotMatch(shellReturn[1], /shorts-slide__bg/);
+  assert.doesNotMatch(shellReturn[1], /shorts-slide__poster/);
+  assert.doesNotMatch(shellReturn[1], /<video/);
+
+  // 空壳是条件 return，后面不能再有 hook，否则 hook 调用顺序会随窗口变化。
+  const slideTail = shortsPageSource.slice(
+    shortsPageSource.indexOf("if (!shouldRenderContent) {"),
+    shortsPageSource.indexOf("function ShortsLoadingSpinner")
+  );
+  assert.ok(slideTail.length > 0, "slide tail slice should be non-empty");
+  assert.doesNotMatch(slideTail, /\buse[A-Z]\w*\(/);
 });
 
 test("shorts reuses one persistent media element across iOS slides", () => {
@@ -968,6 +1003,61 @@ test("Windows viewport resize keeps the current short aligned", () => {
   assert.match(
     shortsPageSource,
     /const observer = new IntersectionObserver\(\s*\(entries\) => \{\s*if \(viewportResizeAnchorIndexRef\.current !== null\) return;/
+  );
+});
+
+test("shorts keeps per-swipe work off the queue length", () => {
+  // ① 观察器只建一次，新批次增量补充；不再每 5 条 disconnect + 整队重挂。
+  assert.match(
+    shortsPageSource,
+    /const slideObserverRef = useRef<IntersectionObserver \| null>\(null\);/
+  );
+  assert.match(
+    shortsPageSource,
+    /const observedSlidesRef = useRef<WeakSet<Element>>\(new WeakSet\(\)\);/
+  );
+  assert.match(
+    shortsPageSource,
+    /slideObserverRef\.current = observer;\s*return \(\) => \{\s*slideObserverRef\.current = null;\s*observedSlidesRef\.current = new WeakSet\(\);\s*observer\.disconnect\(\);\s*\};\s*\}, \[\]\);/
+  );
+  assert.match(
+    shortsPageSource,
+    /slides\.forEach\(\(el\) => \{\s*if \(observedSlidesRef\.current\.has\(el\)\) return;\s*observedSlidesRef\.current\.add\(el\);\s*observer\.observe\(el\);\s*\}\);\s*\}, \[items\.length\]\);/
+  );
+  assert.doesNotMatch(
+    shortsPageSource,
+    /slides\.forEach\(\(el\) => observer\.observe\(el\)\);/
+  );
+
+  // ② slide 上 memo，切屏只重渲染 props 真正变了的那几条。
+  assert.match(shortsPageSource, /^import \{\s*memo,/m);
+  assert.match(shortsPageSource, /function ShortsSlideImpl\(\{/);
+  assert.match(shortsPageSource, /const ShortsSlide = memo\(ShortsSlideImpl\);/);
+  // memo 只有在传下去的回调保持稳定时才有意义，逐个钉住依赖为空。
+  for (const callback of [
+    "handleActiveReadyForPreload",
+    "handleActiveNeedsPriority",
+    "handleSourceCached",
+    "isVideoPausedByUser",
+    "hasLiked",
+    "showHud",
+  ]) {
+    // `(?!\n  const )` 把匹配夹在本条声明内部。少了它，非贪婪的 [\s\S]*?
+    // 会一路扫到后面某个不相干的 `[]);`，让断言恒真。
+    const declared = new RegExp(
+      `const ${callback} = useCallback\\((?:(?!\\n  const )[\\s\\S])*?\\[\\]\\s*\\);`
+    );
+    assert.match(shortsPageSource, declared, `${callback} should be [] stable`);
+  }
+
+  // ③ 备用元素预载不占绘制前的同步块；提升那一条仍然必须是 layout effect。
+  assert.match(
+    shortsPageSource,
+    /useEffect\(\(\) => \{\s*if \(!useIOSSharedVideo \|\| iosStandbyPreloadDisabled \|\| !activeReadyForPreload\)/
+  );
+  assert.match(
+    shortsPageSource,
+    /useLayoutEffect\(\(\) => \{\s*if \(!useIOSSharedVideo\) return;\s*const item = items\[activeIndex\];/
   );
 });
 

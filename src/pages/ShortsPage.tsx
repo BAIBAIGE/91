@@ -1,4 +1,5 @@
 import {
+  memo,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -52,6 +53,20 @@ import "@/styles/shorts.css";
 
 // 当前视频流畅播放后，向后预加载多少条视频。
 const PRELOAD_AHEAD_COUNT = 2;
+
+// 距当前屏多少条以内的 slide 才渲染真正的内容（模糊背景、海报、文案、
+// 操作栏）。队列只增不减，越刷越长；但每条 slide 的模糊背景都是一个带
+// filter 的合成层，海报是一张满屏位图，全留在 DOM 里等于让内存和合成
+// 开销随刷动时长线性上涨——iOS Safari 的内存额度比 Chrome 紧得多，这笔
+// 账最先在那边爆。窗口外的 slide 退化成一个空壳：高度仍由 CSS 给出，
+// 滚动几何和 IntersectionObserver 的观测目标都不受影响，滑回来时重新
+// 挂载内容，海报走 HTTP 缓存不会有二次请求。
+//
+// 半径不能收到 1：iOS 那两个持久 video 元素寄放在 slide 的插槽 div 里，
+// 插槽随内容一起卸载，而元素一旦被移出 DOM，WebKit 授予它的有声播放
+// 权限就没了。两个元素的落点始终在 activeIndex ±1（刚提升时备用元素会
+// 短暂停在 activeIndex-1，直到预载把它挪到 activeIndex+1），留足余量。
+const SLIDE_CONTENT_WINDOW_RADIUS = 3;
 
 // iOS 的 AVPlayer 在向后 seek 以开始下一轮时，偶尔会保持“逻辑上正在播放”
 // 但迟迟没有新画面。先走普通 seek；超过这个时间仍未呈现首帧时，才对同一
@@ -136,6 +151,9 @@ export default function ShortsPage() {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const itemsLengthRef = useRef(items.length);
   itemsLengthRef.current = items.length;
+  // 整页只建一个 slide 观察器，新批次到达时增量补充观察目标。
+  const slideObserverRef = useRef<IntersectionObserver | null>(null);
+  const observedSlidesRef = useRef<WeakSet<Element>>(new WeakSet());
   // index → video element，用来精确控制播放/暂停
   const videoRefs = useRef<Map<number, HTMLVideoElement>>(new Map());
   const videoRefCallbacks = useRef<
@@ -386,6 +404,12 @@ export default function ShortsPage() {
 
   // 用 IntersectionObserver 找出当前进入视口的 item。
   // root 直接用 viewport：普通模式和 iPhone 页面滚动模式都能正确观测。
+  //
+  // 观察器只建一次。队列只增不减、slide 的 <article> 节点也不会被替换
+  // （内容窗口只换子树），所以每取回一批只需要把新增的那几条补进来。
+  // 早先的写法把它挂在 [items.length] 上，每 5 条就 disconnect 再整队重新
+  // observe 一遍——代价随队列长度上涨，而且偏偏发生在用户滑到队尾触发预取
+  // 的那一刻。
   useEffect(() => {
     const root = containerRef.current;
     if (!root) return;
@@ -418,9 +442,26 @@ export default function ShortsPage() {
       }
     );
 
+    slideObserverRef.current = observer;
+    return () => {
+      slideObserverRef.current = null;
+      observedSlidesRef.current = new WeakSet();
+      observer.disconnect();
+    };
+  }, []);
+
+  // 新一批 slide 进入 DOM 后补充观察。WeakSet 记账避免对同一节点重复调用，
+  // 节点被 React 丢弃时条目自动消失。
+  useEffect(() => {
+    const observer = slideObserverRef.current;
+    const root = containerRef.current;
+    if (!observer || !root) return;
     const slides = root.querySelectorAll<HTMLElement>("[data-shorts-slide]");
-    slides.forEach((el) => observer.observe(el));
-    return () => observer.disconnect();
+    slides.forEach((el) => {
+      if (observedSlidesRef.current.has(el)) return;
+      observedSlidesRef.current.add(el);
+      observer.observe(el);
+    });
   }, [items.length]);
 
   // 先停掉所有非当前屏。当前屏的 play() 由 ShortsSlide 负责，
@@ -603,7 +644,12 @@ export default function ShortsPage() {
   // 串行发生在用户眼前；桌面/Android 早就预载了 PRELOAD_AHEAD_COUNT 条。
   // 开始时机沿用同一套高低水位（activeReadyForPreload），当前视频缓冲不
   // 健康时不去抢它的带宽。
-  useLayoutEffect(() => {
+  //
+  // 这里是普通 useEffect 而不是 useLayoutEffect：备用元素处于隐藏角色，
+  // 移动插槽和起 src 都没有当帧的视觉后果，没必要把一次 appendChild 和一次
+  // load()（会立刻发网络请求）压进浏览器绘制前的同步块里。上面那个提升
+  // effect 必须保持 useLayoutEffect——活跃元素得在这一帧画出来之前就位。
+  useEffect(() => {
     if (!useIOSSharedVideo || iosStandbyPreloadDisabled || !activeReadyForPreload) {
       return;
     }
@@ -703,9 +749,11 @@ export default function ShortsPage() {
     };
   }, [useDocumentScroll]);
 
+  // 读 itemsLengthRef 而不是 items.length：这个回调要发给每一条 slide，
+  // 依赖队列长度会让它每取回一批就换一个新引用，把 memo 白白击穿一次。
   const handleHideSuccess = useCallback((idx: number) => {
     const nextIdx = idx + 1;
-    if (nextIdx < items.length) {
+    if (nextIdx < itemsLengthRef.current) {
       setTimeout(() => {
         const nextSlide = containerRef.current?.querySelector(`[data-index="${nextIdx}"]`);
         if (nextSlide) {
@@ -713,7 +761,7 @@ export default function ShortsPage() {
         }
       }, 700);
     }
-  }, [items.length]);
+  }, []);
 
   const videoWindow = getVideoWindowBounds(cacheWindowHighIndex, items.length);
 
@@ -842,6 +890,13 @@ export default function ShortsPage() {
             cacheableSourceIds.has(item.id);
           const shouldLoad = isActiveSlide || shouldPreload || shouldRetainCached;
           const shouldEagerLoad = isActiveSlide || shouldPreload;
+          // 视口附近的照常渲染；再加上所有还挂着 <video> 的 slide——那些是
+          // 有意保留的缓冲，不能因为离开视口就被拆掉。两者之和有上限，
+          // 与队列长度无关。
+          const shouldRenderContent =
+            Math.abs(preloadOffset) <= SLIDE_CONTENT_WINDOW_RADIUS ||
+            shouldMount ||
+            shouldRetainCached;
           return (
             <ShortsSlide
               key={`${item.feedToken}:${item.feedCursor}`}
@@ -854,6 +909,7 @@ export default function ShortsPage() {
               shouldMount={shouldMount}
               shouldLoad={shouldLoad}
               shouldEagerLoad={shouldEagerLoad}
+              shouldRenderContent={shouldRenderContent}
               keyboardSeekPreview={
                 keyboardSeekPreview?.videoIndex === index
                   ? keyboardSeekPreview
@@ -913,6 +969,11 @@ type SlideProps = {
   shouldMount: boolean;
   shouldLoad: boolean;
   shouldEagerLoad: boolean;
+  /**
+   * 是否渲染 slide 的实际内容。false 时只留一个等高空壳，把模糊背景层、
+   * 海报位图和整套浮层从 DOM 里摘掉，避免长队列把它们无限累积下去。
+   */
+  shouldRenderContent: boolean;
   /** 键盘长按左右键期间的累计目标，用来稳定驱动底部进度条。 */
   keyboardSeekPreview?: Pick<
     ShortsKeyboardSeekPreview,
@@ -957,13 +1018,14 @@ type SlideProps = {
  * - 单击切换播放 / 暂停
  * - 长按弹出的下载/分享菜单通过 contextmenu + CSS 屏蔽
  */
-function ShortsSlide({
+function ShortsSlideImpl({
   item,
   index,
   isActive,
   shouldMount,
   shouldLoad,
   shouldEagerLoad,
+  shouldRenderContent,
   keyboardSeekPreview,
   sharedVideoRef,
   sharedVideoSlotRef,
@@ -2136,6 +2198,21 @@ function ShortsSlide({
     ? clamp(progressCurrentTime / progressDuration, 0, 1)
     : 0;
 
+  // 远离视口的 slide 只保留空壳。属性照旧给全：高度来自 .shorts-slide 的
+  // CSS，滚动高度和吸附点一格不差；data-shorts-slide 让 IntersectionObserver
+  // 依然能观测到它，滑回来时才判定为活跃并重新长出内容。
+  if (!shouldRenderContent) {
+    return (
+      <article
+        ref={slideRef}
+        className="shorts-slide"
+        data-shorts-slide=""
+        data-index={index}
+        data-active={isActive}
+      />
+    );
+  }
+
   return (
     <article
       ref={slideRef}
@@ -2339,6 +2416,22 @@ function ShortsSlide({
     </article>
   );
 }
+
+/**
+ * 切一屏只会改动紧邻几条 slide 的 props（isActive、各个 shouldXxx、
+ * keyboardSeekPreview），其余全部命中 memo 直接跳过。没有这层时，每次
+ * setActiveIndex 都要把已挂载的每一条 slide 重跑一遍函数体和子树协调——
+ * 队列只增不减，这份开销随刷动时长线性上涨，而它偏偏落在贴着手指的那一帧。
+ *
+ * 这层比较之所以有效：父级传下来的回调要么是 [] 依赖的 useCallback，要么是
+ * 按 index 缓存的 ref setter，要么是稳定的 ref 对象；item 对象在 merge 时
+ * 按引用保留。改这些 props 前先确认它们仍然稳定，否则 memo 会静默失效。
+ *
+ * 另注：父级有个只写不读的 setUserPausedIndexState，作用是强制重渲染。
+ * slide 内所有 isVideoPausedByUser(index) 都在 effect 或事件回调里读 ref，
+ * 没有一处出现在渲染体里，因此那次重渲染被 memo 挡掉不改变任何行为。
+ */
+const ShortsSlide = memo(ShortsSlideImpl);
 
 function ShortsLoadingSpinner({ size }: { size: number }) {
   const ref = useRef<HTMLSpanElement | null>(null);
