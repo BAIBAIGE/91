@@ -1525,6 +1525,131 @@ func TestHandleShortsNextUsesStableFeedTokenAndCursor(t *testing.T) {
 	}
 }
 
+// 短视频页要用 sizeBytes/durationSeconds 算平均码率，把预加载门槛从固定
+// 秒数换算成一份固定的字节预算。两者缺一不可，且元数据缺失时必须整个省略
+// （omitempty），前端才能识别"码率未知"并退回原来的固定门槛。
+func TestHandleShortsNextCarriesBitrateMetadata(t *testing.T) {
+	ctx := context.Background()
+	cat, err := catalog.Open(t.TempDir() + "/catalog.db")
+	if err != nil {
+		t.Fatalf("open catalog: %v", err)
+	}
+	t.Cleanup(func() { _ = cat.Close() })
+
+	now := time.Now()
+	seed := func(id string, size int64, duration int) {
+		t.Helper()
+		if err := cat.UpsertVideo(ctx, &catalog.Video{
+			ID:              id,
+			DriveID:         "drive",
+			FileID:          "file-" + id,
+			Title:           id,
+			Size:            size,
+			DurationSeconds: duration,
+			PublishedAt:     now,
+			CreatedAt:       now,
+			UpdatedAt:       now,
+		}); err != nil {
+			t.Fatalf("seed %s: %v", id, err)
+		}
+	}
+	seed("sized", 300<<20, 388)
+	seed("unsized", 0, 0)
+	seed("size-only", 100<<20, 0)
+	seed("duration-only", 0, 120)
+	seed("transcoded", 300<<20, 300)
+	if err := cat.UpdateVideoTranscode(
+		ctx,
+		"transcoded",
+		"ready",
+		"",
+		"file-transcoded-output",
+		30<<20,
+	); err != nil {
+		t.Fatalf("mark transcoded video ready: %v", err)
+	}
+
+	server := &Server{Catalog: cat}
+	req := httptest.NewRequest(http.MethodGet, "/api/shorts/next?count=5", nil)
+	rr := httptest.NewRecorder()
+	server.handleShortsNext(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rr.Code, rr.Body.String())
+	}
+	body := rr.Body.String()
+
+	var response shortsFeedResponse
+	if err := json.NewDecoder(strings.NewReader(body)).Decode(&response); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	byID := make(map[string]ShortsItemDTO, len(response.Items))
+	for _, item := range response.Items {
+		byID[item.ID] = item
+	}
+
+	sized, ok := byID["sized"]
+	if !ok {
+		t.Fatalf("feed did not return the sized video: %s", body)
+	}
+	if sized.SizeBytes != 300<<20 || sized.DurationSeconds != 388 {
+		t.Fatalf("sized item = %d bytes / %ds, want 314572800 / 388", sized.SizeBytes, sized.DurationSeconds)
+	}
+
+	transcoded, ok := byID["transcoded"]
+	if !ok {
+		t.Fatalf("feed did not return the transcoded video: %s", body)
+	}
+	if transcoded.VideoSrc != "/p/stream/drive/file-transcoded-output" {
+		t.Fatalf("transcoded video source = %q, want the transcoded asset", transcoded.VideoSrc)
+	}
+	if transcoded.SizeBytes != 30<<20 || transcoded.DurationSeconds != 300 {
+		t.Fatalf(
+			"transcoded item = %d bytes / %ds, want the 31457280-byte playback asset / 300s",
+			transcoded.SizeBytes,
+			transcoded.DurationSeconds,
+		)
+	}
+
+	var rawResponse struct {
+		Items []map[string]json.RawMessage `json:"items"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &rawResponse); err != nil {
+		t.Fatalf("decode raw response: %v", err)
+	}
+	rawByID := make(map[string]map[string]json.RawMessage, len(rawResponse.Items))
+	for _, item := range rawResponse.Items {
+		var id string
+		if err := json.Unmarshal(item["id"], &id); err != nil {
+			t.Fatalf("decode raw item id: %v", err)
+		}
+		rawByID[id] = item
+	}
+	assertMetadataKeys := func(id string, want bool) {
+		t.Helper()
+		item, ok := rawByID[id]
+		if !ok {
+			t.Fatalf("feed did not return %s: %s", id, body)
+		}
+		_, hasSize := item["sizeBytes"]
+		_, hasDuration := item["durationSeconds"]
+		if hasSize != want || hasDuration != want {
+			t.Fatalf(
+				"%s metadata keys = size:%t duration:%t, want both %t: %s",
+				id,
+				hasSize,
+				hasDuration,
+				want,
+				body,
+			)
+		}
+	}
+	assertMetadataKeys("sized", true)
+	assertMetadataKeys("transcoded", true)
+	for _, id := range []string{"unsized", "size-only", "duration-only"} {
+		assertMetadataKeys(id, false)
+	}
+}
+
 func TestHandleShortsNextSkipsVideosHiddenAfterFeedCreation(t *testing.T) {
 	ctx := context.Background()
 	cat, err := catalog.Open(t.TempDir() + "/catalog.db")

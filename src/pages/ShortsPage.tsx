@@ -20,8 +20,11 @@ import {
 } from "lucide-react";
 import { hideVideo, type ShortsItem } from "@/data/videos";
 import {
+  averageBytesPerSecond,
   clamp,
   getVideoWindowBounds,
+  preloadBufferSecondsFor,
+  preloadKeepSecondsFor,
   videoBufferIsCritical,
   videoHasBufferedData,
   videoHasComfortableBuffer,
@@ -764,6 +767,10 @@ export default function ShortsPage() {
   }, []);
 
   const videoWindow = getVideoWindowBounds(cacheWindowHighIndex, items.length);
+  // 只给 ?debug=1 的面板显示当前这条的码率；真正的门槛由各 slide 自己算。
+  const activeItemBytesPerSecond = averageBytesPerSecond(
+    items[activeIndex] ?? {}
+  );
 
   return (
     <div
@@ -826,6 +833,10 @@ export default function ShortsPage() {
           windowStart={videoWindow.start}
           windowEnd={videoWindow.end}
           activeReadyForPreload={activeReadyForPreload}
+          preloadBufferSeconds={preloadBufferSecondsFor(
+            activeItemBytesPerSecond
+          )}
+          activeBytesPerSecond={activeItemBytesPerSecond}
           cachedSourceCount={cacheableSourceIds.size}
           muted={muted}
           usesIOSSharedVideo={useIOSSharedVideo}
@@ -1087,6 +1098,14 @@ function ShortsSlideImpl({
   useEffect(() => {
     pendingShareURLRef.current = "";
   }, [item.id]);
+
+  // 这一条的预加载高低水位。按平均码率把固定的字节预算换算成秒数，
+  // 高码率片子不必先囤十几 MB 才肯放行预载；元数据缺失时自动退回原有的
+  // 12s / 4s。纯算术且只依赖 item，放在渲染体里即可。
+  const preloadBufferSeconds = preloadBufferSecondsFor(
+    averageBytesPerSecond(item)
+  );
+  const preloadKeepSeconds = preloadKeepSecondsFor(preloadBufferSeconds);
 
   // 进度状态。iOS 由实际呈现帧更新，其他平台由 timeupdate 更新；
   // 拖动期间则以用户输入为准。
@@ -1825,9 +1844,9 @@ function ShortsSlideImpl({
         onActiveNeedsPriority(index);
         return;
       }
-      if (videoHasComfortableBuffer(currentVideo)) {
+      if (videoHasComfortableBuffer(currentVideo, preloadBufferSeconds)) {
         onActiveReadyForPreload(index);
-      } else if (videoBufferIsCritical(currentVideo)) {
+      } else if (videoBufferIsCritical(currentVideo, preloadKeepSeconds)) {
         // 高低水位滞回：只有缓冲真正告急才收回预加载授权，
         // 在两个水位之间维持现状，避免阈值附近来回抖动。
         onActiveNeedsPriority(index);
@@ -1880,6 +1899,8 @@ function ShortsSlideImpl({
     onActiveNeedsPriority,
     onActiveReadyForPreload,
     onSourceCached,
+    preloadBufferSeconds,
+    preloadKeepSeconds,
     resetLoopRestartState,
     scheduleBufferingIndicator,
     setIsBuffering,

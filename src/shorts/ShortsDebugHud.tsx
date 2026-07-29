@@ -62,6 +62,9 @@ type ShortsDebugHudProps = {
   windowStart: number;
   windowEnd: number;
   activeReadyForPreload: boolean;
+  /** 当前这条按码率换算出的预载高水位，以及换算依据的平均码率。 */
+  preloadBufferSeconds: number;
+  activeBytesPerSecond: number;
   cachedSourceCount: number;
   muted: boolean;
   usesIOSSharedVideo: boolean;
@@ -205,6 +208,8 @@ export function ShortsDebugHud(props: ShortsDebugHudProps) {
     windowStart,
     windowEnd,
     activeReadyForPreload,
+    preloadBufferSeconds,
+    activeBytesPerSecond,
     cachedSourceCount,
     muted,
     usesIOSSharedVideo,
@@ -215,6 +220,13 @@ export function ShortsDebugHud(props: ShortsDebugHudProps) {
     `#${activeIndex + 1}/${itemCount} id=${itemId ?? "-"}`,
     `win=[${windowStart},${windowEnd}] cached=${cachedSourceCount} preload=${
       activeReadyForPreload ? "granted" : "held"
+    }`,
+    // gate 是这一条实际要满足的高水位；rate 是换算依据，0 表示后端没给
+    // 元数据、已退回固定 12s。
+    `gate=${preloadBufferSeconds.toFixed(1)}s rate=${
+      activeBytesPerSecond > 0
+        ? `${((activeBytesPerSecond * 8) / 1e6).toFixed(1)}Mbps`
+        : "?"
     }`,
     sample?.hasVideo
       ? `ready=${sample.readyState} net=${sample.networkState} ` +

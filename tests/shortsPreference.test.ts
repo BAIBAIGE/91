@@ -42,6 +42,14 @@ const slideGesturesSource = readFileSync(
   new URL("../src/shorts/useShortsSlideGestures.ts", import.meta.url),
   "utf8"
 );
+const shortsHudSource = readFileSync(
+  new URL("../src/shorts/ShortsDebugHud.tsx", import.meta.url),
+  "utf8"
+);
+const shortsFeedGoSource = readFileSync(
+  new URL("../backend/internal/api/shorts_feed.go", import.meta.url),
+  "utf8"
+);
 
 test("shorts does not keep recommendation preference from likes or watch time", () => {
   assert.doesNotMatch(shortsPageSource, /currentTime\s*>=\s*3/);
@@ -382,7 +390,12 @@ test("shorts preloads the next two original videos only after the active video h
   assert.match(shortsPageSource, /shouldLoad=\{shouldLoad\}/);
   assert.match(shortsPageSource, /setActiveReadyForPreload\(false\);\s*setActiveIndex\(bestIndex\);/);
   assert.match(shortsPageSource, /function syncActivePreloadReadiness\(currentVideo: HTMLVideoElement\)/);
-  assert.match(shortsPageSource, /if \(videoHasComfortableBuffer\(currentVideo\)\) \{\s*onActiveReadyForPreload\(index\);/);
+  // 水位现在按码率逐条换算，这里只钉住"授权由 comfortable 判定驱动"；
+  // 换算规则见 "shorts sizes the preload gate by bitrate" 那条。
+  assert.match(
+    shortsPageSource,
+    /if \(videoHasComfortableBuffer\(currentVideo, preloadBufferSeconds\)\) \{\s*onActiveReadyForPreload\(index\);/
+  );
   assert.match(shortsPageSource, /if \(isActive\) onActiveNeedsPriority\(index\);/);
   assert.match(shortsPageSource, /video\.addEventListener\("progress", handleProgress\);/);
   assert.match(shortsPageSource, /src=\{shouldLoad \? item\.videoSrc : undefined\}/);
@@ -391,23 +404,31 @@ test("shorts preloads the next two original videos only after the active video h
 });
 
 test("shorts preload grant uses high/low watermark hysteresis", () => {
-  // 高水位 12s 授权、低水位 4s 收回，之间维持现状，避免阈值附近抖动。
+  // 高水位授权、低水位收回，之间维持现状，避免阈值附近抖动。两个水位现在
+  // 按码率逐条换算，缺省参数仍是原来的 12s / 4s，低码率视频行为不变。
   // 判定本身的行为矩阵见 shortsMediaBuffer.test.ts；这里钉住页面接线。
   assert.match(mediaBufferSource, /const ACTIVE_PRELOAD_KEEP_SECONDS = 4;/);
   assert.match(
     shortsPageSource,
-    /\} else if \(videoBufferIsCritical\(currentVideo\)\) \{[\s\S]*?onActiveNeedsPriority\(index\);/
+    /\} else if \(videoBufferIsCritical\(currentVideo, preloadKeepSeconds\)\) \{[\s\S]*?onActiveNeedsPriority\(index\);/
   );
-  assert.match(mediaBufferSource, /function videoBufferIsCritical\(video: BufferedMediaProbe\)/);
+  assert.match(
+    mediaBufferSource,
+    /function videoBufferIsCritical\(\s*video: BufferedMediaProbe,\s*keepSeconds = ACTIVE_PRELOAD_KEEP_SECONDS\s*\)/
+  );
+  assert.match(
+    mediaBufferSource,
+    /function videoHasComfortableBuffer\(\s*video: BufferedMediaProbe,\s*bufferSeconds = ACTIVE_PRELOAD_BUFFER_SECONDS\s*\)/
+  );
   // 已缓冲到片尾时既视为健康也不视为告急，避免临近结尾误收回授权
   assert.match(mediaBufferSource, /function videoBufferedToEnd\(video: BufferedMediaProbe\)/);
   assert.match(
     mediaBufferSource,
-    /if \(videoBufferedToEnd\(video\)\) return true;[\s\S]*?>= ACTIVE_PRELOAD_BUFFER_SECONDS;/
+    /if \(videoBufferedToEnd\(video\)\) return true;[\s\S]*?>= bufferSeconds;/
   );
   assert.match(
     mediaBufferSource,
-    /if \(videoBufferedToEnd\(video\)\) return false;[\s\S]*?< ACTIVE_PRELOAD_KEEP_SECONDS;/
+    /if \(videoBufferedToEnd\(video\)\) return false;[\s\S]*?< keepSeconds;/
   );
 });
 
@@ -1004,6 +1025,59 @@ test("Windows viewport resize keeps the current short aligned", () => {
     shortsPageSource,
     /const observer = new IntersectionObserver\(\s*\(entries\) => \{\s*if \(viewportResizeAnchorIndexRef\.current !== null\) return;/
   );
+});
+
+test("shorts sizes the preload gate by bitrate, not by a fixed second count", () => {
+  // 门槛的真实预算是字节数；秒数只是它在某个码率下的换算结果。
+  // 行为用例见 tests/shortsMediaBuffer.test.ts。
+  assert.match(mediaBufferSource, /const ACTIVE_PRELOAD_BUFFER_BYTES = 4 \* 1024 \* 1024;/);
+  assert.match(mediaBufferSource, /const ACTIVE_PRELOAD_MIN_BUFFER_SECONDS = 4;/);
+  assert.match(mediaBufferSource, /const ACTIVE_PRELOAD_BUFFER_SECONDS = 12;/);
+  assert.match(
+    mediaBufferSource,
+    /return clamp\(\s*ACTIVE_PRELOAD_BUFFER_BYTES \/ bytesPerSecond,\s*ACTIVE_PRELOAD_MIN_BUFFER_SECONDS,\s*ACTIVE_PRELOAD_BUFFER_SECONDS\s*\);/
+  );
+
+  // 每条 slide 用自己的水位，而不是模块级常量
+  assert.match(
+    shortsPageSource,
+    /const preloadBufferSeconds = preloadBufferSecondsFor\(\s*averageBytesPerSecond\(item\)\s*\);\s*const preloadKeepSeconds = preloadKeepSecondsFor\(preloadBufferSeconds\);/
+  );
+  assert.match(
+    shortsPageSource,
+    /if \(videoHasComfortableBuffer\(currentVideo, preloadBufferSeconds\)\) \{\s*onActiveReadyForPreload\(index\);\s*\} else if \(videoBufferIsCritical\(currentVideo, preloadKeepSeconds\)\) \{/
+  );
+  // 水位变化必须重挂媒体 effect，否则闭包里还是旧阈值
+  assert.match(
+    shortsPageSource,
+    /onSourceCached,\s*preloadBufferSeconds,\s*preloadKeepSeconds,\s*resetLoopRestartState,/
+  );
+
+  // 码率来自后端，元数据缺失时字段被省略，前端按未知码率兜底
+  assert.match(
+    shortsFeedGoSource,
+    /SizeBytes\s+int64\s+`json:"sizeBytes,omitempty"`/
+  );
+  assert.match(
+    shortsFeedGoSource,
+    /DurationSeconds\s+int\s+`json:"durationSeconds,omitempty"`/
+  );
+  assert.match(
+    shortsFeedGoSource,
+    /videoSrc, sizeBytes := s\.videoSourceAndSize\(video\)\s*durationSeconds := video\.DurationSeconds/
+  );
+  assert.match(
+    shortsFeedGoSource,
+    /if sizeBytes <= 0 \|\| durationSeconds <= 0 \{\s*sizeBytes = 0\s*durationSeconds = 0\s*\}/
+  );
+  assert.match(
+    shortsFeedGoSource,
+    /VideoSrc:\s+videoSrc,\s*Poster:[\s\S]*?SizeBytes:\s+sizeBytes,\s*DurationSeconds:\s+durationSeconds,/
+  );
+  assert.match(videosDataSource, /sizeBytes\?: number;\s*durationSeconds\?: number;/);
+
+  // ?debug=1 面板要能看到实际生效的门槛，否则真机上无法确认
+  assert.match(shortsHudSource, /gate=\$\{preloadBufferSeconds\.toFixed\(1\)\}s rate=/);
 });
 
 test("shorts keeps per-swipe work off the queue length", () => {

@@ -27,11 +27,18 @@ var errShortsFeedExpired = errors.New("shorts feed expired")
 
 // ShortsItemDTO is a compact feed item that can be handed directly to a video
 // element. FeedCursor is the resume position immediately after this item.
+// SizeBytes/DurationSeconds 让前端能算出这一条的平均码率。短视频页的
+// 预加载门槛原本只按"缓冲够多少秒"判定，但带宽是按字节付的：本库平均
+// ~10 Mbps，12 秒就是 ~15 MB，网速跟不上时门槛永远达不到，预载授权
+// 一直发不出去，退化成没有预载的串行加载。有了码率才能把门槛换算成
+// 一份固定的字节预算。任一元数据缺失时两个字段会一起省略，前端需要兜底。
 type ShortsItemDTO struct {
 	VideoDTO
-	VideoSrc   string `json:"videoSrc"`
-	Poster     string `json:"poster"`
-	FeedCursor int    `json:"feedCursor,omitempty"`
+	VideoSrc        string `json:"videoSrc"`
+	Poster          string `json:"poster"`
+	SizeBytes       int64  `json:"sizeBytes,omitempty"`
+	DurationSeconds int    `json:"durationSeconds,omitempty"`
+	FeedCursor      int    `json:"feedCursor,omitempty"`
 }
 
 type shortsFeedSession struct {
@@ -319,6 +326,14 @@ func (s *Server) mapShortsItems(
 	out := make([]ShortsItemDTO, 0, len(videos))
 	for index, video := range videos {
 		dto := mapVideo(video)
+		videoSrc, sizeBytes := s.videoSourceAndSize(video)
+		durationSeconds := video.DurationSeconds
+		// 大小与时长必须成对出现。任一缺失时把两者都省略，让前端明确
+		// 识别为"码率未知"，而不是收到一半可用的元数据。
+		if sizeBytes <= 0 || durationSeconds <= 0 {
+			sizeBytes = 0
+			durationSeconds = 0
+		}
 		if label, ok := driveLabels[video.DriveID]; ok {
 			dto.SourceLabel = label
 		} else if drive, err := s.Catalog.GetDrive(ctx, video.DriveID); err == nil {
@@ -331,10 +346,12 @@ func (s *Server) mapShortsItems(
 			feedCursor = itemCursors[index]
 		}
 		out = append(out, ShortsItemDTO{
-			VideoDTO:   dto,
-			VideoSrc:   s.videoSource(video),
-			Poster:     thumbnailURL(video),
-			FeedCursor: feedCursor,
+			VideoDTO:        dto,
+			VideoSrc:        videoSrc,
+			Poster:          thumbnailURL(video),
+			SizeBytes:       sizeBytes,
+			DurationSeconds: durationSeconds,
+			FeedCursor:      feedCursor,
 		})
 	}
 	return out

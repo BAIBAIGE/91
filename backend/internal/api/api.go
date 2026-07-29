@@ -1179,13 +1179,20 @@ func transcodedSource(v *catalog.Video) (string, bool) {
 }
 
 func (s *Server) videoSource(v *catalog.Video) string {
+	src, _ := s.videoSourceAndSize(v)
+	return src
+}
+
+// videoSourceAndSize 返回实际播放资源的地址和同一资源的字节数。转码就绪时
+// 播放的是转码产物，因此不能继续沿用原文件大小来估算码率。
+func (s *Server) videoSourceAndSize(v *catalog.Video) (string, int64) {
 	if v.DriveID == localUploadDriveID {
-		return "/p/upload/" + pathSegment(v.ID)
+		return "/p/upload/" + pathSegment(v.ID), v.Size
 	}
 	if src, ok := transcodedSource(v); ok {
-		return src
+		return src, v.TranscodedSize
 	}
-	return fmt.Sprintf("/p/stream/%s/%s", pathSegment(v.DriveID), pathSegment(v.FileID))
+	return fmt.Sprintf("/p/stream/%s/%s", pathSegment(v.DriveID), pathSegment(v.FileID)), v.Size
 }
 
 // videoSource 兼容旧调用点，没有 server context 时按之前逻辑回退到 /p/stream。
