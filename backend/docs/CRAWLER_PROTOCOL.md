@@ -166,6 +166,7 @@ Recommended fields:
 
 Optional fields:
 
+- `thumbnail_local_file` (local alternative to `thumbnail_url`)
 - `author`
 - `tags`
 - `duration_seconds`
@@ -205,7 +206,11 @@ If the script must materialize a video locally, the file must be complete, non-e
 }
 ```
 
-The script must not write crawler media outside `output_dir`.
+If the script materializes a thumbnail, emit its absolute path as
+`thumbnail_local_file`. It is subject to the same complete, non-empty, and
+`output_dir` containment rules as `media_local_file`.
+
+The script must not write crawler media or thumbnails outside `output_dir`.
 
 ## 8. `progress` event
 
@@ -248,7 +253,11 @@ On normal completion, emit exactly one terminal `done` event:
 
 Do not emit `done` after an unrecoverable error.
 
-The backend may intentionally stop the script after receiving enough candidates or the first dry-run item. If stdout closes early, handle `BrokenPipeError` quietly and exit; no `done` event is required for a backend-enforced early stop.
+The backend may intentionally stop the script after importing
+`unique_target` content-deduplicated new videos, after consuming
+`candidate_budget` item events, or after receiving the first dry-run item. If
+stdout closes early, handle `BrokenPipeError` quietly and exit; no `done` event
+is required for a backend-enforced early stop.
 
 ## 10. Termination rules
 

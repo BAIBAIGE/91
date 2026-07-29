@@ -6,10 +6,6 @@ dist
 .vscode/
 .idea/
 
-# 第三方源码参考，可选，详见 vendor-refs/README.md
-vendor-refs/
-OpenList-4.2.1/
-
 # 后端数据目录（SQLite + teaser/封面）
 backend/data/
 backend/config.yaml
@@ -41,12 +37,6 @@ __pycache__/
 /*.webp
 /*.bmp
 /*.ico
-/image.jpg
-/image003.jpg
-/image004.jpg
-/image005.png
-/image006.png
-/image02.png
 
 # README 截图原图（仓库内只提交压缩后的 .webp）
 ReadMeImage/*.png

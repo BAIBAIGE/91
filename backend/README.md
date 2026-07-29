@@ -1,6 +1,6 @@
 ## 快速开始
 
-依赖：**Go 1.23+**、**ffmpeg / ffprobe**（封面、预览视频、指纹、内容级去重都靠它，必装；路径可在配置里改）。SQLite 用纯 Go 驱动（modernc），无需系统库；依赖已 vendored，可离线构建。跑爬虫需要 `python3`。
+依赖：**Go 1.23+**、**ffmpeg / ffprobe**（用于封面、预览视频、媒体探测/转码和内容级去重，必装；路径可在配置里改）。`sampled_sha256` 指纹由 Go 直接读取 Range 字节计算，不依赖 ffmpeg。SQLite 用纯 Go 驱动（modernc），无需系统库；依赖已 vendored，可离线构建。跑爬虫需要 `python3`。
 
 ```bash
 cd backend
@@ -113,12 +113,13 @@ internal/
   tagging/                  标签匹配规则、番号识别
   fixedtags/                内置标签包及其匹配规则
   mediasim/                 标题相似度 + 封面 SSIM + teaser 帧签名，供近重复判定使用
-  mediaasset/               封面 / 预览视频的本地路径与文件名规则
+  mediaasset/               封面 / 预览视频及派生资源的本地路径与文件名规则
   videoname/                扫描、上传、爬虫迁移共用的文件名与标题规则
   storageusage/             磁盘与各网盘占用统计
 
-CRAWLER_PROTOCOL.md         crawler.v2 脚本协议
-DEDUP.md                    去重体系：信号、阈值、时机与流程图
+docs/
+  CRAWLER_PROTOCOL.md       crawler.v2 脚本协议
+  DEDUP.md                  去重体系：信号、阈值、时机与流程图
 config.example.yaml         配置模板
 vendor/                     依赖已 vendored，可离线构建
 ```
@@ -128,7 +129,10 @@ vendor/                     依赖已 vendored，可离线构建
 ```
 config.yaml                 首次启动从 config.example.yaml 复制
 data/video-site.db          SQLite 主库
-data/previews/              封面与预览视频（storage.local_preview_dir）
+data/previews/              预览视频及本地媒体资产根目录（storage.local_preview_dir）
+data/previews/thumbs/       普通封面
+data/previews/thumbs-shorts-bg/
+                            Shorts 按需生成的 96px 预模糊背景封面
 data/previews/framesigs/    内容级去重的帧签名缓存（约 110KB/视频，删了会自动重建）
 data/uploads/               站内上传的视频
 data/scriptcrawlers/        爬虫落地的视频
@@ -175,7 +179,7 @@ flowchart TB
     end
 
     MIG["crawlerupload<br/>爬虫产物迁移到目标网盘"]
-    DEDUP["夜间去重维护<br/>全库硬去重（DEDUP.md）"]
+    DEDUP["夜间去重维护<br/>全库硬去重（docs/DEDUP.md）"]
 
     BOOT --> SCAN
     CRON --> SCAN
@@ -246,10 +250,12 @@ sequenceDiagram
     B->>A: GET /api/video/{id}
     A-->>B: 元数据 + videoSrc=/p/stream/{drive}/{file}
     B->>P: GET /p/stream/...（带 session）
-    P->>P: 查 30s 链接缓存，key 含 UA
-    alt 缓存未命中
-        P->>D: StreamURL 取直链
+    P->>P: 查链接缓存（最长 5m；UA 绑定链接的 key 含 UA）
+    alt 缓存未命中且没有同 key 换链
+        P->>D: StreamURL 取直链（15s 硬超时）
         D-->>P: StreamLink：URL + Headers + Expires
+    else 已有同 key 换链
+        P->>P: 等待并复用同一个 inflight 结果
     end
     alt 自签名 URL 的网盘
         P-->>B: 302 Location
@@ -264,7 +270,9 @@ sequenceDiagram
 设计要点：
 
 - **302 白名单**只放「URL 自带签名、不依赖持久请求头」的网盘：115、PikPak、OneDrive、123网盘、联通、光鸭。Google Drive 的下载地址必须带 `Authorization`，只能中转；WebDAV 遵循上游 —— 上游给 3xx 就把不含凭据的直链交给浏览器，给 200/206 就由后端转发。
-- **链接缓存 30 秒**，且不超过 `link.Expires`。缓存 key 包含 UA，因为 115 的签名与 UA 绑定。
+- **链接缓存最长 5 分钟**，且要求离 `link.Expires` 至少还有 15 秒；最多保留 2048 项，满时淘汰最久未使用项。115 等 UA 绑定链接的 cache key 包含 UA。
+- 同一个 cache key 的并发请求只发起一次换链，其他请求等待同一个 inflight 结果；换链有 15 秒硬超时，即使某个 driver 不响应 context，也会清掉 inflight 并唤醒等待者。
+- `/api/shorts/next` 会在后台预热返回批次中前两条可代理视频的直链，不传输媒体字节；全局最多同时 4 个预热任务，真实播放与预热共用上述缓存和 inflight。
 - 每次取链和中转的结果都会回写网盘健康状态。浏览器主动断开、单个文件 404 不算网盘故障，只有真正影响整盘的错误才标记异常。
 - 播放器的「三屏画面」可以带 `?tripleScreenRelay=1` 请求强制中转（WebGL 需要同源帧），受 `proxy.allow_forced_relay` 开关控制。
 
@@ -273,7 +281,8 @@ sequenceDiagram
 新视频入库即入队，队列按 video ID 去重，避免同一视频重复排队；每处理完一条 worker 休眠 500ms 节流。
 
 - **封面**：`ffprobe` 探时长 → `ffmpeg` 抽帧。
-- **预览视频**：30 秒以下最多 3 段、30 秒及以上固定 4 段，每段 3 秒。取点区间按时长分档：10 分钟以上在 20%–80% 之间均匀取，30 秒到 10 分钟避开片头片尾（5% 或 3 秒起、85% 前结束），30 秒以下从 10% 起。拼接后校验确有视频流；段数不足时只有在明确的降级路径下才接受 2 段，并留日志。⚠️ **选段起点只由时长决定**——这是内容级去重（[DEDUP.md](DEDUP.md)）帧对齐的正确性依赖，改选段算法必须同步评估那边。
+- **Shorts 背景封面**：第一次请求 `/p/thumb/{videoID}?variant=shorts-bg` 时，从普通封面按需生成最长边 96px、预先模糊的 JPEG，后续直接复用；普通封面更新后会自动刷新。它计入封面存储占用，并随视频或网盘删除一起清理。
+- **预览视频**：30 秒以下最多 3 段、30 秒及以上固定 4 段，每段 3 秒。取点区间按时长分档：10 分钟以上在 20%–80% 之间均匀取，30 秒到 10 分钟避开片头片尾（5% 或 3 秒起、85% 前结束），30 秒以下从 10% 起。拼接后校验确有视频流；段数不足时只有在明确的降级路径下才接受 2 段，并留日志。⚠️ **选段起点只由时长决定**——这是内容级去重（[docs/DEDUP.md](docs/DEDUP.md)）帧对齐的正确性依赖，改选段算法必须同步评估那边。
 - **指纹**：读少量 Range 片段算 `sampled_sha256`，用于跨盘去重。除入库即时入队外，还有每分钟一次的补扫协程捞 `pending`。
 - **转码**：不自动跑，由后台按盘手动启动。候选按扩展名圈定：webm（规范上只装浏览器必播编码）和 strm（远程引用）除外都算候选——mp4/m4v 容器兼容但可能装着 MPEG-4 Part 2 / HEVC 等浏览器解不了的视频轨（表现为黑屏有声音）。云盘候选先用 `ffprobe` 远程探测直链（Range 只读容器元数据，MB 级流量），编码兼容的直接标 `skipped` 零下载跳过，需要转码的才整文件下载；mp4/m4v 远程探测失败标 `failed` 等重试，不做整文件下载兜底，避免系统性探测失败时把全库 mp4 拉一遍。单条视频可用 `go run ./cmd/transcode-one <videoID>` 立即处理（走同一流程，目前仅支持 p115）。
 
@@ -281,28 +290,28 @@ sequenceDiagram
 
 ### 5. 夜间流水线
 
-每天 `cron_hour` 跑一次，后台「扫描所有网盘」按钮触发同一条流水线。五个阶段**串行**，且阶段之间会等生成队列排空：
+每天 `cron_hour` 跑一次，后台「扫描所有网盘」按钮触发同一条流水线。五个阶段**串行**；Phase 1 和 Phase 2 结束时都会等待封面、预览和指纹三个生成队列排空：
 
 ```mermaid
 flowchart LR
-    P1["Phase 1<br/>扫所有云盘<br/>+ 删除检测"] --> W1{{"等封面/预览队列排空"}}
+    P1["Phase 1<br/>扫所有云盘<br/>+ 删除检测"] --> W1{{"等封面/预览/指纹队列排空"}}
     W1 --> P2["Phase 2<br/>跑脚本爬虫"]
-    P2 --> W2{{"等预览队列排空"}}
+    P2 --> W2{{"等封面/预览/指纹队列排空"}}
     W2 --> P3["Phase 3<br/>爬虫产物上传到目标网盘"]
     P3 --> P4["Phase 4<br/>扫爬虫本地目录<br/>恢复已解除拉黑的视频"]
     P4 --> P5["Phase 5<br/>全库去重维护"]
 ```
 
-最近一次成功启动的日期写在 `settings` 表的 `nightly.last_run_date`，重启后不会因为进程在 `cron_hour` 内崩溃过就重跑一遍。流水线没有固定时长上限 —— 网盘冷却可能让某个阶段跑很久。标签匹配**不在**流水线里全库重算，它是事件驱动的：新视频入库和管理员改标签规则时即时刷新。
+流水线返回后（包括阶段仅记录错误、整体仍正常返回的情况），会把本次启动日期写入 `settings` 表的 `nightly.last_run_date`；同一天不再自动触发，管理员仍可手动重跑。如果进程在流水线返回前崩溃，日期尚未写入，重启后仍处于 `cron_hour` 时可能再次执行。流水线没有固定时长上限 —— 网盘冷却可能让某个阶段跑很久。标签匹配**不在**流水线里全库重算，它是事件驱动的：新视频入库和管理员改标签规则时即时刷新。
 
 ### 6. 去重体系
 
-去重分布在视频生命周期四个时机，外加人工复核兜底——完整的信号定义、阈值、判定流程图见 **[DEDUP.md](DEDUP.md)**。一段话版本：
+去重分布在视频生命周期四个时机，外加人工复核兜底——完整的信号定义、阈值、判定流程图见 **[docs/DEDUP.md](docs/DEDUP.md)**。一段话版本：
 
-- **字节级**：`(drive_id, file_id)` 恒等；`content_hash` / `sampled_sha256` 抓完全相同的文件（扫描与爬虫导入时跳过、前台软过滤、夜间 Phase 5 硬去重）。
+- **文件级**：`(drive_id, file_id)` 表示同一个源文件；扫描按 `content_hash`（哈希缺失或未命中时以 `file_name + size_bytes` 弱兜底）跳过重复，前台软过滤还会使用 `size_bytes + sampled_sha256`。夜间 Phase 5 的精确硬去重只按 `size_bytes + sampled_sha256` 分组。
 - **内容级**：teaser 选段只由时长决定，时长几乎相等的视频比较对齐帧 SSIM（中位数 ≥0.92 判重，时长精确相等时另有交叉匹配兜底），能抓标题、封面完全对不上的跨源转码副本；爬虫导入时同样启用，重复视频在上传网盘前就被挡下。
-- **人工兜底**：0.80~0.92 的疑似对进 `duplicate_review_pairs`，后台「重复复核」页并排裁决。
-- **删除语义**：一律打 `reason=duplicate` 墓碑 + 指向保留项，清理本地资产，**不删网盘源文件**，墓碑阻止重新入库，可在黑名单恢复。
+- **人工兜底**：夜间内容通道会把对齐中位数落在 `[0.80, 0.92)` 的疑似对写入 `duplicate_review_pairs`，由后台「重复复核」页并排裁决。
+- **删除语义**：一律打 `reason=duplicate` 墓碑 + 指向保留项，清理本地 teaser、普通封面、Shorts 背景封面和帧签名，**不删网盘源文件**；墓碑阻止重新入库，可在黑名单恢复。
 
 ### 7. 鉴权与分享
 

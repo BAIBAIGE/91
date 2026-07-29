@@ -282,12 +282,12 @@ func main() {
 }
 
 // deleteDuplicateWithAssets 与 cmd/server 夜间维护的 deleteDuplicateVideoWithAssets
-// 行为一致：先清本地资产（teaser、封面、帧签名缓存），再按重复墓碑删除 catalog
-// 行；SQLite busy 时退避重试。
+// 行为一致：先清本地资产（teaser、封面及其派生图、帧签名缓存），再按重复墓碑
+// 删除 catalog 行；SQLite busy 时退避重试。
 func deleteDuplicateWithAssets(ctx context.Context, cat *catalog.Catalog, localDir string, v *catalog.Video, canonicalID string) error {
 	removeCandidates := []string{v.PreviewLocal}
 	removeCandidates = append(removeCandidates, mediaasset.PreviewPathCandidates(localDir, v.ID)...)
-	removeCandidates = append(removeCandidates, mediaasset.ThumbnailPathCandidates(localDir, v.ID)...)
+	removeCandidates = append(removeCandidates, mediaasset.ThumbnailAssetPathCandidates(localDir, v.ID)...)
 	removeCandidates = append(removeCandidates, mediaasset.FrameSignaturePath(localDir, v.ID))
 	seen := map[string]struct{}{}
 	for _, candidate := range removeCandidates {
