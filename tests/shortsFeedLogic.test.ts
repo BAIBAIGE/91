@@ -1,9 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  BATCH_SIZE,
   EMPTY_SHORTS_FEED,
+  INITIAL_BATCH_SIZE,
+  MAX_SHORTS_QUEUE_ITEMS,
+  SHORTS_QUEUE_KEEP_BEHIND,
   SHORTS_FEED_STORAGE_KEY,
   clearShortsFeedState,
+  getShortsQueueTrimCount,
   loadShortsFeedState,
   mergeShortsQueue,
   planShortsPrefetch,
@@ -62,6 +67,11 @@ function feedResponse(input: {
     roundComplete: input.roundComplete ?? false,
   } as unknown as ShortsNextResponse;
 }
+
+test("shorts feed exposes a small initial batch and larger continuation batch", () => {
+  assert.equal(INITIAL_BATCH_SIZE, 2);
+  assert.equal(BATCH_SIZE, 5);
+});
 
 test("feed bookmark storage round-trips and rejects hostile payloads", () => {
   withMemoryLocalStorage((store) => {
@@ -148,6 +158,23 @@ test("prefetch plan waits for the queue end before starting a new round", () => 
     planShortsPrefetch({ ...base, remainingAfterActive: 0, loadError: true }),
     "none"
   );
+});
+
+test("long shorts sessions trim in batches while retaining back-scroll history", () => {
+  assert.equal(getShortsQueueTrimCount(50, MAX_SHORTS_QUEUE_ITEMS), 0);
+  assert.equal(
+    getShortsQueueTrimCount(
+      SHORTS_QUEUE_KEEP_BEHIND,
+      MAX_SHORTS_QUEUE_ITEMS + 1
+    ),
+    0
+  );
+  assert.equal(
+    getShortsQueueTrimCount(58, MAX_SHORTS_QUEUE_ITEMS + 1),
+    58 - SHORTS_QUEUE_KEEP_BEHIND
+  );
+  const removed = getShortsQueueTrimCount(80, 85);
+  assert.equal(80 - removed, SHORTS_QUEUE_KEEP_BEHIND);
 });
 
 class FakeExpiredError extends Error {}

@@ -176,15 +176,21 @@ body.shorts-document-scroll::before {
   }
 }
 
-/* 模糊海报背景：填充黑边的部分 */
+/* 服务端生成的 96px 预模糊纹理：填充黑边，但不在 GPU 上实时模糊全屏层。 */
 .shorts-slide__bg {
   position: absolute;
   inset: 0;
   background-size: cover;
   background-position: center;
-  filter: blur(32px) brightness(0.45);
-  transform: scale(1.15); /* 模糊后边缘羽化，放大避免漏边 */
+  transform: scale(1.08);
   z-index: 0;
+}
+
+.shorts-slide__bg::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: rgb(0 0 0 / 55%);
 }
 
 .shorts-slide__video,
@@ -196,6 +202,30 @@ body.shorts-document-scroll::before {
   margin: auto;
   object-fit: contain; /* 横屏视频不裁切，多余处由 __bg 顶上 */
   z-index: 1;
+}
+
+/* 播放层保持稳定、完全不透明，避免 WebKit 在首帧解码期间还要混合和缩放
+   video texture。入场动效交给静态海报承担。 */
+.shorts-slide__video {
+  transform: none;
+  opacity: 1;
+}
+
+/* 真机 A/B/兼容回退专用；默认页面不会命中这些规则。 */
+.shorts-page.has-video-transition .shorts-slide__video {
+  transform: scale(0.96);
+  opacity: 0.5;
+  transition: transform 0.6s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.shorts-page.has-video-transition
+  .shorts-slide[data-active="true"]
+  .shorts-slide__video {
+  transform: scale(1);
+  opacity: 1;
+}
+
+.shorts-slide__poster {
   /* 影院镜头变焦动效：非活跃状态下稍微缩小，切入时柔和放大并淡入 */
   transform: scale(0.96);
   opacity: 0.5;
@@ -208,7 +238,6 @@ body.shorts-document-scroll::before {
   z-index: 2;
 }
 
-.shorts-slide[data-active="true"] .shorts-slide__video,
 .shorts-slide[data-active="true"] .shorts-slide__poster {
   transform: scale(1);
   opacity: 1;
@@ -253,6 +282,13 @@ body.shorts-document-scroll::before {
   border-top-color: rgba(255, 255, 255, 0.98);
   border-radius: 50%;
   will-change: transform;
+  animation: shorts-spinner-rotate 0.8s linear infinite;
+}
+
+@keyframes shorts-spinner-rotate {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 @media (max-width: 640px) {
@@ -672,6 +708,7 @@ body.shorts-document-scroll::before {
   /* 使用高颜值渐变（从粉红到蛇金橙），契合主色调，带来极高的高级感 */
   background: linear-gradient(90deg, #ff4060 0%, #ff8030 100%);
   border-radius: 99px;
+  width: var(--progress-pct, 0%);
   transition: width 80ms linear;
 }
 

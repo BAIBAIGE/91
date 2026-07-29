@@ -1,8 +1,12 @@
 import { useEffect, useRef } from "react";
 import { clamp } from "./mediaBuffer";
+import { shouldUsePassiveShortsTouchMove } from "./platform";
 
 const SHORTS_SEEK_ACTIVATION_PX = 12;
 const SHORTS_SEEK_DIRECTION_LOCK_RATIO = 1.2;
+// 网络视频不需要在每个 touch/pointer move 上都真实 seek。视觉进度仍按帧
+// 更新，媒体管线最多约 12.5Hz 跳一次，松手再精确落到最终位置。
+export const SHORTS_MEDIA_SEEK_INTERVAL_MS = 80;
 // touchend / mouseup 之后浏览器还会补发 click。长按倍速和拖动进度已经
 // 消费了这次手势，必须拦住这个合成 click，否则单击逻辑会把视频暂停。
 const SHORTS_SYNTHETIC_CLICK_RESET_MS = 700;
@@ -11,6 +15,7 @@ type ShortsTouchSeekState = {
   startX: number;
   startY: number;
   startTime: number;
+  videoWidth: number;
   mode: "seek" | null;
   targetTime: number;
 };
@@ -82,6 +87,95 @@ export function useShortsSlideGestures(options: ShortsSlideGesturesOptions) {
   const wasPlayingRef = useRef(true);
   const optionsRef = useRef(options);
   optionsRef.current = options;
+  const previewFrameRef = useRef<number | null>(null);
+  const pendingPreviewTimeRef = useRef<number | null>(null);
+  const mediaSeekTimerRef = useRef<number | null>(null);
+  const pendingMediaSeekRef = useRef<{
+    video: HTMLVideoElement;
+    time: number;
+  } | null>(null);
+  const lastMediaSeekAtRef = useRef(-Infinity);
+  const progressTargetTimeRef = useRef<number | null>(null);
+
+  function writeMediaSeek(
+    video: HTMLVideoElement,
+    time: number,
+    exact: boolean
+  ) {
+    try {
+      if (!exact && typeof video.fastSeek === "function") {
+        video.fastSeek(time);
+      } else {
+        video.currentTime = time;
+      }
+      lastMediaSeekAtRef.current = performance.now();
+    } catch {
+      // 部分 ready state 下 seek 会抛错；后续 move / 最终提交仍会重试。
+    }
+  }
+
+  function scheduleProgressPreview(time: number) {
+    pendingPreviewTimeRef.current = time;
+    if (previewFrameRef.current !== null) return;
+    previewFrameRef.current = window.requestAnimationFrame(() => {
+      previewFrameRef.current = null;
+      const pending = pendingPreviewTimeRef.current;
+      pendingPreviewTimeRef.current = null;
+      if (pending !== null) optionsRef.current.setCurrentTime(pending);
+    });
+  }
+
+  function flushProgressPreview(time: number) {
+    if (previewFrameRef.current !== null) {
+      window.cancelAnimationFrame(previewFrameRef.current);
+      previewFrameRef.current = null;
+    }
+    pendingPreviewTimeRef.current = null;
+    optionsRef.current.setCurrentTime(time);
+  }
+
+  function scheduleMediaSeek(video: HTMLVideoElement, time: number) {
+    pendingMediaSeekRef.current = { video, time };
+    if (mediaSeekTimerRef.current !== null) return;
+
+    const elapsed = performance.now() - lastMediaSeekAtRef.current;
+    const delay = Math.max(0, SHORTS_MEDIA_SEEK_INTERVAL_MS - elapsed);
+    if (delay === 0) {
+      pendingMediaSeekRef.current = null;
+      writeMediaSeek(video, time, false);
+      return;
+    }
+
+    mediaSeekTimerRef.current = window.setTimeout(() => {
+      mediaSeekTimerRef.current = null;
+      const pending = pendingMediaSeekRef.current;
+      pendingMediaSeekRef.current = null;
+      if (pending) writeMediaSeek(pending.video, pending.time, false);
+    }, delay);
+  }
+
+  function flushMediaSeek(video: HTMLVideoElement, time: number) {
+    if (mediaSeekTimerRef.current !== null) {
+      window.clearTimeout(mediaSeekTimerRef.current);
+      mediaSeekTimerRef.current = null;
+    }
+    pendingMediaSeekRef.current = null;
+    writeMediaSeek(video, time, true);
+  }
+
+  function cancelScheduledSeeks() {
+    if (previewFrameRef.current !== null) {
+      window.cancelAnimationFrame(previewFrameRef.current);
+      previewFrameRef.current = null;
+    }
+    pendingPreviewTimeRef.current = null;
+    if (mediaSeekTimerRef.current !== null) {
+      window.clearTimeout(mediaSeekTimerRef.current);
+      mediaSeekTimerRef.current = null;
+    }
+    pendingMediaSeekRef.current = null;
+    progressTargetTimeRef.current = null;
+  }
 
   function clearClickTimer() {
     if (clickTimerRef.current !== null) {
@@ -112,8 +206,8 @@ export function useShortsSlideGestures(options: ShortsSlideGesturesOptions) {
   useEffect(() => {
     const video = optionsRef.current.getVideoElement();
     if (!video) return;
-    const { scrubbingRef, setScrubbing, setFastActive, setCurrentTime } =
-      optionsRef.current;
+    const passiveTouchMove = shouldUsePassiveShortsTouchMove();
+    const { scrubbingRef, setScrubbing, setFastActive } = optionsRef.current;
     let timer: number | null = null;
     let active = false;
     let touchSeekState: ShortsTouchSeekState | null = null;
@@ -168,6 +262,7 @@ export function useShortsSlideGestures(options: ShortsSlideGesturesOptions) {
         startX: touch.clientX,
         startY: touch.clientY,
         startTime: video.currentTime || 0,
+        videoWidth: Math.max(1, video.getBoundingClientRect().width),
         mode: null,
         targetTime: video.currentTime || 0,
       };
@@ -200,23 +295,18 @@ export function useShortsSlideGestures(options: ShortsSlideGesturesOptions) {
         clearClickTimer();
       }
 
-      event.preventDefault();
+      if (!passiveTouchMove) event.preventDefault();
       const seekDuration = optionsRef.current.getSeekDuration(video);
       if (!seekDuration) return;
-      const rect = video.getBoundingClientRect();
       const next = computeTouchSeekTime({
         startTime: touchSeekState.startTime,
         dx,
-        width: rect.width,
+        width: touchSeekState.videoWidth,
         duration: seekDuration,
       });
       touchSeekState.targetTime = next;
-      setCurrentTime(next);
-      try {
-        video.currentTime = next;
-      } catch {
-        // ignore
-      }
+      scheduleProgressPreview(next);
+      scheduleMediaSeek(video, next);
     };
 
     const handleTouchEnd = (event: TouchEvent) => {
@@ -224,6 +314,11 @@ export function useShortsSlideGestures(options: ShortsSlideGesturesOptions) {
       const wasFastPress = active;
       if (wasSeeking) {
         event.preventDefault();
+        const targetTime = touchSeekState?.targetTime;
+        if (targetTime !== undefined) {
+          flushProgressPreview(targetTime);
+          flushMediaSeek(video, targetTime);
+        }
       }
       if (wasSeeking || wasFastPress) {
         suppressNextSyntheticClick();
@@ -233,6 +328,10 @@ export function useShortsSlideGestures(options: ShortsSlideGesturesOptions) {
     };
 
     const handleTouchCancel = () => {
+      if (touchSeekState?.mode === "seek") {
+        flushProgressPreview(touchSeekState.targetTime);
+        flushMediaSeek(video, touchSeekState.targetTime);
+      }
       resetTouchSeek();
       end();
     };
@@ -249,7 +348,9 @@ export function useShortsSlideGestures(options: ShortsSlideGesturesOptions) {
     };
 
     video.addEventListener("touchstart", handleTouchStart, { passive: true });
-    video.addEventListener("touchmove", handleTouchMove, { passive: false });
+    video.addEventListener("touchmove", handleTouchMove, {
+      passive: passiveTouchMove,
+    });
     video.addEventListener("touchend", handleTouchEnd);
     video.addEventListener("touchcancel", handleTouchCancel);
     video.addEventListener("mousedown", handleMouseDown);
@@ -260,6 +361,7 @@ export function useShortsSlideGestures(options: ShortsSlideGesturesOptions) {
 
     return () => {
       clearTimer();
+      cancelScheduledSeeks();
       resetTouchSeek();
       video.removeEventListener("touchstart", handleTouchStart);
       video.removeEventListener("touchmove", handleTouchMove);
@@ -279,6 +381,7 @@ export function useShortsSlideGestures(options: ShortsSlideGesturesOptions) {
     return () => {
       clearClickTimer();
       clearSuppressNextClickResetTimer();
+      cancelScheduledSeeks();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -356,6 +459,7 @@ export function useShortsSlideGestures(options: ShortsSlideGesturesOptions) {
     }
     options.scrubbingRef.current = true;
     options.setScrubbing(true);
+    progressTargetTimeRef.current = null;
     applyProgressFromEvent(e, seekDuration);
   }
   function handleProgressPointerMove(e: React.PointerEvent<HTMLDivElement>) {
@@ -374,6 +478,12 @@ export function useShortsSlideGestures(options: ShortsSlideGesturesOptions) {
       // ignore
     }
     const video = options.getVideoElement();
+    const targetTime = progressTargetTimeRef.current;
+    if (video && targetTime !== null) {
+      flushProgressPreview(targetTime);
+      flushMediaSeek(video, targetTime);
+    }
+    progressTargetTimeRef.current = null;
     options.scrubbingRef.current = false;
     options.setScrubbing(false);
     if (video && wasPlayingRef.current) {
@@ -390,12 +500,9 @@ export function useShortsSlideGestures(options: ShortsSlideGesturesOptions) {
     const rect = e.currentTarget.getBoundingClientRect();
     const ratio = clamp((e.clientX - rect.left) / rect.width, 0, 1);
     const next = ratio * seekDuration;
-    options.setCurrentTime(next);
-    try {
-      video.currentTime = next;
-    } catch {
-      // ignore（部分 ready state 下设置会抛错）
-    }
+    progressTargetTimeRef.current = next;
+    scheduleProgressPreview(next);
+    scheduleMediaSeek(video, next);
   }
 
   return {

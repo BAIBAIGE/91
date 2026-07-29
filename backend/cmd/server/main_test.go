@@ -27,6 +27,7 @@ import (
 	"github.com/video-site/backend/internal/drives"
 	"github.com/video-site/backend/internal/drives/scriptcrawler"
 	"github.com/video-site/backend/internal/fingerprint"
+	"github.com/video-site/backend/internal/mediaasset"
 	"github.com/video-site/backend/internal/preview"
 	"github.com/video-site/backend/internal/proxy"
 )
@@ -1453,7 +1454,8 @@ func TestCleanupDriveVideosForDeleteRemovesRowsAndGeneratedAssetsOnly(t *testing
 
 	previewPath := filepath.Join(localDir, "localstorage-local-main-file.mp4")
 	thumbPath := filepath.Join(localDir, "thumbs", "localstorage-local-main-file.jpg")
-	for _, path := range []string{previewPath, thumbPath} {
+	backgroundPath := mediaasset.ShortsBackgroundPath(localDir, "localstorage-local-main-file")
+	for _, path := range []string{previewPath, thumbPath, backgroundPath} {
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			t.Fatalf("mkdir %s: %v", path, err)
 		}
@@ -1511,7 +1513,7 @@ func TestCleanupDriveVideosForDeleteRemovesRowsAndGeneratedAssetsOnly(t *testing
 	if _, err := cat.GetVideo(ctx, "pikpak-other"); err != nil {
 		t.Fatalf("other drive video missing: %v", err)
 	}
-	for _, path := range []string{previewPath, thumbPath} {
+	for _, path := range []string{previewPath, thumbPath, backgroundPath} {
 		if _, err := os.Stat(path); !os.IsNotExist(err) {
 			t.Fatalf("generated asset %s still exists, stat err=%v", path, err)
 		}
@@ -1552,7 +1554,8 @@ func TestDeleteVideoRemovesGeneratedAssetsKeepsLocalOriginalAndTombstones(t *tes
 
 	previewPath := filepath.Join(localDir, "localstorage-local-main-file.mp4")
 	thumbPath := filepath.Join(localDir, "thumbs", "localstorage-local-main-file.jpg")
-	for _, path := range []string{previewPath, thumbPath} {
+	backgroundPath := mediaasset.ShortsBackgroundPath(localDir, "localstorage-local-main-file")
+	for _, path := range []string{previewPath, thumbPath, backgroundPath} {
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			t.Fatalf("mkdir %s: %v", path, err)
 		}
@@ -1602,7 +1605,7 @@ func TestDeleteVideoRemovesGeneratedAssetsKeepsLocalOriginalAndTombstones(t *tes
 	if !deleted {
 		t.Fatal("deleted video tombstone missing")
 	}
-	for _, path := range []string{previewPath, thumbPath} {
+	for _, path := range []string{previewPath, thumbPath, backgroundPath} {
 		if _, err := os.Stat(path); !os.IsNotExist(err) {
 			t.Fatalf("generated asset %s still exists, stat err=%v", path, err)
 		}

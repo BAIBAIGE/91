@@ -343,6 +343,7 @@ function VideoDetailContent({ id }: { id?: string }) {
                   <VideoPlayer
                     id={detail.id}
                     src={detail.videoSrc}
+                    preferTypedMp4SourceOnIOS={isPikPakMp4Detail(detail)}
                     poster={detail.poster}
                     previewSrc={detail.previewSrc}
                     loadSubtitles={loadSubtitles}
@@ -430,5 +431,12 @@ function VideoDetailContent({ id }: { id?: string }) {
         </div>
       )}
     </AppShell>
+  );
+}
+
+function isPikPakMp4Detail(detail: VideoDetail) {
+  return (
+    detail.mediaType?.toLowerCase() === "video/mp4" &&
+    detail.sourceLabel?.toLowerCase().includes("pikpak") === true
   );
 }

@@ -31,6 +31,7 @@ import {
 } from "@/shorts/mediaBuffer";
 import {
   isIOSStandbyPreloadDisabled,
+  isLegacyShortsVideoTransitionEnabled,
   isWindowsPlatform,
   shouldUseDocumentScrollForShorts,
   shouldUseIOSSharedVideo,
@@ -41,6 +42,10 @@ import {
   type ShortsLoopDebugProbe,
 } from "@/shorts/ShortsDebugHud";
 import { useShortsFeed } from "@/shorts/useShortsFeed";
+import {
+  getShortsQueueTrimCount,
+  shortsQueueItemKey,
+} from "@/shorts/shortsFeed";
 import {
   useShortsKeyboard,
   type ShortsKeyboardSeekPreview,
@@ -57,13 +62,10 @@ import "@/styles/shorts.css";
 // 当前视频流畅播放后，向后预加载多少条视频。
 const PRELOAD_AHEAD_COUNT = 2;
 
-// 距当前屏多少条以内的 slide 才渲染真正的内容（模糊背景、海报、文案、
-// 操作栏）。队列只增不减，越刷越长；但每条 slide 的模糊背景都是一个带
-// filter 的合成层，海报是一张满屏位图，全留在 DOM 里等于让内存和合成
-// 开销随刷动时长线性上涨——iOS Safari 的内存额度比 Chrome 紧得多，这笔
-// 账最先在那边爆。窗口外的 slide 退化成一个空壳：高度仍由 CSS 给出，
-// 滚动几何和 IntersectionObserver 的观测目标都不受影响，滑回来时重新
-// 挂载内容，海报走 HTTP 缓存不会有二次请求。
+// 距当前屏多少条以内的 slide 才渲染真正的内容（背景、海报、文案、操作栏）。
+// 即使队列已经有几十条，也只让附近 slide 持有位图和完整子树；窗口外退化成
+// 等高空壳，滚动几何和 IntersectionObserver 的观测目标都不受影响，滑回来
+// 时重新挂载内容，海报走 HTTP 缓存不会有二次请求。
 //
 // 半径不能收到 1：iOS 那两个持久 video 元素寄放在 slide 的插槽 div 里，
 // 插槽随内容一起卸载，而元素一旦被移出 DOM，WebKit 授予它的有声播放
@@ -88,10 +90,11 @@ export default function ShortsPage() {
   // 队列因空库被丢弃时回到第一屏
   const handleQueueReset = useCallback(() => setActiveIndex(0), []);
   // 已加入页面的视频队列（按出现顺序）与拉取状态
-  const { items, loading, empty, loadError, loadMore } = useShortsFeed(
-    activeIndex,
-    handleQueueReset
-  );
+  const { items, loading, empty, loadError, loadMore, trimQueueBefore } =
+    useShortsFeed(activeIndex, handleQueueReset);
+  const activeItemKey = items[activeIndex]
+    ? shortsQueueItemKey(items[activeIndex])
+    : "";
   // 是否静音；首次必须静音才能 autoplay，用户点击后切换
   const [muted, setMuted] = useState(true);
   // 全局 Toast / HUD 提醒文字
@@ -177,6 +180,11 @@ export default function ShortsPage() {
     Map<number, (el: HTMLDivElement | null) => void>
   >(new Map());
   const activeIndexRef = useRef(0);
+  const queueTrimInProgressRef = useRef(false);
+  const pendingQueueTrimRef = useRef<{
+    anchorKey: string;
+    activeIndex: number;
+  } | null>(null);
   // Windows 退出浏览器全屏时视口高度会改变。调整滚动位置期间锁住当前
   // slide，避免 IntersectionObserver 把新的像素位置误判成后续视频。
   const viewportResizeAnchorIndexRef = useRef<number | null>(null);
@@ -194,6 +202,10 @@ export default function ShortsPage() {
   const loopDebugProbeRef = useRef<ShortsLoopDebugProbe | null>(null);
   // ?iosPreload=0 时完全不启用备用元素，用于对照实验。
   const [iosStandbyPreloadDisabled] = useState(isIOSStandbyPreloadDisabled);
+  // 默认走稳定合成层；查询参数仅供 iOS 真机 A/B/紧急回退。
+  const [legacyVideoTransitionEnabled] = useState(
+    isLegacyShortsVideoTransitionEnabled
+  );
   // iPhone 浏览器里改用页面滚动，让 Safari 工具栏能随刷动收起。
   const useDocumentScroll = shouldUseDocumentScrollForShorts();
   // Windows 短视频页只保留静音图标；不挂载桌面 hover 音量条，避免点击
@@ -230,7 +242,9 @@ export default function ShortsPage() {
   // 用户在操作栏点取消时会从这里移除，允许之后再次点赞。
   const likedIdsRef = useRef<Set<string>>(new Set());
 
-  useEffect(() => {
+  // 事件监听器和 iOS 持久 video effect 都通过 ref 读取当前索引。放在最前面的
+  // layout effect 可避免长队列裁剪与上一轮 passive effect 交错时写回旧值。
+  useLayoutEffect(() => {
     activeIndexRef.current = activeIndex;
   }, [activeIndex]);
 
@@ -271,7 +285,7 @@ export default function ShortsPage() {
 
   useEffect(() => {
     updateUserPausedIndex(null);
-  }, [activeIndex, updateUserPausedIndex]);
+  }, [activeItemKey, updateUserPausedIndex]);
 
   const handleActiveReadyForPreload = useCallback((index: number) => {
     if (index === activeIndexRef.current) {
@@ -341,10 +355,124 @@ export default function ShortsPage() {
   );
 
   // 记录实际到达过的最远索引，驱动固定大小的视频缓存窗口。
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!items[activeIndex]) return;
     setCacheWindowHighIndex((prev) => Math.max(prev, activeIndex));
   }, [activeIndex, items]);
+
+  // 队列超过上限时整批裁掉很久以前的空壳 slide。一次保留 20 条回看历史，
+  // 避免每滑一屏都触发 DOM 结构变化；当前项及 iOS 两个持久 video 的插槽
+  // 始终处于保留区内。
+  useLayoutEffect(() => {
+    if (
+      queueTrimInProgressRef.current ||
+      viewportResizeAnchorIndexRef.current !== null ||
+      getShortsQueueTrimCount(activeIndex, items.length) === 0
+    ) {
+      return;
+    }
+
+    const activeItem = items[activeIndex];
+    if (!activeItem) return;
+    const removeCount = getShortsQueueTrimCount(activeIndex, items.length);
+    const nextActiveIndex = activeIndex - removeCount;
+    queueTrimInProgressRef.current = true;
+    pendingQueueTrimRef.current = {
+      anchorKey: shortsQueueItemKey(activeItem),
+      activeIndex: nextActiveIndex,
+    };
+
+    // IntersectionObserver 会持有 target；被裁掉前显式 unobserve，避免旧空壳
+    // 继续留在观察器内部。裁剪期间忽略迟到的 observer 回调。
+    const root = containerRef.current;
+    const observer = slideObserverRef.current;
+    if (root && observer) {
+      const slides =
+        root.querySelectorAll<HTMLElement>("[data-shorts-slide]");
+      for (
+        let index = 0;
+        index < removeCount && index < slides.length;
+        index += 1
+      ) {
+        observer.unobserve(slides[index]);
+      }
+    }
+
+    // ref setter 闭包捕获的是旧 index。清空后让保留下来的 keyed slide 在下次
+    // commit 领取新 setter；真实 video 节点本身仍由 React/WebKit 保留。
+    videoRefs.current.clear();
+    videoRefCallbacks.current.clear();
+    iosSharedVideoSlots.current.clear();
+    iosSharedVideoSlotCallbacks.current.clear();
+
+    const rebaseMediaIndex = (value: number) =>
+      value < removeCount ? -1 : value - removeCount;
+    iosSharedVideoIndexRef.current = rebaseMediaIndex(
+      iosSharedVideoIndexRef.current
+    );
+    iosStandbyVideoIndexRef.current = rebaseMediaIndex(
+      iosStandbyVideoIndexRef.current
+    );
+    activeIndexRef.current = nextActiveIndex;
+    setCacheWindowHighIndex((previous) =>
+      previous < removeCount ? -1 : previous - removeCount
+    );
+
+    const pausedIndex = userPausedIndexRef.current;
+    if (pausedIndex !== null) {
+      updateUserPausedIndex(
+        pausedIndex < removeCount ? null : pausedIndex - removeCount
+      );
+    }
+
+    const retainedVideoIDs = new Set(
+      items.slice(removeCount).map((item) => item.id)
+    );
+    setCacheableSourceIds((previous) => {
+      const retained = new Set(
+        [...previous].filter((videoID) => retainedVideoIDs.has(videoID))
+      );
+      return retained.size === previous.size ? previous : retained;
+    });
+
+    trimQueueBefore(removeCount);
+    setActiveIndex(nextActiveIndex);
+  }, [
+    activeIndex,
+    items,
+    trimQueueBefore,
+    updateUserPausedIndex,
+  ]);
+
+  // DOM 已按新索引提交后，把同一个逻辑视频重新贴到视口起点。用实际 offset
+  // 而不是“删除条数 × 视口高度”，可覆盖 iPhone 动态工具栏改变 100dvh 的情况。
+  useLayoutEffect(() => {
+    const pending = pendingQueueTrimRef.current;
+    if (!pending || activeIndex !== pending.activeIndex) return;
+    const activeItem = items[activeIndex];
+    if (!activeItem || shortsQueueItemKey(activeItem) !== pending.anchorKey) {
+      pendingQueueTrimRef.current = null;
+      queueTrimInProgressRef.current = false;
+      return;
+    }
+
+    const root = containerRef.current;
+    const slide = root
+      ? [...root.querySelectorAll<HTMLElement>("[data-shorts-slide]")].find(
+          (element) => element.dataset.feedKey === pending.anchorKey
+        )
+      : undefined;
+    if (root && slide) {
+      if (useDocumentScroll) {
+        const top = window.scrollY + slide.getBoundingClientRect().top;
+        window.scrollTo({ top, behavior: "auto" });
+      } else {
+        root.scrollTop = slide.offsetTop;
+      }
+    }
+    pendingQueueTrimRef.current = null;
+    queueTrimInProgressRef.current = false;
+  }, [activeIndex, items, useDocumentScroll]);
 
   // 全屏与窗口模式的可用高度不同。Chrome/Edge 退出全屏后会保留原来的
   // scrollTop 像素值，而每条 slide 的 100svh 已经变矮；索引越靠后，误差
@@ -408,8 +536,8 @@ export default function ShortsPage() {
   // 用 IntersectionObserver 找出当前进入视口的 item。
   // root 直接用 viewport：普通模式和 iPhone 页面滚动模式都能正确观测。
   //
-  // 观察器只建一次。队列只增不减、slide 的 <article> 节点也不会被替换
-  // （内容窗口只换子树），所以每取回一批只需要把新增的那几条补进来。
+  // 观察器只建一次。正常取批只追加并增量 observe；长会话裁剪会在删除旧
+  // slide 前显式 unobserve，保留下来的 keyed <article> 节点不替换。
   // 早先的写法把它挂在 [items.length] 上，每 5 条就 disconnect 再整队重新
   // observe 一遍——代价随队列长度上涨，而且偏偏发生在用户滑到队尾触发预取
   // 的那一刻。
@@ -419,7 +547,12 @@ export default function ShortsPage() {
 
     const observer = new IntersectionObserver(
       (entries) => {
-        if (viewportResizeAnchorIndexRef.current !== null) return;
+        if (
+          viewportResizeAnchorIndexRef.current !== null ||
+          queueTrimInProgressRef.current
+        ) {
+          return;
+        }
         let bestIndex = -1;
         let bestRatio = 0.6;
         for (const entry of entries) {
@@ -752,18 +885,23 @@ export default function ShortsPage() {
     };
   }, [useDocumentScroll]);
 
-  // 读 itemsLengthRef 而不是 items.length：这个回调要发给每一条 slide，
-  // 依赖队列长度会让它每取回一批就换一个新引用，把 memo 白白击穿一次。
-  const handleHideSuccess = useCallback((idx: number) => {
-    const nextIdx = idx + 1;
-    if (nextIdx < itemsLengthRef.current) {
-      setTimeout(() => {
-        const nextSlide = containerRef.current?.querySelector(`[data-index="${nextIdx}"]`);
-        if (nextSlide) {
-          nextSlide.scrollIntoView({ behavior: "smooth" });
-        }
-      }, 700);
-    }
+  // 用稳定 feed key 在真实 DOM 中找下一条；不闭包 items/index，既能跨队列
+  // 裁剪，也不会每取回一批就换回调引用、击穿 ShortsSlide 的 memo。
+  const handleHideSuccess = useCallback((itemKey: string) => {
+    setTimeout(() => {
+      const root = containerRef.current;
+      if (!root) return;
+      const current = [
+        ...root.querySelectorAll<HTMLElement>("[data-shorts-slide]"),
+      ].find((element) => element.dataset.feedKey === itemKey);
+      const nextSlide = current?.nextElementSibling;
+      if (
+        nextSlide instanceof HTMLElement &&
+        nextSlide.dataset.shortsSlide !== undefined
+      ) {
+        nextSlide.scrollIntoView({ behavior: "smooth" });
+      }
+    }, 700);
   }, []);
 
   const videoWindow = getVideoWindowBounds(cacheWindowHighIndex, items.length);
@@ -774,7 +912,9 @@ export default function ShortsPage() {
 
   return (
     <div
-      className={`shorts-page${useDocumentScroll ? " is-document-scroll" : ""}`}
+      className={`shorts-page${useDocumentScroll ? " is-document-scroll" : ""}${
+        legacyVideoTransitionEnabled ? " has-video-transition" : ""
+      }`}
     >
       <header className="shorts-header">
         <Link
@@ -880,6 +1020,7 @@ export default function ShortsPage() {
         )}
 
         {items.map((item, index) => {
+          const itemKey = shortsQueueItemKey(item);
           const isActiveSlide = index === activeIndex;
           const isInCacheWindow =
             index >= videoWindow.start && index <= videoWindow.end;
@@ -910,11 +1051,12 @@ export default function ShortsPage() {
             shouldRetainCached;
           return (
             <ShortsSlide
-              key={`${item.feedToken}:${item.feedCursor}`}
+              key={itemKey}
               item={item}
+              itemKey={itemKey}
               index={index}
               isActive={isActiveSlide}
-              // 固定 6 条视频窗口内才挂载 <video> 壳；
+              // 固定 4 条视频窗口内才挂载 <video> 壳；
               // 当前屏先绑定 src；后两个视频等当前屏缓冲健康后再预加载；
               // 已缓冲过的窗口内视频保留 src，便于来回切换复用缓存。
               shouldMount={shouldMount}
@@ -975,6 +1117,8 @@ export default function ShortsPage() {
 
 type SlideProps = {
   item: ShortsItem;
+  /** 服务端 feed 内的稳定身份；队列裁剪后 index 会变化，但这个 key 不变。 */
+  itemKey: string;
   index: number;
   isActive: boolean;
   shouldMount: boolean;
@@ -1009,7 +1153,7 @@ type SlideProps = {
     handler: (() => void) | null
   ) => void;
   canHide: boolean;
-  onHideSuccess: (index: number) => void;
+  onHideSuccess: (itemKey: string) => void;
   onActiveReadyForPreload: (index: number) => void;
   onActiveNeedsPriority: (index: number) => void;
   /** 本条视频在浏览器里已有可复用缓冲，之后在视频窗口内保留 src */
@@ -1031,6 +1175,7 @@ type SlideProps = {
  */
 function ShortsSlideImpl({
   item,
+  itemKey,
   index,
   isActive,
   shouldMount,
@@ -1107,17 +1252,70 @@ function ShortsSlideImpl({
   );
   const preloadKeepSeconds = preloadKeepSecondsFor(preloadBufferSeconds);
 
-  // 进度状态。iOS 由实际呈现帧更新，其他平台由 timeupdate 更新；
-  // 拖动期间则以用户输入为准。
+  // 时长是低频元数据，保留在 state。播放进度是高频信号：放进 ref 并直接
+  // 写进度条 CSS 变量，避免 timeupdate/rVFC 让整棵 ShortsSlide 每秒重渲染。
   const [duration, setDuration] = useState(0);
-  const [currentTime, setCurrentTime] = useState(0);
+  const durationRef = useRef(0);
+  const currentTimeRef = useRef(0);
+  const progressTrackRef = useRef<HTMLDivElement | null>(null);
+  const progressTimeRef = useRef<HTMLDivElement | null>(null);
   const [scrubbing, setScrubbing] = useState(false);
   const scrubbingRef = useRef(false);
   const lastKeyboardSeekPreviewTimeRef = useRef<number | null>(null);
+  const keyboardSeekPreviewRef = useRef(keyboardSeekPreview);
+  keyboardSeekPreviewRef.current = keyboardSeekPreview;
+
+  const writeProgressDisplay = useCallback(
+    (time: number, knownDuration = durationRef.current) => {
+      const safeTime = Number.isFinite(time) && time > 0 ? time : 0;
+      const safeDuration =
+        Number.isFinite(knownDuration) && knownDuration > 0 ? knownDuration : 0;
+      const ratio =
+        safeDuration > 0 ? clamp(safeTime / safeDuration, 0, 1) : 0;
+      progressTrackRef.current?.style.setProperty(
+        "--progress-pct",
+        `${ratio * 100}%`
+      );
+      if (progressTimeRef.current) {
+        progressTimeRef.current.textContent =
+          `${formatClock(safeTime)} / ${formatClock(safeDuration)}`;
+      }
+    },
+    []
+  );
+
+  const updateCurrentTime = useCallback(
+    (nextTime: number, forceDisplay = false) => {
+      const safeTime = Number.isFinite(nextTime) && nextTime > 0 ? nextTime : 0;
+      currentTimeRef.current = safeTime;
+      // 键盘累计 seek 期间，底部进度条必须停在累计目标，不能被尚未完成的
+      // timeupdate 拉回真实媒体时钟。松键后会 force 写入最终目标。
+      if (!forceDisplay && keyboardSeekPreviewRef.current) return;
+      writeProgressDisplay(safeTime);
+    },
+    [writeProgressDisplay]
+  );
+
+  const updateDuration = useCallback(
+    (nextDuration: number) => {
+      const safeDuration =
+        Number.isFinite(nextDuration) && nextDuration > 0 ? nextDuration : 0;
+      durationRef.current = safeDuration;
+      setDuration((previous) =>
+        previous === safeDuration ? previous : safeDuration
+      );
+      writeProgressDisplay(currentTimeRef.current, safeDuration);
+    },
+    [writeProgressDisplay]
+  );
 
   useLayoutEffect(() => {
     if (keyboardSeekPreview) {
       lastKeyboardSeekPreviewTimeRef.current = keyboardSeekPreview.currentTime;
+      writeProgressDisplay(
+        keyboardSeekPreview.currentTime,
+        keyboardSeekPreview.duration
+      );
       return;
     }
 
@@ -1126,8 +1324,28 @@ function ShortsSlideImpl({
     lastKeyboardSeekPreviewTimeRef.current = null;
     // 松键提示消失时 seek 可能还在等待网络。先保留累计目标，避免底部进度条
     // 回跳到长按前的 timeupdate；之后由真实媒体时间自然接管。
-    setCurrentTime(lastPreviewTime);
-  }, [keyboardSeekPreview]);
+    updateCurrentTime(lastPreviewTime, true);
+  }, [keyboardSeekPreview, updateCurrentTime, writeProgressDisplay]);
+
+  // 进度条/时间提示只在活跃态挂载。DOM 刚出现时在绘制前补上 ref 中的最新值。
+  useLayoutEffect(() => {
+    if (keyboardSeekPreview) {
+      writeProgressDisplay(
+        keyboardSeekPreview.currentTime,
+        keyboardSeekPreview.duration
+      );
+      return;
+    }
+    writeProgressDisplay(currentTimeRef.current, durationRef.current);
+  }, [
+    duration,
+    isActive,
+    isMarkedHidden,
+    keyboardSeekPreview,
+    scrubbing,
+    shouldLoad,
+    writeProgressDisplay,
+  ]);
 
   const clearBufferingIndicatorTimer = useCallback(() => {
     if (bufferingIndicatorTimerRef.current === null) return;
@@ -1194,10 +1412,10 @@ function ShortsSlideImpl({
         Number.isFinite(mediaTime) &&
         !scrubbingRef.current
       ) {
-        setCurrentTime(mediaTime);
+        updateCurrentTime(mediaTime);
       }
     },
-    [clearLoopRestartWatchdog, setIsBuffering]
+    [clearLoopRestartWatchdog, setIsBuffering, updateCurrentTime]
   );
 
   useEffect(() => clearBufferingIndicatorTimer, [clearBufferingIndicatorTimer]);
@@ -1252,8 +1470,8 @@ function ShortsSlideImpl({
       if (!shouldLoad) {
         resetLoopRestartState();
         hasStartedPlayingRef.current = false;
-        setDuration(0);
-        setCurrentTime(0);
+        updateDuration(0);
+        updateCurrentTime(0);
         setIsBuffering(false);
       }
       return;
@@ -1263,10 +1481,17 @@ function ShortsSlideImpl({
     if (!video) return;
     releaseVideoSource(video);
     hasStartedPlayingRef.current = false;
-    setDuration(0);
-    setCurrentTime(0);
+    updateDuration(0);
+    updateCurrentTime(0);
     setIsBuffering(false);
-  }, [item.id, resetLoopRestartState, shouldLoad, usesSharedVideo]);
+  }, [
+    item.id,
+    resetLoopRestartState,
+    shouldLoad,
+    updateCurrentTime,
+    updateDuration,
+    usesSharedVideo,
+  ]);
 
   // 每次成为当前屏都明确发起播放。Safari 可能在 src/load
   // 切换时以 AbortError 中断第一次请求，因此在 canplay/loadeddata
@@ -1363,6 +1588,7 @@ function ShortsSlideImpl({
     item.id,
     onActiveNeedsPriority,
     shouldLoad,
+    updateCurrentTime,
     usesSharedVideo,
   ]);
 
@@ -1489,7 +1715,7 @@ function ShortsSlideImpl({
       hasStartedPlayingRef.current = false;
       normalizeVideoPlaybackRate(video);
       setFastActive(false);
-      setCurrentTime(0);
+      updateCurrentTime(0);
       setPaused(false);
       // 循环重启几乎总能在延迟窗口内出下一轮首帧。立刻点亮加载圈会让每循环
       // 一轮都闪一次——短视频循环频繁，这是 iOS 上最显眼的残留噪音。
@@ -1634,8 +1860,8 @@ function ShortsSlideImpl({
   // 因此这里必须跟随 shouldMount 重新绑定，否则后续视频没有 timeupdate 事件。
   useEffect(() => {
     if (!shouldMount) {
-      setDuration(0);
-      setCurrentTime(0);
+      updateDuration(0);
+      updateCurrentTime(0);
       setIsBuffering(false);
       return;
     }
@@ -1651,9 +1877,9 @@ function ShortsSlideImpl({
     const handleLoaded = () => {
       if (!belongsToSlide()) return;
       if (Number.isFinite(video.duration) && video.duration > 0) {
-        setDuration(video.duration);
+        updateDuration(video.duration);
       } else {
-        setDuration(0);
+        updateDuration(0);
       }
       if (
         !usesPresentedFrameProgress &&
@@ -1661,7 +1887,7 @@ function ShortsSlideImpl({
         !video.seeking &&
         !scrubbingRef.current
       ) {
-        setCurrentTime(video.currentTime || 0);
+        updateCurrentTime(video.currentTime || 0);
       }
     };
     const handleTime = () => {
@@ -1683,7 +1909,7 @@ function ShortsSlideImpl({
         !video.seeking &&
         !scrubbingRef.current
       ) {
-        setCurrentTime(mediaTime);
+        updateCurrentTime(mediaTime);
       }
       if (
         !usesPresentedFrameProgress &&
@@ -1906,6 +2132,8 @@ function ShortsSlideImpl({
     setIsBuffering,
     shouldLoad,
     shouldMount,
+    updateCurrentTime,
+    updateDuration,
     usesSharedVideo,
   ]);
 
@@ -1997,7 +2225,7 @@ function ShortsSlideImpl({
       if (shouldCommitProgress) {
         lastProgressUpdateAt = now;
         if (!scrubbingRef.current) {
-          setCurrentTime(mediaTime);
+          updateCurrentTime(mediaTime);
         }
       }
 
@@ -2020,6 +2248,7 @@ function ShortsSlideImpl({
     item.id,
     shouldLoad,
     shouldMount,
+    updateCurrentTime,
     usesSharedVideo,
   ]);
 
@@ -2080,7 +2309,7 @@ function ShortsSlideImpl({
     scrubbingRef,
     setScrubbing,
     setFastActive,
-    setCurrentTime,
+    setCurrentTime: updateCurrentTime,
     getSeekDuration,
     onSingleTap: togglePlayInternal,
     onDoubleTap: handleDoubleClickLike,
@@ -2192,7 +2421,7 @@ function ShortsSlideImpl({
     void hideVideo(item.id)
       .then((res) => {
         if (res.ok) {
-          onHideSuccess(index);
+          onHideSuccess(itemKey);
         } else {
           setIsMarkedHidden(false);
           showHud("操作失败，请重试", <AlertCircle size={16} />);
@@ -2207,17 +2436,11 @@ function ShortsSlideImpl({
   function getSeekDuration(video: HTMLVideoElement | null) {
     if (duration > 0) return duration;
     if (video && Number.isFinite(video.duration) && video.duration > 0) {
-      setDuration(video.duration);
+      updateDuration(video.duration);
       return video.duration;
     }
     return 0;
   }
-
-  const progressCurrentTime = keyboardSeekPreview?.currentTime ?? currentTime;
-  const progressDuration = keyboardSeekPreview?.duration ?? duration;
-  const progressRatio = progressDuration > 0
-    ? clamp(progressCurrentTime / progressDuration, 0, 1)
-    : 0;
 
   // 远离视口的 slide 只保留空壳。属性照旧给全：高度来自 .shorts-slide 的
   // CSS，滚动高度和吸附点一格不差；data-shorts-slide 让 IntersectionObserver
@@ -2229,6 +2452,7 @@ function ShortsSlideImpl({
         className="shorts-slide"
         data-shorts-slide=""
         data-index={index}
+        data-feed-key={itemKey}
         data-active={isActive}
       />
     );
@@ -2240,13 +2464,16 @@ function ShortsSlideImpl({
       className="shorts-slide"
       data-shorts-slide=""
       data-index={index}
+      data-feed-key={itemKey}
       data-active={isActive}
       onClick={handleSlideClick}
     >
-      {/* 模糊海报背景：避免横屏视频两边出现刺眼黑边 */}
+      {/* 服务端预模糊的小图：避免横屏视频两边出现刺眼黑边，也不创建大面积 GPU blur layer。 */}
       <div
         className="shorts-slide__bg"
-        style={{ backgroundImage: `url(${item.poster})` }}
+        style={{
+          backgroundImage: `url(${item.backgroundPoster || item.poster})`,
+        }}
         aria-hidden="true"
       />
 
@@ -2403,8 +2630,12 @@ function ShortsSlideImpl({
       {/* 移动端左右滑动 / 拖动进度时的时间提示。独立于底部进度条，
           这样可以在触屏设备上放到页面顶部且不受底部容器定位限制。 */}
       {scrubbing && isActive && shouldLoad && !isMarkedHidden && (
-        <div className="shorts-slide__progress-time" aria-live="polite">
-          {formatClock(currentTime)} / {formatClock(duration)}
+        <div
+          ref={progressTimeRef}
+          className="shorts-slide__progress-time"
+          aria-live="polite"
+        >
+          {formatClock(currentTimeRef.current)} / {formatClock(duration)}
         </div>
       )}
 
@@ -2422,15 +2653,10 @@ function ShortsSlideImpl({
           onClick={(e) => e.stopPropagation()}
         >
           <div
+            ref={progressTrackRef}
             className="shorts-slide__progress-track"
-            style={{
-              "--progress-pct": `${progressRatio * 100}%`,
-            } as React.CSSProperties}
           >
-            <div
-              className="shorts-slide__progress-fill"
-              style={{ width: `${progressRatio * 100}%` }}
-            />
+            <div className="shorts-slide__progress-fill" />
           </div>
         </div>
       )}
@@ -2442,7 +2668,7 @@ function ShortsSlideImpl({
  * 切一屏只会改动紧邻几条 slide 的 props（isActive、各个 shouldXxx、
  * keyboardSeekPreview），其余全部命中 memo 直接跳过。没有这层时，每次
  * setActiveIndex 都要把已挂载的每一条 slide 重跑一遍函数体和子树协调——
- * 队列只增不减，这份开销随刷动时长线性上涨，而它偏偏落在贴着手指的那一帧。
+ * 即使有几十条保留队列，这份工作也会落在贴着手指的那一帧。
  *
  * 这层比较之所以有效：父级传下来的回调要么是 [] 依赖的 useCallback，要么是
  * 按 index 缓存的 ref setter，要么是稳定的 ref 对象；item 对象在 merge 时
@@ -2455,26 +2681,8 @@ function ShortsSlideImpl({
 const ShortsSlide = memo(ShortsSlideImpl);
 
 function ShortsLoadingSpinner({ size }: { size: number }) {
-  const ref = useRef<HTMLSpanElement | null>(null);
-
-  useEffect(() => {
-    let frame = 0;
-    const startedAt = performance.now();
-    const tick = (now: number) => {
-      const spinner = ref.current;
-      if (spinner) {
-        const rotation = ((now - startedAt) / 800) * 360;
-        spinner.style.transform = `rotate(${rotation}deg)`;
-      }
-      frame = window.requestAnimationFrame(tick);
-    };
-    frame = window.requestAnimationFrame(tick);
-    return () => window.cancelAnimationFrame(frame);
-  }, []);
-
   return (
     <span
-      ref={ref}
       className="shorts-slide__loading-spinner"
       style={{
         "--shorts-spinner-size": `${size}px`,

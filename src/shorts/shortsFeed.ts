@@ -6,9 +6,12 @@ export const SHORTS_FEED_STORAGE_KEY = "shorts_feed_v2";
 // 每次向后端取多少条续到队列尾。值不要太大避免一次返回过多浪费；
 // 也不要太小导致频繁请求和滑动卡顿。
 export const BATCH_SIZE = 5;
+export const INITIAL_BATCH_SIZE = 2;
 
 // 当队列里"还没看过的视频"少于这个数时，提前请求下一批。
 export const PREFETCH_THRESHOLD = 2;
+export const MAX_SHORTS_QUEUE_ITEMS = 60;
+export const SHORTS_QUEUE_KEEP_BEHIND = 20;
 
 export type ShortsFeedState = {
   feedToken: string;
@@ -20,6 +23,13 @@ export type QueuedShortsItem = ShortsFeedItem & {
 };
 
 export const EMPTY_SHORTS_FEED: ShortsFeedState = { feedToken: "", cursor: 0 };
+
+export function shortsQueueItemKey(item: {
+  feedToken: string;
+  feedCursor: number;
+}) {
+  return `${item.feedToken}:${item.feedCursor}`;
+}
 
 export function loadShortsFeedState(): ShortsFeedState {
   try {
@@ -66,12 +76,10 @@ export function mergeShortsQueue(
   prev: QueuedShortsItem[],
   resp: ShortsNextResponse
 ): QueuedShortsItem[] {
-  const existing = new Set(
-    prev.map((item) => `${item.feedToken}:${item.feedCursor}`)
-  );
+  const existing = new Set(prev.map(shortsQueueItemKey));
   const fresh = resp.items
     .map((item) => ({ ...item, feedToken: resp.feedToken }))
-    .filter((item) => !existing.has(`${item.feedToken}:${item.feedCursor}`));
+    .filter((item) => !existing.has(shortsQueueItemKey(item)));
   return [...prev, ...fresh];
 }
 
@@ -100,6 +108,23 @@ export function planShortsPrefetch(input: {
     return input.remainingAfterActive > 0 ? "none" : "new-round";
   }
   return "load";
+}
+
+/**
+ * 长会话只在队列超限且已经留出足够回看历史时整批裁剪。返回从头部删除
+ * 的条数；裁剪后当前项会稳定落在 SHORTS_QUEUE_KEEP_BEHIND。
+ */
+export function getShortsQueueTrimCount(
+  activeIndex: number,
+  itemCount: number
+): number {
+  if (
+    itemCount <= MAX_SHORTS_QUEUE_ITEMS ||
+    activeIndex <= SHORTS_QUEUE_KEEP_BEHIND
+  ) {
+    return 0;
+  }
+  return activeIndex - SHORTS_QUEUE_KEEP_BEHIND;
 }
 
 export type FetchShortsNextFn = (

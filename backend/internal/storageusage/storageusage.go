@@ -73,7 +73,7 @@ func Compute(
 			continue
 		}
 		driveUsage := out.Drives[ref.DriveID]
-		for _, thumbPath := range mediaasset.ThumbnailPathCandidates(localDir, ref.ID) {
+		for _, thumbPath := range mediaasset.ThumbnailAssetPathCandidates(localDir, ref.ID) {
 			if size, exists, err := regularFileSize(thumbPath); err != nil {
 				return Usage{}, err
 			} else if exists {

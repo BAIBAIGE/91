@@ -21,9 +21,15 @@ const (
 	shortsFeedLookupChunk  = 32
 	shortsFeedTTL          = 24 * time.Hour
 	maxShortsFeedSessions  = 64
+	shortsLinkPrewarmCount = 2
+	// Slightly longer than proxy link resolution's hard timeout so a timed-out
+	// provider call keeps occupying its global slot until the detached resolver
+	// actually exits.
+	shortsLinkPrewarmTimeout = 16 * time.Second
 )
 
 var errShortsFeedExpired = errors.New("shorts feed expired")
+var shortsLinkPrewarmSlots = make(chan struct{}, 4)
 
 // ShortsItemDTO is a compact feed item that can be handed directly to a video
 // element. FeedCursor is the resume position immediately after this item.
@@ -34,11 +40,12 @@ var errShortsFeedExpired = errors.New("shorts feed expired")
 // 一份固定的字节预算。任一元数据缺失时两个字段会一起省略，前端需要兜底。
 type ShortsItemDTO struct {
 	VideoDTO
-	VideoSrc        string `json:"videoSrc"`
-	Poster          string `json:"poster"`
-	SizeBytes       int64  `json:"sizeBytes,omitempty"`
-	DurationSeconds int    `json:"durationSeconds,omitempty"`
-	FeedCursor      int    `json:"feedCursor,omitempty"`
+	VideoSrc         string `json:"videoSrc"`
+	Poster           string `json:"poster"`
+	BackgroundPoster string `json:"backgroundPoster,omitempty"`
+	SizeBytes        int64  `json:"sizeBytes,omitempty"`
+	DurationSeconds  int    `json:"durationSeconds,omitempty"`
+	FeedCursor       int    `json:"feedCursor,omitempty"`
 }
 
 type shortsFeedSession struct {
@@ -125,14 +132,55 @@ func (s *Server) handleShortsNext(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	items := s.mapShortsItems(r.Context(), videos, itemCursors)
+	s.prewarmShortsStreamLinks(videos, r.Header)
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, shortsFeedResponse{
-		Items:         s.mapShortsItems(r.Context(), videos, itemCursors),
+		Items:         items,
 		Total:         len(videoIDs),
 		FeedToken:     feedToken,
 		NextCursor:    nextCursor,
 		RoundComplete: nextCursor >= len(videoIDs),
 	})
+}
+
+// Resolve only the first couple of browser-facing stream links in the background.
+// The proxy coalesces this with a real /p/stream request if playback arrives first;
+// a small global semaphore prevents several clients from flooding provider APIs.
+func (s *Server) prewarmShortsStreamLinks(videos []*catalog.Video, requestHeader http.Header) {
+	if s.Proxy == nil {
+		return
+	}
+	header := make(http.Header)
+	if userAgent := requestHeader.Get("User-Agent"); userAgent != "" {
+		header.Set("User-Agent", userAgent)
+	}
+
+	scheduled := 0
+	for _, video := range videos {
+		driveID, fileID, ok := videoStreamTarget(video)
+		if !ok {
+			continue
+		}
+		select {
+		case shortsLinkPrewarmSlots <- struct{}{}:
+		default:
+			return
+		}
+		scheduled++
+		go func(driveID, fileID string) {
+			defer func() { <-shortsLinkPrewarmSlots }()
+			ctx, cancel := context.WithTimeout(
+				context.Background(),
+				shortsLinkPrewarmTimeout,
+			)
+			defer cancel()
+			_ = s.Proxy.WarmStreamLink(ctx, driveID, fileID, header)
+		}(driveID, fileID)
+		if scheduled >= shortsLinkPrewarmCount {
+			return
+		}
+	}
 }
 
 func shortsQueryInt(r *http.Request, name string, fallback int) (int, error) {
@@ -345,14 +393,27 @@ func (s *Server) mapShortsItems(
 		if index < len(itemCursors) {
 			feedCursor = itemCursors[index]
 		}
+		poster := thumbnailURL(video)
 		out = append(out, ShortsItemDTO{
-			VideoDTO:        dto,
-			VideoSrc:        videoSrc,
-			Poster:          thumbnailURL(video),
-			SizeBytes:       sizeBytes,
-			DurationSeconds: durationSeconds,
-			FeedCursor:      feedCursor,
+			VideoDTO:         dto,
+			VideoSrc:         videoSrc,
+			Poster:           poster,
+			BackgroundPoster: shortsBackgroundPosterURL(poster),
+			SizeBytes:        sizeBytes,
+			DurationSeconds:  durationSeconds,
+			FeedCursor:       feedCursor,
 		})
 	}
 	return out
+}
+
+func shortsBackgroundPosterURL(poster string) string {
+	if !strings.HasPrefix(poster, "/p/thumb/") {
+		return ""
+	}
+	separator := "?"
+	if strings.ContainsRune(poster, '?') {
+		separator = "&"
+	}
+	return poster + separator + "variant=shorts-bg"
 }

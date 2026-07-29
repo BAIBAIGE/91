@@ -376,6 +376,16 @@ func (s *Server) serveVideoThumb(w http.ResponseWriter, r *http.Request, videoID
 		http.NotFound(w, r)
 		return
 	}
+	if r.URL.Query().Get("variant") == "shorts-bg" {
+		backgroundPath := filepath.Clean(mediaasset.ShortsBackgroundPath(s.LocalDir, videoID))
+		if !strings.HasPrefix(backgroundPath, filepath.Clean(s.LocalDir)) {
+			http.Error(w, "invalid path", http.StatusForbidden)
+			return
+		}
+		if err := mediaasset.EnsureShortsBackground(clean, backgroundPath); err == nil {
+			clean = backgroundPath
+		}
+	}
 	w.Header().Set("Cache-Control", "private, max-age=86400")
 	s.Proxy.ServeLocal(w, r, clean)
 }

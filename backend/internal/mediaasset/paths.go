@@ -30,6 +30,14 @@ func ThumbnailPathCandidates(localDir, videoID string) []string {
 	return pathCandidates(localDir, videoID, ".jpg", "thumbs")
 }
 
+// ThumbnailAssetPathCandidates returns every local thumbnail-derived asset
+// owned by a video. Keep deletion and storage accounting on this shared list so
+// lazily generated variants cannot outlive their source video unnoticed.
+func ThumbnailAssetPathCandidates(localDir, videoID string) []string {
+	paths := ThumbnailPathCandidates(localDir, videoID)
+	return append(paths, ShortsBackgroundPath(localDir, videoID))
+}
+
 // FrameSignaturePath 内容级查重的 teaser 帧签名缓存文件路径。
 func FrameSignaturePath(localDir, videoID string) string {
 	return filepath.Join(localDir, "framesigs", safeFilename(videoID, ".fsig"))

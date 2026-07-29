@@ -28,7 +28,7 @@ export const ACTIVE_PRELOAD_MIN_KEEP_SECONDS = 1.5;
 // 维护一个固定大小的视频窗口：窗口内才 mount 真实 <video> 壳。
 // 当前屏先绑定 src；后续预加载要等当前屏缓冲健康后才开始。
 // 窗口内只要已经产生过可复用缓冲，就保留 src 复用浏览器缓存。
-export const VIDEO_WINDOW_SIZE = 6;
+export const VIDEO_WINDOW_SIZE = 4;
 
 /** 判定所需的最小视频元素切面；HTMLVideoElement 天然满足。 */
 export type BufferedMediaProbe = {

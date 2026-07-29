@@ -27,6 +27,11 @@ import type { VideoSubtitle } from "@/types";
 type Props = {
   id?: string;
   src: string;
+  /**
+   * 仅由普通详情页对已确认的 PikPak MP4 开启。运行时仍会限制为
+   * iOS/iPadOS；分享页及短视频页不传此参数。
+   */
+  preferTypedMp4SourceOnIOS?: boolean;
   poster: string;
   previewSrc?: string;
   loadSubtitles?: () => Promise<VideoSubtitle[]>;
@@ -174,6 +179,9 @@ const ACTIVE_MODAL_SELECTOR =
   'dialog[open], [role="dialog"][aria-modal="true"]';
 const PREVIEW_WIDTH = 168;
 const MEDIA_REFERRER_POLICY = "no-referrer";
+const TYPED_MP4_SOURCE_TYPE = "ios-pikpak-mp4-source";
+const TYPED_MP4_SOURCE_SELECTOR =
+  'source[data-video-player-typed-source="mp4"]';
 const BRIGHTNESS_MIN = 0.45;
 const BRIGHTNESS_MAX = 1.35;
 const GESTURE_ACTIVATION_PX = 12;
@@ -187,6 +195,7 @@ const tripleScreenBindings = new WeakMap<
 
 export function VideoPlayer({
   src,
+  preferTypedMp4SourceOnIOS = false,
   poster,
   previewSrc,
   loadSubtitles,
@@ -224,6 +233,7 @@ export function VideoPlayer({
     const cleanupPlayer = mountArtPlayer({
       mount,
       src,
+      preferTypedMp4SourceOnIOS,
       poster,
       title,
       loadSubtitlesRef,
@@ -237,7 +247,7 @@ export function VideoPlayer({
     });
 
     return cleanupPlayer;
-  }, [poster, retryNonce, src, title]);
+  }, [poster, preferTypedMp4SourceOnIOS, retryNonce, src, title]);
 
   useEffect(() => {
     return () => {
@@ -368,6 +378,7 @@ function sourcePathname(src: string) {
 function mountArtPlayer({
   mount,
   src,
+  preferTypedMp4SourceOnIOS,
   poster,
   loadSubtitlesRef,
   title,
@@ -381,6 +392,7 @@ function mountArtPlayer({
 }: {
   mount: HTMLDivElement;
   src: string;
+  preferTypedMp4SourceOnIOS: boolean;
   poster: string;
   loadSubtitlesRef: MutableRefObject<Props["loadSubtitles"]>;
   title: string;
@@ -392,7 +404,11 @@ function mountArtPlayer({
   onPreviewHover: (hover: PreviewHover | null) => void;
   onGestureHud: (label: string, duration?: number) => void;
 }) {
-  const sourceType = inferSourceType(src);
+  const useTypedMp4Source =
+    preferTypedMp4SourceOnIOS && isIOSPlaybackDevice();
+  const sourceType = useTypedMp4Source
+    ? TYPED_MP4_SOURCE_TYPE
+    : inferSourceType(src);
   const subtitleState: SubtitleLoadState = { status: "idle", subtitles: [] };
   const fastActiveRef = { current: false };
   const loadHlsSource = createHlsSourceLoader(onError);
@@ -438,6 +454,7 @@ function mountArtPlayer({
     customType: {
       hls: loadHlsSource,
       m3u8: loadHlsSource,
+      [TYPED_MP4_SOURCE_TYPE]: loadTypedMp4Source,
     },
     moreVideoAttr: {
       preload: "metadata",
@@ -610,7 +627,14 @@ function mountArtPlayer({
   art.on("video:ended", resetFastRate);
   // 所有基于媒体生命周期的监听都挂好后再设置真实地址，避免本地缓存
   // 极快返回 metadata 时错过方向识别或错误恢复事件。
-  art.url = src;
+  if (useTypedMp4Source) {
+    // ArtPlayer 的 url getter 读取父级 video.src；使用子 <source> 时它为空。
+    // 主动保存 option.url，确保 ArtPlayer 内置的失败重连仍使用真实地址。
+    art.option.url = src;
+    loadTypedMp4Source(video, src, art);
+  } else {
+    art.url = src;
+  }
 
   return () => {
     disposed = true;
@@ -630,6 +654,7 @@ function mountArtPlayer({
     setPlayerFastRateHint(art, false);
     mount.removeEventListener("contextmenu", preventContextMenu);
     destroyHls(video);
+    if (useTypedMp4Source) clearTypedMp4Source(video);
     art.off("video:loadstart", handleLoadStart);
     art.off("video:loadeddata", handleReady);
     art.off("video:canplay", handleReady);
@@ -645,6 +670,41 @@ function mountArtPlayer({
     }
     onPreviewHover(null);
   };
+}
+
+function loadTypedMp4Source(
+  video: HTMLVideoElement,
+  url: string,
+  art: Artplayer
+) {
+  if (art.isDestroy || !video.isConnected) return;
+  video.removeAttribute("src");
+  clearTypedMp4Source(video);
+
+  const source = document.createElement("source");
+  source.src = url;
+  source.type = "video/mp4";
+  source.dataset.videoPlayerTypedSource = "mp4";
+  source.addEventListener(
+    "error",
+    (event) => {
+      // 使用 <source> 时，WebKit 会把资源选择错误派发到 source 节点；
+      // 转成 ArtPlayer 的媒体错误，沿用现有重试和诊断界面。
+      if (!art.isDestroy && source.isConnected) {
+        art.emit("video:error", event);
+      }
+    },
+    { once: true }
+  );
+  // ArtPlayer 已经放入了字幕 <track>；source 必须排在 track 前面。
+  video.insertBefore(source, video.firstChild);
+  video.load();
+}
+
+function clearTypedMp4Source(video: HTMLVideoElement) {
+  video
+    .querySelectorAll<HTMLSourceElement>(TYPED_MP4_SOURCE_SELECTOR)
+    .forEach((source) => source.remove());
 }
 
 function bindFullscreenSubtitleLayout(
@@ -908,6 +968,13 @@ function isMobilePlaybackDevice() {
 
 function isApplePhoneDevice() {
   return /iPhone|iPod/i.test(navigator.userAgent);
+}
+
+function isIOSPlaybackDevice() {
+  return (
+    /iPhone|iPad|iPod/i.test(navigator.userAgent) ||
+    (/Macintosh/i.test(navigator.userAgent) && navigator.maxTouchPoints > 1)
+  );
 }
 
 function isAppleDevice() {

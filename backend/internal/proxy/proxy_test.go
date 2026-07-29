@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync"
 	"testing"
 	"time"
 
@@ -329,6 +330,195 @@ func TestServeStreamP115CacheIsUserAgentScoped(t *testing.T) {
 	}
 }
 
+func TestGetLinkReusesCachedURLBeyondThirtySeconds(t *testing.T) {
+	reg := NewRegistry()
+	drv := &proxyFakeSimpleDrive{
+		kind: "onedrive",
+		url:  "https://cdn.example/fresh.mp4",
+	}
+	reg.Set("onedrive", drv)
+	p := New(reg)
+	now := time.Now()
+	p.cache["onedrive/file-1"] = cachedLink{
+		link: &drives.StreamLink{
+			URL:     "https://cdn.example/cached.mp4",
+			Expires: now.Add(10 * time.Minute),
+		},
+		fetched: now.Add(-time.Minute),
+		used:    now.Add(-time.Minute),
+	}
+
+	link, err := p.getLink(context.Background(), drv, "onedrive", "file-1", nil)
+	if err != nil {
+		t.Fatalf("getLink: %v", err)
+	}
+	if link.URL != "https://cdn.example/cached.mp4" {
+		t.Fatalf("URL = %q, want cached URL", link.URL)
+	}
+	if drv.calls != 0 {
+		t.Fatalf("driver calls = %d, want 0", drv.calls)
+	}
+}
+
+func TestGetLinkRefreshesAtMaxAgeAndBeforeProviderExpiry(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		fetched time.Time
+		expires time.Time
+	}{
+		{
+			name:    "max age",
+			fetched: time.Now().Add(-linkCacheMaxAge),
+			expires: time.Now().Add(10 * time.Minute),
+		},
+		{
+			name:    "expiry safety margin",
+			fetched: time.Now(),
+			expires: time.Now().Add(linkCacheExpiryMargin / 2),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			reg := NewRegistry()
+			drv := &proxyFakeSimpleDrive{
+				kind: "onedrive",
+				url:  "https://cdn.example/fresh.mp4",
+			}
+			reg.Set("onedrive", drv)
+			p := New(reg)
+			p.cache["onedrive/file-1"] = cachedLink{
+				link: &drives.StreamLink{
+					URL:     "https://cdn.example/stale.mp4",
+					Expires: tc.expires,
+				},
+				fetched: tc.fetched,
+				used:    tc.fetched,
+			}
+
+			link, err := p.getLink(context.Background(), drv, "onedrive", "file-1", nil)
+			if err != nil {
+				t.Fatalf("getLink: %v", err)
+			}
+			if link.URL != "https://cdn.example/fresh.mp4" {
+				t.Fatalf("URL = %q, want refreshed URL", link.URL)
+			}
+			if drv.calls != 1 {
+				t.Fatalf("driver calls = %d, want 1", drv.calls)
+			}
+		})
+	}
+}
+
+func TestConcurrentWarmAndPlaybackShareOneLinkResolution(t *testing.T) {
+	reg := NewRegistry()
+	drv := newProxyBlockingDrive()
+	reg.Set("onedrive", drv)
+	p := New(reg)
+
+	const callers = 20
+	start := make(chan struct{})
+	errs := make(chan error, callers)
+	var wait sync.WaitGroup
+	for index := 0; index < callers; index++ {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			<-start
+			errs <- p.WarmStreamLink(
+				context.Background(),
+				"onedrive",
+				"file-1",
+				nil,
+			)
+		}()
+	}
+	close(start)
+	<-drv.started
+	close(drv.release)
+	wait.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("WarmStreamLink: %v", err)
+		}
+	}
+	if calls := drv.callCount(); calls != 1 {
+		t.Fatalf("driver calls = %d, want 1", calls)
+	}
+}
+
+func TestLinkResolutionTimeoutEvictsInflightWhenDriverIgnoresContext(t *testing.T) {
+	reg := NewRegistry()
+	drv := newProxyContextIgnoringDrive()
+	reg.Set("115", drv)
+	p := New(reg)
+	p.resolveTimeout = 50 * time.Millisecond
+	t.Cleanup(drv.release)
+
+	errs := make(chan error, 1)
+	go func() {
+		errs <- p.WarmStreamLink(context.Background(), "115", "file-1", nil)
+	}()
+	select {
+	case <-drv.firstStarted:
+	case <-time.After(time.Second):
+		t.Fatal("first link resolution did not start")
+	}
+	var err error
+	select {
+	case err = <-errs:
+	case <-time.After(time.Second):
+		t.Fatal("first link resolution did not honor proxy timeout")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("first WarmStreamLink error = %v, want context deadline exceeded", err)
+	}
+
+	key := linkCacheKey(drv, "115", "file-1", nil)
+	p.cacheMu.Lock()
+	_, stillInflight := p.inflight[key]
+	p.cacheMu.Unlock()
+	if stillInflight {
+		t.Fatal("timed-out link resolution still present in inflight")
+	}
+
+	// The first provider request is still blocked. A new request must start a
+	// fresh resolution instead of joining the poisoned inflight entry.
+	link, err := p.getLink(context.Background(), drv, "115", "file-1", nil)
+	if err != nil {
+		t.Fatalf("second getLink: %v", err)
+	}
+	if link.URL != "https://cdn.example/fresh.mp4" {
+		t.Fatalf("second URL = %q, want fresh provider result", link.URL)
+	}
+	if calls := drv.callCount(); calls != 2 {
+		t.Fatalf("driver calls = %d, want 2", calls)
+	}
+
+	drv.release()
+	select {
+	case <-drv.firstReturned:
+	case <-time.After(time.Second):
+		t.Fatal("context-ignoring driver did not return after release")
+	}
+}
+
+func TestWarmStreamLinkUsesTheServeStreamUserAgentCacheKey(t *testing.T) {
+	reg := NewRegistry()
+	drv := &proxyFakeDrive{kind: "p115"}
+	reg.Set("115", drv)
+	p := New(reg)
+	header := http.Header{"User-Agent": {"Browser-A"}}
+
+	if err := p.WarmStreamLink(context.Background(), "115", "file-1", header); err != nil {
+		t.Fatalf("WarmStreamLink: %v", err)
+	}
+	requestP115(t, p, "115", "file-1", "Browser-A")
+
+	if len(drv.calls) != 1 {
+		t.Fatalf("link calls = %d, want one shared warm/play resolution", len(drv.calls))
+	}
+}
+
 func requestP115(t *testing.T, p *Proxy, driveID, fileID, ua string) {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodGet, "/p/stream/"+driveID+"/"+fileID, nil)
@@ -348,6 +538,120 @@ type proxyFakeDrive struct {
 type proxyFakeCall struct {
 	fileID string
 	ua     string
+}
+
+type proxyBlockingDrive struct {
+	mu      sync.Mutex
+	calls   int
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func newProxyBlockingDrive() *proxyBlockingDrive {
+	return &proxyBlockingDrive{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+}
+
+func (d *proxyBlockingDrive) Kind() string               { return "onedrive" }
+func (d *proxyBlockingDrive) ID() string                 { return "blocking" }
+func (d *proxyBlockingDrive) Init(context.Context) error { return nil }
+func (d *proxyBlockingDrive) List(context.Context, string) ([]drives.Entry, error) {
+	return nil, drives.ErrNotSupported
+}
+func (d *proxyBlockingDrive) Stat(context.Context, string) (*drives.Entry, error) {
+	return nil, drives.ErrNotSupported
+}
+func (d *proxyBlockingDrive) StreamURL(ctx context.Context, _ string) (*drives.StreamLink, error) {
+	d.mu.Lock()
+	d.calls++
+	d.mu.Unlock()
+	d.once.Do(func() { close(d.started) })
+	select {
+	case <-d.release:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	return &drives.StreamLink{
+		URL:     "https://cdn.example/video.mp4",
+		Expires: time.Now().Add(10 * time.Minute),
+	}, nil
+}
+func (d *proxyBlockingDrive) Upload(context.Context, string, string, io.Reader, int64) (string, error) {
+	return "", drives.ErrNotSupported
+}
+func (d *proxyBlockingDrive) EnsureDir(context.Context, string) (string, error) {
+	return "", drives.ErrNotSupported
+}
+func (d *proxyBlockingDrive) RootID() string { return "0" }
+func (d *proxyBlockingDrive) callCount() int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.calls
+}
+
+type proxyContextIgnoringDrive struct {
+	mu            sync.Mutex
+	calls         int
+	releaseFirst  chan struct{}
+	releaseOnce   sync.Once
+	firstStarted  chan struct{}
+	firstReturned chan struct{}
+}
+
+func newProxyContextIgnoringDrive() *proxyContextIgnoringDrive {
+	return &proxyContextIgnoringDrive{
+		releaseFirst:  make(chan struct{}),
+		firstStarted:  make(chan struct{}),
+		firstReturned: make(chan struct{}),
+	}
+}
+
+func (d *proxyContextIgnoringDrive) Kind() string               { return "p115" }
+func (d *proxyContextIgnoringDrive) ID() string                 { return "context-ignoring" }
+func (d *proxyContextIgnoringDrive) Init(context.Context) error { return nil }
+func (d *proxyContextIgnoringDrive) List(context.Context, string) ([]drives.Entry, error) {
+	return nil, drives.ErrNotSupported
+}
+func (d *proxyContextIgnoringDrive) Stat(context.Context, string) (*drives.Entry, error) {
+	return nil, drives.ErrNotSupported
+}
+func (d *proxyContextIgnoringDrive) StreamURL(context.Context, string) (*drives.StreamLink, error) {
+	d.mu.Lock()
+	d.calls++
+	call := d.calls
+	d.mu.Unlock()
+
+	if call == 1 {
+		close(d.firstStarted)
+		<-d.releaseFirst
+		close(d.firstReturned)
+		return &drives.StreamLink{
+			URL:     "https://cdn.example/stale.mp4",
+			Expires: time.Now().Add(10 * time.Minute),
+		}, nil
+	}
+	return &drives.StreamLink{
+		URL:     "https://cdn.example/fresh.mp4",
+		Expires: time.Now().Add(10 * time.Minute),
+	}, nil
+}
+func (d *proxyContextIgnoringDrive) Upload(context.Context, string, string, io.Reader, int64) (string, error) {
+	return "", drives.ErrNotSupported
+}
+func (d *proxyContextIgnoringDrive) EnsureDir(context.Context, string) (string, error) {
+	return "", drives.ErrNotSupported
+}
+func (d *proxyContextIgnoringDrive) RootID() string { return "0" }
+func (d *proxyContextIgnoringDrive) release() {
+	d.releaseOnce.Do(func() { close(d.releaseFirst) })
+}
+func (d *proxyContextIgnoringDrive) callCount() int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.calls
 }
 
 func (d *proxyFakeDrive) Kind() string { return d.kind }
@@ -388,8 +692,8 @@ func TestServeStreamRedirectsPikPakWithoutUserAgentScopedCache(t *testing.T) {
 
 	p := New(reg)
 
-	// 三次请求，两个不同 UA。pikpak 取链不依赖 UA，所以缓存 key 只看 driveID/fileID，
-	// 30 秒内只会真正调用 driver 一次。
+	// 三次请求，两个不同 UA。pikpak 取链不依赖 UA，所以缓存 key 只看
+	// driveID/fileID，在统一缓存有效期内只会真正调用 driver 一次。
 	requestPikPak(t, p, "pikpak", "file-1", "Browser-A")
 	requestPikPak(t, p, "pikpak", "file-1", "Browser-B")
 	requestPikPak(t, p, "pikpak", "file-1", "Browser-A")

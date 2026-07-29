@@ -45,6 +45,8 @@ export type CommentItem = {
 
 export type VideoDetail = VideoItem & {
   videoSrc: string;
+  /** 实际交给浏览器播放的资源 MIME；后端无法确认时省略。 */
+  mediaType?: string;
   poster: string;
   description: string;
   embedUrl: string;

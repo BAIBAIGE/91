@@ -23,6 +23,15 @@ type streamURLWithHeader interface {
 	StreamURLWithHeader(ctx context.Context, fileID string, header http.Header) (*drives.StreamLink, error)
 }
 
+const (
+	// StreamLink.Expires 已由各网盘 driver 给出保守期限；这里再设一个统一上限，
+	// 避免供应商撤销链接后长时间复用，同时不再每 30 秒重复换链。
+	linkCacheMaxAge       = 5 * time.Minute
+	linkCacheExpiryMargin = 15 * time.Second
+	linkCacheMaxEntries   = 2048
+	linkResolveTimeout    = 15 * time.Second
+)
+
 // Registry 管理多个 Drive 实例
 type Registry struct {
 	mu     sync.RWMutex
@@ -66,10 +75,14 @@ func (r *Registry) Remove(id string) {
 type Proxy struct {
 	Registry *Registry
 	// linkCache key: driveID + "/" + fileID (+ User-Agent for UA-bound links)
-	cacheMu sync.Mutex
-	cache   map[string]cachedLink
-	http    *http.Client
-	relay   *http.Client
+	cacheMu  sync.Mutex
+	cache    map[string]cachedLink
+	inflight map[string]*linkCall
+	// resolveTimeout is kept on the proxy so timeout behavior can be tested
+	// without making production tests wait for the full provider deadline.
+	resolveTimeout time.Duration
+	http           *http.Client
+	relay          *http.Client
 
 	allowForcedRelay atomic.Bool
 
@@ -87,6 +100,14 @@ type StreamStatusReporter func(driveID, status, lastError string)
 type cachedLink struct {
 	link    *drives.StreamLink
 	fetched time.Time
+	used    time.Time
+}
+
+type linkCall struct {
+	done chan struct{}
+	once sync.Once
+	link *drives.StreamLink
+	err  error
 }
 
 type driveInitError struct {
@@ -98,6 +119,8 @@ func New(r *Registry) *Proxy {
 	p := &Proxy{
 		Registry:       r,
 		cache:          make(map[string]cachedLink),
+		inflight:       make(map[string]*linkCall),
+		resolveTimeout: linkResolveTimeout,
 		reportedStatus: make(map[string]string),
 		initErrors:     make(map[string]driveInitError),
 		http:           streamhttp.NewClient(0), // 流式不设超时
@@ -146,6 +169,13 @@ func (p *Proxy) InvalidateDrive(driveID string) {
 			delete(p.cache, key)
 		}
 	}
+	// 已经发出的 provider 请求无法安全中断，但把它从表里移走后，新请求不会
+	// 等待旧凭证的结果；旧请求完成时也会因身份不再匹配而跳过写缓存。
+	for key := range p.inflight {
+		if strings.HasPrefix(key, prefix) {
+			delete(p.inflight, key)
+		}
+	}
 	p.cacheMu.Unlock()
 
 	p.statusMu.Lock()
@@ -163,33 +193,131 @@ func (p *Proxy) driveInitError(driveID string) (driveInitError, bool) {
 
 func (p *Proxy) getLink(ctx context.Context, d drives.Drive, driveID, fileID string, header http.Header) (*drives.StreamLink, error) {
 	key := linkCacheKey(d, driveID, fileID, header)
+	now := time.Now()
 
 	p.cacheMu.Lock()
 	if c, ok := p.cache[key]; ok {
-		// 缓存 30 秒，且不超过 link.Expires
-		if time.Since(c.fetched) < 30*time.Second && time.Now().Before(c.link.Expires) {
+		if cachedLinkValid(c, now) {
+			c.used = now
+			p.cache[key] = c
 			p.cacheMu.Unlock()
 			return c.link, nil
 		}
+		delete(p.cache, key)
 	}
+	if call, ok := p.inflight[key]; ok {
+		p.cacheMu.Unlock()
+		return waitForLinkCall(ctx, call)
+	}
+	call := &linkCall{done: make(chan struct{})}
+	p.inflight[key] = call
 	p.cacheMu.Unlock()
 
-	var (
-		link *drives.StreamLink
-		err  error
-	)
+	// 解析不跟随某一个浏览器请求的取消：预热和真实播放可能同时等待它，
+	// 任何一个调用方离开都不应让其他调用方重新向网盘换链。统一超时负责
+	// 给脱离请求生命周期的工作兜底。
+	resolveTimeout := p.resolveTimeout
+	if resolveTimeout <= 0 {
+		resolveTimeout = linkResolveTimeout
+	}
+	resolveCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), resolveTimeout)
+	requestHeader := header.Clone()
+	go func() {
+		defer cancel()
+		link, err := resolveStreamLink(resolveCtx, d, fileID, requestHeader)
+		if timeoutErr := resolveCtx.Err(); timeoutErr != nil {
+			p.finishLinkCall(key, call, nil, timeoutErr)
+			return
+		}
+		p.finishLinkCall(key, call, link, err)
+	}()
+
+	// 部分 driver（115 SDK）不会把 ctx 继续传到底层 HTTP 请求。单独的看门狗
+	// 保证即使 provider 一直不返回，超时也会结束 call、移除 inflight 并唤醒
+	// 所有等待者；迟到的 provider 结果由 linkCall.once 丢弃。
+	go func() {
+		<-resolveCtx.Done()
+		p.finishLinkCall(key, call, nil, resolveCtx.Err())
+	}()
+
+	return waitForLinkCall(ctx, call)
+}
+
+func (p *Proxy) finishLinkCall(key string, call *linkCall, link *drives.StreamLink, err error) {
+	call.once.Do(func() {
+		p.cacheMu.Lock()
+		call.link = link
+		call.err = err
+		if current := p.inflight[key]; current == call {
+			delete(p.inflight, key)
+			if err == nil && link != nil {
+				p.storeCachedLinkLocked(key, link, time.Now())
+			}
+		}
+		close(call.done)
+		p.cacheMu.Unlock()
+	})
+}
+
+func resolveStreamLink(ctx context.Context, d drives.Drive, fileID string, header http.Header) (*drives.StreamLink, error) {
 	if h, ok := d.(streamURLWithHeader); ok {
-		link, err = h.StreamURLWithHeader(ctx, fileID, header)
-	} else {
-		link, err = d.StreamURL(ctx, fileID)
+		return h.StreamURLWithHeader(ctx, fileID, header)
 	}
-	if err != nil {
-		return nil, err
+	return d.StreamURL(ctx, fileID)
+}
+
+func waitForLinkCall(ctx context.Context, call *linkCall) (*drives.StreamLink, error) {
+	select {
+	case <-call.done:
+		return call.link, call.err
+	case <-ctx.Done():
+		return nil, ctx.Err()
 	}
-	p.cacheMu.Lock()
-	p.cache[key] = cachedLink{link: link, fetched: time.Now()}
-	p.cacheMu.Unlock()
-	return link, nil
+}
+
+func cachedLinkValid(c cachedLink, now time.Time) bool {
+	if c.link == nil || c.link.Expires.IsZero() {
+		return false
+	}
+	if now.Sub(c.fetched) >= linkCacheMaxAge {
+		return false
+	}
+	return now.Add(linkCacheExpiryMargin).Before(c.link.Expires)
+}
+
+func (p *Proxy) storeCachedLinkLocked(key string, link *drives.StreamLink, now time.Time) {
+	for existingKey, cached := range p.cache {
+		if !cachedLinkValid(cached, now) {
+			delete(p.cache, existingKey)
+		}
+	}
+	next := cachedLink{link: link, fetched: now, used: now}
+	if !cachedLinkValid(next, now) {
+		return
+	}
+	if len(p.cache) >= linkCacheMaxEntries {
+		var oldestKey string
+		var oldestUsed time.Time
+		for existingKey, cached := range p.cache {
+			if oldestKey == "" || cached.used.Before(oldestUsed) {
+				oldestKey = existingKey
+				oldestUsed = cached.used
+			}
+		}
+		delete(p.cache, oldestKey)
+	}
+	p.cache[key] = next
+}
+
+// WarmStreamLink resolves the same cache entry used by ServeStream without
+// transferring media bytes. Concurrent warm/play requests share one provider call.
+func (p *Proxy) WarmStreamLink(ctx context.Context, driveID, fileID string, header http.Header) error {
+	d, ok := p.Registry.Get(driveID)
+	if !ok {
+		return errDriveNotFound
+	}
+	_, err := p.getLink(ctx, d, driveID, fileID, header)
+	return err
 }
 
 func linkCacheKey(d drives.Drive, driveID, fileID string, header http.Header) string {

@@ -4,6 +4,7 @@ import {
   BATCH_SIZE,
   clearShortsFeedState,
   EMPTY_SHORTS_FEED,
+  INITIAL_BATCH_SIZE,
   loadShortsFeedState,
   mergeShortsQueue,
   planShortsPrefetch,
@@ -12,6 +13,8 @@ import {
   type QueuedShortsItem,
   type ShortsFeedState,
 } from "./shortsFeed";
+
+const SHORTS_FEED_SAVE_DELAY_MS = 500;
 
 /**
  * 短视频队列：向服务端 token/cursor feed 拉取批次，维护页面内的视频
@@ -24,6 +27,7 @@ export function useShortsFeed(activeIndex: number, onQueueReset: () => void) {
   // 是否正在加载下一批，避免并发请求
   const [loading, setLoading] = useState(false);
   const loadingRef = useRef(false);
+  const hasLoadedBatchRef = useRef(false);
   // 后端报告"本轮已耗尽"，下次请求前会自动重置
   const [roundComplete, setRoundComplete] = useState(false);
   // 没有任何视频可放（库为空 / 全部隐藏）
@@ -33,11 +37,58 @@ export function useShortsFeed(activeIndex: number, onQueueReset: () => void) {
   const [initialFeedState] = useState(loadShortsFeedState);
   // 指向已经取到队列尾部的位置；只在内存中预取，不直接写 localStorage。
   const requestFeedRef = useRef<ShortsFeedState>(initialFeedState);
-  // 当前页面队列中已经写入续播书签的最远索引。回滑只用于回看，不能让
-  // localStorage 中的 token/cursor 倒退到旧视频或上一轮随机队列。
-  const persistedFeedHighIndexRef = useRef(-1);
+  // 已写书签的最远逻辑队列位置。队首裁剪时 queueStartOffset 会前移，因此
+  // 同一个视频的逻辑位置不变；这样旧/new commit 的 passive effect 即使相邻
+  // 执行，也不会把已观看水位写回裁剪前的局部 index。
+  const persistedFeedHighPositionRef = useRef(-1);
+  const queueStartOffsetRef = useRef(0);
+  const queueStartOffset = queueStartOffsetRef.current;
+  const pendingPersistedFeedRef = useRef<ShortsFeedState | null>(null);
+  const persistedFeedWriteTimerRef = useRef<number | null>(null);
   const onQueueResetRef = useRef(onQueueReset);
   onQueueResetRef.current = onQueueReset;
+
+  const cancelPendingPersistedFeed = useCallback(() => {
+    if (persistedFeedWriteTimerRef.current !== null) {
+      window.clearTimeout(persistedFeedWriteTimerRef.current);
+      persistedFeedWriteTimerRef.current = null;
+    }
+    pendingPersistedFeedRef.current = null;
+  }, []);
+
+  const flushPersistedFeed = useCallback(() => {
+    if (persistedFeedWriteTimerRef.current !== null) {
+      window.clearTimeout(persistedFeedWriteTimerRef.current);
+      persistedFeedWriteTimerRef.current = null;
+    }
+    const pending = pendingPersistedFeedRef.current;
+    pendingPersistedFeedRef.current = null;
+    if (pending) saveShortsFeedState(pending);
+  }, []);
+
+  const schedulePersistedFeed = useCallback(
+    (feed: ShortsFeedState) => {
+      pendingPersistedFeedRef.current = feed;
+      if (persistedFeedWriteTimerRef.current !== null) {
+        window.clearTimeout(persistedFeedWriteTimerRef.current);
+      }
+      persistedFeedWriteTimerRef.current = window.setTimeout(
+        flushPersistedFeed,
+        SHORTS_FEED_SAVE_DELAY_MS
+      );
+    },
+    [flushPersistedFeed]
+  );
+
+  // 路由离开和页面进入后台时补写最后一个已观看游标，既避开切屏热路径，
+  // 也不会因为 debounce 丢掉续播书签。
+  useEffect(() => {
+    window.addEventListener("pagehide", flushPersistedFeed);
+    return () => {
+      window.removeEventListener("pagehide", flushPersistedFeed);
+      flushPersistedFeed();
+    };
+  }, [flushPersistedFeed]);
 
   const loadMore = useCallback(async () => {
     if (loadingRef.current) return;
@@ -47,14 +98,18 @@ export function useShortsFeed(activeIndex: number, onQueueReset: () => void) {
     try {
       const outcome = await requestShortsBatch({
         feed: requestFeedRef.current,
-        count: BATCH_SIZE,
+        count: hasLoadedBatchRef.current ? BATCH_SIZE : INITIAL_BATCH_SIZE,
         fetchNext: fetchShortsNext,
         isFeedExpiredError: (error) => error instanceof ShortsFeedExpiredError,
         commitFeed: (feed, event) => {
           requestFeedRef.current = feed;
-          if (event === "expired") clearShortsFeedState();
+          if (event === "expired") {
+            cancelPendingPersistedFeed();
+            clearShortsFeedState();
+          }
         },
       });
+      hasLoadedBatchRef.current = true;
 
       if (outcome.kind === "empty") {
         setEmpty(true);
@@ -62,9 +117,11 @@ export function useShortsFeed(activeIndex: number, onQueueReset: () => void) {
         // 否则末条视频的预取 effect 会持续请求同一个空库。
         setItems([]);
         onQueueResetRef.current();
-        persistedFeedHighIndexRef.current = -1;
+        persistedFeedHighPositionRef.current = -1;
+        queueStartOffsetRef.current = 0;
         setRoundComplete(false);
         requestFeedRef.current = EMPTY_SHORTS_FEED;
+        cancelPendingPersistedFeed();
         clearShortsFeedState();
         return;
       }
@@ -78,6 +135,15 @@ export function useShortsFeed(activeIndex: number, onQueueReset: () => void) {
       loadingRef.current = false;
       setLoading(false);
     }
+  }, [cancelPendingPersistedFeed]);
+
+  const trimQueueBefore = useCallback((count: number) => {
+    const removeCount = Math.max(0, Math.floor(count));
+    if (removeCount === 0) return;
+    setItems((previous) =>
+      removeCount >= previous.length ? [] : previous.slice(removeCount)
+    );
+    queueStartOffsetRef.current += removeCount;
   }, []);
 
   // 首次加载
@@ -92,9 +158,10 @@ export function useShortsFeed(activeIndex: number, onQueueReset: () => void) {
     const active = items[activeIndex];
     if (!active) return;
 
-    if (activeIndex > persistedFeedHighIndexRef.current) {
-      persistedFeedHighIndexRef.current = activeIndex;
-      saveShortsFeedState({
+    const activeQueuePosition = queueStartOffset + activeIndex;
+    if (activeQueuePosition > persistedFeedHighPositionRef.current) {
+      persistedFeedHighPositionRef.current = activeQueuePosition;
+      schedulePersistedFeed({
         feedToken: active.feedToken,
         cursor: active.feedCursor,
       });
@@ -112,7 +179,17 @@ export function useShortsFeed(activeIndex: number, onQueueReset: () => void) {
       setRoundComplete(false);
     }
     void loadMore();
-  }, [activeIndex, items, loading, loadError, empty, roundComplete, loadMore]);
+  }, [
+    activeIndex,
+    queueStartOffset,
+    items,
+    loading,
+    loadError,
+    empty,
+    roundComplete,
+    loadMore,
+    schedulePersistedFeed,
+  ]);
 
-  return { items, loading, empty, loadError, loadMore };
+  return { items, loading, empty, loadError, loadMore, trimQueueBefore };
 }

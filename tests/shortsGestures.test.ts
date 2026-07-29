@@ -4,6 +4,46 @@ import {
   classifyTouchSeekIntent,
   computeTouchSeekTime,
 } from "../src/shorts/useShortsSlideGestures";
+import {
+  isLegacyShortsVideoTransitionEnabled,
+  shouldUsePassiveShortsTouchMove,
+} from "../src/shorts/platform";
+
+function withWindowSearch<T>(search: string, run: () => T): T {
+  const original = Object.getOwnPropertyDescriptor(globalThis, "window");
+  Object.defineProperty(globalThis, "window", {
+    value: { location: { search } },
+    configurable: true,
+    writable: true,
+  });
+  try {
+    return run();
+  } finally {
+    if (original) {
+      Object.defineProperty(globalThis, "window", original);
+    } else {
+      delete (globalThis as { window?: unknown }).window;
+    }
+  }
+}
+
+test("touchmove stays passive by default with an explicit legacy fallback", () => {
+  withWindowSearch("", () => {
+    assert.equal(shouldUsePassiveShortsTouchMove(), true);
+  });
+  withWindowSearch("?shortsPassiveTouch=0", () => {
+    assert.equal(shouldUsePassiveShortsTouchMove(), false);
+  });
+});
+
+test("playing video transition is disabled by default with an A/B fallback", () => {
+  withWindowSearch("", () => {
+    assert.equal(isLegacyShortsVideoTransitionEnabled(), false);
+  });
+  withWindowSearch("?shortsVideoTransition=1", () => {
+    assert.equal(isLegacyShortsVideoTransitionEnabled(), true);
+  });
+});
 
 test("touch seek stays pending until movement passes the activation threshold", () => {
   // 横纵位移都在 12px 内继续观望，长按倍速不被打断

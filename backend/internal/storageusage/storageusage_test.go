@@ -9,15 +9,21 @@ import (
 	"github.com/video-site/backend/internal/mediaasset"
 )
 
-func TestComputeCountsLocalThumbnailsAndTeasersByDrive(t *testing.T) {
+func TestComputeCountsLocalThumbnailAssetsAndTeasersByDrive(t *testing.T) {
 	localDir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(localDir, "thumbs"), 0o755); err != nil {
 		t.Fatalf("mkdir thumbs: %v", err)
 	}
+	if err := os.MkdirAll(filepath.Join(localDir, "thumbs-shorts-bg"), 0o755); err != nil {
+		t.Fatalf("mkdir shorts backgrounds: %v", err)
+	}
 	writeSizedFile(t, filepath.Join(localDir, "thumbs", "video-a.jpg"), 3)
 	writeSizedFile(t, filepath.Join(localDir, "thumbs", "video-b.jpg"), 5)
+	writeSizedFile(t, mediaasset.ShortsBackgroundPath(localDir, "video-a"), 2)
+	writeSizedFile(t, mediaasset.ShortsBackgroundPath(localDir, "video-b"), 4)
 	longID := "localstorage-" + strings.Repeat("x", 240)
 	writeSizedFile(t, mediaasset.ThumbnailPath(localDir, longID), 13)
+	writeSizedFile(t, mediaasset.ShortsBackgroundPath(localDir, longID), 6)
 	teaserA := filepath.Join(localDir, "video-a.mp4")
 	teaserB := filepath.Join(localDir, "video-b.mp4")
 	writeSizedFile(t, teaserA, 7)
@@ -43,15 +49,15 @@ func TestComputeCountsLocalThumbnailsAndTeasersByDrive(t *testing.T) {
 		t.Fatalf("disk stats = available:%d capacity:%d, want 123/456", got.AvailableBytes, got.CapacityBytes)
 	}
 	driveA := got.Drives["drive-a"]
-	if driveA.ThumbnailBytes != 3 || driveA.TeaserBytes != 7 || driveA.TotalBytes != 10 {
-		t.Fatalf("drive-a usage = %#v, want thumbnails=3 teaser=7 total=10", driveA)
+	if driveA.ThumbnailBytes != 5 || driveA.TeaserBytes != 7 || driveA.TotalBytes != 12 {
+		t.Fatalf("drive-a usage = %#v, want thumbnails=5 teaser=7 total=12", driveA)
 	}
 	driveB := got.Drives["drive-b"]
-	if driveB.ThumbnailBytes != 18 || driveB.TeaserBytes != 11 || driveB.TotalBytes != 29 {
-		t.Fatalf("drive-b usage = %#v, want thumbnails=18 teaser=11 total=29", driveB)
+	if driveB.ThumbnailBytes != 28 || driveB.TeaserBytes != 11 || driveB.TotalBytes != 39 {
+		t.Fatalf("drive-b usage = %#v, want thumbnails=28 teaser=11 total=39", driveB)
 	}
-	if got.ThumbnailBytes != 21 || got.TeaserBytes != 18 || got.TotalBytes != 39 {
-		t.Fatalf("totals = %#v, want thumbnails=21 teaser=18 total=39", got)
+	if got.ThumbnailBytes != 33 || got.TeaserBytes != 18 || got.TotalBytes != 51 {
+		t.Fatalf("totals = %#v, want thumbnails=33 teaser=18 total=51", got)
 	}
 }
 

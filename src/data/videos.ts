@@ -250,6 +250,8 @@ export function fetchTags(): Promise<TagItem[]> {
 export type ShortsItem = VideoItem & {
   videoSrc: string;
   poster: string;
+  /** Tiny server-preblurred texture for the viewport-sized letterbox backdrop. */
+  backgroundPoster?: string;
   /**
    * 文件大小与时长，用来算平均码率，进而把预加载门槛从固定秒数换算成
    * 一份固定的字节预算。元数据缺失时后端会省略这两个字段（omitempty），

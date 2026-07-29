@@ -82,7 +82,7 @@ test("shorts progress dragging uses immediate pointer state", () => {
 test("mobile shorts scrubbing time is shown at the top", () => {
   assert.match(
     shortsPageSource,
-    /\{scrubbing && isActive && shouldLoad && !isMarkedHidden && \(\s*<div className="shorts-slide__progress-time" aria-live="polite">\s*\{formatClock\(currentTime\)\} \/ \{formatClock\(duration\)\}/
+    /\{scrubbing && isActive && shouldLoad && !isMarkedHidden && \(\s*<div\s*ref=\{progressTimeRef\}\s*className="shorts-slide__progress-time"\s*aria-live="polite"\s*>\s*\{formatClock\(currentTimeRef\.current\)\} \/ \{formatClock\(duration\)\}/
   );
   assert.doesNotMatch(
     shortsPageSource,
@@ -99,7 +99,31 @@ test("shorts horizontal video swipe seeks relative to the current playback time"
   assert.match(slideGesturesSource, /const SHORTS_SEEK_DIRECTION_LOCK_RATIO = 1\.2;/);
   assert.match(slideGesturesSource, /type ShortsTouchSeekState = \{/);
   assert.match(slideGesturesSource, /startTime: video\.currentTime \|\| 0/);
-  assert.match(slideGesturesSource, /video\.addEventListener\("touchmove", handleTouchMove, \{ passive: false \}\);/);
+  assert.match(
+    slideGesturesSource,
+    /const passiveTouchMove = shouldUsePassiveShortsTouchMove\(\);/
+  );
+  assert.match(
+    slideGesturesSource,
+    /video\.addEventListener\("touchmove", handleTouchMove, \{\s*passive: passiveTouchMove,\s*\}\);/
+  );
+  assert.match(
+    slideGesturesSource,
+    /if \(!passiveTouchMove\) event\.preventDefault\(\);/
+  );
+  assert.match(
+    slideGesturesSource,
+    /videoWidth: Math\.max\(1, video\.getBoundingClientRect\(\)\.width\)/
+  );
+  assert.match(
+    slideGesturesSource,
+    /export const SHORTS_MEDIA_SEEK_INTERVAL_MS = 80;/
+  );
+  assert.match(slideGesturesSource, /video\.fastSeek\(time\);/);
+  assert.match(
+    slideGesturesSource,
+    /flushMediaSeek\(video, targetTime\);/
+  );
   // 相对快进的换算与方向锁的行为用例见 shortsGestures.test.ts
   assert.match(
     slideGesturesSource,
@@ -133,7 +157,10 @@ test("shorts progress listeners rebind when deferred videos mount", () => {
     shortsPageSource,
     /VIDEO_WINDOW_SIZE 会让窗口外的 slide 先以海报占位/
   );
-  assert.match(shortsPageSource, /if \(!shouldMount\) \{\s*setDuration\(0\);\s*setCurrentTime\(0\);/);
+  assert.match(
+    shortsPageSource,
+    /if \(!shouldMount\) \{\s*updateDuration\(0\);\s*updateCurrentTime\(0\);/
+  );
   assert.match(
     shortsPageSource,
     /getVideoElement,[\s\S]*?shouldLoad,[\s\S]*?shouldMount,[\s\S]*?usesSharedVideo,[\s\S]*?\]\);/
@@ -320,11 +347,11 @@ test("desktop held arrow-key seeking previews progress and commits once", () => 
   );
   assert.match(
     shortsPageSource,
-    /const progressCurrentTime = keyboardSeekPreview\?\.currentTime \?\? currentTime;[\s\S]*?const progressDuration = keyboardSeekPreview\?\.duration \?\? duration;[\s\S]*?clamp\(progressCurrentTime \/ progressDuration, 0, 1\)/
+    /const writeProgressDisplay = useCallback\([\s\S]*?progressTrackRef\.current\?\.style\.setProperty\(\s*"--progress-pct",\s*`\$\{ratio \* 100\}%`\s*\);/
   );
   assert.match(
     shortsPageSource,
-    /useLayoutEffect\(\(\) => \{[\s\S]*?lastKeyboardSeekPreviewTimeRef\.current = keyboardSeekPreview\.currentTime;[\s\S]*?setCurrentTime\(lastPreviewTime\);[\s\S]*?\}, \[keyboardSeekPreview\]\);/
+    /useLayoutEffect\(\(\) => \{[\s\S]*?lastKeyboardSeekPreviewTimeRef\.current = keyboardSeekPreview\.currentTime;[\s\S]*?writeProgressDisplay\([\s\S]*?updateCurrentTime\(lastPreviewTime, true\);[\s\S]*?\}, \[keyboardSeekPreview, updateCurrentTime, writeProgressDisplay\]\);/
   );
 });
 
@@ -359,8 +386,14 @@ test("shorts hud toast keeps icon and text close together", () => {
 
 test("shorts loading spinner covers video buffering and initial feed loading", () => {
   assert.match(shortsPageSource, /function ShortsLoadingSpinner/);
-  assert.match(shortsPageSource, /requestAnimationFrame\(tick\)/);
-  assert.match(shortsPageSource, /spinner\.style\.transform = `rotate\(\$\{rotation\}deg\)`;/);
+  const spinnerStart = shortsPageSource.indexOf("function ShortsLoadingSpinner");
+  const spinnerEnd = shortsPageSource.indexOf(
+    "function applyVideoMutedState",
+    spinnerStart
+  );
+  assert.ok(spinnerStart >= 0 && spinnerEnd > spinnerStart);
+  const spinnerBlock = shortsPageSource.slice(spinnerStart, spinnerEnd);
+  assert.doesNotMatch(spinnerBlock, /requestAnimationFrame|style\.transform/);
   assert.match(shortsPageSource, /"--shorts-spinner-size": `\$\{size\}px`/);
   assert.match(shortsPageSource, /<ShortsLoadingSpinner size=\{30\} \/>/);
   assert.doesNotMatch(shortsPageSource, /<ShortsLoadingSpinner size=\{16\} \/>/);
@@ -370,6 +403,14 @@ test("shorts loading spinner covers video buffering and initial feed loading", (
   assert.match(
     shortsCssSource,
     /\.shorts-slide__loading-spinner\s*\{[\s\S]*width:\s*var\(--shorts-spinner-size,\s*30px\);[\s\S]*height:\s*var\(--shorts-spinner-size,\s*30px\);[\s\S]*border:\s*3px solid rgba\(255,\s*255,\s*255,\s*0\.24\);[\s\S]*border-top-color:\s*rgba\(255,\s*255,\s*255,\s*0\.98\);[\s\S]*border-radius:\s*50%;/
+  );
+  assert.match(
+    shortsCssSource,
+    /animation:\s*shorts-spinner-rotate 0\.8s linear infinite;/
+  );
+  assert.match(
+    shortsCssSource,
+    /@keyframes shorts-spinner-rotate\s*\{[\s\S]*to\s*\{\s*transform:\s*rotate\(360deg\);/
   );
   assert.match(shortsCssSource, /\.shorts-loading \.shorts-slide__loading-spinner\s*\{/);
   assert.match(
@@ -436,11 +477,19 @@ test("shorts only advances viewed cursors and waits for queue end before startin
   assert.doesNotMatch(shortsPageSource + shortsFeedSource + useShortsFeedSource, /seenIdsRef|saveSeenIds/);
   assert.match(
     useShortsFeedSource,
-    /const persistedFeedHighIndexRef = useRef\(-1\);/
+    /const persistedFeedHighPositionRef = useRef\(-1\);\s*const queueStartOffsetRef = useRef\(0\);\s*const queueStartOffset = queueStartOffsetRef\.current;/
   );
   assert.match(
     useShortsFeedSource,
-    /if \(activeIndex > persistedFeedHighIndexRef\.current\) \{\s*persistedFeedHighIndexRef\.current = activeIndex;\s*saveShortsFeedState\(\{\s*feedToken: active\.feedToken,\s*cursor: active\.feedCursor,/
+    /const activeQueuePosition = queueStartOffset \+ activeIndex;\s*if \(activeQueuePosition > persistedFeedHighPositionRef\.current\) \{\s*persistedFeedHighPositionRef\.current = activeQueuePosition;\s*schedulePersistedFeed\(\{\s*feedToken: active\.feedToken,\s*cursor: active\.feedCursor,/
+  );
+  assert.match(
+    useShortsFeedSource,
+    /const SHORTS_FEED_SAVE_DELAY_MS = 500;/
+  );
+  assert.match(
+    useShortsFeedSource,
+    /window\.addEventListener\("pagehide", flushPersistedFeed\);[\s\S]*?flushPersistedFeed\(\);/
   );
   // 续播书签只归 feed hook 管；页面的缓存窗口推进不得写书签
   assert.doesNotMatch(shortsPageSource, /saveShortsFeedState/);
@@ -455,6 +504,23 @@ test("shorts only advances viewed cursors and waits for queue end before startin
   );
 });
 
+test("shorts returns the first playable pair before fetching normal batches", () => {
+  assert.match(shortsFeedSource, /export const INITIAL_BATCH_SIZE = 2;/);
+  assert.match(shortsFeedSource, /export const BATCH_SIZE = 5;/);
+  assert.match(
+    useShortsFeedSource,
+    /const hasLoadedBatchRef = useRef\(false\);/
+  );
+  assert.match(
+    useShortsFeedSource,
+    /count: hasLoadedBatchRef\.current \? BATCH_SIZE : INITIAL_BATCH_SIZE,/
+  );
+  assert.match(
+    useShortsFeedSource,
+    /const outcome = await requestShortsBatch\([\s\S]*?hasLoadedBatchRef\.current = true;/
+  );
+});
+
 test("shorts distinguishes feed failures from a genuinely empty library", () => {
   // 恢复流程（令牌失效 / 快照耗尽 / 空库）的行为用例见 shortsFeedLogic.test.ts
   assert.match(
@@ -463,7 +529,7 @@ test("shorts distinguishes feed failures from a genuinely empty library", () => 
   );
   assert.match(
     useShortsFeedSource,
-    /if \(outcome\.kind === "empty"\) \{\s*setEmpty\(true\);[\s\S]*?setItems\(\[\]\);\s*onQueueResetRef\.current\(\);[\s\S]*?setRoundComplete\(false\);\s*requestFeedRef\.current = EMPTY_SHORTS_FEED;\s*clearShortsFeedState\(\);\s*return;/
+    /if \(outcome\.kind === "empty"\) \{\s*setEmpty\(true\);[\s\S]*?setItems\(\[\]\);\s*onQueueResetRef\.current\(\);[\s\S]*?setRoundComplete\(false\);\s*requestFeedRef\.current = EMPTY_SHORTS_FEED;\s*cancelPendingPersistedFeed\(\);\s*clearShortsFeedState\(\);\s*return;/
   );
   assert.match(
     shortsPageSource,
@@ -511,7 +577,7 @@ test("shorts hidden overlay keeps only the concise confirmation", () => {
   assert.doesNotMatch(shortsCssSource, /\.shorts-slide__hidden-desc/);
 });
 
-test("shorts hide action is icon-only and advances without a toast", () => {
+test("shorts hide action is icon-only and advances by stable feed key", () => {
   assert.match(
     shortsPageSource,
     /aria-label="不再展示"[\s\S]*?<EyeOff size=\{22\} \/>/
@@ -524,11 +590,11 @@ test("shorts hide action is icon-only and advances without a toast", () => {
     shortsPageSource,
     /已选择不再展示，正在滑至下一首/
   );
-  // 依赖必须是空数组：这个回调传给每一条 slide，依赖 items.length 会让它
-  // 每取回一批就换新引用，把 ShortsSlide 的 memo 整片击穿。
+  // 稳定 key 不受长会话队列裁剪后的 index 平移影响；依赖仍须是空数组，
+  // 避免每次取批都把 ShortsSlide 的 memo 整片击穿。
   assert.match(
     shortsPageSource,
-    /const handleHideSuccess = useCallback\(\(idx: number\) => \{\s*const nextIdx = idx \+ 1;\s*if \(nextIdx < itemsLengthRef\.current\) \{[\s\S]*?nextSlide\.scrollIntoView\(\{ behavior: "smooth" \}\);[\s\S]*?\}, \[\]\);/
+    /const handleHideSuccess = useCallback\(\(itemKey: string\) => \{[\s\S]*?element\.dataset\.feedKey === itemKey[\s\S]*?current\?\.nextElementSibling[\s\S]*?nextSlide\.scrollIntoView\(\{ behavior: "smooth" \}\);[\s\S]*?\}, \[\]\);/
   );
 });
 
@@ -564,10 +630,10 @@ test("shorts like action does not display a count", () => {
   assert.doesNotMatch(shortsCssSource, /\.shorts-slide__action-count/);
 });
 
-test("shorts keeps buffered sources inside a six video window", () => {
+test("shorts keeps buffered sources inside a four video window", () => {
   assert.match(shortsPageSource, /const \[cacheableSourceIds, setCacheableSourceIds\] = useState<Set<string>>/);
   assert.match(shortsPageSource, /setCacheableSourceIds\(\(prev\) => \{/);
-  assert.match(mediaBufferSource, /const VIDEO_WINDOW_SIZE = 6;/);
+  assert.match(mediaBufferSource, /const VIDEO_WINDOW_SIZE = 4;/);
   assert.doesNotMatch(shortsPageSource + mediaBufferSource, /VIDEO_WINDOW_BACKWARD_BIAS/);
   assert.match(shortsPageSource, /const \[cacheWindowHighIndex, setCacheWindowHighIndex\] = useState\(-1\);/);
   assert.match(shortsPageSource, /setCacheWindowHighIndex\(\(prev\) => Math\.max\(prev, activeIndex\)\);/);
@@ -609,8 +675,8 @@ test("shorts keeps buffered sources inside a six video window", () => {
 });
 
 test("shorts caps how many slides keep real content in the DOM", () => {
-  // 队列只增不减，内容窗口必须是常量半径，否则每条 slide 的模糊层和海报
-  // 位图会随刷动时长线性堆积。
+  // 队列批量裁剪之间仍会保留几十条回看历史；内容窗口必须是常量半径，
+  // 避免每条 slide 的背景和海报位图一起常驻。
   assert.match(shortsPageSource, /const SLIDE_CONTENT_WINDOW_RADIUS = 3;/);
   assert.match(
     shortsPageSource,
@@ -639,6 +705,31 @@ test("shorts caps how many slides keep real content in the DOM", () => {
   );
   assert.ok(slideTail.length > 0, "slide tail slice should be non-empty");
   assert.doesNotMatch(slideTail, /\buse[A-Z]\w*\(/);
+});
+
+test("long shorts sessions trim old shells without changing logical identity", () => {
+  assert.match(
+    shortsFeedSource,
+    /export const MAX_SHORTS_QUEUE_ITEMS = 60;/
+  );
+  assert.match(
+    shortsFeedSource,
+    /export const SHORTS_QUEUE_KEEP_BEHIND = 20;/
+  );
+  assert.match(
+    shortsPageSource,
+    /const removeCount = getShortsQueueTrimCount\(activeIndex, items\.length\);[\s\S]*?pendingQueueTrimRef\.current = \{\s*anchorKey: shortsQueueItemKey\(activeItem\),\s*activeIndex: nextActiveIndex,/
+  );
+  assert.match(shortsPageSource, /observer\.unobserve\(slides\[index\]\);/);
+  assert.match(
+    shortsPageSource,
+    /trimQueueBefore\(removeCount\);\s*setActiveIndex\(nextActiveIndex\);/
+  );
+  assert.match(shortsPageSource, /data-feed-key=\{itemKey\}/);
+  assert.match(
+    useShortsFeedSource,
+    /queueStartOffsetRef\.current \+= removeCount;/
+  );
 });
 
 test("shorts reuses one persistent media element across iOS slides", () => {
@@ -776,7 +867,7 @@ test("iOS loops restart under app control and progress follows presented frames"
   // see "iOS loop restart defers the buffering spinner instead of blinking".
   assert.match(
     shortsPageSource,
-    /loopRestartPendingRef\.current = true;[\s\S]*?setCurrentTime\(0\);[\s\S]*?scheduleBufferingIndicator\([\s\S]*?video\.currentTime = 0;/
+    /loopRestartPendingRef\.current = true;[\s\S]*?updateCurrentTime\(0\);[\s\S]*?scheduleBufferingIndicator\([\s\S]*?video\.currentTime = 0;/
   );
   assert.match(
     shortsPageSource,
@@ -832,7 +923,7 @@ test("iOS loops restart under app control and progress follows presented frames"
   assert.match(confirmationBlock, /loopRestartAwaitingFrameRef\.current = false;/);
   assert.match(confirmationBlock, /hasStartedPlayingRef\.current = true;/);
   assert.match(confirmationBlock, /setIsBuffering\(false\);/);
-  assert.match(confirmationBlock, /setCurrentTime\(mediaTime\);/);
+  assert.match(confirmationBlock, /updateCurrentTime\(mediaTime\);/);
   assert.match(shortsPageSource, /const presentedFrameAdvanced =/);
   assert.match(
     shortsPageSource,
@@ -863,7 +954,7 @@ test("shorts buffering state survives stalled and self-heals on real progress", 
   assert.match(timeBlock, /const mediaTimeAdvanced =/);
   assert.match(
     timeBlock,
-    /if \(\s*!usesPresentedFrameProgress &&\s*!loopRestartPendingRef\.current &&\s*!video\.seeking &&\s*!scrubbingRef\.current\s*\) \{\s*setCurrentTime\(mediaTime\);/
+    /if \(\s*!usesPresentedFrameProgress &&\s*!loopRestartPendingRef\.current &&\s*!video\.seeking &&\s*!scrubbingRef\.current\s*\) \{\s*updateCurrentTime\(mediaTime\);/
   );
   assert.match(timeBlock, /!video\.paused/);
   assert.match(timeBlock, /!video\.seeking/);
@@ -919,15 +1010,48 @@ test("iOS loop restart defers the buffering spinner instead of blinking every la
 // compositing path: every frame has to be rendered into a layer and filtered.
 // The shadow stays on the static poster, where it costs one pass.
 test("the active slide never puts a CSS filter on the playing video", () => {
-  const activeRule =
-    /\.shorts-slide\[data-active="true"\] \.shorts-slide__video,\s*\.shorts-slide\[data-active="true"\] \.shorts-slide__poster \{[\s\S]*?\}/.exec(
-      shortsCssSource
-    );
-  assert.ok(activeRule, "active video/poster rule should exist");
-  assert.doesNotMatch(activeRule[0], /filter:/);
+  const videoRule = /\.shorts-slide__video\s*\{([\s\S]*?)\}/.exec(
+    shortsCssSource
+  );
+  assert.ok(videoRule, "video compositing rule should exist");
+  assert.match(videoRule[1], /opacity:\s*1;/);
+  assert.doesNotMatch(videoRule[1], /filter:|transition:/);
+  assert.match(
+    shortsCssSource,
+    /\.shorts-page\.has-video-transition[\s\S]*?\.shorts-slide\[data-active="true"\][\s\S]*?\.shorts-slide__video/
+  );
+  assert.match(
+    shortsPlatformSource,
+    /isLegacyShortsVideoTransitionEnabled\(\)[\s\S]*?get\("shortsVideoTransition"\) ===\s*"1"/
+  );
   assert.match(
     shortsCssSource,
     /\.shorts-slide\[data-active="true"\] \.shorts-slide__poster \{\s*filter: drop-shadow/
+  );
+});
+
+test("shorts uses a server-preblurred texture instead of a viewport blur layer", () => {
+  assert.match(videosDataSource, /backgroundPoster\?: string;/);
+  assert.match(
+    shortsPageSource,
+    /backgroundImage: `url\(\$\{item\.backgroundPoster \|\| item\.poster\}\)`/
+  );
+  const backgroundRule = /\.shorts-slide__bg\s*\{([\s\S]*?)\}/.exec(
+    shortsCssSource
+  );
+  assert.ok(backgroundRule, "shorts background rule should exist");
+  assert.doesNotMatch(backgroundRule[1], /filter:\s*blur/);
+  assert.match(
+    shortsCssSource,
+    /\.shorts-slide__bg::after\s*\{[\s\S]*?background:\s*rgb\(0 0 0 \/ 55%\);/
+  );
+  assert.match(
+    shortsFeedGoSource,
+    /BackgroundPoster\s+string\s+`json:"backgroundPoster,omitempty"`/
+  );
+  assert.match(
+    shortsFeedGoSource,
+    /BackgroundPoster:\s+shortsBackgroundPosterURL\(poster\),/
   );
 });
 
@@ -1023,7 +1147,7 @@ test("Windows viewport resize keeps the current short aligned", () => {
   );
   assert.match(
     shortsPageSource,
-    /const observer = new IntersectionObserver\(\s*\(entries\) => \{\s*if \(viewportResizeAnchorIndexRef\.current !== null\) return;/
+    /const observer = new IntersectionObserver\(\s*\(entries\) => \{\s*if \(\s*viewportResizeAnchorIndexRef\.current !== null \|\|\s*queueTrimInProgressRef\.current\s*\) \{\s*return;\s*\}/
   );
 });
 

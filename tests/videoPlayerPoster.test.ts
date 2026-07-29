@@ -491,6 +491,33 @@ test("detail player sets referrer policy before loading media url", () => {
   );
 });
 
+test("iOS PikPak MP4 detail uses a typed source element without changing other pages", () => {
+  assert.match(
+    detailPageSource,
+    /preferTypedMp4SourceOnIOS=\{isPikPakMp4Detail\(detail\)\}/
+  );
+  assert.match(
+    detailPageSource,
+    /detail\.mediaType\?\.toLowerCase\(\) === "video\/mp4"[\s\S]*detail\.sourceLabel\?\.toLowerCase\(\)\.includes\("pikpak"\)/
+  );
+  assert.match(
+    playerSource,
+    /preferTypedMp4SourceOnIOS && isIOSPlaybackDevice\(\)/
+  );
+  assert.match(
+    playerSource,
+    /if \(art\.isDestroy \|\| !video\.isConnected\) return;[\s\S]*source\.src = url;\s*source\.type = "video\/mp4";[\s\S]*video\.insertBefore\(source, video\.firstChild\);\s*video\.load\(\);/
+  );
+  assert.match(
+    playerSource,
+    /art\.option\.url = src;\s*loadTypedMp4Source\(video, src, art\);/
+  );
+  assert.match(
+    playerSource,
+    /if \(useTypedMp4Source\) clearTypedMp4Source\(video\);[\s\S]*art\.destroy\(true\);/
+  );
+});
+
 test("detail player fullscreen long-press rate hint lives inside ArtPlayer", () => {
   assert.match(
     detailCss,
