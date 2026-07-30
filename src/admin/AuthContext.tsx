@@ -18,6 +18,7 @@ type AuthCtx = {
   login: (username: string, password: string) => Promise<string | undefined>;
   logout: () => Promise<void>;
   refresh: () => Promise<void>;
+  invalidateSession: () => void;
 };
 
 const Ctx = createContext<AuthCtx | null>(null);
@@ -26,16 +27,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<AuthStatus>("loading");
   const [role, setRole] = useState<string>("");
 
+  const invalidateSession = useCallback(() => {
+    setStatus("guest");
+    setRole("");
+  }, []);
+
   const refresh = useCallback(async () => {
     try {
       const r = await api.me();
-      setStatus(r.authenticated ? "authed" : "guest");
+      if (!r.authenticated) {
+        invalidateSession();
+        return;
+      }
+      setStatus("authed");
       setRole(r.role ?? "");
     } catch {
-      setStatus("guest");
-      setRole("");
+      invalidateSession();
     }
-  }, []);
+  }, [invalidateSession]);
 
   useEffect(() => {
     refresh();
@@ -52,16 +61,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       await api.logout();
     } finally {
-      setStatus("guest");
-      setRole("");
+      invalidateSession();
     }
-  }, []);
+  }, [invalidateSession]);
 
   const isAdmin = role === "admin";
 
   const value = useMemo(
-    () => ({ status, role, isAdmin, login, logout, refresh }),
-    [status, role, isAdmin, login, logout, refresh]
+    () => ({ status, role, isAdmin, login, logout, refresh, invalidateSession }),
+    [status, role, isAdmin, login, logout, refresh, invalidateSession]
   );
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

@@ -12,6 +12,10 @@ const page = readFileSync(
   "utf8"
 );
 const api = readFileSync(new URL("../src/admin/api.ts", import.meta.url), "utf8");
+const authContext = readFileSync(
+  new URL("../src/admin/AuthContext.tsx", import.meta.url),
+  "utf8"
+);
 const css = readFileSync(
   new URL("../src/styles/admin.css", import.meta.url),
   "utf8"
@@ -79,6 +83,23 @@ test("restore polling distinguishes success from an automatic rollback", () => {
   assert.match(page, /旧数据已自动回滚/);
   assert.match(page, /restoreReport\.localStorageWarnings/);
   assert.match(page, /restoreReport\.missingAssets/);
+});
+
+test("successful restore invalidates cached auth before opening login", () => {
+  assert.match(authContext, /invalidateSession:\s*\(\) => void/);
+  assert.match(
+    authContext,
+    /const invalidateSession = useCallback\(\(\) => \{[\s\S]*?setStatus\("guest"\);[\s\S]*?setRole\(""\);/
+  );
+  const polling = page.slice(
+    page.indexOf("const redirectToLogin"),
+    page.indexOf("const current = data?.current")
+  );
+  assert.ok(
+    polling.indexOf("invalidateSession();") < polling.indexOf('navigate("/login"'),
+    "the shared auth state must become guest before LoginPage renders"
+  );
+  assert.match(polling, /!state\.authenticated[\s\S]*?redirectToLogin\(\)/);
 });
 
 test("restore polling starts only after validation and staging are accepted", () => {

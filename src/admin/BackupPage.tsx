@@ -22,6 +22,7 @@ import {
   X,
 } from "lucide-react";
 import * as api from "./api";
+import { useAuth } from "./AuthContext";
 import { ConfirmModal } from "./ConfirmModal";
 import { Modal } from "./Modal";
 import { PasswordInput } from "./PasswordInput";
@@ -102,6 +103,7 @@ function readResumeState(): ResumeState | null {
 
 export function BackupPage() {
   const navigate = useNavigate();
+  const { invalidateSession } = useAuth();
   const { show } = useToast();
   const [data, setData] = useState<api.BackupList | null>(null);
   const [loading, setLoading] = useState(true);
@@ -163,11 +165,18 @@ export function BackupPage() {
   useEffect(() => {
     if (!restoring) return;
     let active = true;
+    const redirectToLogin = () => {
+      if (!active) return;
+      // Restore deliberately clears every server session. Keep the central
+      // auth state in sync before LoginPage decides whether to redirect.
+      invalidateSession();
+      navigate("/login", { replace: true });
+    };
     const poll = async () => {
       try {
         const state = await api.me();
         if (active && !state.authenticated) {
-          navigate("/login", { replace: true });
+          redirectToLogin();
           return;
         }
         if (active && state.authenticated) {
@@ -186,7 +195,7 @@ export function BackupPage() {
         }
       } catch (error) {
         if (active && error instanceof api.UnauthorizedError) {
-          navigate("/login", { replace: true });
+          redirectToLogin();
           return;
         }
       }
@@ -197,7 +206,7 @@ export function BackupPage() {
       active = false;
       window.clearTimeout(timer);
     };
-  }, [restoring, navigate]);
+  }, [restoring, navigate, invalidateSession]);
 
   const current = data?.current;
   const progress = useMemo(() => {
