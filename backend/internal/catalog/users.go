@@ -75,6 +75,36 @@ func (c *Catalog) ListUsers(ctx context.Context) ([]*User, error) {
 	return out, rows.Err()
 }
 
+// ListAdmins returns every administrator, including the stored password hash,
+// for internal operations that must preserve target-environment credentials.
+func (c *Catalog) ListAdmins(ctx context.Context) ([]*User, error) {
+	rows, err := c.db.QueryContext(ctx, `
+SELECT id, username, password, role, banned, created_at
+  FROM users
+ WHERE role = 'admin'
+ ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*User
+	for rows.Next() {
+		u := &User{}
+		if err := rows.Scan(
+			&u.ID,
+			&u.Username,
+			&u.Password,
+			&u.Role,
+			&u.Banned,
+			&u.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		out = append(out, u)
+	}
+	return out, rows.Err()
+}
+
 func (c *Catalog) CountUsers(ctx context.Context) (int, error) {
 	var count int
 	err := c.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM users`).Scan(&count)

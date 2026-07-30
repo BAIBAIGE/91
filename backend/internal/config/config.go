@@ -71,9 +71,37 @@ func WriteAdminCredentials(path, username, password string) error {
 	if err != nil {
 		return fmt.Errorf("read config: %w", err)
 	}
+	out, err := rewriteAdminCredentials(b, username, password)
+	if err != nil {
+		return err
+	}
+
+	mode := os.FileMode(0o644)
+	if st, err := os.Stat(path); err == nil {
+		mode = st.Mode().Perm()
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, out, mode); err != nil {
+		return fmt.Errorf("write temp config: %w", err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("replace config: %w", err)
+	}
+	return nil
+}
+
+// RedactAdminCredentials clears only the configured administrator username and
+// password while preserving the rest of the YAML document, including unknown
+// fields that may belong to a newer application version.
+func RedactAdminCredentials(data []byte) ([]byte, error) {
+	return rewriteAdminCredentials(data, "", "")
+}
+
+func rewriteAdminCredentials(data []byte, username, password string) ([]byte, error) {
 	var root yaml.Node
-	if err := yaml.Unmarshal(b, &root); err != nil {
-		return fmt.Errorf("parse config: %w", err)
+	if err := yaml.Unmarshal(data, &root); err != nil {
+		return nil, fmt.Errorf("parse config: %w", err)
 	}
 	doc := ensureDocumentMapping(&root)
 	server := ensureMappingValue(doc, "server")
@@ -86,25 +114,12 @@ func WriteAdminCredentials(path, username, password string) error {
 	enc.SetIndent(2)
 	if err := enc.Encode(&root); err != nil {
 		_ = enc.Close()
-		return fmt.Errorf("encode config: %w", err)
+		return nil, fmt.Errorf("encode config: %w", err)
 	}
 	if err := enc.Close(); err != nil {
-		return fmt.Errorf("encode config: %w", err)
+		return nil, fmt.Errorf("encode config: %w", err)
 	}
-
-	mode := os.FileMode(0o644)
-	if st, err := os.Stat(path); err == nil {
-		mode = st.Mode().Perm()
-	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, out.Bytes(), mode); err != nil {
-		return fmt.Errorf("write temp config: %w", err)
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("replace config: %w", err)
-	}
-	return nil
+	return out.Bytes(), nil
 }
 
 func ensureDocumentMapping(root *yaml.Node) *yaml.Node {

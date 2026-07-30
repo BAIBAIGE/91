@@ -41,6 +41,13 @@ test("backup page exposes full backup safety and destructive restore confirmatio
   assert.match(page, /当前运行方式没有进程守护/);
 });
 
+test("backup creation uses credential-neutral backup wording", () => {
+  assert.match(page, /\n          创建备份\n        <\/button>/);
+  assert.match(page, /show\("备份任务已开始", "success"\)/);
+  assert.match(page, /<span>还没有备份<\/span>/);
+  assert.doesNotMatch(page, /创建完整备份|完整备份任务已开始|还没有完整备份/);
+});
+
 test("migration upload uses resumable 16 MiB server chunks with hashes", () => {
   assert.match(api, /X-Chunk-SHA256/);
   assert.match(api, /\/backup-uploads\/\$\{encodeURIComponent\(id\)\}\/chunks\/\$\{index\}/);
@@ -72,4 +79,19 @@ test("restore polling distinguishes success from an automatic rollback", () => {
   assert.match(page, /旧数据已自动回滚/);
   assert.match(page, /restoreReport\.localStorageWarnings/);
   assert.match(page, /restoreReport\.missingAssets/);
+});
+
+test("restore polling starts only after validation and staging are accepted", () => {
+  assert.match(
+    page,
+    /const \[restoreSubmitting, setRestoreSubmitting\] = useState\(false\)/
+  );
+  const handler = page.slice(
+    page.indexOf("async function handleRestore()"),
+    page.indexOf("function closeRestore()")
+  );
+  assert.ok(
+    handler.indexOf("await api.restoreBackup") < handler.indexOf("setRestoring(true)"),
+    "restart polling must not begin while the restore request is still staging"
+  );
 });

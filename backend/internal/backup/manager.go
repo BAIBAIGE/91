@@ -587,8 +587,18 @@ func (m *Manager) createSnapshot(ctx context.Context, snapshotRoot string) error
 	if err := m.catalog.BackupTo(ctx, dbDestination); err != nil {
 		return err
 	}
+	if err := redactSnapshotDatabase(ctx, dbDestination); err != nil {
+		return err
+	}
 	for _, spec := range m.sourceSpecs() {
-		if err := snapshotSource(ctx, spec.source, filepath.Join(snapshotRoot, filepath.FromSlash(spec.prefix))); err != nil {
+		destination := filepath.Join(snapshotRoot, filepath.FromSlash(spec.prefix))
+		var err error
+		if spec.name == "config" {
+			err = snapshotRedactedConfig(ctx, spec.source, destination)
+		} else {
+			err = snapshotSource(ctx, spec.source, destination)
+		}
+		if err != nil {
 			return fmt.Errorf("backup: snapshot %s: %w", spec.name, err)
 		}
 	}

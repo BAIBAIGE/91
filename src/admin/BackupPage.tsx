@@ -111,6 +111,7 @@ export function BackupPage() {
   const [restoreTarget, setRestoreTarget] = useState<api.BackupRecord | null>(null);
   const [restorePassword, setRestorePassword] = useState("");
   const [restoreText, setRestoreText] = useState("");
+  const [restoreSubmitting, setRestoreSubmitting] = useState(false);
   const [restoring, setRestoring] = useState(false);
   const [restartManaged, setRestartManaged] = useState(true);
   const [restoreReport, setRestoreReport] = useState<api.RestoreReport | null>(null);
@@ -208,7 +209,7 @@ export function BackupPage() {
     setCreating(true);
     try {
       await api.createBackup();
-      show("完整备份任务已开始", "success");
+      show("备份任务已开始", "success");
       await refresh(true);
     } catch (error) {
       show(error instanceof Error ? error.message : "创建备份失败", "error");
@@ -364,8 +365,8 @@ export function BackupPage() {
   }
 
   async function handleRestore() {
-    if (!restoreTarget || restoring) return;
-    setRestoring(true);
+    if (!restoreTarget || restoreSubmitting || restoring) return;
+    setRestoreSubmitting(true);
     try {
       const result = await api.restoreBackup(restoreTarget.id, {
         password: restorePassword,
@@ -376,15 +377,17 @@ export function BackupPage() {
       setRestoreTarget(null);
       setRestorePassword("");
       setRestoreText("");
+      setRestoring(true);
       show("恢复已通过校验，服务正在切换数据并重启", "success");
     } catch (error) {
-      setRestoring(false);
       show(error instanceof Error ? error.message : "恢复失败", "error");
+    } finally {
+      setRestoreSubmitting(false);
     }
   }
 
   function closeRestore() {
-    if (restoring) return;
+    if (restoreSubmitting || restoring) return;
     setRestoreTarget(null);
     setRestorePassword("");
     setRestoreText("");
@@ -422,7 +425,7 @@ export function BackupPage() {
           disabled={creating || taskActive(current) || data?.pendingRestore}
         >
           {creating ? <Loader2 size={15} className="admin-spin" /> : <Archive size={15} />}
-          创建完整备份
+          创建备份
         </button>
       </div>
 
@@ -641,7 +644,7 @@ export function BackupPage() {
         ) : (
           <div className="backup-empty">
             <Archive size={28} />
-            <span>还没有完整备份</span>
+            <span>还没有备份</span>
           </div>
         )}
       </section>
@@ -666,7 +669,7 @@ export function BackupPage() {
             <button
               type="button"
               className="admin-btn"
-              disabled={restoring}
+              disabled={restoreSubmitting}
               onClick={closeRestore}
             >
               取消
@@ -674,11 +677,11 @@ export function BackupPage() {
             <button
               type="button"
               className="admin-btn is-danger"
-              disabled={!restorePassword || restoreText !== "确认恢复" || restoring}
+              disabled={!restorePassword || restoreText !== "确认恢复" || restoreSubmitting}
               onClick={handleRestore}
             >
-              {restoring ? <Loader2 size={14} className="admin-spin" /> : <RotateCcw size={14} />}
-              {restoring ? "校验并暂存中…" : "确认恢复"}
+              {restoreSubmitting ? <Loader2 size={14} className="admin-spin" /> : <RotateCcw size={14} />}
+              {restoreSubmitting ? "校验并暂存中…" : "确认恢复"}
             </button>
           </>
         }

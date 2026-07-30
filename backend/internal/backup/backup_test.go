@@ -163,6 +163,17 @@ func TestCatalogBackupToIncludesUncheckpointedWALData(t *testing.T) {
 
 func TestFullBackupContainsPersistentFilesAndExcludesTemporaryData(t *testing.T) {
 	env := newTestBackupEnv(t)
+	ctx := context.Background()
+	adminID, err := env.cat.CreateUser(ctx, "backup-admin", "admin-password-hash", "admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := env.cat.CreateUser(ctx, "backup-user", "user-password-hash", "user"); err != nil {
+		t.Fatal(err)
+	}
+	if err := env.cat.CreateSession(ctx, "backup-session", time.Hour, adminID); err != nil {
+		t.Fatal(err)
+	}
 	writeTestFile(t, filepath.Join(env.root, "previews", "cover.jpg"), []byte("cover"))
 	writeTestFile(t, filepath.Join(env.root, "previews", "teaser.mp4"), []byte("teaser"))
 	writeTestFile(t, filepath.Join(env.root, "previews", "framesigs", "video.fsig"), []byte("framesig"))
@@ -189,9 +200,9 @@ func TestFullBackupContainsPersistentFilesAndExcludesTemporaryData(t *testing.T)
 		t.Fatal(err)
 	}
 	defer reader.Close()
-	names := make(map[string]bool)
+	files := make(map[string]*zip.File)
 	for _, file := range reader.File {
-		names[file.Name] = true
+		files[file.Name] = file
 	}
 	for _, expected := range []string{
 		"manifest.json",
@@ -205,7 +216,7 @@ func TestFullBackupContainsPersistentFilesAndExcludesTemporaryData(t *testing.T)
 		"payload/scriptcrawlers/demo/videos/crawl.mp4",
 		"payload/spider91/legacy.mp4",
 	} {
-		if !names[expected] {
+		if files[expected] == nil {
 			t.Errorf("archive is missing %s", expected)
 		}
 	}
@@ -214,12 +225,56 @@ func TestFullBackupContainsPersistentFilesAndExcludesTemporaryData(t *testing.T)
 		"payload/crawler-scripts/__pycache__/ignored.pyc",
 		"payload/previews/linked-secret",
 	} {
-		if names[excluded] {
+		if files[excluded] != nil {
 			t.Errorf("archive unexpectedly contains %s", excluded)
 		}
 	}
 	if record.VerificationStatus != "verified" || !validSHA256(record.SHA256) {
 		t.Fatalf("record verification = %q sha=%q", record.VerificationStatus, record.SHA256)
+	}
+
+	databasePath := filepath.Join(t.TempDir(), "database.sqlite")
+	if err := os.WriteFile(databasePath, readZipFile(t, files["payload/database.sqlite"]), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	database, err := sql.Open("sqlite", databasePath+"?mode=ro")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	var adminCount, userCount, sessionCount int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM users WHERE role = 'admin'`).Scan(&adminCount); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.QueryRow(`SELECT COUNT(*) FROM users WHERE username = 'backup-user' AND role = 'user'`).Scan(&userCount); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.QueryRow(`SELECT COUNT(*) FROM admin_sessions`).Scan(&sessionCount); err != nil {
+		t.Fatal(err)
+	}
+	if adminCount != 0 || userCount != 1 || sessionCount != 0 {
+		t.Fatalf(
+			"redacted snapshot has admins=%d users=%d sessions=%d, want 0/1/0",
+			adminCount,
+			userCount,
+			sessionCount,
+		)
+	}
+
+	var backupConfig config.Config
+	if err := yaml.Unmarshal(readZipFile(t, files["payload/config.yaml"]), &backupConfig); err != nil {
+		t.Fatal(err)
+	}
+	if backupConfig.Server.Admin.Username != "" || backupConfig.Server.Admin.Password != "" {
+		t.Fatalf("backup administrator config was not redacted: %+v", backupConfig.Server.Admin)
+	}
+	liveConfig, err := config.Load(env.configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if liveConfig.Server.Admin.Username != "source-admin" ||
+		liveConfig.Server.Admin.Password != "source-password" {
+		t.Fatalf("creating a backup changed the live administrator config: %+v", liveConfig.Server.Admin)
 	}
 }
 
@@ -690,9 +745,9 @@ func TestRestoreSwitchesAllDataPreservesTargetRuntimeConfigAndClearsSessions(t *
 		restoredConfig.Preview.FFprobePath != "/target/bin/ffprobe" {
 		t.Fatalf("target executable paths were not preserved: %+v", restoredConfig.Preview)
 	}
-	if restoredConfig.Server.Admin.Username != "source-admin" ||
-		restoredConfig.Server.Admin.Password != "source-password" {
-		t.Fatalf("source administrator config was not restored: %+v", restoredConfig.Server.Admin)
+	if restoredConfig.Server.Admin.Username != "target-admin" ||
+		restoredConfig.Server.Admin.Password != "target-password" {
+		t.Fatalf("target administrator config was not preserved: %+v", restoredConfig.Server.Admin)
 	}
 	localDrive, err := restoredCatalog.GetDrive(ctx, "local-missing")
 	if err != nil {
@@ -700,6 +755,179 @@ func TestRestoreSwitchesAllDataPreservesTargetRuntimeConfigAndClearsSessions(t *
 	}
 	if localDrive.Status != "disconnected" || !strings.Contains(localDrive.LastError, missingLocal) {
 		t.Fatalf("missing local drive state = %+v", localDrive)
+	}
+}
+
+func TestRestoreLegacyBackupPreservesAllTargetAdministrators(t *testing.T) {
+	env := newTestBackupEnv(t)
+	ctx := context.Background()
+
+	sourceAdminID, err := env.cat.CreateUser(
+		ctx,
+		"legacy-source-admin",
+		"legacy-source-admin-hash",
+		"admin",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sourceUserID, err := env.cat.CreateUser(ctx, "restored-user", "restored-user-hash", "user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	conflictingUserID, err := env.cat.CreateUser(
+		ctx,
+		"TARGET-OWNER",
+		"source-conflicting-user-hash",
+		"user",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := env.cat.CreateSession(ctx, "legacy-source-session", time.Hour, sourceAdminID); err != nil {
+		t.Fatal(err)
+	}
+
+	legacyDatabasePath := filepath.Join(env.root, "legacy-source.sqlite")
+	if err := env.cat.BackupTo(ctx, legacyDatabasePath); err != nil {
+		t.Fatal(err)
+	}
+	legacyDatabase, err := os.ReadFile(legacyDatabasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyConfig, err := os.ReadFile(env.configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const legacyID = "video-site-91-full-legacy-administrator-test"
+	writePayloadArchive(
+		t,
+		filepath.Join(env.manager.backupDir, legacyID+".zip"),
+		[]rawZipEntry{
+			{name: "payload/database.sqlite", body: legacyDatabase},
+			{name: "payload/config.yaml", body: legacyConfig},
+		},
+	)
+
+	if err := env.cat.DeleteSession(ctx, "legacy-source-session"); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []int64{sourceAdminID, sourceUserID, conflictingUserID} {
+		if err := env.cat.DeleteUser(ctx, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	targetOwnerID, err := env.cat.CreateUser(
+		ctx,
+		"target-owner",
+		"target-owner-password-hash",
+		"admin",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	targetAuditorID, err := env.cat.CreateUser(
+		ctx,
+		"target-auditor",
+		"target-auditor-password-hash",
+		"admin",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := env.cat.SetUserBanned(ctx, targetAuditorID, true); err != nil {
+		t.Fatal(err)
+	}
+	targetOwner, err := env.cat.GetUserByID(ctx, targetOwnerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	targetAuditor, err := env.cat.GetUserByID(ctx, targetAuditorID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := env.cat.CreateSession(ctx, "target-session", time.Hour, targetOwnerID); err != nil {
+		t.Fatal(err)
+	}
+	env.cfg.Server.Admin.Username = "target-config-admin"
+	env.cfg.Server.Admin.Password = "target-config-password"
+	writeTestConfig(t, env.configPath, env.cfg)
+
+	if _, err := env.manager.PrepareRestore(ctx, legacyID); err != nil {
+		t.Fatal(err)
+	}
+	env.manager.Close()
+	if err := env.cat.Close(); err != nil {
+		t.Fatal(err)
+	}
+	applied, err := ApplyPendingRestore(env.root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if applied == nil {
+		t.Fatal("pending legacy restore was not applied")
+	}
+	restoredCatalog, err := catalog.Open(env.cfg.Storage.DBPath)
+	if err != nil {
+		_ = RollbackAppliedRestore(applied, err)
+		t.Fatal(err)
+	}
+	defer restoredCatalog.Close()
+	if err := CommitAppliedRestore(applied); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := restoredCatalog.GetUserByUsername(ctx, "legacy-source-admin"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("legacy source administrator survived restore: %v", err)
+	}
+	restoredUser, err := restoredCatalog.GetUserByUsername(ctx, "restored-user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restoredUser.Role != "user" || restoredUser.Password != "restored-user-hash" {
+		t.Fatalf("source regular user was not restored: %+v", restoredUser)
+	}
+	restoredOwner, err := restoredCatalog.GetUserByUsername(ctx, "TARGET-OWNER")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restoredOwner.Username != targetOwner.Username ||
+		restoredOwner.Password != targetOwner.Password ||
+		restoredOwner.Role != "admin" ||
+		restoredOwner.Banned != targetOwner.Banned ||
+		restoredOwner.CreatedAt != targetOwner.CreatedAt {
+		t.Fatalf("target owner was not preserved over conflicting source user: %+v", restoredOwner)
+	}
+	restoredAuditor, err := restoredCatalog.GetUserByUsername(ctx, targetAuditor.Username)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restoredAuditor.Password != targetAuditor.Password ||
+		restoredAuditor.Role != "admin" ||
+		restoredAuditor.Banned != targetAuditor.Banned ||
+		restoredAuditor.CreatedAt != targetAuditor.CreatedAt {
+		t.Fatalf("target auditor was not preserved: %+v", restoredAuditor)
+	}
+	admins, err := restoredCatalog.ListAdmins(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(admins) != 2 {
+		t.Fatalf("restored administrator count = %d, want 2", len(admins))
+	}
+	for _, token := range []string{"legacy-source-session", "target-session"} {
+		if valid, _, err := restoredCatalog.ValidateSession(ctx, token); err != nil || valid {
+			t.Fatalf("restored session %q valid=%v err=%v, want cleared", token, valid, err)
+		}
+	}
+	restoredConfig, err := config.Load(env.configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restoredConfig.Server.Admin.Username != "target-config-admin" ||
+		restoredConfig.Server.Admin.Password != "target-config-password" {
+		t.Fatalf("target administrator config was not preserved: %+v", restoredConfig.Server.Admin)
 	}
 }
 
@@ -711,6 +939,46 @@ func TestAppliedRestoreCanRollBackToOldData(t *testing.T) {
 	if _, err := env.cat.CreateUser(context.Background(), "current-user", "hash", "user"); err != nil {
 		t.Fatal(err)
 	}
+	currentOwnerID, err := env.cat.CreateUser(
+		context.Background(),
+		"current-owner",
+		"current-owner-password-hash",
+		"admin",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	currentAuditorID, err := env.cat.CreateUser(
+		context.Background(),
+		"current-auditor",
+		"current-auditor-password-hash",
+		"admin",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := env.cat.SetUserBanned(context.Background(), currentAuditorID, true); err != nil {
+		t.Fatal(err)
+	}
+	currentOwner, err := env.cat.GetUserByID(context.Background(), currentOwnerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	currentAuditor, err := env.cat.GetUserByID(context.Background(), currentAuditorID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := env.cat.CreateSession(
+		context.Background(),
+		"rollback-admin-session",
+		time.Hour,
+		currentOwnerID,
+	); err != nil {
+		t.Fatal(err)
+	}
+	env.cfg.Server.Admin.Username = "rollback-config-owner"
+	env.cfg.Server.Admin.Password = "rollback-config-password"
+	writeTestConfig(t, env.configPath, env.cfg)
 	if _, err := env.manager.PrepareRestore(context.Background(), record.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -736,6 +1004,32 @@ func TestAppliedRestoreCanRollBackToOldData(t *testing.T) {
 	defer oldCatalog.Close()
 	if _, err := oldCatalog.GetUserByUsername(context.Background(), "current-user"); err != nil {
 		t.Fatalf("current database was not restored after rollback: %v", err)
+	}
+	for _, expected := range []*catalog.User{currentOwner, currentAuditor} {
+		actual, err := oldCatalog.GetUserByUsername(context.Background(), expected.Username)
+		if err != nil {
+			t.Fatalf("rolled back administrator %q is missing: %v", expected.Username, err)
+		}
+		if actual.Password != expected.Password ||
+			actual.Role != expected.Role ||
+			actual.Banned != expected.Banned ||
+			actual.CreatedAt != expected.CreatedAt {
+			t.Fatalf("rolled back administrator %q = %+v, want %+v", expected.Username, actual, expected)
+		}
+	}
+	if valid, userID, err := oldCatalog.ValidateSession(
+		context.Background(),
+		"rollback-admin-session",
+	); err != nil || !valid || userID != currentOwnerID {
+		t.Fatalf("rolled back administrator session valid=%v userID=%d err=%v", valid, userID, err)
+	}
+	rolledBackConfig, err := config.Load(env.configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rolledBackConfig.Server.Admin.Username != "rollback-config-owner" ||
+		rolledBackConfig.Server.Admin.Password != "rollback-config-password" {
+		t.Fatalf("administrator config was not restored after rollback: %+v", rolledBackConfig.Server.Admin)
 	}
 }
 
@@ -813,6 +1107,23 @@ type rawZipEntry struct {
 	name string
 	body []byte
 	mode os.FileMode
+}
+
+func readZipFile(t *testing.T, file *zip.File) []byte {
+	t.Helper()
+	if file == nil {
+		t.Fatal("ZIP entry is missing")
+	}
+	input, err := file.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer input.Close()
+	body, err := io.ReadAll(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return body
 }
 
 func writeRawZip(t *testing.T, path string, entries []rawZipEntry) {

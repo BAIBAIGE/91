@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 func TestRequiresAdminSetup(t *testing.T) {
@@ -49,6 +51,45 @@ storage:
 	}
 	if cfg.Storage.DBPath != "./data/video-site.db" {
 		t.Fatalf("db path = %q, want preserved value", cfg.Storage.DBPath)
+	}
+}
+
+func TestRedactAdminCredentialsPreservesOtherConfig(t *testing.T) {
+	source := []byte(`# retained comment
+server:
+  listen: "127.0.0.1:9192"
+  admin:
+    username: "source-owner"
+    password: "source-secret"
+  future_option: "keep-me"
+storage:
+  db_path: "./data/video-site.db"
+`)
+	redacted, err := RedactAdminCredentials(source)
+	if err != nil {
+		t.Fatalf("redact admin credentials: %v", err)
+	}
+	if strings.Contains(string(redacted), "source-owner") ||
+		strings.Contains(string(redacted), "source-secret") {
+		t.Fatalf("redacted config still contains administrator credentials:\n%s", redacted)
+	}
+	if !strings.Contains(string(redacted), "# retained comment") {
+		t.Fatalf("redaction discarded unrelated config:\n%s", redacted)
+	}
+	var document map[string]any
+	if err := yaml.Unmarshal(redacted, &document); err != nil {
+		t.Fatalf("parse redacted config: %v", err)
+	}
+	server, ok := document["server"].(map[string]any)
+	if !ok {
+		t.Fatalf("redacted server config = %#v", document["server"])
+	}
+	admin, ok := server["admin"].(map[string]any)
+	if !ok || admin["username"] != "" || admin["password"] != "" {
+		t.Fatalf("redacted administrator config = %#v", server["admin"])
+	}
+	if server["future_option"] != "keep-me" {
+		t.Fatalf("redacted future server option = %#v", server["future_option"])
 	}
 }
 

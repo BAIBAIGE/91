@@ -60,6 +60,14 @@ func TestListUsers(t *testing.T) {
 	if len(users) != 2 {
 		t.Fatalf("expected 2 users, got %d", len(users))
 	}
+	admins, err := c.ListAdmins(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(admins) != 1 || admins[0].Username != "user2" ||
+		admins[0].Password != "pass2" || admins[0].Role != "admin" {
+		t.Fatalf("administrators = %#v", admins)
+	}
 }
 
 func TestSetUserBanned(t *testing.T) {

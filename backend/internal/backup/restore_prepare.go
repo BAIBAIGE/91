@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/video-site/backend/internal/catalog"
 	"github.com/video-site/backend/internal/config"
 	"github.com/video-site/backend/internal/mediaasset"
 	"gopkg.in/yaml.v3"
@@ -111,6 +112,10 @@ func (m *Manager) PrepareRestore(ctx context.Context, id string) (ValidationRepo
 		return ValidationReport{}, err
 	}
 
+	targetAdmins, err := m.catalog.ListAdmins(ctx)
+	if err != nil {
+		return ValidationReport{}, fmt.Errorf("backup: read target administrators: %w", err)
+	}
 	sourceConfig, err := readBackupConfig(filepath.Join(stageRoot, "payload", "config.yaml"))
 	if err != nil {
 		return ValidationReport{}, err
@@ -151,6 +156,7 @@ func (m *Manager) PrepareRestore(ctx context.Context, id string) (ValidationRepo
 		targetConfig,
 		m.dataRoot,
 		m.assetRoot,
+		targetAdmins,
 	)
 	if err != nil {
 		return ValidationReport{}, err
@@ -280,6 +286,7 @@ func readBackupConfig(filePath string) (config.Config, error) {
 
 func mergeRestoreConfig(source, target config.Config) config.Config {
 	source.Server.Listen = target.Server.Listen
+	source.Server.Admin = target.Server.Admin
 	source.Server.AllowedOrigins = append([]string(nil), target.Server.AllowedOrigins...)
 	source.Storage = target.Storage
 	source.Preview.FFmpegPath = target.Preview.FFmpegPath
@@ -417,6 +424,7 @@ func rewriteRestoredDatabase(
 	targetConfig config.Config,
 	targetDataRoot string,
 	targetAssetRoot string,
+	targetAdmins []*catalog.User,
 ) (ValidationReport, error) {
 	dsn := databasePath + "?_pragma=busy_timeout(5000)"
 	database, err := sql.Open("sqlite", dsn)
@@ -638,9 +646,12 @@ SELECT id, COALESCE(restore_payload, '') FROM deleted_videos WHERE COALESCE(rest
 		report.PathRewrites = appendLimited(report.PathRewrites, fmt.Sprintf("删除记录 %s 的恢复载荷路径已改写", item.id))
 	}
 
+	if err := restoreTargetAdministrators(ctx, tx, targetAdmins); err != nil {
+		return ValidationReport{}, err
+	}
+
 	now := time.Now().UnixMilli()
 	for _, statement := range []string{
-		`DELETE FROM admin_sessions`,
 		`DELETE FROM video_shares`,
 		`DELETE FROM shorts_feed_sessions`,
 	} {
