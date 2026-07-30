@@ -3239,6 +3239,77 @@ func TestHandleAdminListVideosFiltersByDriveID(t *testing.T) {
 	}
 }
 
+func TestHandleAdminListVideosTreatsUploadsAsOneSource(t *testing.T) {
+	ctx := context.Background()
+	cat, err := catalog.Open(t.TempDir() + "/catalog.db")
+	if err != nil {
+		t.Fatalf("open catalog: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := cat.Close(); err != nil {
+			t.Fatalf("close catalog: %v", err)
+		}
+	})
+
+	now := time.Now()
+	for _, video := range []*catalog.Video{
+		{
+			ID:          "uploaded-from-file",
+			DriveID:     "local-upload",
+			FileID:      "from-file.mp4",
+			Title:       "uploaded from file",
+			PublishedAt: now,
+			CreatedAt:   now,
+		},
+		{
+			ID:          "uploaded-from-link",
+			DriveID:     "local-upload",
+			FileID:      "from-link.mp4",
+			Title:       "uploaded from link",
+			PublishedAt: now.Add(-time.Second),
+			CreatedAt:   now.Add(-time.Second),
+		},
+		{
+			ID:          "cloud-video",
+			DriveID:     "cloud",
+			FileID:      "cloud-file",
+			Title:       "cloud video",
+			PublishedAt: now.Add(-2 * time.Second),
+			CreatedAt:   now.Add(-2 * time.Second),
+		},
+	} {
+		if err := cat.UpsertVideo(ctx, video); err != nil {
+			t.Fatalf("seed %s: %v", video.ID, err)
+		}
+	}
+
+	req := httptest.NewRequest(
+		http.MethodGet,
+		"/admin/api/videos?driveId=local-upload",
+		nil,
+	)
+	rr := httptest.NewRecorder()
+	(&AdminServer{Catalog: cat}).handleAdminListVideos(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rr.Code, rr.Body.String())
+	}
+	var got struct {
+		Items []catalog.Video `json:"items"`
+		Total int             `json:"total"`
+	}
+	if err := json.NewDecoder(rr.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.Total != 2 || len(got.Items) != 2 {
+		t.Fatalf("response total/items = %d/%d, want both uploads: %#v", got.Total, len(got.Items), got.Items)
+	}
+	for _, item := range got.Items {
+		if item.DriveID != "local-upload" {
+			t.Fatalf("unexpected non-upload item: %#v", item)
+		}
+	}
+}
+
 func TestHandleAdminListVideosAppliesAdvancedFilters(t *testing.T) {
 	ctx := context.Background()
 	cat, err := catalog.Open(t.TempDir() + "/catalog.db")

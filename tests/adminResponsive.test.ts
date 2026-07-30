@@ -277,6 +277,9 @@ test("admin video management uses a modal advanced filter without a page title",
   assert.match(videosPageSource, /function AdvancedVideoFilters/);
   assert.match(videosPageSource, /function VideoSourcePicker/);
   assert.match(videosPageSource, /<span>来源<\/span>/);
+  assert.match(videosPageSource, /<strong>上传来源<\/strong>/);
+  assert.match(videosPageSource, /selectSource\("drive", LOCAL_UPLOAD_SOURCE_ID\)/);
+  assert.doesNotMatch(videosPageSource, /className="admin-video-upload-source-options"/);
   assert.match(videosPageSource, /className="admin-video-source-picker__trigger"/);
   assert.match(videosPageSource, /role="listbox" aria-label="来源"/);
   assert.match(videosPageSource, /role="group" aria-label="网盘"/);
@@ -295,6 +298,7 @@ test("admin video management uses a modal advanced filter without a page title",
   assert.match(adminCss, /\.admin-video-advanced-filters\s*\{/);
   assert.match(adminCss, /\.admin-video-source-picker__trigger\s*\{/);
   assert.match(adminCss, /\.admin-video-source-picker__menu\s*\{/);
+  assert.match(adminCss, /\.admin-video-source-picker__icon\.is-upload\s*\{/);
   assert.match(desktopRange, /grid-column\s*:\s*1\s*\/\s*-1/);
   assert.match(desktopRangeInputs, /grid-template-columns\s*:\s*minmax\(0,\s*1fr\) auto minmax\(0,\s*1fr\)/);
   assert.match(desktopRangeInputs, /justify-content\s*:\s*stretch/);

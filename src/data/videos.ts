@@ -220,6 +220,66 @@ export function uploadVideo(input: UploadVideoInput): Promise<VideoItem> {
   return apiForm<VideoItem>("/api/upload", body);
 }
 
+export type RemoteUploadState =
+  | "queued"
+  | "downloading"
+  | "validating"
+  | "saving"
+  | "completed"
+  | "failed"
+  | "canceled";
+
+export type RemoteUploadJob = {
+  id: string;
+  state: RemoteUploadState;
+  sourceLabel: string;
+  title?: string;
+  tags: string[];
+  bytesDownloaded: number;
+  totalBytes: number;
+  canCancel: boolean;
+  cancelRequested?: boolean;
+  error?: string;
+  completedVideoId?: string;
+  videoHref?: string;
+  createdAt: string;
+  startedAt?: string;
+  updatedAt: string;
+  finishedAt?: string;
+};
+
+export type CreateRemoteUploadInput = {
+  url: string;
+  title: string;
+  tags: string[];
+};
+
+export function createRemoteUpload(
+  input: CreateRemoteUploadInput
+): Promise<RemoteUploadJob> {
+  return apiJSON<RemoteUploadJob>("/api/upload/remote", {
+    method: "POST",
+    body: JSON.stringify({
+      url: input.url.trim(),
+      title: input.title.trim(),
+      tags: input.tags,
+    }),
+  });
+}
+
+export function fetchRemoteUploads(limit = 20): Promise<RemoteUploadJob[]> {
+  return apiGet<RemoteUploadJob[]>(
+    `/api/upload/remote?limit=${encodeURIComponent(String(limit))}`
+  );
+}
+
+export function cancelRemoteUpload(id: string): Promise<RemoteUploadJob> {
+  return apiJSON<RemoteUploadJob>(
+    `/api/upload/remote/${encodeURIComponent(id)}/cancel`,
+    { method: "POST" }
+  );
+}
+
 export type TagItem = { id: string; label: string; count?: number };
 
 let cachedTags: TagItem[] | null = null;
@@ -391,7 +451,7 @@ async function apiJSON<T>(path: string, init: RequestInit): Promise<T> {
     headers: { "Content-Type": "application/json" },
     ...init,
   });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  if (!res.ok) throw await responseError(res);
   return res.json();
 }
 
@@ -401,6 +461,18 @@ async function apiForm<T>(path: string, body: FormData): Promise<T> {
     credentials: "include",
     body,
   });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  if (!res.ok) throw await responseError(res);
   return res.json();
+}
+
+async function responseError(res: Response): Promise<Error> {
+  try {
+    const body = (await res.json()) as { error?: unknown };
+    if (typeof body?.error === "string" && body.error.trim()) {
+      return new Error(body.error.trim());
+    }
+  } catch {
+    // Non-JSON errors retain the stable HTTP fallback below.
+  }
+  return new Error(`HTTP ${res.status}`);
 }

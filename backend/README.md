@@ -42,6 +42,7 @@ internal/
   fingerprint/              跨盘去重指纹
   nightly/                  每日维护流水线
   crawlerupload/            把爬虫产物迁移到目标网盘
+  remoteupload/             公网视频直链的安全下载与持久化单 worker
   …                         转码、标签、字幕、相似度、路径与文件名规则等小包
 data/                       运行时数据：主库、封面、上传、爬虫产物（不在版本库）
 ```
@@ -110,6 +111,7 @@ internal/
   streamhttp/               共享的重定向策略，跳转时不泄漏网盘凭据
   nightly/                  每日一条维护流水线：扫盘 → 爬虫 → 上传迁移 → 去重维护
   crawlerupload/            把爬虫落地的视频迁移到目标网盘并改写 catalog 行
+  remoteupload/             视频直链任务、SSRF 防护、磁盘保护和下载 worker
   tagging/                  标签匹配规则、番号识别
   fixedtags/                内置标签包及其匹配规则
   mediasim/                 标题相似度 + 封面 SSIM + teaser 帧签名，供近重复判定使用
@@ -219,23 +221,39 @@ flowchart TB
 
 1. 读 `config.yaml`（缺失则从模板复制）、建 `data/` 目录、打开 SQLite。
 2. 挂载本地内置盘（`localupload`），启动指纹补扫协程。
-3. 装配 `api.Server` / `api.AdminServer`，注册 chi 路由，挂前端静态资源。
-4. **先监听端口**，再 `go attachExistingDrives(ctx)` 异步挂载云盘。云盘挂载要校验上游登录态，放在监听之前会拖慢启动。
-5. 启动 nightly 流水线协程，等待退出信号，收到后 5 秒优雅关闭。
+3. 恢复视频直链任务：删除中断的 `.part`，把执行中任务从字节 0 重新排队，并启动唯一下载 worker。
+4. 装配 `api.Server` / `api.AdminServer`，注册 chi 路由，挂前端静态资源。
+5. **先监听端口**，再 `go attachExistingDrives(ctx)` 异步挂载云盘。云盘挂载要校验上游登录态，放在监听之前会拖慢启动。
+6. 启动 nightly 流水线协程，等待退出信号；HTTP 服务关闭后会等待直链 worker 中止请求、清理临时文件并重新排队未完成任务。
 
 启动期还会跑一次性迁移：孤儿视频清理、config 管理员写入 users 表、隐藏视频转黑名单墓碑、标签迁移。
 
 每挂载一个盘，就为它单独起 **封面 / 预览 / 指纹三个 worker**，并注册一个可独立取消的 context —— 后台「停止该盘任务」就是取消这个 context。
 
-### 2. 入库的三条路径
+### 2. 入库的四条路径
 
 | 路径 | 触发 | 关键行为 |
 |---|---|---|
 | 扫盘 | 夜间流水线、后台「重新扫描」 | 递归列目录，按扩展名过滤，`videoname` 解析标题/作者，`UpsertVideo` 落库 |
 | 爬虫 | 夜间流水线、后台「重新扫描」（爬虫盘等同触发爬取） | 启动 Python 子进程，读 stdout 的 JSON Lines 事件流，逐条下载入库 |
 | 上传 | 前台 `POST /api/upload` | 落到 `data/uploads/`，直接入库并立即排生成队列 |
+| 视频直链 | 上传页 `POST /api/upload/remote` | 持久化后台下载，校验视频流后落到 `data/uploads/`，复用上传生成队列 |
 
 扫盘结束后还有一步**删除检测**：本轮见到的 `file_id` 集合之外、且父目录在本轮走过的视频，判定为已从网盘删除。若本轮有目录报错（`stats.Errors > 0`）则整轮跳过检测 —— 宁可漏删，不可把「暂时列不出来」误判成「用户删了」。爬虫盘和站内上传不参与这个检测，它们有自己的生命周期。
+
+#### 视频直链后台任务
+
+上传页的「视频直链」只对管理员开放。创建接口立即返回 `202`，页面通过 `GET /api/upload/remote?limit=20` 展示最近任务；排队或执行中的任务可调用 `POST /api/upload/remote/{jobId}/cancel` 取消。任务保存在 `remote_upload_jobs`，严格由一个 FIFO worker 串行下载，页面刷新或关闭不影响。服务重启会删除中断任务的临时文件并从头下载；普通网络错误不自动重试，重新提交链接即可。完成、失败和取消记录保留 7 天，进入任一终态时原始 URL 会立即从数据库清空，API 和日志始终只使用不含查询参数的主机与路径标签。
+
+直链下载的边界刻意较窄：
+
+- 只接受公网 `http` / `https` 文件 URL，不接受 userinfo、HLS/m3u8、内网/NAS、网页解析或网盘分享页。
+- 不提供 Cookie、Referer 或自定义请求头，因此依赖这些鉴权信息的链接不支持；URL 自身带的签名查询参数可以使用，但不会出现在任务响应、错误或日志里。
+- 独立 HTTP transport 不读取环境代理。提交、DNS 解析、实际拨号和每次重定向都会拒绝回环、私网、链路本地、组播、未指定、CGNAT和云元数据地址；最多跟随 5 次重定向。
+- 连接、TLS 和响应头阶段各有 30 秒超时。下载没有业务大小或总时长上限，但正文连续无数据达到 `remote_upload.idle_timeout_seconds`（默认 120 秒）会失败。
+- 已知 `Content-Length` 时会先检查空间，写入每个数据块前也会继续检查，始终保留 `remote_upload.disk_reserve_bytes`（默认 1 GiB）。临时 `.part` 与最终视频在同一 `data/uploads/` 文件系统中。
+- 下载结束后必须由 `ffprobe` 确认存在视频流，并只接受 AVI、MKV、MOV、MP4 或 WebM。标题优先级为显式标题、`Content-Disposition` 文件名、最终 URL 文件名、原始 URL 文件名，沿用本地上传的文件名安全与同名冲突规则。
+- 最终文件、视频记录、人工标签和任务完成状态按可恢复流程提交；失败会清理文件和数据库记录。成功后仍调用 `OnVideoUploaded`，继续生成封面、预览和指纹。
 
 ### 3. 播放链路
 

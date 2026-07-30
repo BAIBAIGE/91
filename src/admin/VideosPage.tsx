@@ -18,6 +18,7 @@ import {
   Search,
   Image,
   Trash2,
+  Upload,
 } from "lucide-react";
 import * as api from "./api";
 import { useToast } from "./ToastContext";
@@ -36,6 +37,7 @@ const REGEN_PREVIEW_STATUS = "generating";
 const REGEN_PREVIEW_POLL_INTERVAL_MS = 2000;
 const REGEN_PREVIEW_TRACK_TIMEOUT_MS = 30 * 60 * 1000;
 const ADMIN_SEARCH_DEBOUNCE_MS = 500;
+const LOCAL_UPLOAD_SOURCE_ID = "local-upload";
 
 type TabKey = "current" | "blacklist";
 type PageSetter = Dispatch<SetStateAction<number>>;
@@ -295,6 +297,7 @@ function CurrentVideosTab({
   }, [list, trackedRegenCount]);
 
   const driveNameMap = new Map(drives.map((d) => [d.id, d.name || d.id]));
+  driveNameMap.set(LOCAL_UPLOAD_SOURCE_ID, "上传来源");
 
   const listItems = list;
   const editingVideo = editing ? (listItems.find((v) => v.id === editing.id) ?? editing) : null;
@@ -842,6 +845,7 @@ function BlacklistTab({
   }, [keyword, searchKeyword]);
 
   const driveNameMap = new Map(drives.map((d) => [d.id, d.name || d.id]));
+  driveNameMap.set(LOCAL_UPLOAD_SOURCE_ID, "上传来源");
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   useEffect(() => {
     if (!loading && page > totalPages) setPage(totalPages);
@@ -1241,22 +1245,30 @@ function VideoSourcePicker({
   const listRef = useRef<HTMLDivElement>(null);
   const listboxId = useId();
 
-  const selectedDrive = drives.find((drive) => drive.id === driveId);
+  const selectedIsUpload = driveId === LOCAL_UPLOAD_SOURCE_ID;
+  const selectedDrive = selectedIsUpload ? undefined : drives.find((drive) => drive.id === driveId);
   const selectedCrawler = crawlers.find((crawler) => crawler.id === crawlerId);
   const selectedKind: VideoSourcePickerKind = crawlerId ? "crawler" : driveId ? "drive" : null;
-  const selectedName = selectedCrawler?.name || selectedDrive?.name || crawlerId || driveId || "全部来源";
+  const selectedName = selectedIsUpload
+    ? "上传来源"
+    : selectedCrawler?.name || selectedDrive?.name || crawlerId || driveId || "全部来源";
   const normalizedQuery = query.trim().toLocaleLowerCase();
-  const filteredDrives = drives.filter((drive) =>
-    [drive.name, drive.id, kindLabel[drive.kind]].some((text) =>
-      (text || "").toLocaleLowerCase().includes(normalizedQuery)
-    )
+  const uploadMatchesQuery = ["上传来源", "上传", "本地文件", "视频直链"].some((text) =>
+    text.toLocaleLowerCase().includes(normalizedQuery)
   );
+  const filteredDrives = drives
+    .filter((drive) => drive.id !== LOCAL_UPLOAD_SOURCE_ID)
+    .filter((drive) =>
+      [drive.name, drive.id, kindLabel[drive.kind]].some((text) =>
+        (text || "").toLocaleLowerCase().includes(normalizedQuery)
+      )
+    );
   const filteredCrawlers = crawlers.filter((crawler) =>
     [crawler.name, crawler.id, "脚本爬虫"].some((text) =>
       text.toLocaleLowerCase().includes(normalizedQuery)
     )
   );
-  const hasMatches = filteredDrives.length > 0 || filteredCrawlers.length > 0;
+  const hasMatches = uploadMatchesQuery || filteredDrives.length > 0 || filteredCrawlers.length > 0;
 
   useEffect(() => {
     if (!open) return;
@@ -1424,7 +1436,11 @@ function VideoSourcePicker({
         aria-label={`来源，当前为${selectedName}`}
         onClick={() => (open ? closePicker() : openPicker())}
       >
-        <VideoSourcePickerIcon drive={selectedDrive} crawler={selectedCrawler} />
+        <VideoSourcePickerIcon
+          drive={selectedDrive}
+          crawler={selectedCrawler}
+          upload={selectedIsUpload}
+        />
         <span className="admin-video-source-picker__selection">
           <strong>{selectedName}</strong>
         </span>
@@ -1535,6 +1551,23 @@ function VideoSourcePicker({
               </div>
             )}
 
+            {uploadMatchesQuery && (
+              <button
+                type="button"
+                role="option"
+                tabIndex={-1}
+                aria-selected={selectedIsUpload}
+                className={`admin-video-source-picker__option is-upload${selectedIsUpload ? " is-selected" : ""}`}
+                onClick={() => selectSource("drive", LOCAL_UPLOAD_SOURCE_ID)}
+              >
+                <VideoSourcePickerIcon upload />
+                <span className="admin-video-source-picker__option-copy">
+                  <strong>上传来源</strong>
+                </span>
+                {selectedIsUpload && <Check size={16} aria-hidden="true" />}
+              </button>
+            )}
+
             {normalizedQuery && !hasMatches && (
               <div className="admin-video-source-picker__empty">没有匹配的来源</div>
             )}
@@ -1548,10 +1581,19 @@ function VideoSourcePicker({
 function VideoSourcePickerIcon({
   drive,
   crawler,
+  upload,
 }: {
   drive?: api.AdminDrive;
   crawler?: api.AdminCrawler;
+  upload?: boolean;
 }) {
+  if (upload) {
+    return (
+      <span className="admin-video-source-picker__icon is-upload" aria-hidden="true">
+        <Upload size={18} />
+      </span>
+    );
+  }
   if (drive) {
     const iconSrc = driveKindIconPath(drive.kind);
     return (

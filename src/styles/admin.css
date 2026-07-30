@@ -4399,6 +4399,11 @@
   color: var(--accent);
 }
 
+.admin-video-source-picker__icon.is-upload {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
 .admin-video-source-picker__icon.is-all {
   background: var(--bg-elevated);
   color: var(--text-muted);

@@ -166,6 +166,44 @@ nightly:
 	}
 }
 
+func TestLoadRemoteUploadDefaultsAndOverrides(t *testing.T) {
+	t.Run("defaults", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "config.yaml")
+		if err := os.WriteFile(path, []byte(`{}`), 0o644); err != nil {
+			t.Fatalf("write config: %v", err)
+		}
+		cfg, err := Load(path)
+		if err != nil {
+			t.Fatalf("load config: %v", err)
+		}
+		if cfg.RemoteUpload.DiskReserveBytes != 1073741824 {
+			t.Fatalf("disk reserve = %d", cfg.RemoteUpload.DiskReserveBytes)
+		}
+		if cfg.RemoteUpload.IdleTimeoutSeconds != 120 {
+			t.Fatalf("idle timeout = %d", cfg.RemoteUpload.IdleTimeoutSeconds)
+		}
+	})
+
+	t.Run("overrides", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "config.yaml")
+		if err := os.WriteFile(path, []byte(`
+remote_upload:
+  disk_reserve_bytes: 2147483648
+  idle_timeout_seconds: 240
+`), 0o644); err != nil {
+			t.Fatalf("write config: %v", err)
+		}
+		cfg, err := Load(path)
+		if err != nil {
+			t.Fatalf("load config: %v", err)
+		}
+		if cfg.RemoteUpload.DiskReserveBytes != 2147483648 ||
+			cfg.RemoteUpload.IdleTimeoutSeconds != 240 {
+			t.Fatalf("remote upload config = %#v", cfg.RemoteUpload)
+		}
+	})
+}
+
 func hasVideoExtension(exts []string, want string) bool {
 	want = strings.ToLower(strings.TrimSpace(want))
 	for _, ext := range exts {

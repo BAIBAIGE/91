@@ -49,6 +49,14 @@ test("normal videos support composable advanced filters", () => {
   assert.match(sourcePickerSource, /placeholder="搜索网盘或爬虫"/);
   assert.match(sourcePickerSource, /driveKindIconPath\(drive\.kind\)/);
   assert.match(sourcePickerSource, /<SpiderIcon \/>/);
+  assert.match(videosPageSource, /const LOCAL_UPLOAD_SOURCE_ID = "local-upload";/);
+  assert.match(sourcePickerSource, /<strong>上传来源<\/strong>/);
+  assert.match(sourcePickerSource, /selectSource\("drive", LOCAL_UPLOAD_SOURCE_ID\)/);
+  assert.match(sourcePickerSource, /<VideoSourcePickerIcon upload \/>/);
+  assert.ok(
+    sourcePickerSource.indexOf("<strong>上传来源</strong>") >
+      sourcePickerSource.indexOf('role="group" aria-label="爬虫"')
+  );
   assert.doesNotMatch(sourcePickerSource, /<Bot\b/);
   assert.match(sourcePickerSource, /document\.addEventListener\("pointerdown", closeOnOutsidePointer\)/);
   assert.match(sourcePickerSource, /useLayoutEffect\(\(\) => \{[\s\S]*?getBoundingClientRect\(\)[\s\S]*?spaceBelow < 240 && spaceAbove > spaceBelow/);
@@ -76,6 +84,8 @@ test("normal videos support composable advanced filters", () => {
   assert.doesNotMatch(adminCss, /\.admin-video-source-picker__group-title span:last-child/);
   assert.match(videosPageSource, /<legend>入库时间<\/legend>/);
   assert.match(videosPageSource, /<legend>视频时长\(分钟\)<\/legend>/);
+  assert.doesNotMatch(advancedFilterSource, /<span>上传来源<\/span>/);
+  assert.doesNotMatch(videosPageSource, /admin-video-upload-source-options|uploadSource/);
   assert.equal(Array.from(advancedFilterSource.matchAll(/admin-video-advanced-range__placeholder/g)).length, 2);
   assert.equal(Array.from(advancedFilterSource.matchAll(/年\/月\/日/g)).length, 2);
   assert.match(videosPageSource, />\s*应用\s*<\/button>/);

@@ -21,13 +21,14 @@ var (
 )
 
 type Config struct {
-	Server  Server  `yaml:"server"`
-	Storage Storage `yaml:"storage"`
-	Scanner Scanner `yaml:"scanner"`
-	Preview Preview `yaml:"preview"`
-	Proxy   Proxy   `yaml:"proxy"`
-	Nightly Nightly `yaml:"nightly"`
-	Drives  []Drive `yaml:"drives"`
+	Server       Server       `yaml:"server"`
+	Storage      Storage      `yaml:"storage"`
+	Scanner      Scanner      `yaml:"scanner"`
+	Preview      Preview      `yaml:"preview"`
+	Proxy        Proxy        `yaml:"proxy"`
+	Nightly      Nightly      `yaml:"nightly"`
+	RemoteUpload RemoteUpload `yaml:"remote_upload"`
+	Drives       []Drive      `yaml:"drives"`
 }
 
 type Server struct {
@@ -210,6 +211,13 @@ type Nightly struct {
 	CronHour int `yaml:"cron_hour"`
 }
 
+type RemoteUpload struct {
+	// DiskReserveBytes 是直链下载期间必须留给数据盘的最小可用空间。
+	DiskReserveBytes int64 `yaml:"disk_reserve_bytes"`
+	// IdleTimeoutSeconds 是响应正文连续无数据时中止任务的秒数。
+	IdleTimeoutSeconds int `yaml:"idle_timeout_seconds"`
+}
+
 // Drive 配置项中的敏感字段（Cookie / RefreshToken 等）最终由管理后台写入 DB
 // 这里保留 yaml 中的静态定义，用于启动时预置盘。生产建议只在 DB 里维护。
 type Drive struct {
@@ -280,6 +288,12 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Nightly.CronHour <= 0 || c.Nightly.CronHour > 23 {
 		c.Nightly.CronHour = 1
+	}
+	if c.RemoteUpload.DiskReserveBytes <= 0 {
+		c.RemoteUpload.DiskReserveBytes = 1 << 30
+	}
+	if c.RemoteUpload.IdleTimeoutSeconds <= 0 {
+		c.RemoteUpload.IdleTimeoutSeconds = 120
 	}
 }
 

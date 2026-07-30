@@ -49,6 +49,41 @@ CREATE INDEX IF NOT EXISTS idx_videos_created ON videos(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_videos_duration ON videos(duration_seconds);
 CREATE INDEX IF NOT EXISTS idx_videos_views ON videos(views DESC);
 
+-- 管理员提交的视频直链后台任务。source_url 只在任务排队或执行期间保留；
+-- 进入 completed / failed / canceled 后由状态更新语句立即清空。
+CREATE TABLE IF NOT EXISTS remote_upload_jobs (
+    sequence           INTEGER PRIMARY KEY AUTOINCREMENT,
+    id                 TEXT NOT NULL UNIQUE,
+    source_url         TEXT NOT NULL DEFAULT '',
+    source_label       TEXT NOT NULL DEFAULT '',
+    requested_title    TEXT NOT NULL DEFAULT '',
+    resolved_title     TEXT NOT NULL DEFAULT '',
+    tags               TEXT NOT NULL DEFAULT '[]',
+    state              TEXT NOT NULL
+                           CHECK (state IN (
+                               'queued', 'downloading', 'validating', 'saving',
+                               'completed', 'failed', 'canceled'
+                           )),
+    bytes_downloaded   INTEGER NOT NULL DEFAULT 0,
+    total_bytes        INTEGER NOT NULL DEFAULT 0,
+    cancel_requested   INTEGER NOT NULL DEFAULT 0,
+    error_message      TEXT NOT NULL DEFAULT '',
+    temp_file          TEXT NOT NULL DEFAULT '',
+    final_file         TEXT NOT NULL DEFAULT '',
+    completed_video_id TEXT NOT NULL DEFAULT '',
+    created_at         INTEGER NOT NULL,
+    started_at         INTEGER NOT NULL DEFAULT 0,
+    updated_at         INTEGER NOT NULL,
+    finished_at        INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_remote_upload_jobs_queue
+    ON remote_upload_jobs(state, sequence);
+CREATE INDEX IF NOT EXISTS idx_remote_upload_jobs_recent
+    ON remote_upload_jobs(sequence DESC);
+CREATE INDEX IF NOT EXISTS idx_remote_upload_jobs_finished
+    ON remote_upload_jobs(finished_at);
+
 -- 视频详情页按“本次访问”记录的一张匿名临时选票。visit_id 由每次页面实例
 -- 随机生成，不关联账号、Cookie 或设备；刷新/重新进入会生成新的 visit_id。
 -- 保留 none 行可以让取消操作和重复请求保持幂等。

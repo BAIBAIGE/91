@@ -53,6 +53,12 @@ proxy:
   # 关闭后，支持直链的网盘仍保持 302，避免客户端主动消耗服务端上行带宽。
   allow_forced_relay: true
 
+remote_upload:
+  # 视频直链后台下载时始终保留的数据盘空间，默认 1 GiB。
+  disk_reserve_bytes: 1073741824
+  # 已收到响应头后，正文连续无数据多久判定失败。
+  idle_timeout_seconds: 120
+
 # 盘列表。上线后请通过管理后台添加，本文件可留空。
 # kind 支持 quark / p115 / p123 / pikpak / wopan / guangyapan / onedrive / googledrive / webdav / localstorage。
 # OneDrive 示例：

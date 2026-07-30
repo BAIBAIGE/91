@@ -31,6 +31,7 @@ import (
 	"github.com/video-site/backend/internal/nightly"
 	"github.com/video-site/backend/internal/preview"
 	"github.com/video-site/backend/internal/proxy"
+	"github.com/video-site/backend/internal/remoteupload"
 	"github.com/video-site/backend/internal/subtitles"
 )
 
@@ -111,6 +112,23 @@ func main() {
 	}
 	go app.runFingerprintReconciler(ctx)
 
+	remoteUploader, err := remoteupload.New(remoteupload.Config{
+		Catalog:     cat,
+		UploadDir:   app.localUploadDir(),
+		FFprobePath: cfg.Preview.FFprobePath,
+		DiskReserve: cfg.RemoteUpload.DiskReserveBytes,
+		IdleTimeout: time.Duration(cfg.RemoteUpload.IdleTimeoutSeconds) * time.Second,
+		OnVideoUploaded: func(v *catalog.Video) {
+			app.enqueueUploadedVideo(ctx, v)
+		},
+	})
+	if err != nil {
+		log.Fatalf("configure remote upload: %v", err)
+	}
+	if err := remoteUploader.Start(ctx); err != nil {
+		log.Fatalf("start remote upload: %v", err)
+	}
+
 	authr := &auth.Authenticator{
 		Username: cfg.Server.Admin.Username,
 		Password: cfg.Server.Admin.Password,
@@ -141,6 +159,7 @@ func main() {
 		OnVideoUploaded: func(v *catalog.Video) {
 			app.enqueueUploadedVideo(ctx, v)
 		},
+		RemoteUploads: remoteUploader,
 		// 前台「不再展示」走拉黑逻辑：删记录 + 删本地封面/预览 + 写墓碑，
 		// 保留网盘源文件（deleteSource=false）。后续任务不再入库；可重新发现的
 		// 普通网盘/爬虫来源可在后台解除墓碑，操作本身不会立即触发扫盘或爬取。
@@ -361,6 +380,11 @@ func main() {
 	shutCtx, shutCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutCancel()
 	_ = srv.Shutdown(shutCtx)
+	remoteShutCtx, remoteShutCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer remoteShutCancel()
+	if err := remoteUploader.Shutdown(remoteShutCtx); err != nil {
+		log.Printf("[remote-upload] shutdown: %v", err)
+	}
 }
 
 func runHashPasswordCommand(r io.Reader, w io.Writer) error {

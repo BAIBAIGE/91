@@ -18,15 +18,17 @@ function ruleBody(css: string, selector: string): string {
   return match[1];
 }
 
-test("upload page uses a compact text-only submit button", () => {
+test("upload page supports local files and persistent remote-link jobs", () => {
   assert.match(uploadPageSource, /<SectionHeader title="上传视频" \/>/);
-  assert.doesNotMatch(uploadPageSource, /本地视频会加入站内列表/);
-  assert.match(uploadPageSource, /import \{ Check, UploadCloud \} from "lucide-react"/);
-  assert.doesNotMatch(uploadPageSource, /\bFilm\b/);
-  assert.match(
-    uploadPageSource,
-    /<button className="upload-submit" type="submit" disabled=\{!file \|\| saving\}>\s*\{saving \? "上传中" : "上传"\}\s*<\/button>/
-  );
+  assert.match(uploadPageSource, /本地文件/);
+  assert.match(uploadPageSource, /视频直链/);
+  assert.match(uploadPageSource, /createRemoteUpload/);
+  assert.match(uploadPageSource, /fetchRemoteUploads\(20\)/);
+  assert.match(uploadPageSource, /cancelRemoteUpload/);
+  assert.match(uploadPageSource, /window\.setInterval\(\(\) => \{[\s\S]*?\}, 2000\)/);
+  assert.match(uploadPageSource, /document\.visibilityState !== "hidden"/);
+  assert.match(uploadPageSource, /disabled=\{submitDisabled\}/);
+  assert.match(uploadPageSource, /任务已加入后台队列，关闭页面不会中断下载/);
 
   const uploadActions = ruleBody(layoutCss, ".upload-actions");
   const uploadSubmit = ruleBody(layoutCss, ".upload-submit");
@@ -38,5 +40,19 @@ test("upload page uses a compact text-only submit button", () => {
   assert.doesNotMatch(
     layoutCss,
     /\.upload-submit\s*\{[^}]*width\s*:\s*100%/s
+  );
+});
+
+test("remote upload task list has progress, cancellation, and mobile layout", () => {
+  assert.match(uploadPageSource, /role="progressbar"/);
+  assert.match(uploadPageSource, /job\.totalBytes > 0/);
+  assert.match(uploadPageSource, /远程大小未知/);
+  assert.match(uploadPageSource, /job\.canCancel/);
+  assert.match(uploadPageSource, /job\.videoHref/);
+  assert.match(layoutCss, /\.remote-upload-progress\s*\{/);
+  assert.match(layoutCss, /\.remote-upload-cancel\s*,\s*\.remote-upload-detail\s*\{/);
+  assert.match(
+    layoutCss,
+    /@media \(max-width: 640px\)[\s\S]*?\.remote-upload-job\s*\{[\s\S]*?flex-direction:\s*column/
   );
 });

@@ -61,6 +61,7 @@ type Server struct {
 	LocalDir        string
 	UploadDir       string
 	OnVideoUploaded func(*catalog.Video)
+	RemoteUploads   RemoteUploadService
 	// OnHideVideo 处理前台「不再展示」。隐藏机制已废弃，改走拉黑逻辑：
 	// 删除库中记录 + 本地封面/预览，保留网盘源文件，并写黑名单墓碑
 	// （扫盘不再入库）。未注入时回退为旧的 hidden 标记。
@@ -214,6 +215,9 @@ func (s *Server) RegisterRoutes(r chi.Router, a *auth.Authenticator) {
 		r.Put("/api/video/{id}/tags", s.handleUpdateVideoTags)
 		r.Post("/api/video/{id}/hide", s.handleHideVideo)
 		r.Post("/api/upload", s.handleUploadVideo)
+		r.Post("/api/upload/remote", s.handleCreateRemoteUpload)
+		r.Get("/api/upload/remote", s.handleListRemoteUploads)
+		r.Post("/api/upload/remote/{jobId}/cancel", s.handleCancelRemoteUpload)
 	})
 }
 
@@ -662,26 +666,14 @@ func (s *Server) handleUploadVideo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tags, err := parseUploadTags(uploadTagValues(r))
+	tags, err := s.canonicalUploadTags(r.Context(), uploadTagValues(r))
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, err)
-		return
-	}
-	if len(tags) > 0 {
-		canonicalTags := make([]string, 0, len(tags))
-		for _, tag := range tags {
-			label, ok, err := s.Catalog.LookupTagLabel(r.Context(), tag)
-			if err != nil {
-				writeErr(w, http.StatusInternalServerError, err)
-				return
-			}
-			if !ok {
-				writeErr(w, http.StatusBadRequest, fmt.Errorf("unknown upload tag: %s", tag))
-				return
-			}
-			canonicalTags = append(canonicalTags, label)
+		status := http.StatusInternalServerError
+		if isUploadTagValidationError(err) {
+			status = http.StatusBadRequest
 		}
-		tags = canonicalTags
+		writeErr(w, status, err)
+		return
 	}
 
 	now := time.Now()
@@ -1388,6 +1380,42 @@ func parseUploadTags(values []string) ([]string, error) {
 		}
 	}
 	return out, nil
+}
+
+func (s *Server) canonicalUploadTags(ctx context.Context, values []string) ([]string, error) {
+	tags, err := parseUploadTags(values)
+	if err != nil {
+		return nil, uploadTagValidationError{err}
+	}
+	if len(tags) == 0 {
+		return tags, nil
+	}
+	if s.Catalog == nil {
+		return nil, errors.New("catalog is not configured")
+	}
+	canonicalTags := make([]string, 0, len(tags))
+	for _, tag := range tags {
+		label, ok, err := s.Catalog.LookupTagLabel(ctx, tag)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			return nil, uploadTagValidationError{
+				fmt.Errorf("unknown upload tag: %s", tag),
+			}
+		}
+		canonicalTags = append(canonicalTags, label)
+	}
+	return canonicalTags, nil
+}
+
+type uploadTagValidationError struct {
+	error
+}
+
+func isUploadTagValidationError(err error) bool {
+	var target uploadTagValidationError
+	return errors.As(err, &target)
 }
 
 func splitUploadTags(value string) []string {
