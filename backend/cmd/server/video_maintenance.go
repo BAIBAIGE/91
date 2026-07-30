@@ -12,6 +12,7 @@ import (
 
 	"github.com/video-site/backend/internal/catalog"
 	"github.com/video-site/backend/internal/drives/localupload"
+	"github.com/video-site/backend/internal/localpath"
 	"github.com/video-site/backend/internal/mediaasset"
 	"github.com/video-site/backend/internal/mediasim"
 	"github.com/video-site/backend/internal/persistence"
@@ -786,20 +787,5 @@ func (s *videoMaintenanceDisjointSet) union(a, b int) {
 }
 
 func localPathWithin(root, path string) (string, bool) {
-	if strings.TrimSpace(root) == "" || strings.TrimSpace(path) == "" {
-		return "", false
-	}
-	rootAbs, err := filepath.Abs(root)
-	if err != nil {
-		return "", false
-	}
-	pathAbs, err := filepath.Abs(path)
-	if err != nil {
-		return "", false
-	}
-	rel, err := filepath.Rel(rootAbs, pathAbs)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
-		return "", false
-	}
-	return pathAbs, true
+	return localpath.Within(root, path)
 }

@@ -43,6 +43,31 @@ func TestHashPasswordCommandProducesBcryptHash(t *testing.T) {
 	}
 }
 
+func TestLoadApplicationConfigSeparatesFileAndRuntimeStoragePaths(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(configPath, []byte(`
+storage:
+  db_path: "./data/video-site.db"
+  local_preview_dir: "./data/previews"
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	workingDir := t.TempDir()
+
+	fileConfig, runtimeConfig, err := loadApplicationConfig(configPath, workingDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fileConfig.Storage.DBPath != "./data/video-site.db" ||
+		fileConfig.Storage.LocalPreviewDir != "./data/previews" {
+		t.Fatalf("file storage paths changed: %+v", fileConfig.Storage)
+	}
+	if runtimeConfig.Storage.DBPath != filepath.Join(workingDir, "data", "video-site.db") ||
+		runtimeConfig.Storage.LocalPreviewDir != filepath.Join(workingDir, "data", "previews") {
+		t.Fatalf("runtime storage paths = %+v", runtimeConfig.Storage)
+	}
+}
+
 func TestGuangYaPanLegacyRootPath(t *testing.T) {
 	credentials := map[string]string{"root_path": "  影视/电影  "}
 	if got := guangYaPanLegacyRootPath("", credentials); got != "影视/电影" {

@@ -26,6 +26,7 @@ import (
 	"github.com/video-site/backend/internal/catalog"
 	"github.com/video-site/backend/internal/drives/localstorage"
 	"github.com/video-site/backend/internal/drives/localupload"
+	"github.com/video-site/backend/internal/localpath"
 	"github.com/video-site/backend/internal/persistence"
 	"github.com/video-site/backend/internal/proxy"
 	"github.com/video-site/backend/internal/subtitles"
@@ -1363,15 +1364,8 @@ func (s *Server) localUploadFilePath(fileID string) (string, error) {
 		return "", errors.New("local upload storage is not configured")
 	}
 	path := filepath.Join(root, fileID)
-	cleanRoot, err := filepath.Abs(root)
-	if err != nil {
-		return "", err
-	}
-	cleanPath, err := filepath.Abs(path)
-	if err != nil {
-		return "", err
-	}
-	if cleanPath != cleanRoot && !strings.HasPrefix(cleanPath, cleanRoot+string(os.PathSeparator)) {
+	cleanPath, ok := localpath.Within(root, path)
+	if !ok {
 		return "", errors.New("invalid upload file id")
 	}
 	return cleanPath, nil

@@ -108,6 +108,29 @@ func TestLoadDefaultScannerVideoExtensionsIncludeSTRM(t *testing.T) {
 	}
 }
 
+func TestResolveStoragePathsUsesStartupDirectoryWithoutMutatingConfig(t *testing.T) {
+	baseDir := t.TempDir()
+	storage := Storage{
+		DBPath:          "./data/video-site.db",
+		LocalPreviewDir: "./data/previews",
+	}
+
+	resolved, err := ResolveStoragePaths(storage, baseDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.DBPath != filepath.Join(baseDir, "data", "video-site.db") {
+		t.Fatalf("resolved db path = %q", resolved.DBPath)
+	}
+	if resolved.LocalPreviewDir != filepath.Join(baseDir, "data", "previews") {
+		t.Fatalf("resolved preview path = %q", resolved.LocalPreviewDir)
+	}
+	if storage.DBPath != "./data/video-site.db" ||
+		storage.LocalPreviewDir != "./data/previews" {
+		t.Fatalf("source storage config was mutated: %+v", storage)
+	}
+}
+
 func TestLoadLegacyDefaultScannerVideoExtensionsIncludeSTRM(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(path, []byte(`

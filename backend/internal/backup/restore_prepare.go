@@ -17,6 +17,7 @@ import (
 
 	"github.com/video-site/backend/internal/catalog"
 	"github.com/video-site/backend/internal/config"
+	"github.com/video-site/backend/internal/localpath"
 	"github.com/video-site/backend/internal/mediaasset"
 	"gopkg.in/yaml.v3"
 )
@@ -121,6 +122,11 @@ func (m *Manager) PrepareRestore(ctx context.Context, id string) (ValidationRepo
 		return ValidationReport{}, err
 	}
 	targetConfig := *m.appConfig
+	targetRuntimeConfig := targetConfig
+	targetRuntimeConfig.Storage = config.Storage{
+		DBPath:          m.dbPath,
+		LocalPreviewDir: m.previewPath,
+	}
 	mergedConfig := mergeRestoreConfig(sourceConfig, targetConfig)
 	configBytes, err := yaml.Marshal(&mergedConfig)
 	if err != nil {
@@ -153,7 +159,7 @@ func (m *Manager) PrepareRestore(ctx context.Context, id string) (ValidationRepo
 		stagePreview,
 		report.Manifest.SourceDataRoot,
 		sourceConfig,
-		targetConfig,
+		targetRuntimeConfig,
 		m.dataRoot,
 		m.assetRoot,
 		targetAdmins,
@@ -172,14 +178,14 @@ func (m *Manager) PrepareRestore(ctx context.Context, id string) (ValidationRepo
 		source string
 		target string
 	}{
-		{name: "previews", kind: "dir", source: stagePreview, target: targetConfig.Storage.LocalPreviewDir},
+		{name: "previews", kind: "dir", source: stagePreview, target: targetRuntimeConfig.Storage.LocalPreviewDir},
 		{name: "uploads", kind: "dir", source: filepath.Join(stageRoot, "payload", "uploads"), target: filepath.Join(m.assetRoot, "uploads")},
 		{name: "crawler-scripts", kind: "dir", source: filepath.Join(stageRoot, "payload", "crawler-scripts"), target: filepath.Join(m.assetRoot, "crawler-scripts")},
 		{name: "scriptcrawlers", kind: "dir", source: filepath.Join(stageRoot, "payload", "scriptcrawlers"), target: filepath.Join(m.assetRoot, "scriptcrawlers")},
 		{name: "spider91", kind: "dir", source: filepath.Join(stageRoot, "payload", "spider91"), target: filepath.Join(m.assetRoot, "spider91")},
-		{name: "database-wal", kind: "remove", target: targetConfig.Storage.DBPath + "-wal"},
-		{name: "database-shm", kind: "remove", target: targetConfig.Storage.DBPath + "-shm"},
-		{name: "database", kind: "file", source: stageDatabase, target: targetConfig.Storage.DBPath},
+		{name: "database-wal", kind: "remove", target: targetRuntimeConfig.Storage.DBPath + "-wal"},
+		{name: "database-shm", kind: "remove", target: targetRuntimeConfig.Storage.DBPath + "-shm"},
+		{name: "database", kind: "file", source: stageDatabase, target: targetRuntimeConfig.Storage.DBPath},
 		{name: "config", kind: "file", source: filepath.Join(stageRoot, "payload", "config.yaml"), target: m.configPath},
 	}
 	marker := restoreMarker{
@@ -698,16 +704,7 @@ func rewriteRestoredPath(value string, rewrites []pathRewrite) string {
 }
 
 func relativeWithin(root, candidate string) (string, bool) {
-	root = cleanNonEmptyPath(root)
-	candidate = cleanNonEmptyPath(candidate)
-	if root == "" || candidate == "" {
-		return "", false
-	}
-	relative, err := filepath.Rel(root, candidate)
-	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
-		return "", false
-	}
-	return relative, true
+	return localpath.RelativeWithin(root, candidate)
 }
 
 func cleanNonEmptyPath(value string) string {

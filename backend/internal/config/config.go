@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/video-site/backend/internal/localpath"
 	"gopkg.in/yaml.v3"
 )
 
@@ -187,6 +188,24 @@ func setScalarValue(parent *yaml.Node, key, value string) {
 type Storage struct {
 	DBPath          string `yaml:"db_path"`
 	LocalPreviewDir string `yaml:"local_preview_dir"`
+}
+
+// ResolveStoragePaths returns the storage configuration used by the running
+// process. Values in config.yaml remain unchanged, while every subsystem gets
+// the same absolute paths resolved from the process startup directory.
+func ResolveStoragePaths(storage Storage, baseDir string) (Storage, error) {
+	dbPath, err := localpath.Resolve(baseDir, storage.DBPath)
+	if err != nil {
+		return Storage{}, fmt.Errorf("resolve database path: %w", err)
+	}
+	previewDir, err := localpath.Resolve(baseDir, storage.LocalPreviewDir)
+	if err != nil {
+		return Storage{}, fmt.Errorf("resolve preview path: %w", err)
+	}
+	return Storage{
+		DBPath:          dbPath,
+		LocalPreviewDir: previewDir,
+	}, nil
 }
 
 type Scanner struct {

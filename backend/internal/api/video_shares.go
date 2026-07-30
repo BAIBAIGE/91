@@ -12,12 +12,12 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/video-site/backend/internal/catalog"
+	"github.com/video-site/backend/internal/localpath"
 	"github.com/video-site/backend/internal/mediaasset"
 	"github.com/video-site/backend/internal/subtitles"
 )
@@ -345,14 +345,15 @@ func (s *Server) servePreviewVideo(w http.ResponseWriter, r *http.Request, v *ca
 		return
 	}
 	if v.PreviewLocal != "" {
-		if !strings.HasPrefix(filepath.Clean(v.PreviewLocal), filepath.Clean(s.LocalDir)) {
+		localPreview, ok := localpath.Within(s.LocalDir, v.PreviewLocal)
+		if !ok {
 			http.Error(w, "invalid local path", http.StatusForbidden)
 			return
 		}
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("Pragma", "no-cache")
 		w.Header().Set("Expires", "0")
-		s.Proxy.ServeLocal(w, r, v.PreviewLocal)
+		s.Proxy.ServeLocal(w, r, localPreview)
 		return
 	}
 	http.NotFound(w, r)
@@ -361,8 +362,8 @@ func (s *Server) servePreviewVideo(w http.ResponseWriter, r *http.Request, v *ca
 func (s *Server) serveVideoThumb(w http.ResponseWriter, r *http.Request, videoID string) {
 	var clean string
 	for _, path := range mediaasset.ThumbnailPathCandidates(s.LocalDir, videoID) {
-		candidate := filepath.Clean(path)
-		if !strings.HasPrefix(candidate, filepath.Clean(s.LocalDir)) {
+		candidate, ok := localpath.Within(s.LocalDir, path)
+		if !ok {
 			http.Error(w, "invalid path", http.StatusForbidden)
 			return
 		}
@@ -377,8 +378,11 @@ func (s *Server) serveVideoThumb(w http.ResponseWriter, r *http.Request, videoID
 		return
 	}
 	if r.URL.Query().Get("variant") == "shorts-bg" {
-		backgroundPath := filepath.Clean(mediaasset.ShortsBackgroundPath(s.LocalDir, videoID))
-		if !strings.HasPrefix(backgroundPath, filepath.Clean(s.LocalDir)) {
+		backgroundPath, ok := localpath.Within(
+			s.LocalDir,
+			mediaasset.ShortsBackgroundPath(s.LocalDir, videoID),
+		)
+		if !ok {
 			http.Error(w, "invalid path", http.StatusForbidden)
 			return
 		}

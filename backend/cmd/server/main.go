@@ -60,7 +60,11 @@ func main() {
 	if v := os.Getenv("VIDEO_CONFIG"); v != "" {
 		cfgPath = v
 	}
-	cfg, err := config.Load(cfgPath)
+	workingDir, err := os.Getwd()
+	if err != nil {
+		log.Fatalf("resolve startup directory: %v", err)
+	}
+	fileConfig, cfg, err := loadApplicationConfig(cfgPath, workingDir)
 	if err != nil {
 		log.Fatalf("load config: %v", err)
 	}
@@ -80,7 +84,7 @@ func main() {
 	// rollback. The config read before ApplyPendingRestore may have belonged to
 	// the opposite side of the directory switch.
 	if appliedRestore != nil || pendingRestoreAtStartup {
-		cfg, err = config.Load(cfgPath)
+		fileConfig, cfg, err = loadApplicationConfig(cfgPath, workingDir)
 		if err != nil {
 			if appliedRestore != nil {
 				if rollbackErr := backup.RollbackAppliedRestore(appliedRestore, err); rollbackErr != nil {
@@ -197,7 +201,8 @@ func main() {
 	}
 	backupManager, err := backup.NewManager(backup.Config{
 		Catalog:        cat,
-		AppConfig:      cfg,
+		AppConfig:      fileConfig,
+		RuntimeStorage: cfg.Storage,
 		ConfigPath:     cfgPath,
 		AppVersion:     appVersion,
 		RestartManaged: restartIsManaged(),
@@ -256,6 +261,8 @@ func main() {
 			if _, err := cat.CreateUser(ctx, username, hashed, "admin"); err != nil {
 				return err
 			}
+			fileConfig.Server.Admin.Username = username
+			fileConfig.Server.Admin.Password = password
 			cfg.Server.Admin.Username = username
 			cfg.Server.Admin.Password = password
 			authr.SetCredentials(username, password)
@@ -459,6 +466,20 @@ func main() {
 		log.Printf("[restore] pending restore staged; exiting with restart code %d", backup.RestartExitCode)
 		os.Exit(backup.RestartExitCode)
 	}
+}
+
+func loadApplicationConfig(path, workingDir string) (*config.Config, *config.Config, error) {
+	fileConfig, err := config.Load(path)
+	if err != nil {
+		return nil, nil, err
+	}
+	runtimeStorage, err := config.ResolveStoragePaths(fileConfig.Storage, workingDir)
+	if err != nil {
+		return nil, nil, err
+	}
+	runtimeConfig := *fileConfig
+	runtimeConfig.Storage = runtimeStorage
+	return fileConfig, &runtimeConfig, nil
 }
 
 func readVersionFile(path string) string {

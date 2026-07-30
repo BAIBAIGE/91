@@ -20,6 +20,7 @@ import (
 
 	"github.com/video-site/backend/internal/catalog"
 	"github.com/video-site/backend/internal/config"
+	"github.com/video-site/backend/internal/localpath"
 	"github.com/video-site/backend/internal/persistence"
 )
 
@@ -28,6 +29,7 @@ const diskSafetyReserve int64 = 64 << 20
 type Config struct {
 	Catalog        *catalog.Catalog
 	AppConfig      *config.Config
+	RuntimeStorage config.Storage
 	ConfigPath     string
 	AppVersion     string
 	RestartManaged bool
@@ -40,6 +42,8 @@ type Manager struct {
 	appConfig      *config.Config
 	configPath     string
 	appVersion     string
+	dbPath         string
+	previewPath    string
 	dataRoot       string
 	assetRoot      string
 	backupDir      string
@@ -77,12 +81,23 @@ func NewManager(cfg Config) (*Manager, error) {
 	if cfg.AppConfig == nil {
 		return nil, errors.New("backup: application config is required")
 	}
-	dbPath, err := filepath.Abs(strings.TrimSpace(cfg.AppConfig.Storage.DBPath))
-	if err != nil || strings.TrimSpace(cfg.AppConfig.Storage.DBPath) == "" {
+	runtimeStorage := cfg.RuntimeStorage
+	if strings.TrimSpace(runtimeStorage.DBPath) == "" {
+		runtimeStorage.DBPath = cfg.AppConfig.Storage.DBPath
+	}
+	if strings.TrimSpace(runtimeStorage.LocalPreviewDir) == "" {
+		runtimeStorage.LocalPreviewDir = cfg.AppConfig.Storage.LocalPreviewDir
+	}
+	workingDir, err := os.Getwd()
+	if err != nil {
+		return nil, fmt.Errorf("backup: resolve working directory: %w", err)
+	}
+	dbPath, err := localpath.Resolve(workingDir, runtimeStorage.DBPath)
+	if err != nil {
 		return nil, errors.New("backup: database path is invalid")
 	}
-	previewPath, err := filepath.Abs(strings.TrimSpace(cfg.AppConfig.Storage.LocalPreviewDir))
-	if err != nil || strings.TrimSpace(cfg.AppConfig.Storage.LocalPreviewDir) == "" {
+	previewPath, err := localpath.Resolve(workingDir, runtimeStorage.LocalPreviewDir)
+	if err != nil {
 		return nil, errors.New("backup: preview path is invalid")
 	}
 	configPath, err := filepath.Abs(strings.TrimSpace(cfg.ConfigPath))
@@ -96,6 +111,8 @@ func NewManager(cfg Config) (*Manager, error) {
 		appConfig:      cfg.AppConfig,
 		configPath:     configPath,
 		appVersion:     normalizedVersion(cfg.AppVersion),
+		dbPath:         dbPath,
+		previewPath:    previewPath,
 		dataRoot:       dataRoot,
 		assetRoot:      assetRoot,
 		backupDir:      filepath.Join(dataRoot, "backups"),
@@ -185,7 +202,7 @@ func (m *Manager) nowTime() time.Time {
 func (m *Manager) sourceSpecs() []sourceSpec {
 	return []sourceSpec{
 		{name: "config", source: m.configPath, prefix: "payload/config.yaml"},
-		{name: "previews", source: m.appConfig.Storage.LocalPreviewDir, prefix: "payload/previews"},
+		{name: "previews", source: m.previewPath, prefix: "payload/previews"},
 		{name: "uploads", source: filepath.Join(m.assetRoot, "uploads"), prefix: "payload/uploads"},
 		{name: "crawler-scripts", source: filepath.Join(m.assetRoot, "crawler-scripts"), prefix: "payload/crawler-scripts"},
 		{name: "scriptcrawlers", source: filepath.Join(m.assetRoot, "scriptcrawlers"), prefix: "payload/scriptcrawlers"},
@@ -208,8 +225,8 @@ func (m *Manager) Estimate(ctx context.Context) (Estimate, error) {
 
 	var estimate Estimate
 	dbPaths := []string{
-		m.appConfig.Storage.DBPath,
-		m.appConfig.Storage.DBPath + "-wal",
+		m.dbPath,
+		m.dbPath + "-wal",
 	}
 	for _, dbPath := range dbPaths {
 		info, err := os.Lstat(dbPath)

@@ -1388,6 +1388,65 @@ func TestHandlePreviewIgnoresRemotePreviewFileIDAndServesLocalFile(t *testing.T)
 	}
 }
 
+func TestHandlePreviewServesRestoredAbsolutePathWithRelativeLocalDir(t *testing.T) {
+	ctx := context.Background()
+	cat, err := catalog.Open(t.TempDir() + "/catalog.db")
+	if err != nil {
+		t.Fatalf("open catalog: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := cat.Close(); err != nil {
+			t.Fatalf("close catalog: %v", err)
+		}
+	})
+	localDir := filepath.Join(t.TempDir(), "previews")
+	if err := os.MkdirAll(localDir, 0o755); err != nil {
+		t.Fatalf("mkdir previews: %v", err)
+	}
+	localPreview := filepath.Join(localDir, "video-1.mp4")
+	if err := os.WriteFile(localPreview, []byte("restored teaser"), 0o644); err != nil {
+		t.Fatalf("write local preview: %v", err)
+	}
+	workingDir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("get working directory: %v", err)
+	}
+	relativeLocalDir, err := filepath.Rel(workingDir, localDir)
+	if err != nil {
+		t.Fatalf("make local preview dir relative: %v", err)
+	}
+	now := time.Now()
+	if err := cat.UpsertVideo(ctx, &catalog.Video{
+		ID:            "video-1",
+		DriveID:       "drive-1",
+		FileID:        "file-1",
+		Title:         "Video",
+		PreviewStatus: "ready",
+		PreviewLocal:  localPreview,
+		PublishedAt:   now,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}); err != nil {
+		t.Fatalf("seed video: %v", err)
+	}
+	server := &Server{
+		Catalog:  cat,
+		LocalDir: relativeLocalDir,
+		Proxy:    proxy.New(proxy.NewRegistry()),
+	}
+	req := requestWithRouteParam(http.MethodGet, "/p/preview/video-1", "videoID", "video-1", strings.NewReader(``))
+	rr := httptest.NewRecorder()
+
+	server.handlePreview(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rr.Code, rr.Body.String())
+	}
+	if rr.Body.String() != "restored teaser" {
+		t.Fatalf("body = %q, want restored teaser bytes", rr.Body.String())
+	}
+}
+
 func TestHandleThumbServesHashedPathForLongVideoID(t *testing.T) {
 	localDir := t.TempDir()
 	longID := "localstorage-" + strings.Repeat("x", 240)
