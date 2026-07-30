@@ -8,6 +8,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/video-site/backend/internal/auth"
+	"github.com/video-site/backend/internal/backup"
 	"github.com/video-site/backend/internal/catalog"
 	"github.com/video-site/backend/internal/drives/quark"
 )
@@ -15,6 +16,7 @@ import (
 type AdminServer struct {
 	Catalog *catalog.Catalog
 	Auth    *auth.Authenticator
+	Backups *backup.Manager
 	// VersionFilePath points to the installer-written .version file.
 	VersionFilePath string
 	// ImageVersion is the Docker image version injected at build/runtime.
@@ -272,6 +274,17 @@ func (a *AdminServer) Register(r chi.Router) {
 
 			// 运维任务
 			r.Get("/update/check", a.handleCheckUpdate)
+			r.Get("/backups", a.handleListBackups)
+			r.Post("/backups", a.handleCreateBackup)
+			r.Post("/backups/current/cancel", a.handleCancelBackup)
+			r.Get("/backups/{id}/download", a.handleDownloadBackup)
+			r.Delete("/backups/{id}", a.handleDeleteBackup)
+			r.Post("/backups/{id}/restore", a.handleRestoreBackup)
+			r.Post("/backup-uploads", a.handleBeginBackupUpload)
+			r.Get("/backup-uploads/{id}", a.handleBackupUploadStatus)
+			r.Put("/backup-uploads/{id}/chunks/{index}", a.handleBackupUploadChunk)
+			r.Post("/backup-uploads/{id}/finalize", a.handleFinalizeBackupUpload)
+			r.Delete("/backup-uploads/{id}", a.handleCancelBackupUpload)
 			r.Get("/jobs/nightly/status", a.handleNightlyJobStatus)
 			r.Post("/jobs/nightly/run", a.handleRunNightlyJob)
 			r.Post("/tasks/stop", a.handleStopAllTasks)

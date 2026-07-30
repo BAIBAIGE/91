@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import {
+  ArchiveRestore,
   Film,
   GitCompare,
   HardDrive,
@@ -182,6 +183,19 @@ export function AdminLayout() {
               </span>
               <span className="admin-nav__text">
                 <span className="admin-nav__title">主题外观</span>
+              </span>
+            </NavLink>
+            <NavLink
+              to="/admin/backup"
+              className={({ isActive }) =>
+                `admin-nav__link ${isActive ? "is-active" : ""}`
+              }
+            >
+              <span className="admin-nav__icon" aria-hidden="true">
+                <ArchiveRestore size={15} />
+              </span>
+              <span className="admin-nav__text">
+                <span className="admin-nav__title">备份恢复</span>
               </span>
             </NavLink>
             <button

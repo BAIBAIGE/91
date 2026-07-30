@@ -20,6 +20,7 @@ import (
 
 	"github.com/video-site/backend/internal/catalog"
 	"github.com/video-site/backend/internal/drives/scriptcrawler"
+	"github.com/video-site/backend/internal/persistence"
 )
 
 type crawlerDTO struct {
@@ -581,6 +582,8 @@ func (a *AdminServer) saveCrawlerScript(ctx context.Context, name string, r io.R
 		_ = os.Remove(tmp)
 		return "", fmt.Errorf("脚本文件不能超过 %d KiB", maxBytes/1024)
 	}
+	persistence.RLock()
+	defer persistence.RUnlock()
 	if err := os.Rename(tmp, dstAbs); err != nil {
 		_ = os.Remove(tmp)
 		return "", err
@@ -790,6 +793,8 @@ func (a *AdminServer) handleDeleteCrawler(w http.ResponseWriter, r *http.Request
 		a.OnStopDriveTasks(id)
 	}
 
+	persistence.RLock()
+	defer persistence.RUnlock()
 	deletedScript, scriptErr := a.removeImportedCrawlerScript(d)
 	if d.Credentials == nil {
 		d.Credentials = map[string]string{}

@@ -4,6 +4,8 @@ services:
     container_name: video-site-91
     ports:
       - "9191:9191"
+    environment:
+      VIDEO_RESTART_MANAGED: "true"
     volumes:
       - ./data:/opt/video-site-91/data
     restart: unless-stopped

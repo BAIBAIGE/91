@@ -22,6 +22,7 @@ import (
 	"github.com/video-site/backend/internal/catalog"
 	"github.com/video-site/backend/internal/drives"
 	"github.com/video-site/backend/internal/mediaasset"
+	"github.com/video-site/backend/internal/persistence"
 	"github.com/video-site/backend/internal/streamhttp"
 )
 
@@ -272,19 +273,33 @@ func (g *Generator) GenerateThumbnail(ctx context.Context, link *drives.StreamLi
 		return "", err
 	}
 	dst := mediaasset.ThumbnailPath(g.cfg.LocalDir, videoID)
+	temp, err := os.CreateTemp(dir, ".thumbnail-*.part.jpg")
+	if err != nil {
+		return "", err
+	}
+	tempPath := temp.Name()
+	if err := temp.Close(); err != nil {
+		_ = os.Remove(tempPath)
+		return "", err
+	}
+	_ = os.Remove(tempPath)
+	defer os.Remove(tempPath)
 
 	var lastErr error
 	offsets := thumbnailOffsets(duration)
 	for i, offset := range offsets {
 		if i > 0 {
-			_ = os.Remove(dst)
+			_ = os.Remove(tempPath)
 		}
-		if err := g.generateThumbnailAtOffset(ctx, link, dst, offset); err != nil {
+		if err := g.generateThumbnailAtOffset(ctx, link, tempPath, offset); err != nil {
 			lastErr = err
 			if !thumbnailOffsetFallbackAllowed(err) {
 				return "", err
 			}
 			continue
+		}
+		if err := replaceFile(tempPath, dst); err != nil {
+			return "", err
 		}
 		return dst, nil
 	}
@@ -987,12 +1002,30 @@ func (g *Generator) MoveToLocal(tmpPath, videoID string) (string, error) {
 	dst := mediaasset.PreviewPath(g.cfg.LocalDir, videoID)
 	if err := os.Rename(tmpPath, dst); err != nil {
 		// 跨盘 rename 可能失败，fallback 到 copy
-		if cerr := copyFile(tmpPath, dst); cerr != nil {
+		partPath := dst + ".part"
+		_ = os.Remove(partPath)
+		if cerr := copyFile(tmpPath, partPath); cerr != nil {
+			return "", cerr
+		}
+		if cerr := replaceFile(partPath, dst); cerr != nil {
+			_ = os.Remove(partPath)
 			return "", cerr
 		}
 		_ = os.Remove(tmpPath)
 	}
 	return dst, nil
+}
+
+func replaceFile(source, destination string) error {
+	if err := os.Rename(source, destination); err == nil {
+		return nil
+	}
+	// Windows cannot atomically rename over an existing destination. Removing
+	// the old directory entry still preserves any hard-linked backup snapshot.
+	if err := os.Remove(destination); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return os.Rename(source, destination)
 }
 
 func copyFile(src, dst string) error {
@@ -1676,6 +1709,8 @@ func (w *ThumbWorker) probeDuration(ctx context.Context, v *catalog.Video, link 
 }
 
 func (w *ThumbWorker) generateThumbnailFromLink(ctx context.Context, v *catalog.Video, link *drives.StreamLink) error {
+	persistence.RLock()
+	defer persistence.RUnlock()
 	local, err := w.Gen.GenerateThumbnail(ctx, link, v.ID, float64(v.DurationSeconds))
 	if err != nil {
 		return err
@@ -1768,6 +1803,8 @@ func (w *Worker) process(ctx context.Context, v *catalog.Video) {
 		w.Catalog.UpdatePreview(ctx, v.ID, "", "failed")
 		return
 	}
+	persistence.RLock()
+	defer persistence.RUnlock()
 	local, err := w.Gen.MoveToLocal(tmp, v.ID)
 	if err != nil {
 		log.Printf("[preview] move %s: %v", v.Title, err)

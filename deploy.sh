@@ -283,10 +283,12 @@ Group=${DEPLOY_GROUP}
 WorkingDirectory=${REPO_DIR}/backend
 ExecStart=${REPO_DIR}/backend/server
 Restart=on-failure
+RestartForceExitStatus=75
 RestartSec=5
 TimeoutStopSec=20
 Environment=HOME=${DEPLOY_HOME}
 Environment=PATH=/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+Environment=VIDEO_RESTART_MANAGED=true
 ${env_lines}LimitNOFILE=65536
 StandardOutput=journal
 StandardError=journal

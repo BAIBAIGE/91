@@ -22,6 +22,7 @@ import (
 
 	"github.com/video-site/backend/internal/api"
 	"github.com/video-site/backend/internal/auth"
+	"github.com/video-site/backend/internal/backup"
 	"github.com/video-site/backend/internal/catalog"
 	"github.com/video-site/backend/internal/config"
 	"github.com/video-site/backend/internal/crawlerupload"
@@ -64,6 +65,33 @@ func main() {
 		log.Fatalf("load config: %v", err)
 	}
 
+	// A restore is activated before SQLite is opened. The switch itself only
+	// uses same-directory renames; opening and migrating the restored catalog
+	// below is the commit check. If that check fails, every switched path is
+	// returned to its pre-restore value.
+	dataRoot := filepath.Dir(cfg.Storage.DBPath)
+	_, pendingRestoreStatErr := os.Stat(backup.PendingMarkerPath(dataRoot))
+	pendingRestoreAtStartup := pendingRestoreStatErr == nil
+	appliedRestore, err := backup.ApplyPendingRestore(dataRoot)
+	if err != nil {
+		log.Fatalf("apply pending restore: %v", err)
+	}
+	// Reload after either applying a restore or resuming an interrupted
+	// rollback. The config read before ApplyPendingRestore may have belonged to
+	// the opposite side of the directory switch.
+	if appliedRestore != nil || pendingRestoreAtStartup {
+		cfg, err = config.Load(cfgPath)
+		if err != nil {
+			if appliedRestore != nil {
+				if rollbackErr := backup.RollbackAppliedRestore(appliedRestore, err); rollbackErr != nil {
+					log.Fatalf("reload restored config: %v (rollback failed: %v)", err, rollbackErr)
+				}
+				log.Fatalf("reload restored config: %v; old data restored", err)
+			}
+			log.Fatalf("reload config after restore rollback: %v", err)
+		}
+	}
+
 	if err := os.MkdirAll(filepath.Dir(cfg.Storage.DBPath), 0o755); err != nil {
 		log.Fatalf("mkdir db dir: %v", err)
 	}
@@ -73,9 +101,22 @@ func main() {
 
 	cat, err := catalog.Open(cfg.Storage.DBPath)
 	if err != nil {
+		if appliedRestore != nil {
+			if rollbackErr := backup.RollbackAppliedRestore(appliedRestore, err); rollbackErr != nil {
+				log.Fatalf("open restored catalog: %v (rollback failed: %v)", err, rollbackErr)
+			}
+			log.Fatalf("open restored catalog: %v; old data restored and will be used after restart", err)
+		}
 		log.Fatalf("open catalog: %v", err)
 	}
 	defer cat.Close()
+	if appliedRestore != nil {
+		if err := backup.CommitAppliedRestore(appliedRestore); err != nil {
+			log.Printf("[restore] restored catalog opened, but rollback cleanup/report write failed: %v", err)
+		} else {
+			log.Printf("[restore] backup restored successfully; previous sessions were cleared")
+		}
+	}
 
 	app := &App{
 		cfg:                cfg,
@@ -145,10 +186,27 @@ func main() {
 	if versionFilePath == "" {
 		versionFilePath = filepath.Join(filepath.Dir(cfgPath), ".version")
 	}
+	imageVersion := strings.TrimSpace(os.Getenv("VIDEO_IMAGE_VERSION"))
+	appVersion := imageVersion
+	if appVersion == "" {
+		appVersion = readVersionFile(versionFilePath)
+	}
 	githubRepo := strings.TrimSpace(os.Getenv("VIDEO_GITHUB_REPO"))
 	if githubRepo == "" {
 		githubRepo = strings.TrimSpace(os.Getenv("GITHUB_REPO"))
 	}
+	backupManager, err := backup.NewManager(backup.Config{
+		Catalog:        cat,
+		AppConfig:      cfg,
+		ConfigPath:     cfgPath,
+		AppVersion:     appVersion,
+		RestartManaged: restartIsManaged(),
+	})
+	if err != nil {
+		log.Fatalf("configure backup service: %v", err)
+	}
+	backupManager.Start(ctx)
+	defer backupManager.Close()
 
 	apiServer := &api.Server{
 		Catalog:        cat,
@@ -173,8 +231,9 @@ func main() {
 	adminServer := &api.AdminServer{
 		Catalog:         cat,
 		Auth:            authr,
+		Backups:         backupManager,
 		VersionFilePath: versionFilePath,
-		ImageVersion:    strings.TrimSpace(os.Getenv("VIDEO_IMAGE_VERSION")),
+		ImageVersion:    imageVersion,
 		GitHubRepo:      githubRepo,
 		SetupRequired: func() bool {
 			setupMu.Lock()
@@ -372,11 +431,18 @@ func main() {
 	go app.attachExistingDrives(ctx)
 	go app.migrateHiddenVideosToTombstone(ctx)
 
-	// 等待退出信号
+	// 等待退出信号或恢复任务要求的受控重启。
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
-	<-sigs
+	restoreRestart := false
+	select {
+	case <-sigs:
+	case <-backupManager.RestartRequested():
+		restoreRestart = true
+	}
+	signal.Stop(sigs)
 	log.Println("shutting down...")
+	cancel()
 	shutCtx, shutCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutCancel()
 	_ = srv.Shutdown(shutCtx)
@@ -385,6 +451,36 @@ func main() {
 	if err := remoteUploader.Shutdown(remoteShutCtx); err != nil {
 		log.Printf("[remote-upload] shutdown: %v", err)
 	}
+	if restoreRestart {
+		backupManager.Close()
+		if err := cat.Close(); err != nil {
+			log.Printf("[restore] close catalog before restart: %v", err)
+		}
+		log.Printf("[restore] pending restore staged; exiting with restart code %d", backup.RestartExitCode)
+		os.Exit(backup.RestartExitCode)
+	}
+}
+
+func readVersionFile(path string) string {
+	data, err := os.ReadFile(strings.TrimSpace(path))
+	if err != nil {
+		return ""
+	}
+	line := strings.SplitN(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n", 2)[0]
+	return strings.TrimSpace(line)
+}
+
+func restartIsManaged() bool {
+	if raw := strings.TrimSpace(os.Getenv("VIDEO_RESTART_MANAGED")); raw != "" {
+		return parseBoolDefault(raw, false)
+	}
+	if strings.TrimSpace(os.Getenv("INVOCATION_ID")) != "" {
+		return true
+	}
+	if _, err := os.Stat("/.dockerenv"); err == nil {
+		return true
+	}
+	return false
 }
 
 func runHashPasswordCommand(r io.Reader, w io.Writer) error {

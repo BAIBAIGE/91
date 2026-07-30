@@ -26,6 +26,7 @@ import (
 	"github.com/video-site/backend/internal/catalog"
 	"github.com/video-site/backend/internal/drives/localstorage"
 	"github.com/video-site/backend/internal/drives/localupload"
+	"github.com/video-site/backend/internal/persistence"
 	"github.com/video-site/backend/internal/proxy"
 	"github.com/video-site/backend/internal/subtitles"
 	"github.com/video-site/backend/internal/tagging"
@@ -702,12 +703,25 @@ func (s *Server) handleUploadVideo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if _, statErr := os.Lstat(dst); statErr == nil {
+		storedName = videoname.UploadFileName(title, ext, uploadID, true)
+		dst, err = s.localUploadFilePath(storedName)
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, err)
+			return
+		}
+	} else if !os.IsNotExist(statErr) {
+		writeErr(w, http.StatusInternalServerError, statErr)
+		return
+	}
+	partPath := dst + ".part"
+	out, err := os.OpenFile(partPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if errors.Is(err, os.ErrExist) {
 		storedName = videoname.UploadFileName(title, ext, uploadID, true)
 		dst, err = s.localUploadFilePath(storedName)
 		if err == nil {
-			out, err = os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+			partPath = dst + ".part"
+			out, err = os.OpenFile(partPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 		}
 	}
 	if err != nil {
@@ -718,18 +732,48 @@ func (s *Server) handleUploadVideo(w http.ResponseWriter, r *http.Request) {
 	size, copyErr := io.Copy(out, file)
 	closeErr := out.Close()
 	if copyErr != nil {
-		_ = os.Remove(dst)
+		_ = os.Remove(partPath)
 		writeErr(w, http.StatusInternalServerError, copyErr)
 		return
 	}
 	if closeErr != nil {
-		_ = os.Remove(dst)
+		_ = os.Remove(partPath)
 		writeErr(w, http.StatusInternalServerError, closeErr)
 		return
 	}
 	if size <= 0 {
-		_ = os.Remove(dst)
+		_ = os.Remove(partPath)
 		writeErr(w, http.StatusBadRequest, errors.New("uploaded video is empty"))
+		return
+	}
+	if err := os.Chmod(partPath, 0o644); err != nil {
+		_ = os.Remove(partPath)
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+
+	// The potentially long request-body copy above writes an excluded .part
+	// file. Only publication of the final file and its catalog rows needs to be
+	// atomic with respect to a backup snapshot.
+	persistence.RLock()
+	mutationLocked := true
+	defer func() {
+		if mutationLocked {
+			persistence.RUnlock()
+		}
+	}()
+	if _, err := os.Lstat(dst); err == nil {
+		_ = os.Remove(partPath)
+		writeErr(w, http.StatusConflict, errors.New("目标视频文件已存在，请重试"))
+		return
+	} else if !os.IsNotExist(err) {
+		_ = os.Remove(partPath)
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	if err := os.Rename(partPath, dst); err != nil {
+		_ = os.Remove(partPath)
+		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
 
@@ -762,6 +806,8 @@ func (s *Server) handleUploadVideo(w http.ResponseWriter, r *http.Request) {
 			video = saved
 		}
 	}
+	persistence.RUnlock()
+	mutationLocked = false
 	if s.OnVideoUploaded != nil {
 		s.OnVideoUploaded(video)
 	}

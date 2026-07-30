@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/video-site/backend/internal/persistence"
 )
 
 // teaser 帧签名的磁盘缓存：签名只依赖 teaser 文件内容，用 (size, mtime)
@@ -48,6 +50,8 @@ func StoreCachedTeaserSignature(cachePath, teaserPath string, sig *FrameSignatur
 		return err
 	}
 	data := encodeFrameSignature(sig, info.Size(), info.ModTime().UnixNano())
+	persistence.RLock()
+	defer persistence.RUnlock()
 	tmp := cachePath + ".tmp"
 	if err := os.WriteFile(tmp, data, 0o644); err != nil {
 		return err

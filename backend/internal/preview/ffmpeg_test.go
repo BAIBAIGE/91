@@ -17,6 +17,31 @@ import (
 	"github.com/video-site/backend/internal/drives"
 )
 
+func TestReplaceFilePreservesHardLinkedBackupSnapshot(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "thumbnail.jpg")
+	snapshot := filepath.Join(root, "snapshot-thumbnail.jpg")
+	replacement := filepath.Join(root, "replacement.jpg")
+	if err := os.WriteFile(target, []byte("old-thumbnail"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(target, snapshot); err != nil {
+		t.Skipf("hard links unavailable: %v", err)
+	}
+	if err := os.WriteFile(replacement, []byte("new-thumbnail"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := replaceFile(replacement, target); err != nil {
+		t.Fatal(err)
+	}
+	if body, err := os.ReadFile(target); err != nil || string(body) != "new-thumbnail" {
+		t.Fatalf("replacement body = %q err=%v", body, err)
+	}
+	if body, err := os.ReadFile(snapshot); err != nil || string(body) != "old-thumbnail" {
+		t.Fatalf("hard-linked snapshot body = %q err=%v", body, err)
+	}
+}
+
 func TestNewDefaultsToThreeSecondTeaserSegments(t *testing.T) {
 	gen := New(Config{})
 	if gen.cfg.DurationSeconds != 3 {

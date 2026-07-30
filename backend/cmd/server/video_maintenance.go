@@ -14,6 +14,7 @@ import (
 	"github.com/video-site/backend/internal/drives/localupload"
 	"github.com/video-site/backend/internal/mediaasset"
 	"github.com/video-site/backend/internal/mediasim"
+	"github.com/video-site/backend/internal/persistence"
 	"github.com/video-site/backend/internal/videoname"
 )
 
@@ -700,6 +701,8 @@ func (a *App) deleteDuplicateVideoWithAssets(ctx context.Context, localDir strin
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	persistence.RLock()
+	defer persistence.RUnlock()
 	if err := removeLocalVideoAssets(localDir, v); err != nil {
 		return fmt.Errorf("remove local assets for %s: %w", v.ID, err)
 	}

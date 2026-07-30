@@ -15,6 +15,7 @@ import (
 	"github.com/video-site/backend/internal/catalog"
 	"github.com/video-site/backend/internal/drives"
 	"github.com/video-site/backend/internal/mediaasset"
+	"github.com/video-site/backend/internal/persistence"
 )
 
 // migrateHiddenVideosToTombstone 把历史「隐藏」视频一次性迁移为黑名单墓碑。
@@ -53,6 +54,11 @@ func (a *App) deleteVideo(ctx context.Context, videoID string, deleteSource bool
 		return api.DeleteVideoResult{}, err
 	}
 
+	// Source deletion can remove a local-upload or crawler file that belongs in
+	// a full backup. Keep source, derived assets, and the catalog tombstone on
+	// the same side of the persistence snapshot gate.
+	persistence.RLock()
+	defer persistence.RUnlock()
 	deletedSource := false
 	if deleteSource {
 		deletedSource, err = a.removeVideoSourceFile(ctx, v)
@@ -356,6 +362,8 @@ func (a *App) cleanupDriveVideosForDelete(ctx context.Context, driveID string) (
 	if a.cfg != nil {
 		localDir = a.cfg.Storage.LocalPreviewDir
 	}
+	persistence.RLock()
+	defer persistence.RUnlock()
 	for _, v := range items {
 		if err := ctx.Err(); err != nil {
 			return 0, err
@@ -397,6 +405,8 @@ func (a *App) cleanupOrphanDriveVideos(ctx context.Context) (int, error) {
 	if a.cfg != nil {
 		localDir = a.cfg.Storage.LocalPreviewDir
 	}
+	persistence.RLock()
+	defer persistence.RUnlock()
 	for _, v := range items {
 		if err := ctx.Err(); err != nil {
 			return 0, err

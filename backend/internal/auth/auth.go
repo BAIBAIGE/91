@@ -106,6 +106,45 @@ func (a *Authenticator) SetCredentials(username, password string) {
 	a.Password = password
 }
 
+// CheckCurrentPassword re-authenticates the administrator represented by the
+// request's current session. Database-backed administrators are checked
+// against their bcrypt hash; a legacy user_id=0 session is checked against the
+// configured administrator password.
+func (a *Authenticator) CheckCurrentPassword(r *http.Request, password string) (bool, error) {
+	if a == nil || a.Catalog == nil || r == nil {
+		return false, nil
+	}
+	cookie, err := r.Cookie(sessionCookie)
+	if err != nil {
+		if errors.Is(err, http.ErrNoCookie) {
+			return false, nil
+		}
+		return false, err
+	}
+	session, found, err := a.Catalog.GetSession(r.Context(), cookie.Value)
+	if err != nil || !found {
+		return false, err
+	}
+	if !a.now().Before(session.ExpiresAt) {
+		return false, nil
+	}
+	if session.UserID == 0 {
+		_, expected := a.Credentials()
+		return subtle.ConstantTimeCompare([]byte(password), []byte(expected)) == 1, nil
+	}
+	user, err := a.Catalog.GetUserByID(r.Context(), session.UserID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil
+		}
+		return false, err
+	}
+	if user.Banned || user.Role != "admin" {
+		return false, nil
+	}
+	return checkPassword(password, user.Password), nil
+}
+
 func (a *Authenticator) recordFailure(r *http.Request, ip string) error {
 	now := a.now()
 	a.mu.Lock()

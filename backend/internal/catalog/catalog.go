@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path"
 	"strings"
 	"sync"
@@ -57,6 +58,25 @@ func Open(path string) (*Catalog, error) {
 }
 
 func (c *Catalog) Close() error { return c.db.Close() }
+
+// BackupTo creates an online, transactionally consistent SQLite snapshot.
+// VACUUM INTO uses SQLite's own read transaction, so WAL pages that have not
+// yet been checkpointed are included. The destination must not already exist.
+func (c *Catalog) BackupTo(ctx context.Context, destination string) error {
+	if c == nil || c.db == nil {
+		return errors.New("catalog: database is not open")
+	}
+	if _, err := os.Stat(destination); err == nil {
+		return fmt.Errorf("catalog: backup destination already exists")
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	quoted := strings.ReplaceAll(destination, "'", "''")
+	if _, err := c.db.ExecContext(ctx, "VACUUM INTO '"+quoted+"'"); err != nil {
+		return fmt.Errorf("catalog: sqlite online backup: %w", err)
+	}
+	return nil
+}
 
 // ---------- Video ----------
 

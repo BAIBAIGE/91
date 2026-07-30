@@ -388,6 +388,90 @@ func TestUserLoginOnlyFallsBackToConfigWhenUsersTableIsEmpty(t *testing.T) {
 	}
 }
 
+func TestCheckCurrentPasswordUsesDatabaseAdminSession(t *testing.T) {
+	ctx := context.Background()
+	cat, err := catalog.Open(t.TempDir() + "/catalog.db")
+	if err != nil {
+		t.Fatalf("open catalog: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := cat.Close(); err != nil {
+			t.Fatalf("close catalog: %v", err)
+		}
+	})
+	hash, err := HashPassword("database-secret")
+	if err != nil {
+		t.Fatalf("hash password: %v", err)
+	}
+	if _, err := cat.CreateUser(ctx, "database-admin", hash, "admin"); err != nil {
+		t.Fatalf("create admin: %v", err)
+	}
+
+	authr := &Authenticator{
+		Username: "legacy-admin",
+		Password: "different-config-secret",
+		Catalog:  cat,
+	}
+	loginResponse := httptest.NewRecorder()
+	role, err := authr.UserLogin(
+		loginResponse,
+		loginRequest("203.0.113.33"),
+		"database-admin",
+		"database-secret",
+	)
+	if err != nil || role != "admin" {
+		t.Fatalf("login role=%q err=%v", role, err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/admin/api/backups/example/restore", nil)
+	request.AddCookie(responseCookie(t, loginResponse, sessionCookie))
+
+	ok, err := authr.CheckCurrentPassword(request, "database-secret")
+	if err != nil || !ok {
+		t.Fatalf("database password check ok=%v err=%v", ok, err)
+	}
+	ok, err = authr.CheckCurrentPassword(request, "different-config-secret")
+	if err != nil {
+		t.Fatalf("wrong password check: %v", err)
+	}
+	if ok {
+		t.Fatal("database admin was incorrectly verified with the config password")
+	}
+}
+
+func TestCheckCurrentPasswordSupportsLegacyAdminSession(t *testing.T) {
+	cat, err := catalog.Open(t.TempDir() + "/catalog.db")
+	if err != nil {
+		t.Fatalf("open catalog: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := cat.Close(); err != nil {
+			t.Fatalf("close catalog: %v", err)
+		}
+	})
+	authr := &Authenticator{
+		Username: "legacy-admin",
+		Password: "legacy-secret",
+		Catalog:  cat,
+	}
+	loginResponse := httptest.NewRecorder()
+	ok, err := authr.Login(
+		loginResponse,
+		loginRequest("203.0.113.34"),
+		"legacy-admin",
+		"legacy-secret",
+	)
+	if err != nil || !ok {
+		t.Fatalf("login ok=%v err=%v", ok, err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/admin/api/backups/example/restore", nil)
+	request.AddCookie(responseCookie(t, loginResponse, sessionCookie))
+
+	ok, err = authr.CheckCurrentPassword(request, "legacy-secret")
+	if err != nil || !ok {
+		t.Fatalf("legacy password check ok=%v err=%v", ok, err)
+	}
+}
+
 func TestClientIPUsesForwardedHeadersFromTrustedProxy(t *testing.T) {
 	req := loginRequest("127.0.0.1")
 	req.Header.Set("X-Forwarded-For", "203.0.113.12")

@@ -27,6 +27,7 @@ import (
 	"github.com/video-site/backend/internal/catalog"
 	"github.com/video-site/backend/internal/fingerprint"
 	"github.com/video-site/backend/internal/mediaasset"
+	"github.com/video-site/backend/internal/persistence"
 	"golang.org/x/net/proxy"
 )
 
@@ -804,7 +805,8 @@ func (c *Crawler) processItem(ctx context.Context, item Item) (bool, error) {
 	if thumbReady {
 		v.ThumbnailURL = "/p/thumb/" + v.ID
 	}
-	if duplicate, err := c.findNearDuplicateVideo(ctx, v, commonThumbPath, videoPath); err != nil {
+	duplicate, err := c.findNearDuplicateVideo(ctx, v, commonThumbPath, videoPath)
+	if err != nil {
 		_ = os.Remove(videoPath)
 		if thumbPath != "" {
 			_ = os.Remove(thumbPath)
@@ -813,7 +815,12 @@ func (c *Crawler) processItem(ctx context.Context, item Item) (bool, error) {
 			_ = os.Remove(commonThumbPath)
 		}
 		return false, fmt.Errorf("near duplicate lookup: %w", err)
-	} else if duplicate != nil && duplicate.video != nil {
+	}
+	// Media and thumbnail downloads above are written through .part files.
+	// Coordinate only the final file/catalog cleanup and publication.
+	persistence.RLock()
+	defer persistence.RUnlock()
+	if duplicate != nil && duplicate.video != nil {
 		if v.Size > duplicate.video.Size {
 			if err := c.cfg.Catalog.DeleteVideoWithTombstoneOptions(ctx, duplicate.video.ID, catalog.DeleteVideoTombstoneOptions{
 				Reason:           catalog.DeletedVideoReasonDuplicate,

@@ -38,6 +38,7 @@ import (
 	"github.com/video-site/backend/internal/drives/webdav"
 	"github.com/video-site/backend/internal/drives/wopan"
 	"github.com/video-site/backend/internal/mediaasset"
+	"github.com/video-site/backend/internal/persistence"
 	"github.com/video-site/backend/internal/videoname"
 )
 
@@ -876,6 +877,8 @@ func (m *Migrator) migrateOne(ctx context.Context, v *catalog.Video, plan migrat
 	}
 
 	// 事务性改写 catalog 行：drive_id / file_id / content_hash
+	persistence.RLock()
+	defer persistence.RUnlock()
 	if err := m.cfg.Catalog.MigrateVideoToDrive(ctx, v.ID, plan.targetDriveID, res.FileID, res.Hash); err != nil {
 		return false, fmt.Errorf("catalog migrate: %w", err)
 	}
@@ -903,6 +906,8 @@ func (m *Migrator) bindToExistingTarget(ctx context.Context, v, target *catalog.
 	if plan.targetDriveID == "" || target.FileID == "" {
 		return false, nil
 	}
+	persistence.RLock()
+	defer persistence.RUnlock()
 	if err := m.cfg.Catalog.MigrateVideoToDrive(ctx, v.ID, plan.targetDriveID, target.FileID, firstNonEmpty(target.ContentHash, v.ContentHash)); err != nil {
 		return false, fmt.Errorf("catalog bind existing target: %w", err)
 	}

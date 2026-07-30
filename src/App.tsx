@@ -38,6 +38,9 @@ const DuplicateReviewsPage = lazy(() =>
 const ThemePage = lazy(() =>
   import("@/admin/ThemePage").then((module) => ({ default: module.ThemePage }))
 );
+const BackupPage = lazy(() =>
+  import("@/admin/BackupPage").then((module) => ({ default: module.BackupPage }))
+);
 const UsersPage = lazy(() =>
   import("@/admin/UsersPage").then((module) => ({ default: module.UsersPage }))
 );
@@ -193,6 +196,14 @@ export default function App() {
             element={
               <PageSuspense>
                 <ThemePage />
+              </PageSuspense>
+            }
+          />
+          <Route
+            path="backup"
+            element={
+              <PageSuspense>
+                <BackupPage />
               </PageSuspense>
             }
           />

@@ -26,7 +26,14 @@ async function request<T>(
   }
   if (!res.ok) {
     const text = await res.text().catch(() => "");
-    throw new Error(text || `HTTP ${res.status}`);
+    let message = text;
+    try {
+      const parsed = JSON.parse(text) as { error?: unknown };
+      if (typeof parsed.error === "string") message = parsed.error;
+    } catch {
+      // Keep a plain-text error response as-is.
+    }
+    throw new Error(message || `HTTP ${res.status}`);
   }
   if (res.status === 204) return undefined as T;
   const ct = res.headers.get("content-type") ?? "";
@@ -73,6 +80,193 @@ export type UpdateCheck = {
 
 export function checkUpdate() {
   return request<UpdateCheck>("/update/check");
+}
+
+// ---------- Full backup / migration restore ----------
+
+export type BackupEstimate = {
+  fileCount: number;
+  totalBytes: number;
+  availableBytes: number;
+  requiredBytes: number;
+};
+
+export type BackupTask = {
+  id: string;
+  state: string;
+  phase?: string;
+  name?: string;
+  startedAt: string;
+  finishedAt?: string;
+  fileCount: number;
+  processedFiles: number;
+  totalBytes: number;
+  processedBytes: number;
+  bytesPerSecond: number;
+  error?: string;
+  cancellable: boolean;
+};
+
+export type BackupRecord = {
+  id: string;
+  name: string;
+  size: number;
+  sha256?: string;
+  createdAt: string;
+  verificationStatus: "verified" | "unchecked" | "invalid" | string;
+  verificationError?: string;
+  imported: boolean;
+  appVersion?: string;
+  sourceDataRoot?: string;
+  fileCount?: number;
+  expandedSize?: number;
+  included?: string[];
+};
+
+export type BackupList = {
+  backups: BackupRecord[];
+  current?: BackupTask;
+  estimate: BackupEstimate;
+  restartManaged: boolean;
+  pendingRestore: boolean;
+};
+
+export type BackupUploadChunk = {
+  index: number;
+  size: number;
+  sha256: string;
+};
+
+export type BackupUploadSession = {
+  id: string;
+  fileName: string;
+  size: number;
+  sha256?: string;
+  chunkSize: number;
+  totalChunks: number;
+  received: BackupUploadChunk[];
+  state: string;
+  createdAt: string;
+  expiresAt: string;
+};
+
+export type BackupManifest = {
+  formatVersion: number;
+  appVersion: string;
+  createdAt: string;
+  sourceDataRoot: string;
+  fileCount: number;
+  totalSize: number;
+  included: string[];
+};
+
+export type RestoreReport = {
+  manifest: BackupManifest;
+  verificationStatus: string;
+  pathRewrites?: string[];
+  localStorageWarnings?: string[];
+  missingAssets?: string[];
+  warnings?: string[];
+};
+
+export function listBackups() {
+  return request<BackupList>("/backups");
+}
+
+export function createBackup() {
+  return request<BackupTask>("/backups", { method: "POST" });
+}
+
+export function cancelBackup() {
+  return request<{ ok: boolean }>("/backups/current/cancel", { method: "POST" });
+}
+
+export function deleteBackup(id: string) {
+  return request<{ ok: boolean }>(`/backups/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
+}
+
+export function backupDownloadURL(id: string) {
+  return `${BASE}/backups/${encodeURIComponent(id)}/download`;
+}
+
+export function beginBackupUpload(input: {
+  fileName: string;
+  size: number;
+  sha256?: string;
+}) {
+  return request<BackupUploadSession>("/backup-uploads", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function getBackupUpload(id: string) {
+  return request<BackupUploadSession>(`/backup-uploads/${encodeURIComponent(id)}`);
+}
+
+export async function putBackupUploadChunk(
+  id: string,
+  index: number,
+  chunk: Blob,
+  sha256: string,
+  signal?: AbortSignal
+): Promise<BackupUploadSession> {
+  const res = await fetch(
+    `${BASE}/backup-uploads/${encodeURIComponent(id)}/chunks/${index}`,
+    {
+      method: "PUT",
+      credentials: "include",
+      headers: {
+        "Content-Type": "application/octet-stream",
+        "X-Chunk-SHA256": sha256,
+      },
+      body: chunk,
+      signal,
+    }
+  );
+  if (res.status === 401) throw new UnauthorizedError();
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    let message = text;
+    try {
+      const parsed = JSON.parse(text) as { error?: unknown };
+      if (typeof parsed.error === "string") message = parsed.error;
+    } catch {
+      // Keep plain text.
+    }
+    throw new Error(message || `HTTP ${res.status}`);
+  }
+  return (await res.json()) as BackupUploadSession;
+}
+
+export function finalizeBackupUpload(id: string) {
+  return request<BackupRecord>(
+    `/backup-uploads/${encodeURIComponent(id)}/finalize`,
+    { method: "POST" }
+  );
+}
+
+export function cancelBackupUpload(id: string) {
+  return request<{ ok: boolean }>(`/backup-uploads/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
+}
+
+export function restoreBackup(
+  id: string,
+  input: { password: string; confirmation: string }
+) {
+  return request<{
+    ok: boolean;
+    restarting: boolean;
+    restartManaged: boolean;
+    report: RestoreReport;
+  }>(`/backups/${encodeURIComponent(id)}/restore`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
 }
 
 // ---------- Drives ----------

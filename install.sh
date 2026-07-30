@@ -247,12 +247,14 @@ Type=simple
 WorkingDirectory=${INSTALL_PATH}
 ExecStart=${INSTALL_PATH}/server
 Restart=on-failure
+RestartForceExitStatus=75
 RestartSec=5
 TimeoutStopSec=20
 Environment=VIDEO_CONFIG=${INSTALL_PATH}/config.yaml
 Environment=VIDEO_FRONTEND_DIR=${INSTALL_PATH}/dist
 Environment=VIDEO_VERSION_FILE=${VERSION_FILE}
 Environment=VIDEO_GITHUB_REPO=${GITHUB_REPO}
+Environment=VIDEO_RESTART_MANAGED=true
 Environment=HOME=/root
 Environment=PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
 LimitNOFILE=65536

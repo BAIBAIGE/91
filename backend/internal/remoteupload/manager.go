@@ -23,6 +23,7 @@ import (
 
 	"github.com/video-site/backend/internal/catalog"
 	"github.com/video-site/backend/internal/drives/localupload"
+	"github.com/video-site/backend/internal/persistence"
 	"github.com/video-site/backend/internal/transcode"
 	"github.com/video-site/backend/internal/videoname"
 )
@@ -424,6 +425,13 @@ func (m *Manager) processJob(ctx context.Context, job *catalog.RemoteUploadJob) 
 		return err
 	}
 
+	persistence.RLock()
+	mutationLocked := true
+	defer func() {
+		if mutationLocked {
+			persistence.RUnlock()
+		}
+	}()
 	video, err := m.publishFile(ctx, job.ID, partName, title, ext, metadata.Size)
 	if err != nil {
 		return err
@@ -441,6 +449,8 @@ func (m *Manager) processJob(ctx context.Context, job *catalog.RemoteUploadJob) 
 	if err := m.catalog.FinalizeRemoteUpload(ctx, job.ID, video, job.Tags, autoTags); err != nil {
 		return err
 	}
+	persistence.RUnlock()
+	mutationLocked = false
 	saved, err := m.catalog.GetVideo(ctx, video.ID)
 	if err == nil {
 		video = saved
