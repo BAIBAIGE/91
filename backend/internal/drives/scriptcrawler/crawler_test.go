@@ -44,7 +44,27 @@ func writeScriptCrawlerFFprobeStub(t *testing.T, dir string, ok bool) string {
 func writeScriptCrawlerFFmpegStub(t *testing.T, dir string) string {
 	t.Helper()
 	path := filepath.Join(dir, "ffmpeg-hls.sh")
-	body := "#!/bin/sh\nif [ -n \"$GO_SCRIPTCRAWLER_FFMPEG_ARGS_FILE\" ]; then printf '%s\\n' \"$@\" > \"$GO_SCRIPTCRAWLER_FFMPEG_ARGS_FILE\"; fi\nout=\"\"\nfor arg do out=\"$arg\"; done\nprintf 'hls-video-bytes' > \"$out\"\n"
+	body := `#!/bin/sh
+if [ "$#" -eq 3 ] && [ "$1" = "-hide_banner" ] && [ "$2" = "-h" ] && [ "$3" = "demuxer=hls" ]; then
+  if [ "${GO_SCRIPTCRAWLER_FFMPEG_HELP_FAIL:-}" = "1" ]; then
+    echo "hls help unavailable" >&2
+    exit 1
+  fi
+  if [ -n "${GO_SCRIPTCRAWLER_FFMPEG_HLS_HELP:-}" ]; then
+    printf '%s\n' "$GO_SCRIPTCRAWLER_FFMPEG_HLS_HELP"
+  else
+    printf '%s\n' \
+      '  -allowed_extensions <string> .D.........' \
+      '  -allowed_segment_extensions <string> .D.........' \
+      '  -extension_picky <boolean> .D.........'
+  fi
+  exit 0
+fi
+if [ -n "$GO_SCRIPTCRAWLER_FFMPEG_ARGS_FILE" ]; then printf '%s\n' "$@" > "$GO_SCRIPTCRAWLER_FFMPEG_ARGS_FILE"; fi
+out=""
+for arg do out="$arg"; done
+printf 'hls-video-bytes' > "$out"
+`
 	if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
 		t.Fatalf("write ffmpeg stub: %v", err)
 	}

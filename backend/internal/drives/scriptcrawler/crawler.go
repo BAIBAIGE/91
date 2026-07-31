@@ -88,6 +88,8 @@ type Crawler struct {
 	cfg                          CrawlerConfig
 	runTimeoutExplicit           bool
 	candidateIdleTimeoutExplicit bool
+	hlsCapsOnce                  sync.Once
+	hlsCaps                      ffmpegHLSCapabilities
 
 	// protocol is the protocol resolved for the current run. It is refreshed
 	// from the script under runMu, so cfg stays immutable after construction.
@@ -1185,11 +1187,8 @@ func (c *Crawler) downloadHLSAtomic(ctx context.Context, ref MediaRef, dst, refe
 	if h := ffmpegHeaderBlock(headers); h != "" {
 		args = append(args, "-headers", h)
 	}
+	args = append(args, c.ffmpegHLSInputOptions(ctx)...)
 	args = append(args,
-		"-protocol_whitelist", "http,https,tcp,tls,crypto",
-		"-allowed_extensions", "ALL",
-		"-allowed_segment_extensions", "ALL",
-		"-extension_picky", "0",
 		"-i", src,
 		"-c", "copy",
 		"-bsf:a", "aac_adtstoasc",
