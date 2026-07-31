@@ -41,9 +41,7 @@ test("backup restore is reachable from the system navigation", () => {
   assert.doesNotMatch(app, /path="\/tmp"/);
 });
 
-test("backup page keeps essential safety and destructive restore confirmation concise", () => {
-  assert.match(page, /备份包含敏感数据/);
-  assert.match(page, /请通过 HTTPS 传输并妥善保管/);
+test("backup page keeps destructive restore confirmation concise", () => {
   assert.match(page, /restoreText !== "确认恢复"/);
   assert.doesNotMatch(page, /restorePassword|PasswordInput|当前管理员密码/);
   assert.match(api, /input: \{ confirmation: string \}/);
@@ -61,9 +59,9 @@ test("restore confirmation input uses the shared theme-aware field palette", () 
 });
 
 test("backup creation uses credential-neutral backup wording", () => {
-  assert.match(page, /\n          创建备份\n        <\/button>/);
+  assert.match(page, /创建备份\n\s*<\/button>/);
   assert.match(page, /show\("备份任务已开始", "success"\)/);
-  assert.match(page, /<span>还没有备份<\/span>/);
+  assert.match(page, /<span>当前没有备份包<\/span>/);
   assert.doesNotMatch(page, /创建完整备份|完整备份任务已开始|还没有完整备份/);
 });
 
@@ -74,7 +72,7 @@ test("migration upload uses resumable 16 MiB server chunks with hashes", () => {
   assert.match(page, /localStorage\.setItem\(RESUME_KEY/);
   assert.match(page, /继续上传/);
   assert.match(page, /handlePause/);
-  assert.match(page, /正在完整校验并入库/);
+  assert.match(page, /校验并入库/);
   assert.doesNotMatch(page, /正在合并并完整校验/);
 });
 
@@ -85,7 +83,7 @@ test("backup long operations render phase-driven task checklists", () => {
   assert.match(page, /upload\?\.progress\?\.phase/);
   assert.match(page, /data\?\.restoreProgress/);
   assert.match(page, /校验完整文件/);
-  assert.match(page, /单次校验并解压暂存/);
+  assert.match(page, /校验并解压暂存/);
   assert.match(page, /检查暂存数据库/);
   assert.doesNotMatch(page, /每个文件只读取一次/);
   assert.doesNotMatch(page, /生成可回滚的切换清单/);
@@ -138,7 +136,7 @@ test("successful restore invalidates cached auth before opening login", () => {
 });
 
 test("restore polling starts only after validation and staging are accepted", () => {
-  assert.match(page, /单次校验并解压暂存中/);
+  assert.match(page, /校验并解压暂存/);
   assert.match(
     page,
     /const \[restoreSubmitting, setRestoreSubmitting\] = useState\(false\)/

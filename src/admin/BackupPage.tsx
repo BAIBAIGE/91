@@ -10,23 +10,14 @@ import {
   Archive,
   Check,
   CircleAlert,
-  Download,
-  HardDriveDownload,
   Loader2,
-  Pause,
-  Play,
-  RefreshCw,
-  RotateCcw,
-  ShieldAlert,
-  Trash2,
-  UploadCloud,
-  X,
 } from "lucide-react";
 import * as api from "./api";
 import { useAuth } from "./AuthContext";
 import { ConfirmModal } from "./ConfirmModal";
 import { Modal } from "./Modal";
 import { useToast } from "./ToastContext";
+import { AdminLoading } from "./AdminLoading";
 
 const RESUME_KEY = "video-site-91-backup-upload-v1";
 
@@ -70,7 +61,7 @@ function taskPhase(phase: string | undefined) {
     case "compressing":
       return "写入备份包";
     case "verifying":
-      return "完整校验";
+      return "进行完整校验";
     case "canceling":
       return "正在取消";
     case "completed":
@@ -101,19 +92,9 @@ function operationPercent(progress: api.BackupOperationProgress | undefined) {
   return Math.min(100, Math.max(0, (progress.processedBytes / progress.totalBytes) * 100));
 }
 
-function operationDetail(
-  progress: api.BackupOperationProgress | undefined,
-  percent: number | null
-) {
+function operationDetail(percent: number | null) {
   if (percent === null) return "处理中";
-  const percentage = `${percent.toFixed(1)}%`;
-  if (progress?.totalFiles && progress.processedFiles > 0) {
-    return `${percentage} · ${progress.processedFiles}/${progress.totalFiles} 文件`;
-  }
-  if (progress?.totalBytes) {
-    return `${percentage} · ${formatBytes(progress.processedBytes)}/${formatBytes(progress.totalBytes)}`;
-  }
-  return percentage;
+  return `${percent.toFixed(1)}%`;
 }
 
 function BackupOperationChecklist({
@@ -125,24 +106,12 @@ function BackupOperationChecklist({
   steps: ChecklistStep[];
   progress?: api.BackupOperationProgress;
 }) {
-  const completed = steps.filter((step) => step.state === "done").length;
   const percent = operationPercent(progress);
-  const allDone = completed === steps.length;
 
   return (
     <section className="backup-operation-checklist" role="status" aria-live="polite">
       <div className="backup-operation-checklist__head">
         <strong>{title}</strong>
-        <span className={allDone ? "is-complete" : ""}>
-          {allDone ? (
-            <>
-              <Check size={12} strokeWidth={2.8} />
-              完成
-            </>
-          ) : (
-            `${Math.min(completed + 1, steps.length)} / ${steps.length}`
-          )}
-        </span>
       </div>
       <ol className="backup-operation-steps">
         {steps.map((step, index) => (
@@ -172,7 +141,7 @@ function BackupOperationChecklist({
                   >
                     <span style={percent === null ? undefined : { width: `${percent}%` }} />
                   </div>
-                  <span>{operationDetail(progress, percent)}</span>
+                  <span>{operationDetail(percent)}</span>
                 </div>
               )}
             </div>
@@ -584,10 +553,7 @@ export function BackupPage() {
   if (loading && !data) {
     return (
       <div className="admin-page backup-page">
-        <div className="admin-loading-state admin-page-loading">
-          <RefreshCw size={20} className="admin-spin" />
-          <span>加载中...</span>
-        </div>
+        <AdminLoading />
       </div>
     );
   }
@@ -629,7 +595,7 @@ export function BackupPage() {
       state: checklistState(0, restorePrepareIndex, restoreReady),
     },
     {
-      title: "单次校验并解压暂存",
+      title: "校验并解压暂存",
       state: checklistState(1, restorePrepareIndex, restoreReady),
     },
     {
@@ -653,61 +619,28 @@ export function BackupPage() {
 
   return (
     <div className="admin-page backup-page">
-      <div className="admin-page__header backup-page__header">
-        <div>
-          <h1 className="admin-page__title">备份恢复</h1>
-          <p className="admin-page__subtitle">备份、迁移与完整恢复。</p>
-        </div>
-        <button
-          type="button"
-          className="admin-btn is-primary"
-          onClick={handleCreate}
-          disabled={creating || taskActive(current) || data?.pendingRestore}
-        >
-          {creating ? <Loader2 size={15} className="admin-spin" /> : <Archive size={15} />}
-          创建备份
-        </button>
-      </div>
-
-      <div className="backup-security-notice" role="note">
-        <ShieldAlert size={19} />
-        <div>
-          <strong>备份包含敏感数据</strong>
-          <span>请通过 HTTPS 传输并妥善保管。</span>
-        </div>
-      </div>
-
       <section className="backup-overview" aria-label="备份空间概览">
         <div className="backup-stat">
           <span>预计数据量</span>
           <strong>{formatBytes(estimate?.totalBytes)}</strong>
-          <small>{estimate?.fileCount ?? 0} 个文件</small>
         </div>
         <div className="backup-stat">
           <span>服务器可用空间</span>
           <strong>{formatBytes(estimate?.availableBytes)}</strong>
-          <small>安全创建需要 {formatBytes(estimate?.requiredBytes)}</small>
         </div>
         <div className="backup-stat">
-          <span>保留策略</span>
-          <strong>永久保留</strong>
-          <small>仅管理员手动删除</small>
+          <span>备份数量</span>
+          <strong>{data?.backups.length ?? 0}</strong>
         </div>
       </section>
 
-      {current && (
+      {current && taskActive(current) && (
         <section className={`backup-task ${current.state === "failed" ? "is-error" : ""}`}>
           <div className="backup-task__head">
-            <div>
-              <span className="backup-eyebrow">当前任务</span>
+            <div className="backup-task__title">
               <strong>{taskPhase(current.phase)}</strong>
             </div>
-            {taskActive(current) && current.cancellable && (
-              <button type="button" className="admin-btn is-stop" onClick={handleCancelBackup}>
-                <X size={14} />
-                取消
-              </button>
-            )}
+            <strong className="backup-task__percent">{progress.toFixed(1)}%</strong>
           </div>
           <div
             className="backup-progress"
@@ -718,267 +651,217 @@ export function BackupPage() {
           >
             <span style={{ width: `${progress}%` }} />
           </div>
-          <div className="backup-task__meta">
-            <span>{progress.toFixed(1)}%</span>
-            <span>
-              {current.processedFiles}/{current.fileCount} 个文件
-            </span>
-            <span>
-              {formatBytes(current.processedBytes)} / {formatBytes(current.totalBytes)}
-            </span>
-            <span>{formatBytes(current.bytesPerSecond)}/s</span>
+          <div className="backup-task__foot">
+            <div className="backup-task__meta">
+              <span>
+                {current.processedFiles}/{current.fileCount} 文件 · {formatBytes(current.processedBytes)} /{" "}
+                {formatBytes(current.totalBytes)} · {formatBytes(current.bytesPerSecond)}/s
+              </span>
+            </div>
+            {taskActive(current) && current.cancellable && (
+              <button type="button" className="admin-btn is-stop" onClick={handleCancelBackup}>
+                取消
+              </button>
+            )}
           </div>
           {current.error && <p className="backup-task__error">{current.error}</p>}
         </section>
       )}
 
-      <section className="admin-card backup-upload-card">
-        <div className="backup-section-heading">
-          <div>
-            <span className="backup-eyebrow">服务器迁移</span>
-            <h2>分片上传备份包</h2>
+      <div className="backup-grid">
+        <section className="admin-card backup-upload-card">
+          <div className="backup-section-heading">
+            <h2>上传备份包</h2>
           </div>
-          <UploadCloud size={21} />
-        </div>
-        <p>
-          16 MiB 分片上传，支持暂停与断点续传。
-        </p>
-        {resumeHint && !file && (
-          <div className="backup-resume-hint">
-            <RotateCcw size={16} />
-            检测到未完成上传：{resumeHint.fileName}。请重新选择同一个本地文件继续。
+          <div className="backup-upload-controls">
+            <label
+              className="backup-file-picker"
+              title={
+                resumeHint
+                  ? `检测到未完成上传：${resumeHint.fileName}，重新选择同一文件继续`
+                  : "16 MiB 分片上传，支持暂停与断点续传"
+              }
+            >
+              <span>{file ? file.name : "选择 ZIP 备份包"}</span>
+              <input
+                type="file"
+                accept=".zip,application/zip"
+                onChange={chooseFile}
+                disabled={uploading || finalizing}
+              />
+            </label>
+            <div className="backup-upload-actions">
+              {finalizing ? null : !uploading ? (
+                <button
+                  type="button"
+                  className="admin-btn is-primary"
+                  onClick={handleUpload}
+                  disabled={!file || finalizing}
+                >
+                  {upload?.received.length ? "继续上传" : "开始上传"}
+                </button>
+              ) : (
+                <button type="button" className="admin-btn" onClick={handlePause}>
+                  暂停
+                </button>
+              )}
+              {upload && (
+                <button
+                  type="button"
+                  className="admin-btn"
+                  onClick={handleCancelUpload}
+                  disabled={finalizing}
+                >
+                  取消
+                </button>
+              )}
+            </div>
           </div>
-        )}
-        <div className="backup-upload-controls">
-          <label className="backup-file-picker">
-            <HardDriveDownload size={16} />
-            <span>{file ? file.name : "选择 ZIP 备份包"}</span>
-            <input
-              type="file"
-              accept=".zip,application/zip"
-              onChange={chooseFile}
-              disabled={uploading || finalizing}
+          {upload && finalizing ? (
+            <BackupOperationChecklist
+              title="校验并入库"
+              steps={uploadFinalizeSteps}
+              progress={uploadActiveProgress}
             />
-          </label>
-          {finalizing ? (
-            <button type="button" className="admin-btn" disabled>
-              <Loader2 size={14} className="admin-spin" />
-              正在校验
-            </button>
-          ) : !uploading ? (
+          ) : upload ? (
+            <div className="backup-upload-progress">
+              <div className="backup-progress">
+                <span style={{ width: `${uploadPercent}%` }} />
+              </div>
+              <div className="backup-upload-progress__meta">
+                <span>
+                  {upload.received.length}/{upload.totalChunks} 分片 · {formatBytes(receivedBytes)} /{" "}
+                  {formatBytes(upload.size)} · {uploading ? "上传中" : "已暂停"}
+                </span>
+              </div>
+            </div>
+          ) : null}
+        </section>
+
+        <section className="backup-list-section">
+          <div className="backup-section-heading">
+            <h2>备份列表</h2>
             <button
               type="button"
               className="admin-btn is-primary"
-              onClick={handleUpload}
-              disabled={!file || finalizing}
+              onClick={handleCreate}
+              disabled={creating || taskActive(current) || data?.pendingRestore}
             >
-              <Play size={14} />
-              {upload?.received.length ? "继续上传" : "开始上传"}
+              {creating ? <Loader2 size={15} className="admin-spin" /> : null}
+              创建备份
             </button>
-          ) : (
-            <button type="button" className="admin-btn" onClick={handlePause}>
-              <Pause size={14} />
-              暂停
-            </button>
-          )}
-          {upload && (
-            <button
-              type="button"
-              className="admin-btn is-danger"
-              onClick={handleCancelUpload}
-              disabled={finalizing}
-            >
-              <Trash2 size={14} />
-              取消上传
-            </button>
-          )}
-        </div>
-        {upload && finalizing ? (
-          <BackupOperationChecklist
-            title="正在完整校验并入库"
-            steps={uploadFinalizeSteps}
-            progress={uploadActiveProgress}
-          />
-        ) : upload ? (
-          <div className="backup-upload-progress">
-            <div className="backup-progress">
-              <span style={{ width: `${uploadPercent}%` }} />
-            </div>
-            <div>
-              <span>
-                {upload.received.length}/{upload.totalChunks} 个分片
-              </span>
-              <span>
-                {formatBytes(receivedBytes)} / {formatBytes(upload.size)}
-              </span>
-              <span>{uploading ? "上传中" : "已暂停"}</span>
-            </div>
           </div>
-        ) : null}
-      </section>
-
-      <section className="backup-list-section">
-        <div className="backup-section-heading">
-          <div>
-            <span className="backup-eyebrow">服务器备份</span>
-            <h2>已完成备份</h2>
-          </div>
-          <button type="button" className="admin-btn" onClick={() => refresh()} aria-label="刷新备份列表">
-            <RefreshCw size={15} />
-            刷新
-          </button>
-        </div>
-        {data?.backups.length ? (
-          <div className="backup-list">
-            {data.backups.map((record) => (
-              <article className="backup-record" key={record.id}>
-                <div className="backup-record__icon">
-                  <Archive size={21} />
-                </div>
-                <div className="backup-record__body">
-                  <div className="backup-record__name">{record.name}</div>
-                  <div className="backup-record__meta">
-                    <span>{formatBytes(record.size)}</span>
-                    <span>{record.fileCount ?? 0} 个文件</span>
-                    <span>{formatTime(record.createdAt)}</span>
-                    <span>来源版本 {record.appVersion || "unknown"}</span>
-                    {record.imported && <span className="backup-badge">迁移上传</span>}
-                    <span className={`backup-verify is-${record.verificationStatus}`}>
-                      {record.verificationStatus === "verified"
-                        ? "已完整校验"
-                        : record.verificationStatus === "invalid"
-                          ? "校验失败"
-                          : "待校验"}
-                    </span>
+          {data?.backups.length ? (
+            <div className="backup-list">
+              {data.backups.map((record) => (
+                <article className="backup-record" key={record.id}>
+                  <div className="backup-record__icon">
+                    <Archive size={21} />
                   </div>
-                  {record.verificationError && (
-                    <div className="backup-record__error">{record.verificationError}</div>
-                  )}
-                </div>
-                <div className="backup-record__actions">
-                  <a className="admin-btn" href={api.backupDownloadURL(record.id)}>
-                    <Download size={14} />
-                    下载
-                  </a>
-                  <button
-                    type="button"
-                    className="admin-btn"
-                    onClick={() => {
-                      setRestoreReport(null);
-                      setRestoreTarget(record);
-                    }}
-                    disabled={record.verificationStatus === "invalid" || data.pendingRestore}
-                  >
-                    <RotateCcw size={14} />
-                    恢复
-                  </button>
-                  <button
-                    type="button"
-                    className="admin-btn is-danger"
-                    onClick={() => setDeleteTarget(record)}
-                    disabled={data.pendingRestore}
-                  >
-                    <Trash2 size={14} />
-                    删除
-                  </button>
-                </div>
-              </article>
-            ))}
-          </div>
-        ) : (
-          <div className="backup-empty">
-            <Archive size={28} />
-            <span>还没有备份</span>
-          </div>
-        )}
-      </section>
+                  <div className="backup-record__body">
+                    <div className="backup-record__name">{record.name}</div>
+                    <div className="backup-record__meta">
+                      <span>{formatBytes(record.size)}</span>
+                      <span>{formatTime(record.createdAt)}</span>
+                      {record.imported && <span className="backup-badge">迁移</span>}
+                      <span className={`backup-verify is-${record.verificationStatus}`}>
+                        {record.verificationStatus === "verified"
+                          ? "已校验"
+                          : record.verificationStatus === "invalid"
+                            ? "校验失败"
+                            : "待校验"}
+                      </span>
+                    </div>
+                    {record.verificationError && (
+                      <div className="backup-record__error">{record.verificationError}</div>
+                    )}
+                  </div>
+                  <div className="backup-record__actions">
+                    <a className="admin-btn" href={api.backupDownloadURL(record.id)}>
+                      下载
+                    </a>
+                    <button
+                      type="button"
+                      className="admin-btn"
+                      onClick={() => {
+                        setRestoreReport(null);
+                        setRestoreTarget(record);
+                      }}
+                      disabled={record.verificationStatus === "invalid" || data.pendingRestore}
+                    >
+                      恢复
+                    </button>
+                    <button
+                      type="button"
+                      className="admin-btn is-danger"
+                      onClick={() => setDeleteTarget(record)}
+                      disabled={data.pendingRestore}
+                    >
+                      删除
+                    </button>
+                  </div>
+                </article>
+              ))}
+            </div>
+          ) : (
+            <div className="backup-empty">
+              <Archive size={28} />
+              <span>当前没有备份包</span>
+            </div>
+          )}
+        </section>
+      </div>
 
       <ConfirmModal
         open={deleteTarget !== null}
         title="删除备份"
         message={`确定要永久删除「${deleteTarget?.name ?? ""}」吗？`}
         danger
+        hideIcon
         loading={deleting}
         onCancel={() => setDeleteTarget(null)}
         onConfirm={handleDelete}
       />
 
       <Modal
-        open={restoreTarget !== null}
-        title="确认完整恢复"
+        open={restoreTarget !== null || restoring}
+        title={restoring ? "应用恢复并重启服务" : "确认恢复"}
         className="admin-modal--backup-restore"
         onClose={closeRestore}
         footer={
-          <>
-            <button
-              type="button"
-              className="admin-btn"
-              disabled={restoreSubmitting}
-              onClick={closeRestore}
-            >
-              取消
-            </button>
-            <button
-              type="button"
-              className="admin-btn is-danger"
-              disabled={restoreText !== "确认恢复" || restoreSubmitting}
-              onClick={handleRestore}
-            >
-              {restoreSubmitting ? <Loader2 size={14} className="admin-spin" /> : <RotateCcw size={14} />}
-              {restoreSubmitting ? "单次校验并解压暂存中…" : "确认恢复"}
-            </button>
-          </>
+          restoring ? undefined : (
+            <>
+              <button
+                type="button"
+                className="admin-btn"
+                disabled={restoreSubmitting}
+                onClick={closeRestore}
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                className="admin-btn is-danger"
+                disabled={restoreText !== "确认恢复" || restoreSubmitting}
+                onClick={handleRestore}
+              >
+                {restoreSubmitting ? <Loader2 size={14} className="admin-spin" /> : null}
+                确认
+              </button>
+            </>
+          )
         }
       >
         {restoreTarget && restoreSubmitting ? (
           <BackupOperationChecklist
-            title="正在校验并解压暂存"
+            title="恢复中"
             steps={restorePrepareSteps}
             progress={restoreActiveProgress}
           />
-        ) : restoreTarget ? (
-          <div className="backup-restore-form">
-            <div className="backup-restore-warning">
-              <CircleAlert size={18} />
-              <span>将替换全部持久数据并重启，现有登录会话会失效。</span>
-            </div>
-            <dl className="backup-restore-summary">
-              <div>
-                <dt>来源版本</dt>
-                <dd>{restoreTarget.appVersion || "unknown"}</dd>
-              </div>
-              <div>
-                <dt>创建时间</dt>
-                <dd>{formatTime(restoreTarget.createdAt)}</dd>
-              </div>
-              <div>
-                <dt>校验状态</dt>
-                <dd>{restoreTarget.verificationStatus === "verified" ? "已完整校验" : "恢复前将重新完整校验"}</dd>
-              </div>
-              <div>
-                <dt>包含数据</dt>
-                <dd>{restoreTarget.included?.join("、") || "全部持久数据"}</dd>
-              </div>
-            </dl>
-            <label className="backup-field">
-              <span>输入“确认恢复”</span>
-              <input
-                className="admin-input"
-                value={restoreText}
-                onChange={(event) => setRestoreText(event.target.value)}
-                placeholder="确认恢复"
-                autoComplete="off"
-              />
-            </label>
-          </div>
-        ) : null}
-      </Modal>
-
-      {restoring && !restoreTarget && (
-        <div className="backup-restarting">
-          <div className="backup-restarting__panel">
+        ) : restoring ? (
+          <>
             <BackupOperationChecklist
-              title="正在应用恢复并重启服务"
+              title="应用恢复并重启服务"
               steps={[
                 {
                   title: "校验并暂存备份数据",
@@ -998,31 +881,48 @@ export function BackupPage() {
                 },
               ]}
             />
-            <p className="backup-restarting__hint">
-              {restartManaged ? "服务就绪后返回登录页" : "请手动重启后端，页面会继续检测"}
-            </p>
-            {restoreReport && (
-              <details className="backup-restart-report">
-                <summary>恢复详情</summary>
-                <div>
-                  <span>
-                    校验
-                    {restoreReport.verificationStatus === "verified"
-                      ? "通过"
-                      : restoreReport.verificationStatus}
-                  </span>
-                  {!!restoreReport.pathRewrites?.length && (
-                    <span>{restoreReport.pathRewrites.length} 项路径适配</span>
-                  )}
-                  {restoreWarnings.slice(0, 6).map((warning, index) => (
-                    <span key={`${index}-${warning}`}>{warning}</span>
-                  ))}
-                </div>
-              </details>
-            )}
+            <span className="sr-only">
+              {restartManaged ? "服务就绪后返回登录页" : "请手动重启后端，页面会继续检测"}；
+              {restoreWarnings.slice(0, 6).join("；")}
+            </span>
+          </>
+        ) : restoreTarget ? (
+          <div className="backup-restore-form">
+            <div className="backup-restore-warning">
+              <CircleAlert size={18} />
+              <span>将替换全部数据并重启</span>
+            </div>
+            <dl className="backup-restore-summary">
+              <div>
+                <dt>来源版本</dt>
+                <dd>{restoreTarget.appVersion || "unknown"}</dd>
+              </div>
+              <div>
+                <dt>创建时间</dt>
+                <dd>{formatTime(restoreTarget.createdAt)}</dd>
+              </div>
+              <div>
+                <dt>校验状态</dt>
+                <dd>
+                  {restoreTarget.verificationStatus === "verified"
+                    ? "已完整校验"
+                    : "恢复前将重新完整校验"}
+                </dd>
+              </div>
+            </dl>
+            <label className="backup-field">
+              <span>输入“确认恢复”</span>
+              <input
+                className="admin-input"
+                value={restoreText}
+                onChange={(event) => setRestoreText(event.target.value)}
+                placeholder="确认恢复"
+                autoComplete="off"
+              />
+            </label>
           </div>
-        </div>
-      )}
+        ) : null}
+      </Modal>
     </div>
   );
 }

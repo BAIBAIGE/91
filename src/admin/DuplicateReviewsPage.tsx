@@ -5,6 +5,7 @@ import * as api from "./api";
 import { useToast } from "./ToastContext";
 import { ConfirmModal } from "./ConfirmModal";
 import { AdminEmptyVisual } from "./AdminEmptyVisual";
+import { AdminLoading } from "./AdminLoading";
 import { formatBytes } from "./storageFormat";
 
 // 疑似重复复核：夜间内容级查重把拿不准的视频对（SSIM 0.80~0.92）排进队列，
@@ -117,10 +118,7 @@ export function DuplicateReviewsPage() {
       </div>
 
       {loading ? (
-        <div className="admin-loading-state admin-page-loading" role="status" aria-live="polite">
-          <RefreshCw size={20} className="admin-spin" />
-          <span>加载中...</span>
-        </div>
+        <AdminLoading />
       ) : error ? (
         <div className="admin-error-state">
           <strong>加载失败</strong>

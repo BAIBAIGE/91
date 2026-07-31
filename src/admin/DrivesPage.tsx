@@ -5,6 +5,7 @@ import {
   ChevronRight,
   FolderTree,
   HardDrive,
+  Loader2,
   RefreshCw,
 } from "lucide-react";
 import * as api from "./api";
@@ -13,6 +14,7 @@ import { Modal } from "./Modal";
 import { ConfirmModal } from "./ConfirmModal";
 import { formatBytes } from "./storageFormat";
 import { makeUniqueDriveId } from "./driveId";
+import { AdminLoading } from "./AdminLoading";
 import {
   FormState,
   driveKindAbbr,
@@ -541,10 +543,7 @@ export function DrivesPage() {
         </header>
 
         {loading ? (
-          <div className="admin-loading-state admin-page-loading" role="status" aria-live="polite">
-            <RefreshCw size={20} className="admin-spin" />
-            <span>加载中...</span>
-          </div>
+          <AdminLoading />
         ) : loadError ? (
           <div className="admin-error-state">
             <strong>网盘数据加载失败</strong>
@@ -642,7 +641,14 @@ export function DrivesPage() {
                   onClick={() => openEdit(d)}
                   disabled={!!editingCredentialsId}
                 >
-                  {editingCredentialsId === d.id ? "加载中..." : "编辑凭证"}
+                  {editingCredentialsId === d.id ? (
+                    <>
+                      <Loader2 size={14} className="admin-spin" />
+                      加载中
+                    </>
+                  ) : (
+                    "编辑凭证"
+                  )}
                 </button>
                 <button type="button" className="admin-btn admin-detail-actions__danger" onClick={() => setDeleteTarget(d)}>
                   删除网盘
@@ -790,10 +796,7 @@ export function DrivesPage() {
       {storage && <StorageSummary storage={storage} />}
 
       {loading ? (
-        <div className="admin-loading-state admin-page-loading" role="status" aria-live="polite">
-          <RefreshCw size={20} className="admin-spin" />
-          <span>加载中...</span>
-        </div>
+        <AdminLoading />
       ) : loadError ? (
         <div className="admin-error-state">
           <strong>网盘数据加载失败</strong>

@@ -5,6 +5,7 @@ import { useToast } from "./ToastContext";
 import { ConfirmModal } from "./ConfirmModal";
 import { Modal } from "./Modal";
 import { AdminEmptyVisual } from "./AdminEmptyVisual";
+import { AdminLoading } from "./AdminLoading";
 
 const DESKTOP_TAGS_PAGE_SIZE = 24;
 const MOBILE_TAGS_PAGE_SIZE = 8;
@@ -321,15 +322,12 @@ export function TagsPage() {
               text="未查询到"
               className="admin-empty-state admin-empty-state--plain admin-tags-empty-search"
             />
+          ) : loading ? (
+            <AdminLoading />
           ) : (
             <div className="admin-tags-board">
               <div className="admin-tags-cards">
-                {loading ? (
-                  <div className="admin-loading-state admin-page-loading" role="status" aria-live="polite">
-                    <RefreshCw size={20} className="admin-spin" />
-                    <span>加载中...</span>
-                  </div>
-                ) : loadError ? (
+                {loadError ? (
                   <div className="admin-error-state">
                     <strong>标签加载失败</strong>
                     <span>{loadError}</span>

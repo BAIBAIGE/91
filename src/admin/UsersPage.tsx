@@ -3,7 +3,6 @@ import {
   Ban,
   ChevronDown,
   Key,
-  RefreshCw,
   ShieldOff,
   Trash2,
 } from "lucide-react";
@@ -12,6 +11,7 @@ import { useToast } from "./ToastContext";
 import { Modal } from "./Modal";
 import { ConfirmModal } from "./ConfirmModal";
 import { PasswordInput } from "./PasswordInput";
+import { AdminLoading } from "./AdminLoading";
 
 type Tab = "users" | "ips";
 const MIN_PASSWORD_LENGTH = 6;
@@ -189,10 +189,7 @@ export function UsersPage() {
       </div>
 
       {loading ? (
-        <div className="admin-loading-state admin-page-loading" role="status" aria-live="polite">
-          <RefreshCw size={20} className="admin-spin" />
-          <span>加载中...</span>
-        </div>
+        <AdminLoading />
       ) : tab === "users" ? (
         <div className="admin-table-wrap admin-users-table-wrap">
           <table className="admin-table admin-users-table">

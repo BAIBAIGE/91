@@ -12,7 +12,6 @@ import {
   Check,
   Download,
   FileCode2,
-  RefreshCw,
   TestTube,
   Upload,
 } from "lucide-react";
@@ -24,6 +23,7 @@ import { generationStateClass, generationStateLabel } from "./drive/constants";
 import { CrawlerUploadTargetField } from "./drive/CrawlerUploadTargetField";
 import { SpiderIcon } from "./icons/SpiderIcon";
 import { AdminEmptyVisual } from "./AdminEmptyVisual";
+import { AdminLoading } from "./AdminLoading";
 
 const BUSY_STATES = new Set(["scanning", "generating", "uploading", "queued"]);
 const POLL_INTERVAL_MS = 5000;
@@ -239,13 +239,11 @@ export function CrawlersPage() {
       </header>
 
       <div className="admin-crawler-console">
-        <div className="admin-card admin-crawler-list">
-          {loading ? (
-            <div className="admin-loading-state admin-page-loading" role="status" aria-live="polite">
-              <RefreshCw size={18} className="admin-spin" />
-              <span>加载中...</span>
-            </div>
-          ) : list.length === 0 ? (
+        {loading ? (
+          <AdminLoading />
+        ) : (
+          <div className="admin-card admin-crawler-list">
+            {list.length === 0 ? (
             <AdminEmptyVisual
               variant="empty"
               text="暂无爬虫"
@@ -278,8 +276,9 @@ export function CrawlersPage() {
                 />
               ))}
             </div>
-          )}
-        </div>
+            )}
+          </div>
+        )}
       </div>
 
       {editorTarget !== undefined && (

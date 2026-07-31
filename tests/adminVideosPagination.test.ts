@@ -245,7 +245,7 @@ test("video tabs show a loading state while fetching data", () => {
   assert.match(currentSource, /loading \? \(\s*<LoadingState \/>/);
   assert.match(blacklistSource, /loading \? \(\s*<LoadingState \/>/);
   assert.match(videosPageSource, /function LoadingState\(\)/);
-  assert.match(videosPageSource, /className="admin-loading-state admin-page-loading" role="status" aria-live="polite"/);
+  assert.match(videosPageSource, /function LoadingState\(\)[\s\S]*?<AdminLoading \/>/);
 });
 
 test("admin videos batch delete runs deletions sequentially", () => {

@@ -151,10 +151,10 @@ test("mobile user management cards keep identity, metadata, and actions separate
   assert.doesNotMatch(usersPageSource, /<th>ID<\/th>/);
   assert.doesNotMatch(usersPageSource, /admin-users-table__id/);
   assert.match(usersPageSource, /title="创建用户"[\s\S]*?className="admin-modal--user-create"/);
-  assert.match(usersPageSource, /className="admin-loading-state admin-page-loading"/);
-  assert.match(usersPageSource, /<RefreshCw size=\{20\} className="admin-spin" \/>/);
-  assert.match(usersPageSource, /<span>加载中\.\.\.<\/span>/);
-  assert.doesNotMatch(usersPageSource, /className="admin-loading">加载中\.\.\.<\/div>/);
+  assert.match(usersPageSource, /import \{ AdminLoading \} from "\.\/AdminLoading";/);
+  assert.match(usersPageSource, /<AdminLoading \/>/);
+  assert.doesNotMatch(usersPageSource, /<span>加载中\.\.\.<\/span>/);
+  assert.doesNotMatch(usersPageSource, /加载中\.\.\./);
   assert.match(pageLoading, /min-height\s*:\s*calc\(100dvh - 48px - var\(--space-7\) \* 2 - 44px - var\(--space-4\)\)/);
   assert.match(createUserModal, /width\s*:\s*min\(380px,\s*100%\)/);
   assert.match(createUserModal, /border\s*:\s*0/);
@@ -840,19 +840,19 @@ test("admin video management controls wrap instead of covering text on mobile", 
 
 test("admin loading spinner rotates around icon center", () => {
   const spinner = ruleBody(adminCss, ".admin-spin");
-  const pageLoading = ruleBody(adminCss, ".admin-page-loading");
+  const pageLoading = ruleBody(adminCss, ".admin-loading");
 
   assert.match(spinner, /animation\s*:\s*admin-update-spin\s+0\.9s\s+linear\s+infinite/);
   assert.match(spinner, /transform-box\s*:\s*fill-box/);
   assert.match(spinner, /transform-origin\s*:\s*center/);
   assert.match(spinner, /will-change\s*:\s*transform/);
-  assert.match(pageLoading, /min-height\s*:\s*calc\(100dvh - 48px - var\(--space-7\) \* 2 - 44px - var\(--space-4\)\)/);
-  assert.match(usersPageSource, /className="admin-loading-state admin-page-loading" role="status" aria-live="polite"/);
-  assert.match(tagsPageSource, /className="admin-loading-state admin-page-loading" role="status" aria-live="polite"/);
-  assert.match(crawlersPageSource, /className="admin-loading-state admin-page-loading" role="status" aria-live="polite"/);
-  assert.match(videosPageSource, /className="admin-loading-state admin-page-loading" role="status" aria-live="polite"/);
+  assert.match(pageLoading, /min-height\s*:\s*calc\(100dvh - 64px\)/);
+  assert.match(usersPageSource, /<AdminLoading \/>/);
+  assert.match(tagsPageSource, /<AdminLoading \/>/);
+  assert.match(crawlersPageSource, /<AdminLoading \/>/);
+  assert.match(videosPageSource, /<AdminLoading \/>/);
   assert.equal(
-    Array.from(drivesPageSource.matchAll(/className="admin-loading-state admin-page-loading" role="status" aria-live="polite"/g)).length,
+    Array.from(drivesPageSource.matchAll(/<AdminLoading \/>/g)).length,
     2
   );
   assert.match(adminCss, /@media \(prefers-reduced-motion: reduce\)\s*\{\s*\.admin-spin\s*\{\s*animation-duration\s*:\s*0\.9s\s*!important/s);

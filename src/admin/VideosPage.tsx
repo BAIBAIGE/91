@@ -26,6 +26,7 @@ import { Modal } from "./Modal";
 import { ConfirmModal } from "./ConfirmModal";
 import { formatBytes } from "./storageFormat";
 import { AdminEmptyVisual } from "./AdminEmptyVisual";
+import { AdminLoading } from "./AdminLoading";
 import { driveKindAbbr, driveKindIconPath, kindLabel } from "./drive/constants";
 import { readAdminVideosPage, withAdminVideosPage } from "./videosSearchParams";
 
@@ -1834,12 +1835,7 @@ function ErrorState({ message, onRetry }: { message: string; onRetry: () => void
 }
 
 function LoadingState() {
-  return (
-    <div className="admin-loading-state admin-page-loading" role="status" aria-live="polite">
-      <RefreshCw size={18} className="admin-spin" />
-      <span>加载中...</span>
-    </div>
-  );
+  return <AdminLoading />;
 }
 
 function canDeleteBlacklistSource(v: api.AdminDeletedVideo) {
