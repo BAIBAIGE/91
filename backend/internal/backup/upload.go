@@ -1,6 +1,7 @@
 package backup
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -11,20 +12,29 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
+const uploadStoragePartV1 = "part-v1"
+
+type uploadSessionLock struct {
+	mu   sync.Mutex
+	refs int
+}
+
 type storedUploadSession struct {
-	ID          string              `json:"id"`
-	FileName    string              `json:"fileName"`
-	Size        int64               `json:"size"`
-	SHA256      string              `json:"sha256,omitempty"`
-	ChunkSize   int64               `json:"chunkSize"`
-	TotalChunks int                 `json:"totalChunks"`
-	Received    map[int]UploadChunk `json:"received"`
-	State       string              `json:"state"`
-	CreatedAt   time.Time           `json:"createdAt"`
-	ExpiresAt   time.Time           `json:"expiresAt"`
+	ID            string              `json:"id"`
+	FileName      string              `json:"fileName"`
+	Size          int64               `json:"size"`
+	SHA256        string              `json:"sha256,omitempty"`
+	ChunkSize     int64               `json:"chunkSize"`
+	TotalChunks   int                 `json:"totalChunks"`
+	Received      map[int]UploadChunk `json:"received"`
+	State         string              `json:"state"`
+	StorageFormat string              `json:"storageFormat,omitempty"`
+	CreatedAt     time.Time           `json:"createdAt"`
+	ExpiresAt     time.Time           `json:"expiresAt"`
 }
 
 func (m *Manager) BeginUpload(ctx context.Context, input BeginUploadInput) (UploadSession, error) {
@@ -49,7 +59,7 @@ func (m *Manager) BeginUpload(ctx context.Context, input BeginUploadInput) (Uplo
 	}
 	required := requiredUploadBytes(input.Size)
 	if available < required {
-		return UploadSession{}, fmt.Errorf("%w：上传及合并需要至少 %d 字节，可用 %d 字节", ErrInsufficientSpace, required, available)
+		return UploadSession{}, fmt.Errorf("%w：上传暂存需要至少 %d 字节，可用 %d 字节", ErrInsufficientSpace, required, available)
 	}
 	if err := ctx.Err(); err != nil {
 		return UploadSession{}, err
@@ -64,20 +74,39 @@ func (m *Manager) BeginUpload(ctx context.Context, input BeginUploadInput) (Uplo
 		return UploadSession{}, errors.New("备份分片数量无效")
 	}
 	stored := storedUploadSession{
-		ID:          id,
-		FileName:    input.FileName,
-		Size:        input.Size,
-		SHA256:      input.SHA256,
-		ChunkSize:   ChunkSize,
-		TotalChunks: int(totalChunks64),
-		Received:    make(map[int]UploadChunk),
-		State:       "uploading",
-		CreatedAt:   created,
-		ExpiresAt:   created.Add(UploadTTL),
+		ID:            id,
+		FileName:      input.FileName,
+		Size:          input.Size,
+		SHA256:        input.SHA256,
+		ChunkSize:     ChunkSize,
+		TotalChunks:   int(totalChunks64),
+		Received:      make(map[int]UploadChunk),
+		State:         "uploading",
+		StorageFormat: uploadStoragePartV1,
+		CreatedAt:     created,
+		ExpiresAt:     created.Add(UploadTTL),
 	}
+	unlock := m.lockUpload(id)
+	defer unlock()
 	dir := m.uploadDir(id)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return UploadSession{}, err
+	}
+	part, err := os.OpenFile(m.uploadPartPath(id), os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
+	if err != nil {
+		_ = os.RemoveAll(dir)
+		return UploadSession{}, err
+	}
+	truncateErr := part.Truncate(input.Size)
+	syncErr := part.Sync()
+	closeErr := part.Close()
+	if truncateErr != nil || syncErr != nil || closeErr != nil {
+		_ = os.RemoveAll(dir)
+		for _, candidate := range []error{truncateErr, syncErr, closeErr} {
+			if candidate != nil {
+				return UploadSession{}, candidate
+			}
+		}
 	}
 	if err := writeJSONAtomic(m.uploadSidecar(id), stored, 0o600); err != nil {
 		_ = os.RemoveAll(dir)
@@ -87,10 +116,10 @@ func (m *Manager) BeginUpload(ctx context.Context, input BeginUploadInput) (Uplo
 }
 
 func requiredUploadBytes(size int64) int64 {
-	if size > (1<<62-diskSafetyReserve)/2 {
+	if size > (1<<62)-diskSafetyReserve {
 		return 1<<62 - 1
 	}
-	return size*2 + diskSafetyReserve
+	return size + diskSafetyReserve
 }
 
 func (m *Manager) UploadStatus(id string) (UploadSession, error) {
@@ -102,7 +131,9 @@ func (m *Manager) UploadStatus(id string) (UploadSession, error) {
 		_ = m.CancelUpload(id)
 		return UploadSession{}, ErrUploadNotFound
 	}
-	return publicUploadSession(stored), nil
+	session := publicUploadSession(stored)
+	session.Progress = m.uploadProgressSnapshot(id)
+	return session, nil
 }
 
 func (m *Manager) PutChunk(
@@ -117,7 +148,7 @@ func (m *Manager) PutChunk(
 		return UploadSession{}, err
 	}
 	if stored.State != "uploading" {
-		return UploadSession{}, errors.New("迁移上传正在合并，暂不能写入分片")
+		return UploadSession{}, fmt.Errorf("%w，暂不能写入分片", ErrUploadFinalizing)
 	}
 	if !m.nowTime().Before(stored.ExpiresAt) {
 		_ = m.CancelUpload(id)
@@ -137,104 +168,330 @@ func (m *Manager) PutChunk(
 	if expectedSize <= 0 || expectedSize > stored.ChunkSize {
 		return UploadSession{}, errors.New("分片大小计算失败")
 	}
-	tempName := fmt.Sprintf("%08d.chunk.part-%d", index, time.Now().UnixNano())
-	tempPath := filepath.Join(m.uploadDir(id), tempName)
-	output, err := os.OpenFile(tempPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
-	if err != nil {
-		return UploadSession{}, err
-	}
+	var chunk bytes.Buffer
+	chunk.Grow(int(expectedSize))
 	hash := sha256.New()
 	written, copyErr := copyWithContext(
 		ctx,
-		io.MultiWriter(output, hash),
+		io.MultiWriter(&chunk, hash),
 		io.LimitReader(body, expectedSize+1),
 		nil,
 	)
-	syncErr := output.Sync()
-	closeErr := output.Close()
-	if copyErr != nil || syncErr != nil || closeErr != nil || written != expectedSize {
-		_ = os.Remove(tempPath)
-		switch {
-		case copyErr != nil:
-			return UploadSession{}, copyErr
-		case syncErr != nil:
-			return UploadSession{}, syncErr
-		case closeErr != nil:
-			return UploadSession{}, closeErr
-		default:
-			return UploadSession{}, fmt.Errorf("分片大小不匹配：收到 %d 字节，应为 %d 字节", written, expectedSize)
-		}
+	if copyErr != nil {
+		return UploadSession{}, copyErr
+	}
+	if written != expectedSize {
+		return UploadSession{}, fmt.Errorf("分片大小不匹配：收到 %d 字节，应为 %d 字节", written, expectedSize)
 	}
 	actualHash := hex.EncodeToString(hash.Sum(nil))
 	if actualHash != expectedSHA256 {
-		_ = os.Remove(tempPath)
 		return UploadSession{}, errors.New("分片 SHA-256 校验失败")
 	}
 
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	latest, err := m.loadUploadUnlocked(id)
+	unlock := m.lockUpload(id)
+	defer unlock()
+	latest, err := m.loadUpload(id)
 	if err != nil {
-		_ = os.Remove(tempPath)
 		return UploadSession{}, err
 	}
 	if latest.State != "uploading" {
-		_ = os.Remove(tempPath)
-		return UploadSession{}, errors.New("迁移上传正在合并，暂不能写入分片")
+		return UploadSession{}, fmt.Errorf("%w，暂不能写入分片", ErrUploadFinalizing)
 	}
-	if existing, ok := latest.Received[index]; ok &&
-		existing.Size == written && strings.EqualFold(existing.SHA256, actualHash) {
-		_ = os.Remove(tempPath)
-		return publicUploadSession(latest), nil
+	if !m.nowTime().Before(latest.ExpiresAt) {
+		_ = os.RemoveAll(m.uploadDir(id))
+		return UploadSession{}, ErrUploadNotFound
 	}
-	finalPath := m.uploadChunkPath(id, index)
-	_ = os.Remove(finalPath)
-	if err := os.Rename(tempPath, finalPath); err != nil {
-		_ = os.Remove(tempPath)
+	if err := m.ensureAssembledUpload(ctx, id, &latest); err != nil {
 		return UploadSession{}, err
+	}
+	if existing, ok := latest.Received[index]; ok {
+		if existing.Size != written || !strings.EqualFold(existing.SHA256, actualHash) {
+			return UploadSession{}, errors.New("该分片已上传且 SHA-256 不同，请取消后重新上传备份")
+		}
+		valid, err := m.uploadedRangeMatches(ctx, id, index, existing)
+		if err != nil {
+			return UploadSession{}, err
+		}
+		if valid {
+			return publicUploadSession(latest), nil
+		}
+	}
+	part, err := os.OpenFile(m.uploadPartPath(id), os.O_WRONLY, 0o600)
+	if err != nil {
+		return UploadSession{}, err
+	}
+	writeCount, writeErr := part.WriteAt(chunk.Bytes(), int64(index)*latest.ChunkSize)
+	syncErr := part.Sync()
+	closeErr := part.Close()
+	if writeErr != nil || syncErr != nil || closeErr != nil || int64(writeCount) != written {
+		for _, candidate := range []error{writeErr, syncErr, closeErr} {
+			if candidate != nil {
+				return UploadSession{}, candidate
+			}
+		}
+		return UploadSession{}, io.ErrShortWrite
 	}
 	latest.Received[index] = UploadChunk{Index: index, Size: written, SHA256: actualHash}
 	if err := writeJSONAtomic(m.uploadSidecar(id), latest, 0o600); err != nil {
-		_ = os.Remove(finalPath)
 		return UploadSession{}, err
 	}
 	return publicUploadSession(latest), nil
+}
+
+func (m *Manager) ensureAssembledUpload(
+	ctx context.Context,
+	id string,
+	stored *storedUploadSession,
+) error {
+	partPath := m.uploadPartPath(id)
+	switch stored.StorageFormat {
+	case uploadStoragePartV1:
+		info, err := os.Stat(partPath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return errors.New("迁移上传暂存文件缺失")
+			}
+			return err
+		}
+		if !info.Mode().IsRegular() {
+			return errors.New("迁移上传暂存文件大小异常")
+		}
+		if info.Size() != stored.Size {
+			return m.resetAssembledUpload(stored)
+		}
+		return nil
+	case "":
+		// Sessions created before part-v1 stored one file per received chunk.
+		// Convert them once, keeping the old chunks authoritative until the new
+		// part file and sidecar have both been published.
+	default:
+		return errors.New("迁移上传存储格式不受支持")
+	}
+
+	migrationPath := partPath + ".migrating"
+	_ = os.Remove(migrationPath)
+	output, err := os.OpenFile(migrationPath, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
+	if err != nil {
+		return err
+	}
+	completed := false
+	defer func() {
+		_ = output.Close()
+		if !completed {
+			_ = os.Remove(migrationPath)
+		}
+	}()
+	if err := output.Truncate(stored.Size); err != nil {
+		return err
+	}
+	indexes := make([]int, 0, len(stored.Received))
+	for index := range stored.Received {
+		indexes = append(indexes, index)
+	}
+	sort.Ints(indexes)
+	for _, index := range indexes {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		expected := stored.Received[index]
+		chunk, err := os.Open(m.uploadChunkPath(id, index))
+		if err != nil {
+			if os.IsNotExist(err) {
+				return m.invalidateLegacyChunk(stored, index, "分片文件缺失")
+			}
+			return err
+		}
+		if _, err := output.Seek(int64(index)*stored.ChunkSize, io.SeekStart); err != nil {
+			_ = chunk.Close()
+			return err
+		}
+		hash := sha256.New()
+		written, copyErr := copyWithContext(ctx, io.MultiWriter(output, hash), chunk, nil)
+		closeErr := chunk.Close()
+		if copyErr != nil {
+			return copyErr
+		}
+		if closeErr != nil {
+			return closeErr
+		}
+		if written != expected.Size ||
+			!strings.EqualFold(hex.EncodeToString(hash.Sum(nil)), expected.SHA256) {
+			return m.invalidateLegacyChunk(stored, index, "磁盘校验失败")
+		}
+	}
+	if err := output.Sync(); err != nil {
+		return err
+	}
+	if err := output.Close(); err != nil {
+		return err
+	}
+	if err := os.Remove(partPath); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if err := os.Rename(migrationPath, partPath); err != nil {
+		return err
+	}
+	oldFormat := stored.StorageFormat
+	stored.StorageFormat = uploadStoragePartV1
+	if err := writeJSONAtomic(m.uploadSidecar(id), stored, 0o600); err != nil {
+		stored.StorageFormat = oldFormat
+		return err
+	}
+	completed = true
+	m.removeLegacyChunkFiles(id)
+	return nil
+}
+
+func (m *Manager) invalidateLegacyChunk(stored *storedUploadSession, index int, reason string) error {
+	delete(stored.Received, index)
+	stored.State = "uploading"
+	if err := writeJSONAtomic(m.uploadSidecar(stored.ID), stored, 0o600); err != nil {
+		return fmt.Errorf("迁移上传分片 %d %s，且更新续传状态失败: %w", index, reason, err)
+	}
+	return fmt.Errorf("迁移上传分片 %d %s，请重新上传", index, reason)
+}
+
+func (m *Manager) removeLegacyChunkFiles(id string) {
+	entries, err := os.ReadDir(m.uploadDir(id))
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".chunk") {
+			continue
+		}
+		base := strings.TrimSuffix(entry.Name(), ".chunk")
+		if len(base) != 8 {
+			continue
+		}
+		valid := true
+		for _, character := range base {
+			if character < '0' || character > '9' {
+				valid = false
+				break
+			}
+		}
+		if valid {
+			_ = os.Remove(filepath.Join(m.uploadDir(id), entry.Name()))
+		}
+	}
+}
+
+func (m *Manager) uploadedRangeMatches(
+	ctx context.Context,
+	id string,
+	index int,
+	expected UploadChunk,
+) (bool, error) {
+	part, err := os.Open(m.uploadPartPath(id))
+	if err != nil {
+		return false, err
+	}
+	defer part.Close()
+	hash := sha256.New()
+	section := io.NewSectionReader(part, int64(index)*ChunkSize, expected.Size)
+	written, err := copyWithContext(ctx, hash, section, nil)
+	if err != nil {
+		return false, err
+	}
+	return written == expected.Size &&
+		strings.EqualFold(hex.EncodeToString(hash.Sum(nil)), expected.SHA256), nil
+}
+
+func (m *Manager) verifyAssembledUpload(
+	ctx context.Context,
+	id string,
+	stored *storedUploadSession,
+	onProgress func(int64),
+) (string, error) {
+	partPath := m.uploadPartPath(id)
+	part, err := os.Open(partPath)
+	if err != nil {
+		return "", err
+	}
+	info, err := part.Stat()
+	if err != nil {
+		_ = part.Close()
+		return "", err
+	}
+	if !info.Mode().IsRegular() || info.Size() != stored.Size {
+		_ = part.Close()
+		return "", m.resetAssembledUpload(stored)
+	}
+	defer part.Close()
+	fullHash := sha256.New()
+	var processedBytes int64
+	for index := 0; index < stored.TotalChunks; index++ {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		expected := stored.Received[index]
+		chunkHash := sha256.New()
+		section := io.NewSectionReader(
+			part,
+			int64(index)*stored.ChunkSize,
+			expected.Size,
+		)
+		written, err := copyWithContext(
+			ctx,
+			io.MultiWriter(fullHash, chunkHash),
+			section,
+			func(bytes int64) {
+				processedBytes += bytes
+				if onProgress != nil {
+					onProgress(processedBytes)
+				}
+			},
+		)
+		if err != nil {
+			return "", err
+		}
+		if written != expected.Size ||
+			!strings.EqualFold(hex.EncodeToString(chunkHash.Sum(nil)), expected.SHA256) {
+			delete(stored.Received, index)
+			stored.State = "uploading"
+			if err := writeJSONAtomic(m.uploadSidecar(id), stored, 0o600); err != nil {
+				return "", err
+			}
+			return "", fmt.Errorf("分片 %d 在暂存文件中校验失败，请重新上传", index)
+		}
+	}
+	return hex.EncodeToString(fullHash.Sum(nil)), nil
+}
+
+func (m *Manager) resetAssembledUpload(stored *storedUploadSession) error {
+	part, err := os.OpenFile(m.uploadPartPath(stored.ID), os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	truncateErr := part.Truncate(stored.Size)
+	syncErr := part.Sync()
+	closeErr := part.Close()
+	for _, candidate := range []error{truncateErr, syncErr, closeErr} {
+		if candidate != nil {
+			return candidate
+		}
+	}
+	stored.Received = make(map[int]UploadChunk)
+	stored.State = "uploading"
+	if err := writeJSONAtomic(m.uploadSidecar(stored.ID), stored, 0o600); err != nil {
+		return err
+	}
+	return errors.New("迁移上传暂存文件大小异常，请重新上传")
 }
 
 func (m *Manager) FinalizeUpload(ctx context.Context, id string) (record BackupRecord, returnErr error) {
 	if !validUploadID(id) {
 		return BackupRecord{}, ErrUploadNotFound
 	}
+	unlock := m.lockUpload(id)
+	defer unlock()
 	m.mu.Lock()
 	if m.uploadBusy[id] {
 		m.mu.Unlock()
-		return BackupRecord{}, errors.New("迁移上传正在合并")
+		return BackupRecord{}, ErrUploadFinalizing
 	}
 	m.uploadBusy[id] = true
-	stored, err := m.loadUploadUnlocked(id)
-	if err != nil {
-		delete(m.uploadBusy, id)
-		m.mu.Unlock()
-		return BackupRecord{}, err
-	}
-	if len(stored.Received) != stored.TotalChunks {
-		delete(m.uploadBusy, id)
-		m.mu.Unlock()
-		return BackupRecord{}, ErrUploadIncomplete
-	}
-	for index := 0; index < stored.TotalChunks; index++ {
-		if _, ok := stored.Received[index]; !ok {
-			delete(m.uploadBusy, id)
-			m.mu.Unlock()
-			return BackupRecord{}, ErrUploadIncomplete
-		}
-	}
-	stored.State = "finalizing"
-	if err := writeJSONAtomic(m.uploadSidecar(id), stored, 0o600); err != nil {
-		delete(m.uploadBusy, id)
-		m.mu.Unlock()
-		return BackupRecord{}, err
-	}
 	m.mu.Unlock()
 	defer func() {
 		m.mu.Lock()
@@ -248,11 +505,62 @@ func (m *Manager) FinalizeUpload(ctx context.Context, id string) (record BackupR
 			}
 		}
 	}()
+	stored, err := m.loadUpload(id)
+	if err != nil {
+		return BackupRecord{}, err
+	}
+	m.setUploadProgress(id, OperationProgress{
+		Phase:      "preparing",
+		TotalBytes: stored.Size,
+		TotalFiles: stored.TotalChunks,
+	})
+	defer m.clearUploadProgress(id)
+	if len(stored.Received) != stored.TotalChunks {
+		return BackupRecord{}, ErrUploadIncomplete
+	}
+	for index := 0; index < stored.TotalChunks; index++ {
+		if _, ok := stored.Received[index]; !ok {
+			return BackupRecord{}, ErrUploadIncomplete
+		}
+	}
+	stored.State = "finalizing"
+	if err := writeJSONAtomic(m.uploadSidecar(id), stored, 0o600); err != nil {
+		return BackupRecord{}, err
+	}
 	if recovered, ok, err := m.recoverFinalizedUpload(ctx, id); err != nil {
 		return BackupRecord{}, err
 	} else if ok {
+		m.setUploadProgress(id, OperationProgress{
+			Phase:          "publishing",
+			ProcessedBytes: stored.Size,
+			TotalBytes:     stored.Size,
+			ProcessedFiles: stored.TotalChunks,
+			TotalFiles:     stored.TotalChunks,
+		})
 		_ = os.RemoveAll(m.uploadDir(id))
 		return recovered, nil
+	}
+	if err := m.ensureAssembledUpload(ctx, id, &stored); err != nil {
+		return BackupRecord{}, err
+	}
+	m.setUploadProgress(id, OperationProgress{
+		Phase:      "hashing",
+		TotalBytes: stored.Size,
+		TotalFiles: stored.TotalChunks,
+	})
+	archiveHash, err := m.verifyAssembledUpload(ctx, id, &stored, func(processed int64) {
+		m.setUploadProgress(id, OperationProgress{
+			Phase:          "hashing",
+			ProcessedBytes: processed,
+			TotalBytes:     stored.Size,
+			TotalFiles:     stored.TotalChunks,
+		})
+	})
+	if err != nil {
+		return BackupRecord{}, err
+	}
+	if stored.SHA256 != "" && !strings.EqualFold(stored.SHA256, archiveHash) {
+		return BackupRecord{}, errors.New("完整备份 SHA-256 校验失败")
 	}
 
 	name := fmt.Sprintf(
@@ -261,84 +569,48 @@ func (m *Manager) FinalizeUpload(ctx context.Context, id string) (record BackupR
 		id,
 	)
 	finalPath := filepath.Join(m.backupDir, name)
-	partPath := finalPath + ".part"
-	_ = os.Remove(partPath)
-	output, err := os.OpenFile(partPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	partPath := m.uploadPartPath(id)
+	available, err := m.availableBytes(m.dataRoot)
 	if err != nil {
 		return BackupRecord{}, err
 	}
-	fullHash := sha256.New()
-	var totalWritten int64
-	for index := 0; index < stored.TotalChunks; index++ {
-		if err := ctx.Err(); err != nil {
-			_ = output.Close()
-			_ = os.Remove(partPath)
-			return BackupRecord{}, err
-		}
-		chunkPath := m.uploadChunkPath(id, index)
-		chunk, err := os.Open(chunkPath)
-		if err != nil {
-			_ = output.Close()
-			_ = os.Remove(partPath)
-			return BackupRecord{}, ErrUploadIncomplete
-		}
-		chunkHash := sha256.New()
-		written, copyErr := copyWithContext(ctx, io.MultiWriter(output, fullHash, chunkHash), chunk, nil)
-		closeErr := chunk.Close()
-		if copyErr != nil || closeErr != nil {
-			_ = output.Close()
-			_ = os.Remove(partPath)
-			if copyErr != nil {
-				return BackupRecord{}, copyErr
-			}
-			return BackupRecord{}, closeErr
-		}
-		expected := stored.Received[index]
-		if written != expected.Size ||
-			!strings.EqualFold(hex.EncodeToString(chunkHash.Sum(nil)), expected.SHA256) {
-			_ = output.Close()
-			_ = os.Remove(partPath)
-			return BackupRecord{}, fmt.Errorf("分片 %d 在磁盘上校验失败，请重新上传", index)
-		}
-		totalWritten += written
-	}
-	syncErr := output.Sync()
-	closeErr := output.Close()
-	if syncErr != nil || closeErr != nil {
-		_ = os.Remove(partPath)
-		if syncErr != nil {
-			return BackupRecord{}, syncErr
-		}
-		return BackupRecord{}, closeErr
-	}
-	if totalWritten != stored.Size {
-		_ = os.Remove(partPath)
-		return BackupRecord{}, errors.New("合并后的备份大小不匹配")
-	}
-	archiveHash := hex.EncodeToString(fullHash.Sum(nil))
-	if stored.SHA256 != "" && !strings.EqualFold(stored.SHA256, archiveHash) {
-		_ = os.Remove(partPath)
-		return BackupRecord{}, errors.New("完整备份 SHA-256 校验失败")
-	}
-	available, _ := m.availableBytes(m.dataRoot)
-	if available <= (1<<62)-stored.Size {
-		available += stored.Size // chunk directory is removed immediately after success
-	}
+	m.setUploadProgress(id, OperationProgress{
+		Phase:          "inspecting-archive",
+		ProcessedBytes: stored.Size,
+		TotalBytes:     stored.Size,
+		ProcessedFiles: stored.TotalChunks,
+		TotalFiles:     stored.TotalChunks,
+	})
 	report, err := VerifyArchive(ctx, partPath, VerifyOptions{
 		CurrentVersion: m.appVersion,
 		TempDir:        m.restoreDir,
 		AvailableBytes: available,
+		Progress: func(progress OperationProgress) {
+			switch progress.Phase {
+			case "database":
+				progress.Phase = "verifying-database"
+			default:
+				progress.Phase = "verifying-archive"
+			}
+			m.setUploadProgress(id, progress)
+		},
 	})
 	if err != nil {
-		_ = os.Remove(partPath)
 		return BackupRecord{}, err
 	}
+	m.setUploadProgress(id, OperationProgress{
+		Phase:          "publishing",
+		ProcessedBytes: report.Manifest.TotalSize,
+		TotalBytes:     report.Manifest.TotalSize,
+		ProcessedFiles: report.Manifest.FileCount,
+		TotalFiles:     report.Manifest.FileCount,
+	})
 	if err := os.Rename(partPath, finalPath); err != nil {
-		_ = os.Remove(partPath)
 		return BackupRecord{}, err
 	}
 	info, err := os.Stat(finalPath)
 	if err != nil {
+		_ = os.Rename(finalPath, partPath)
 		return BackupRecord{}, err
 	}
 	meta := archiveMeta{
@@ -353,7 +625,7 @@ func (m *Manager) FinalizeUpload(ctx context.Context, id string) (record BackupR
 		Manifest:   report.Manifest,
 	}
 	if err := writeJSONAtomic(metaPath(finalPath), meta, 0o600); err != nil {
-		_ = os.Remove(finalPath)
+		_ = os.Rename(finalPath, partPath)
 		return BackupRecord{}, err
 	}
 	// The completed archive is already durable and verified. A sidecar cleanup
@@ -380,10 +652,18 @@ func (m *Manager) CancelUpload(id string) error {
 	m.mu.Lock()
 	if m.uploadBusy[id] {
 		m.mu.Unlock()
-		return errors.New("迁移上传正在合并，暂不能取消")
+		return fmt.Errorf("%w，暂不能取消", ErrUploadFinalizing)
+	}
+	m.mu.Unlock()
+	unlock := m.lockUpload(id)
+	defer unlock()
+	m.mu.Lock()
+	busy := m.uploadBusy[id]
+	m.mu.Unlock()
+	if busy {
+		return fmt.Errorf("%w，暂不能取消", ErrUploadFinalizing)
 	}
 	dir := m.uploadDir(id)
-	m.mu.Unlock()
 	if _, err := os.Stat(dir); err != nil {
 		if os.IsNotExist(err) {
 			return ErrUploadNotFound
@@ -481,9 +761,22 @@ func (m *Manager) loadUploadUnlocked(id string) (storedUploadSession, error) {
 		}
 		return storedUploadSession{}, err
 	}
-	if stored.ID != id || stored.ChunkSize != ChunkSize || stored.TotalChunks <= 0 ||
-		stored.Size <= 0 || stored.Received == nil {
+	if stored.Size <= 0 || stored.Size > maxExpandedBytes {
 		return storedUploadSession{}, errors.New("迁移上传状态文件已损坏")
+	}
+	expectedChunks := (stored.Size-1)/ChunkSize + 1
+	if stored.ID != id || stored.ChunkSize != ChunkSize || stored.TotalChunks <= 0 ||
+		int64(stored.TotalChunks) != expectedChunks || stored.Received == nil ||
+		(stored.State != "uploading" && stored.State != "finalizing") ||
+		(stored.StorageFormat != "" && stored.StorageFormat != uploadStoragePartV1) ||
+		(stored.SHA256 != "" && !validSHA256(stored.SHA256)) {
+		return storedUploadSession{}, errors.New("迁移上传状态文件已损坏")
+	}
+	for index, chunk := range stored.Received {
+		expectedSize, ok := uploadChunkSize(stored, index)
+		if !ok || chunk.Index != index || chunk.Size != expectedSize || !validSHA256(chunk.SHA256) {
+			return storedUploadSession{}, errors.New("迁移上传状态文件已损坏")
+		}
 	}
 	return stored, nil
 }
@@ -527,13 +820,54 @@ func (m *Manager) cleanupExpiredUploads() error {
 		if busy {
 			continue
 		}
+		unlock := m.lockUpload(entry.Name())
+		m.mu.Lock()
+		busy = m.uploadBusy[entry.Name()]
+		m.mu.Unlock()
+		if busy {
+			unlock()
+			continue
+		}
 		var stored storedUploadSession
 		err := readJSONFile(m.uploadSidecar(entry.Name()), &stored)
 		if err != nil || stored.ExpiresAt.IsZero() || !now.Before(stored.ExpiresAt) {
 			_ = os.RemoveAll(m.uploadDir(entry.Name()))
 		}
+		unlock()
 	}
 	return nil
+}
+
+func (m *Manager) lockUpload(id string) func() {
+	m.mu.Lock()
+	lock := m.uploadLocks[id]
+	if lock == nil {
+		lock = &uploadSessionLock{}
+		m.uploadLocks[id] = lock
+	}
+	lock.refs++
+	m.mu.Unlock()
+	lock.mu.Lock()
+	return func() {
+		lock.mu.Unlock()
+		m.mu.Lock()
+		lock.refs--
+		if lock.refs == 0 && m.uploadLocks[id] == lock {
+			delete(m.uploadLocks, id)
+		}
+		m.mu.Unlock()
+	}
+}
+
+func uploadChunkSize(stored storedUploadSession, index int) (int64, bool) {
+	if index < 0 || index >= stored.TotalChunks {
+		return 0, false
+	}
+	size := stored.ChunkSize
+	if index == stored.TotalChunks-1 {
+		size = stored.Size - int64(index)*stored.ChunkSize
+	}
+	return size, size > 0 && size <= stored.ChunkSize
 }
 
 func validUploadID(id string) bool {
@@ -550,6 +884,10 @@ func (m *Manager) uploadDir(id string) string {
 
 func (m *Manager) uploadSidecar(id string) string {
 	return filepath.Join(m.uploadDir(id), "upload.json")
+}
+
+func (m *Manager) uploadPartPath(id string) string {
+	return filepath.Join(m.uploadDir(id), "archive.part")
 }
 
 func (m *Manager) uploadChunkPath(id string, index int) string {

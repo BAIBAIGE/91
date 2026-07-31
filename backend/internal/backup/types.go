@@ -26,6 +26,7 @@ var (
 	ErrBackupNotFound    = errors.New("备份不存在")
 	ErrUploadNotFound    = errors.New("迁移上传不存在或已过期")
 	ErrUploadIncomplete  = errors.New("迁移上传仍有缺失分片")
+	ErrUploadFinalizing  = errors.New("迁移上传正在完整校验")
 	ErrRestorePending    = errors.New("已有恢复任务等待重启")
 	ErrInsufficientSpace = errors.New("磁盘可用空间不足")
 )
@@ -88,11 +89,23 @@ type BackupRecord struct {
 }
 
 type ListResult struct {
-	Backups        []BackupRecord `json:"backups"`
-	Current        *TaskStatus    `json:"current,omitempty"`
-	Estimate       Estimate       `json:"estimate"`
-	RestartManaged bool           `json:"restartManaged"`
-	PendingRestore bool           `json:"pendingRestore"`
+	Backups         []BackupRecord     `json:"backups"`
+	Current         *TaskStatus        `json:"current,omitempty"`
+	RestoreProgress *OperationProgress `json:"restoreProgress,omitempty"`
+	Estimate        Estimate           `json:"estimate"`
+	RestartManaged  bool               `json:"restartManaged"`
+	PendingRestore  bool               `json:"pendingRestore"`
+}
+
+// OperationProgress is lightweight, in-memory telemetry for a synchronous
+// backup operation. It is intentionally not persisted: durable recovery is
+// still driven by upload sidecars and the restore marker.
+type OperationProgress struct {
+	Phase          string `json:"phase"`
+	ProcessedBytes int64  `json:"processedBytes"`
+	TotalBytes     int64  `json:"totalBytes"`
+	ProcessedFiles int    `json:"processedFiles"`
+	TotalFiles     int    `json:"totalFiles"`
 }
 
 type BeginUploadInput struct {
@@ -108,16 +121,17 @@ type UploadChunk struct {
 }
 
 type UploadSession struct {
-	ID          string        `json:"id"`
-	FileName    string        `json:"fileName"`
-	Size        int64         `json:"size"`
-	SHA256      string        `json:"sha256,omitempty"`
-	ChunkSize   int64         `json:"chunkSize"`
-	TotalChunks int           `json:"totalChunks"`
-	Received    []UploadChunk `json:"received"`
-	State       string        `json:"state"`
-	CreatedAt   time.Time     `json:"createdAt"`
-	ExpiresAt   time.Time     `json:"expiresAt"`
+	ID          string             `json:"id"`
+	FileName    string             `json:"fileName"`
+	Size        int64              `json:"size"`
+	SHA256      string             `json:"sha256,omitempty"`
+	ChunkSize   int64              `json:"chunkSize"`
+	TotalChunks int                `json:"totalChunks"`
+	Received    []UploadChunk      `json:"received"`
+	State       string             `json:"state"`
+	Progress    *OperationProgress `json:"progress,omitempty"`
+	CreatedAt   time.Time          `json:"createdAt"`
+	ExpiresAt   time.Time          `json:"expiresAt"`
 }
 
 type ValidationReport struct {
@@ -130,7 +144,6 @@ type ValidationReport struct {
 }
 
 type RestoreRequest struct {
-	Password     string `json:"password"`
 	Confirmation string `json:"confirmation"`
 }
 

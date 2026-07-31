@@ -34,6 +34,7 @@ type VerifyOptions struct {
 	CurrentVersion string
 	TempDir        string
 	AvailableBytes int64
+	Progress       func(OperationProgress)
 }
 
 func writeArchive(
@@ -215,61 +216,9 @@ func VerifyArchive(ctx context.Context, archivePath string, options VerifyOption
 		return ValidationReport{}, fmt.Errorf("backup: open ZIP: %w", err)
 	}
 	defer reader.Close()
-	manifest, filesByName, err := inspectZIP(&reader.Reader)
+	manifest, filesByName, expected, names, err := validateArchiveMetadata(&reader.Reader, options)
 	if err != nil {
 		return ValidationReport{}, err
-	}
-	if manifest.FormatVersion != FormatVersion {
-		return ValidationReport{}, fmt.Errorf("backup: unsupported format version %d", manifest.FormatVersion)
-	}
-	if newerVersion(manifest.AppVersion, options.CurrentVersion) {
-		return ValidationReport{}, fmt.Errorf(
-			"backup: source version %s is newer than this application (%s)",
-			manifest.AppVersion,
-			normalizedVersion(options.CurrentVersion),
-		)
-	}
-	if options.AvailableBytes > 0 &&
-		manifest.TotalSize > options.AvailableBytes-diskSafetyReserve {
-		return ValidationReport{}, fmt.Errorf(
-			"%w：展开需要 %d 字节，可用 %d 字节",
-			ErrInsufficientSpace,
-			manifest.TotalSize,
-			options.AvailableBytes,
-		)
-	}
-
-	expected := make(map[string]ManifestFile, len(manifest.Files))
-	var declaredTotal int64
-	databaseDeclared := false
-	configDeclared := false
-	for _, entry := range manifest.Files {
-		clean, ok := cleanArchivePath(entry.Path)
-		if !ok || !validPayloadPath(clean) {
-			return ValidationReport{}, fmt.Errorf("backup: manifest contains invalid path %q", entry.Path)
-		}
-		if _, exists := expected[clean]; exists {
-			return ValidationReport{}, fmt.Errorf("backup: manifest contains duplicate path %q", clean)
-		}
-		if entry.Size < 0 || !validSHA256(entry.SHA256) {
-			return ValidationReport{}, fmt.Errorf("backup: invalid manifest metadata for %q", clean)
-		}
-		expected[clean] = entry
-		if declaredTotal > math.MaxInt64-entry.Size {
-			return ValidationReport{}, errors.New("backup: expanded size overflow")
-		}
-		declaredTotal += entry.Size
-		databaseDeclared = databaseDeclared || clean == "payload/database.sqlite"
-		configDeclared = configDeclared || clean == "payload/config.yaml"
-	}
-	if !databaseDeclared || !configDeclared {
-		return ValidationReport{}, errors.New("backup: database or configuration is missing")
-	}
-	if manifest.FileCount != len(manifest.Files) || manifest.FileCount != len(expected) {
-		return ValidationReport{}, errors.New("backup: manifest file count does not match")
-	}
-	if manifest.TotalSize != declaredTotal {
-		return ValidationReport{}, errors.New("backup: manifest expanded size does not match")
 	}
 
 	tempDir := strings.TrimSpace(options.TempDir)
@@ -286,57 +235,39 @@ func VerifyArchive(ctx context.Context, archivePath string, options VerifyOption
 	databasePath := databaseFile.Name()
 	defer os.Remove(databasePath)
 	databaseWritten := false
-
-	names := make([]string, 0, len(expected))
-	for name := range expected {
-		names = append(names, name)
+	progress := OperationProgress{
+		Phase:      "files",
+		TotalBytes: manifest.TotalSize,
+		TotalFiles: manifest.FileCount,
 	}
-	sort.Strings(names)
+	emitArchiveProgress(options, progress)
+
 	for _, name := range names {
 		if err := ctx.Err(); err != nil {
 			_ = databaseFile.Close()
 			return ValidationReport{}, err
 		}
-		zipFile := filesByName[name]
-		if zipFile == nil {
-			_ = databaseFile.Close()
-			return ValidationReport{}, fmt.Errorf("backup: ZIP entry %q is missing", name)
+		var output io.Writer
+		if name == "payload/database.sqlite" {
+			output = databaseFile
+			databaseWritten = true
 		}
-		expectedFile := expected[name]
-		if zipFile.UncompressedSize64 != uint64(expectedFile.Size) {
-			_ = databaseFile.Close()
-			return ValidationReport{}, fmt.Errorf("backup: size mismatch for %q", name)
-		}
-		input, err := zipFile.Open()
-		if err != nil {
+		if err := verifyArchiveEntry(
+			ctx,
+			name,
+			filesByName[name],
+			expected[name],
+			output,
+			func(bytes int64) {
+				progress.ProcessedBytes += bytes
+				emitArchiveProgress(options, progress)
+			},
+		); err != nil {
 			_ = databaseFile.Close()
 			return ValidationReport{}, err
 		}
-		hash := sha256.New()
-		var output io.Writer = hash
-		if name == "payload/database.sqlite" {
-			output = io.MultiWriter(hash, databaseFile)
-			databaseWritten = true
-		}
-		written, copyErr := copyWithContext(ctx, output, input, nil)
-		closeErr := input.Close()
-		if copyErr != nil {
-			_ = databaseFile.Close()
-			return ValidationReport{}, fmt.Errorf("backup: read %q: %w", name, copyErr)
-		}
-		if closeErr != nil {
-			_ = databaseFile.Close()
-			return ValidationReport{}, closeErr
-		}
-		if written != expectedFile.Size {
-			_ = databaseFile.Close()
-			return ValidationReport{}, fmt.Errorf("backup: truncated entry %q", name)
-		}
-		actual := hex.EncodeToString(hash.Sum(nil))
-		if !strings.EqualFold(actual, expectedFile.SHA256) {
-			_ = databaseFile.Close()
-			return ValidationReport{}, fmt.Errorf("backup: SHA-256 mismatch for %q", name)
-		}
+		progress.ProcessedFiles++
+		emitArchiveProgress(options, progress)
 	}
 	if err := databaseFile.Sync(); err != nil {
 		_ = databaseFile.Close()
@@ -348,10 +279,208 @@ func VerifyArchive(ctx context.Context, archivePath string, options VerifyOption
 	if !databaseWritten {
 		return ValidationReport{}, errors.New("backup: database entry was not verified")
 	}
+	progress.Phase = "database"
+	emitArchiveProgress(options, progress)
 	if err := verifySQLite(databasePath); err != nil {
 		return ValidationReport{}, err
 	}
 
+	return archiveValidationReport(manifest, options), nil
+}
+
+// VerifyAndExtractArchive validates the archive while writing the exact bytes
+// being validated into an isolated staging directory. Restore callers use this
+// instead of validating and then decompressing the same archive a second time.
+func VerifyAndExtractArchive(
+	ctx context.Context,
+	archivePath string,
+	stageRoot string,
+	options VerifyOptions,
+) (ValidationReport, error) {
+	reader, err := zip.OpenReader(archivePath)
+	if err != nil {
+		return ValidationReport{}, fmt.Errorf("backup: open ZIP: %w", err)
+	}
+	defer reader.Close()
+	manifest, filesByName, expected, names, err := validateArchiveMetadata(&reader.Reader, options)
+	if err != nil {
+		return ValidationReport{}, err
+	}
+	progress := OperationProgress{
+		Phase:      "files",
+		TotalBytes: manifest.TotalSize,
+		TotalFiles: manifest.FileCount,
+	}
+	emitArchiveProgress(options, progress)
+	for _, name := range names {
+		if err := ctx.Err(); err != nil {
+			return ValidationReport{}, err
+		}
+		target := filepath.Join(stageRoot, filepath.FromSlash(name))
+		relative, err := filepath.Rel(stageRoot, target)
+		if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+			return ValidationReport{}, fmt.Errorf("backup: restore path escapes staging directory: %q", name)
+		}
+		if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+			return ValidationReport{}, err
+		}
+		mode := os.FileMode(expected[name].Mode).Perm()
+		if mode == 0 {
+			mode = 0o600
+		}
+		output, err := os.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode)
+		if err != nil {
+			return ValidationReport{}, err
+		}
+		verifyErr := verifyArchiveEntry(
+			ctx,
+			name,
+			filesByName[name],
+			expected[name],
+			output,
+			func(bytes int64) {
+				progress.ProcessedBytes += bytes
+				emitArchiveProgress(options, progress)
+			},
+		)
+		syncErr := output.Sync()
+		closeErr := output.Close()
+		if verifyErr != nil || syncErr != nil || closeErr != nil {
+			_ = os.Remove(target)
+			for _, candidate := range []error{verifyErr, syncErr, closeErr} {
+				if candidate != nil {
+					return ValidationReport{}, candidate
+				}
+			}
+		}
+		progress.ProcessedFiles++
+		emitArchiveProgress(options, progress)
+	}
+	progress.Phase = "database"
+	emitArchiveProgress(options, progress)
+	if err := verifySQLite(filepath.Join(stageRoot, "payload", "database.sqlite")); err != nil {
+		return ValidationReport{}, err
+	}
+	return archiveValidationReport(manifest, options), nil
+}
+
+func validateArchiveMetadata(
+	reader *zip.Reader,
+	options VerifyOptions,
+) (Manifest, map[string]*zip.File, map[string]ManifestFile, []string, error) {
+	manifest, filesByName, err := inspectZIP(reader)
+	if err != nil {
+		return Manifest{}, nil, nil, nil, err
+	}
+	if manifest.FormatVersion != FormatVersion {
+		return Manifest{}, nil, nil, nil, fmt.Errorf("backup: unsupported format version %d", manifest.FormatVersion)
+	}
+	if newerVersion(manifest.AppVersion, options.CurrentVersion) {
+		return Manifest{}, nil, nil, nil, fmt.Errorf(
+			"backup: source version %s is newer than this application (%s)",
+			manifest.AppVersion,
+			normalizedVersion(options.CurrentVersion),
+		)
+	}
+	if options.AvailableBytes > 0 &&
+		manifest.TotalSize > options.AvailableBytes-diskSafetyReserve {
+		return Manifest{}, nil, nil, nil, fmt.Errorf(
+			"%w：展开需要 %d 字节，可用 %d 字节",
+			ErrInsufficientSpace,
+			manifest.TotalSize,
+			options.AvailableBytes,
+		)
+	}
+
+	expected := make(map[string]ManifestFile, len(manifest.Files))
+	var declaredTotal int64
+	databaseDeclared := false
+	configDeclared := false
+	for _, entry := range manifest.Files {
+		clean, ok := cleanArchivePath(entry.Path)
+		if !ok || !validPayloadPath(clean) {
+			return Manifest{}, nil, nil, nil, fmt.Errorf("backup: manifest contains invalid path %q", entry.Path)
+		}
+		if _, exists := expected[clean]; exists {
+			return Manifest{}, nil, nil, nil, fmt.Errorf("backup: manifest contains duplicate path %q", clean)
+		}
+		if entry.Size < 0 || !validSHA256(entry.SHA256) {
+			return Manifest{}, nil, nil, nil, fmt.Errorf("backup: invalid manifest metadata for %q", clean)
+		}
+		expected[clean] = entry
+		if declaredTotal > math.MaxInt64-entry.Size {
+			return Manifest{}, nil, nil, nil, errors.New("backup: expanded size overflow")
+		}
+		declaredTotal += entry.Size
+		databaseDeclared = databaseDeclared || clean == "payload/database.sqlite"
+		configDeclared = configDeclared || clean == "payload/config.yaml"
+	}
+	if !databaseDeclared || !configDeclared {
+		return Manifest{}, nil, nil, nil, errors.New("backup: database or configuration is missing")
+	}
+	if manifest.FileCount != len(manifest.Files) || manifest.FileCount != len(expected) {
+		return Manifest{}, nil, nil, nil, errors.New("backup: manifest file count does not match")
+	}
+	if manifest.TotalSize != declaredTotal {
+		return Manifest{}, nil, nil, nil, errors.New("backup: manifest expanded size does not match")
+	}
+
+	names := make([]string, 0, len(expected))
+	for name := range expected {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return manifest, filesByName, expected, names, nil
+}
+
+func verifyArchiveEntry(
+	ctx context.Context,
+	name string,
+	zipFile *zip.File,
+	expected ManifestFile,
+	destination io.Writer,
+	onWrite func(int64),
+) error {
+	if zipFile == nil {
+		return fmt.Errorf("backup: ZIP entry %q is missing", name)
+	}
+	if zipFile.UncompressedSize64 != uint64(expected.Size) {
+		return fmt.Errorf("backup: size mismatch for %q", name)
+	}
+	input, err := zipFile.Open()
+	if err != nil {
+		return err
+	}
+	hash := sha256.New()
+	output := io.Writer(hash)
+	if destination != nil {
+		output = io.MultiWriter(hash, destination)
+	}
+	written, copyErr := copyWithContext(ctx, output, input, onWrite)
+	closeErr := input.Close()
+	if copyErr != nil {
+		return fmt.Errorf("backup: read %q: %w", name, copyErr)
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	if written != expected.Size {
+		return fmt.Errorf("backup: truncated entry %q", name)
+	}
+	actual := hex.EncodeToString(hash.Sum(nil))
+	if !strings.EqualFold(actual, expected.SHA256) {
+		return fmt.Errorf("backup: SHA-256 mismatch for %q", name)
+	}
+	return nil
+}
+
+func emitArchiveProgress(options VerifyOptions, progress OperationProgress) {
+	if options.Progress != nil {
+		options.Progress(normalizeOperationProgress(progress))
+	}
+}
+
+func archiveValidationReport(manifest Manifest, options VerifyOptions) ValidationReport {
 	report := ValidationReport{
 		Manifest:           manifest,
 		VerificationStatus: "verified",
@@ -359,7 +488,7 @@ func VerifyArchive(ctx context.Context, archivePath string, options VerifyOption
 	if normalizedVersion(options.CurrentVersion) == "unknown" {
 		report.Warnings = append(report.Warnings, "当前应用版本未知，未执行应用版本新旧比较")
 	}
-	return report, nil
+	return report
 }
 
 func inspectZIP(reader *zip.Reader) (Manifest, map[string]*zip.File, error) {

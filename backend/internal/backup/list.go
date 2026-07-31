@@ -72,11 +72,12 @@ func (m *Manager) List(ctx context.Context) (ListResult, error) {
 	})
 	_, pendingErr := os.Stat(m.pendingPath)
 	return ListResult{
-		Backups:        records,
-		Current:        m.Current(),
-		Estimate:       estimate,
-		RestartManaged: m.restartManaged,
-		PendingRestore: pendingErr == nil,
+		Backups:         records,
+		Current:         m.Current(),
+		RestoreProgress: m.restoreProgressSnapshot(),
+		Estimate:        estimate,
+		RestartManaged:  m.restartManaged,
+		PendingRestore:  pendingErr == nil,
 	}, nil
 }
 

@@ -12,6 +12,10 @@ const page = readFileSync(
   "utf8"
 );
 const api = readFileSync(new URL("../src/admin/api.ts", import.meta.url), "utf8");
+const backupApiHandler = readFileSync(
+  new URL("../backend/internal/api/admin_backups.go", import.meta.url),
+  "utf8"
+);
 const authContext = readFileSync(
   new URL("../src/admin/AuthContext.tsx", import.meta.url),
   "utf8"
@@ -34,15 +38,26 @@ const compose = readFileSync(
 test("backup restore is reachable from the system navigation", () => {
   assert.match(app, /path="backup"[\s\S]*?<BackupPage \/>/);
   assert.match(layout, /to="\/admin\/backup"[\s\S]*?备份恢复/);
+  assert.doesNotMatch(app, /path="\/tmp"/);
 });
 
-test("backup page exposes full backup safety and destructive restore confirmation", () => {
-  assert.match(page, /备份包不加密/);
-  assert.match(page, /网盘令牌、账号数据和媒体文件/);
+test("backup page keeps essential safety and destructive restore confirmation concise", () => {
+  assert.match(page, /备份包含敏感数据/);
+  assert.match(page, /请通过 HTTPS 传输并妥善保管/);
   assert.match(page, /restoreText !== "确认恢复"/);
-  assert.match(page, /<PasswordInput/);
-  assert.match(page, /所有用户需要重新登录/);
-  assert.match(page, /当前运行方式没有进程守护/);
+  assert.doesNotMatch(page, /restorePassword|PasswordInput|当前管理员密码/);
+  assert.match(api, /input: \{ confirmation: string \}/);
+  assert.doesNotMatch(backupApiHandler, /CheckCurrentPassword|request\.Password/);
+  assert.match(backupApiHandler, /request\.Confirmation != "确认恢复"/);
+  assert.match(page, /服务就绪后返回登录页/);
+  assert.match(page, /请手动重启后端，页面会继续检测/);
+});
+
+test("restore confirmation input uses the shared theme-aware field palette", () => {
+  assert.match(page, /className="admin-input"/);
+  assert.match(css, /\.admin-form__row textarea,\s*\.admin-input \{[\s\S]*?background: var\(--bg-sunken\)/);
+  assert.match(css, /\.admin-input:focus \{[\s\S]*?border-color: var\(--border-accent\)/);
+  assert.match(css, /box-shadow:[^;]*var\(--accent-soft\)/);
 });
 
 test("backup creation uses credential-neutral backup wording", () => {
@@ -59,6 +74,26 @@ test("migration upload uses resumable 16 MiB server chunks with hashes", () => {
   assert.match(page, /localStorage\.setItem\(RESUME_KEY/);
   assert.match(page, /继续上传/);
   assert.match(page, /handlePause/);
+  assert.match(page, /正在完整校验并入库/);
+  assert.doesNotMatch(page, /正在合并并完整校验/);
+});
+
+test("backup long operations render phase-driven task checklists", () => {
+  assert.match(api, /export type BackupOperationProgress/);
+  assert.match(api, /restoreProgress\?: BackupOperationProgress/);
+  assert.match(page, /function BackupOperationChecklist/);
+  assert.match(page, /upload\?\.progress\?\.phase/);
+  assert.match(page, /data\?\.restoreProgress/);
+  assert.match(page, /校验完整文件/);
+  assert.match(page, /单次校验并解压暂存/);
+  assert.match(page, /检查暂存数据库/);
+  assert.doesNotMatch(page, /每个文件只读取一次/);
+  assert.doesNotMatch(page, /生成可回滚的切换清单/);
+  assert.match(css, /\.backup-operation-steps/);
+  assert.match(css, /backup-progress-indeterminate/);
+  assert.match(css, /backup-marker-breathe/);
+  assert.match(css, /backup-check-pop/);
+  assert.match(css, /prefers-reduced-motion/);
 });
 
 test("backup layout collapses safely on narrow screens", () => {
@@ -81,8 +116,8 @@ test("supported deployments restart on the dedicated restore exit code", () => {
 test("restore polling distinguishes success from an automatic rollback", () => {
   assert.match(page, /!backupState\.pendingRestore/);
   assert.match(page, /旧数据已自动回滚/);
-  assert.match(page, /restoreReport\.localStorageWarnings/);
-  assert.match(page, /restoreReport\.missingAssets/);
+  assert.match(page, /restoreReport\?\.localStorageWarnings/);
+  assert.match(page, /restoreReport\?\.missingAssets/);
 });
 
 test("successful restore invalidates cached auth before opening login", () => {
@@ -103,6 +138,7 @@ test("successful restore invalidates cached auth before opening login", () => {
 });
 
 test("restore polling starts only after validation and staging are accepted", () => {
+  assert.match(page, /单次校验并解压暂存中/);
   assert.match(
     page,
     /const \[restoreSubmitting, setRestoreSubmitting\] = useState\(false\)/

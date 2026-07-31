@@ -157,7 +157,7 @@ func (a *AdminServer) handleBackupUploadChunk(w http.ResponseWriter, r *http.Req
 		code := http.StatusBadRequest
 		if errors.Is(err, backup.ErrUploadNotFound) {
 			code = http.StatusNotFound
-		} else if strings.Contains(err.Error(), "正在合并") {
+		} else if errors.Is(err, backup.ErrUploadFinalizing) {
 			code = http.StatusConflict
 		}
 		writeErr(w, code, err)
@@ -176,7 +176,7 @@ func (a *AdminServer) handleFinalizeBackupUpload(w http.ResponseWriter, r *http.
 		switch {
 		case errors.Is(err, backup.ErrUploadNotFound):
 			code = http.StatusNotFound
-		case errors.Is(err, backup.ErrUploadIncomplete), strings.Contains(err.Error(), "正在合并"):
+		case errors.Is(err, backup.ErrUploadIncomplete), errors.Is(err, backup.ErrUploadFinalizing):
 			code = http.StatusConflict
 		case errors.Is(err, backup.ErrInsufficientSpace):
 			code = http.StatusInsufficientStorage
@@ -195,7 +195,7 @@ func (a *AdminServer) handleCancelBackupUpload(w http.ResponseWriter, r *http.Re
 		code := http.StatusInternalServerError
 		if errors.Is(err, backup.ErrUploadNotFound) {
 			code = http.StatusNotFound
-		} else if strings.Contains(err.Error(), "正在合并") {
+		} else if errors.Is(err, backup.ErrUploadFinalizing) {
 			code = http.StatusConflict
 		}
 		writeErr(w, code, err)
@@ -217,19 +217,6 @@ func (a *AdminServer) handleRestoreBackup(w http.ResponseWriter, r *http.Request
 	}
 	if request.Confirmation != "确认恢复" {
 		writeErr(w, http.StatusBadRequest, errors.New("请输入固定确认文本“确认恢复”"))
-		return
-	}
-	passwordOK := false
-	if a.Auth != nil {
-		var passwordErr error
-		passwordOK, passwordErr = a.Auth.CheckCurrentPassword(r, request.Password)
-		if passwordErr != nil {
-			writeErr(w, http.StatusInternalServerError, passwordErr)
-			return
-		}
-	}
-	if !passwordOK {
-		writeErr(w, http.StatusForbidden, errors.New("当前管理员密码不正确"))
 		return
 	}
 	report, err := a.Backups.PrepareRestore(r.Context(), routeParam(r, "id"))

@@ -126,9 +126,18 @@ export type BackupRecord = {
 export type BackupList = {
   backups: BackupRecord[];
   current?: BackupTask;
+  restoreProgress?: BackupOperationProgress;
   estimate: BackupEstimate;
   restartManaged: boolean;
   pendingRestore: boolean;
+};
+
+export type BackupOperationProgress = {
+  phase: string;
+  processedBytes: number;
+  totalBytes: number;
+  processedFiles: number;
+  totalFiles: number;
 };
 
 export type BackupUploadChunk = {
@@ -146,6 +155,7 @@ export type BackupUploadSession = {
   totalChunks: number;
   received: BackupUploadChunk[];
   state: string;
+  progress?: BackupOperationProgress;
   createdAt: string;
   expiresAt: string;
 };
@@ -256,7 +266,7 @@ export function cancelBackupUpload(id: string) {
 
 export function restoreBackup(
   id: string,
-  input: { password: string; confirmation: string }
+  input: { confirmation: string }
 ) {
   return request<{
     ok: boolean;

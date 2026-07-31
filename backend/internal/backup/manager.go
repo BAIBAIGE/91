@@ -55,13 +55,16 @@ type Manager struct {
 	now            func() time.Time
 	availableBytes func(string) (int64, error)
 
-	mu            sync.Mutex
-	current       *TaskStatus
-	currentCancel context.CancelFunc
-	estimate      Estimate
-	estimateUntil time.Time
-	uploadBusy    map[string]bool
-	restoreBusy   bool
+	mu              sync.Mutex
+	current         *TaskStatus
+	currentCancel   context.CancelFunc
+	estimate        Estimate
+	estimateUntil   time.Time
+	uploadBusy      map[string]bool
+	uploadLocks     map[string]*uploadSessionLock
+	uploadProgress  map[string]OperationProgress
+	restoreBusy     bool
+	restoreProgress *OperationProgress
 
 	runCtx    context.Context
 	runCancel context.CancelFunc
@@ -122,6 +125,8 @@ func NewManager(cfg Config) (*Manager, error) {
 		now:            cfg.Now,
 		availableBytes: cfg.AvailableBytes,
 		uploadBusy:     make(map[string]bool),
+		uploadLocks:    make(map[string]*uploadSessionLock),
+		uploadProgress: make(map[string]OperationProgress),
 		restart:        make(chan struct{}, 1),
 	}
 	m.uploadRoot = filepath.Join(m.backupDir, ".uploads")

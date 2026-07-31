@@ -1,15 +1,11 @@
 package backup
 
 import (
-	"archive/zip"
 	"context"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -57,10 +53,15 @@ func (m *Manager) PrepareRestore(ctx context.Context, id string) (ValidationRepo
 	}
 	m.restoreBusy = true
 	m.mu.Unlock()
+	m.setRestoreProgress(OperationProgress{Phase: "inspecting"})
+	keepRestoreProgress := false
 	defer func() {
 		m.mu.Lock()
 		m.restoreBusy = false
 		m.mu.Unlock()
+		if !keepRestoreProgress {
+			m.clearRestoreProgress()
+		}
 	}()
 	if running {
 		return ValidationReport{}, ErrTaskRunning
@@ -78,23 +79,6 @@ func (m *Manager) PrepareRestore(ctx context.Context, id string) (ValidationRepo
 	if err != nil {
 		return ValidationReport{}, err
 	}
-	report, err := VerifyArchive(ctx, archivePath, VerifyOptions{
-		CurrentVersion: m.appVersion,
-		TempDir:        m.restoreDir,
-		AvailableBytes: available,
-	})
-	if err != nil {
-		return ValidationReport{}, err
-	}
-	if report.Manifest.TotalSize > available-diskSafetyReserve {
-		return ValidationReport{}, fmt.Errorf(
-			"%w：恢复暂存需要 %d 字节，可用 %d 字节",
-			ErrInsufficientSpace,
-			report.Manifest.TotalSize,
-			available,
-		)
-	}
-
 	stageID, err := randomID()
 	if err != nil {
 		return ValidationReport{}, err
@@ -109,10 +93,30 @@ func (m *Manager) PrepareRestore(ctx context.Context, id string) (ValidationRepo
 			_ = os.RemoveAll(stageRoot)
 		}
 	}()
-	if err := extractArchive(ctx, archivePath, stageRoot, report.Manifest); err != nil {
+	report, err := VerifyAndExtractArchive(ctx, archivePath, stageRoot, VerifyOptions{
+		CurrentVersion: m.appVersion,
+		AvailableBytes: available,
+		Progress: func(progress OperationProgress) {
+			switch progress.Phase {
+			case "database":
+				progress.Phase = "checking-database"
+			default:
+				progress.Phase = "extracting"
+			}
+			m.setRestoreProgress(progress)
+		},
+	})
+	if err != nil {
 		return ValidationReport{}, err
 	}
 
+	m.setRestoreProgress(OperationProgress{
+		Phase:          "rewriting",
+		ProcessedBytes: report.Manifest.TotalSize,
+		TotalBytes:     report.Manifest.TotalSize,
+		ProcessedFiles: report.Manifest.FileCount,
+		TotalFiles:     report.Manifest.FileCount,
+	})
 	targetAdmins, err := m.catalog.ListAdmins(ctx)
 	if err != nil {
 		return ValidationReport{}, fmt.Errorf("backup: read target administrators: %w", err)
@@ -172,6 +176,13 @@ func (m *Manager) PrepareRestore(ctx context.Context, id string) (ValidationRepo
 	report.MissingAssets = append(report.MissingAssets, rewriteReport.MissingAssets...)
 	report.Warnings = append(report.Warnings, rewriteReport.Warnings...)
 
+	m.setRestoreProgress(OperationProgress{
+		Phase:          "preparing-switch",
+		ProcessedBytes: report.Manifest.TotalSize,
+		TotalBytes:     report.Manifest.TotalSize,
+		ProcessedFiles: report.Manifest.FileCount,
+		TotalFiles:     report.Manifest.FileCount,
+	})
 	targets := []struct {
 		name   string
 		kind   string
@@ -210,72 +221,15 @@ func (m *Manager) PrepareRestore(ctx context.Context, id string) (ValidationRepo
 		return ValidationReport{}, err
 	}
 	prepared = true
+	keepRestoreProgress = true
+	m.setRestoreProgress(OperationProgress{
+		Phase:          "ready",
+		ProcessedBytes: report.Manifest.TotalSize,
+		TotalBytes:     report.Manifest.TotalSize,
+		ProcessedFiles: report.Manifest.FileCount,
+		TotalFiles:     report.Manifest.FileCount,
+	})
 	return report, nil
-}
-
-func extractArchive(ctx context.Context, archivePath, stageRoot string, manifest Manifest) error {
-	reader, err := zip.OpenReader(archivePath)
-	if err != nil {
-		return err
-	}
-	defer reader.Close()
-	_, files, err := inspectZIP(&reader.Reader)
-	if err != nil {
-		return err
-	}
-	for _, entry := range manifest.Files {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		clean, ok := cleanArchivePath(entry.Path)
-		if !ok || !validPayloadPath(clean) {
-			return fmt.Errorf("backup: unsafe restore path %q", entry.Path)
-		}
-		zipFile := files[clean]
-		if zipFile == nil {
-			return fmt.Errorf("backup: restore entry %q is missing", clean)
-		}
-		target := filepath.Join(stageRoot, filepath.FromSlash(clean))
-		relative, err := filepath.Rel(stageRoot, target)
-		if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
-			return fmt.Errorf("backup: restore path escapes staging directory: %q", clean)
-		}
-		if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
-			return err
-		}
-		mode := os.FileMode(entry.Mode).Perm()
-		if mode == 0 {
-			mode = 0o600
-		}
-		output, err := os.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode)
-		if err != nil {
-			return err
-		}
-		input, err := zipFile.Open()
-		if err != nil {
-			_ = output.Close()
-			return err
-		}
-		hash := sha256.New()
-		written, copyErr := copyWithContext(ctx, io.MultiWriter(output, hash), input, nil)
-		inputCloseErr := input.Close()
-		syncErr := output.Sync()
-		outputCloseErr := output.Close()
-		if copyErr != nil || inputCloseErr != nil || syncErr != nil || outputCloseErr != nil {
-			_ = os.Remove(target)
-			for _, candidate := range []error{copyErr, inputCloseErr, syncErr, outputCloseErr} {
-				if candidate != nil {
-					return candidate
-				}
-			}
-		}
-		if written != entry.Size ||
-			!strings.EqualFold(hex.EncodeToString(hash.Sum(nil)), entry.SHA256) {
-			_ = os.Remove(target)
-			return fmt.Errorf("backup: extracted file %q failed verification", clean)
-		}
-	}
-	return nil
 }
 
 func readBackupConfig(filePath string) (config.Config, error) {

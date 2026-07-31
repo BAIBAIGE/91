@@ -376,6 +376,25 @@ func TestVerifyArchiveRejectsUnsafeDuplicateTamperedAndNewerArchives(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
+	var progressEvents []OperationProgress
+	verified, err := VerifyArchive(context.Background(), validPath, VerifyOptions{
+		CurrentVersion: "v1.2.3",
+		Progress: func(progress OperationProgress) {
+			progressEvents = append(progressEvents, progress)
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(progressEvents) == 0 {
+		t.Fatal("archive verification did not report progress")
+	}
+	lastProgress := progressEvents[len(progressEvents)-1]
+	if lastProgress.Phase != "database" ||
+		lastProgress.ProcessedBytes != verified.Manifest.TotalSize ||
+		lastProgress.ProcessedFiles != verified.Manifest.FileCount {
+		t.Fatalf("final archive progress = %+v, manifest = %+v", lastProgress, verified.Manifest)
+	}
 
 	traversal := filepath.Join(env.root, "traversal.zip")
 	writeRawZip(t, traversal, []rawZipEntry{
@@ -473,6 +492,13 @@ func TestChunkUploadSupportsOutOfOrderRepeatAndRestartResume(t *testing.T) {
 	if session.TotalChunks < 2 {
 		t.Fatalf("total chunks = %d, want at least 2", session.TotalChunks)
 	}
+	partInfo, err := os.Stat(env.manager.uploadPartPath(session.ID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if partInfo.Size() != session.Size {
+		t.Fatalf("part size = %d, want %d", partInfo.Size(), session.Size)
+	}
 	put := func(index int, hash string) error {
 		start := int64(index) * session.ChunkSize
 		end := min(start+session.ChunkSize, int64(len(archiveBytes)))
@@ -491,15 +517,41 @@ func TestChunkUploadSupportsOutOfOrderRepeatAndRestartResume(t *testing.T) {
 	if err := put(lastIndex, strings.Repeat("0", 64)); err == nil {
 		t.Fatal("bad chunk hash was accepted")
 	}
-	if err := put(lastIndex, lastHash); err != nil {
-		t.Fatal(err)
-	}
 	firstHash := sha256Hex(archiveBytes[:session.ChunkSize])
-	if err := put(0, firstHash); err != nil {
-		t.Fatal(err)
+	putErrors := make(chan error, 2)
+	go func() { putErrors <- put(lastIndex, lastHash) }()
+	go func() { putErrors <- put(0, firstHash) }()
+	for range 2 {
+		if err := <-putErrors; err != nil {
+			t.Fatal(err)
+		}
 	}
 	if err := put(0, firstHash); err != nil {
 		t.Fatalf("idempotent repeated chunk failed: %v", err)
+	}
+	uploadEntries, err := os.ReadDir(env.manager.uploadDir(session.ID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range uploadEntries {
+		if strings.HasSuffix(entry.Name(), ".chunk") {
+			t.Fatalf("new upload wrote legacy chunk file %q", entry.Name())
+		}
+	}
+	part, err := os.Open(env.manager.uploadPartPath(session.ID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lastOnDisk := make([]byte, len(archiveBytes[lastStart:]))
+	if _, err := part.ReadAt(lastOnDisk, lastStart); err != nil {
+		_ = part.Close()
+		t.Fatal(err)
+	}
+	if err := part.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(lastOnDisk, archiveBytes[lastStart:]) {
+		t.Fatal("out-of-order chunk was not written at its fixed offset")
 	}
 
 	env.manager.Close()
@@ -521,6 +573,20 @@ func TestChunkUploadSupportsOutOfOrderRepeatAndRestartResume(t *testing.T) {
 	if len(status.Received) != 2 {
 		t.Fatalf("received after restart = %d, want 2", len(status.Received))
 	}
+	resumed.setUploadProgress(status.ID, OperationProgress{
+		Phase:          "hashing",
+		ProcessedBytes: 1024,
+		TotalBytes:     status.Size,
+	})
+	status, err = resumed.UploadStatus(session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Progress == nil || status.Progress.Phase != "hashing" ||
+		status.Progress.ProcessedBytes != 1024 {
+		t.Fatalf("upload progress snapshot = %+v", status.Progress)
+	}
+	resumed.clearUploadProgress(status.ID)
 	for index := 1; index < lastIndex; index++ {
 		start := int64(index) * status.ChunkSize
 		end := min(start+status.ChunkSize, int64(len(archiveBytes)))
@@ -541,6 +607,134 @@ func TestChunkUploadSupportsOutOfOrderRepeatAndRestartResume(t *testing.T) {
 	}
 	if !imported.Imported || imported.VerificationStatus != "verified" {
 		t.Fatalf("imported record = %+v", imported)
+	}
+}
+
+func TestChunkUploadMigratesLegacySessionToSinglePart(t *testing.T) {
+	env := newTestBackupEnv(t)
+	writeTestFile(t, filepath.Join(env.root, "uploads", "legacy.mp4"), []byte("legacy-upload"))
+	record := createAndWaitForBackup(t, env.manager)
+	sourcePath, _, err := env.manager.resolveBackup(record.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	archiveBytes, err := os.ReadFile(sourcePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := env.manager.BeginUpload(context.Background(), BeginUploadInput{
+		FileName: "legacy.zip",
+		Size:     int64(len(archiveBytes)),
+		SHA256:   sha256Hex(archiveBytes),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, err := env.manager.loadUpload(session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(env.manager.uploadPartPath(session.ID)); err != nil {
+		t.Fatal(err)
+	}
+	stored.StorageFormat = ""
+	for index := 0; index < stored.TotalChunks; index++ {
+		start := int64(index) * stored.ChunkSize
+		end := min(start+stored.ChunkSize, int64(len(archiveBytes)))
+		chunk := archiveBytes[start:end]
+		writeTestFile(t, env.manager.uploadChunkPath(session.ID, index), chunk)
+		stored.Received[index] = UploadChunk{
+			Index:  index,
+			Size:   int64(len(chunk)),
+			SHA256: sha256Hex(chunk),
+		}
+	}
+	if err := writeJSONAtomic(env.manager.uploadSidecar(session.ID), stored, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	imported, err := env.manager.FinalizeUpload(context.Background(), session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	importedPath, _, err := env.manager.resolveBackup(imported.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	importedBytes, err := os.ReadFile(importedPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(importedBytes, archiveBytes) {
+		t.Fatal("legacy chunks changed while migrating to the part file")
+	}
+	if _, err := os.Stat(env.manager.uploadDir(session.ID)); !os.IsNotExist(err) {
+		t.Fatalf("completed legacy upload session still exists: %v", err)
+	}
+}
+
+func TestChunkUploadCorruptPartDropsOnlyFailedChunkForRetry(t *testing.T) {
+	env := newTestBackupEnv(t)
+	writeTestFile(t, filepath.Join(env.root, "uploads", "retry.mp4"), []byte("retry-upload"))
+	record := createAndWaitForBackup(t, env.manager)
+	sourcePath, _, err := env.manager.resolveBackup(record.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	archiveBytes, err := os.ReadFile(sourcePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := env.manager.BeginUpload(context.Background(), BeginUploadInput{
+		FileName: "retry.zip",
+		Size:     int64(len(archiveBytes)),
+		SHA256:   sha256Hex(archiveBytes),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if session.TotalChunks != 1 {
+		t.Fatalf("test archive chunks = %d, want 1", session.TotalChunks)
+	}
+	chunkHash := sha256Hex(archiveBytes)
+	if _, err := env.manager.PutChunk(
+		context.Background(), session.ID, 0, chunkHash, bytes.NewReader(archiveBytes),
+	); err != nil {
+		t.Fatal(err)
+	}
+	part, err := os.OpenFile(env.manager.uploadPartPath(session.ID), os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := part.WriteAt([]byte{archiveBytes[0] ^ 0xff}, 0); err != nil {
+		_ = part.Close()
+		t.Fatal(err)
+	}
+	if err := part.Sync(); err != nil {
+		_ = part.Close()
+		t.Fatal(err)
+	}
+	if err := part.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := env.manager.FinalizeUpload(context.Background(), session.ID); err == nil ||
+		!strings.Contains(err.Error(), "暂存文件中校验失败") {
+		t.Fatalf("corrupt part finalize error = %v", err)
+	}
+	status, err := env.manager.UploadStatus(session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.State != "uploading" || len(status.Received) != 0 {
+		t.Fatalf("status after corrupt chunk = %+v", status)
+	}
+	if _, err := env.manager.PutChunk(
+		context.Background(), session.ID, 0, chunkHash, bytes.NewReader(archiveBytes),
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := env.manager.FinalizeUpload(context.Background(), session.ID); err != nil {
+		t.Fatalf("finalize after retransmitting corrupt chunk: %v", err)
 	}
 }
 
@@ -644,6 +838,12 @@ func TestRestoreSwitchesAllDataPreservesTargetRuntimeConfigAndClearsSessions(t *
 	report, err := env.manager.PrepareRestore(ctx, record.ID)
 	if err != nil {
 		t.Fatal(err)
+	}
+	restoreProgress := env.manager.restoreProgressSnapshot()
+	if restoreProgress == nil || restoreProgress.Phase != "ready" ||
+		restoreProgress.ProcessedBytes != report.Manifest.TotalSize ||
+		restoreProgress.ProcessedFiles != report.Manifest.FileCount {
+		t.Fatalf("restore progress after prepare = %+v", restoreProgress)
 	}
 	if report.VerificationStatus != "verified" || len(report.LocalStorageWarnings) == 0 ||
 		len(report.MissingAssets) < 2 {

@@ -8,6 +8,7 @@ import {
 import { useNavigate } from "react-router-dom";
 import {
   Archive,
+  Check,
   CircleAlert,
   Download,
   HardDriveDownload,
@@ -25,7 +26,6 @@ import * as api from "./api";
 import { useAuth } from "./AuthContext";
 import { ConfirmModal } from "./ConfirmModal";
 import { Modal } from "./Modal";
-import { PasswordInput } from "./PasswordInput";
 import { useToast } from "./ToastContext";
 
 const RESUME_KEY = "video-site-91-backup-upload-v1";
@@ -84,6 +84,134 @@ function taskPhase(phase: string | undefined) {
   }
 }
 
+type ChecklistState = "done" | "active" | "pending";
+
+type ChecklistStep = {
+  title: string;
+  state: ChecklistState;
+};
+
+function checklistState(index: number, activeIndex: number, complete = false): ChecklistState {
+  if (complete || index < activeIndex) return "done";
+  return index === activeIndex ? "active" : "pending";
+}
+
+function operationPercent(progress: api.BackupOperationProgress | undefined) {
+  if (!progress?.totalBytes) return null;
+  return Math.min(100, Math.max(0, (progress.processedBytes / progress.totalBytes) * 100));
+}
+
+function operationDetail(
+  progress: api.BackupOperationProgress | undefined,
+  percent: number | null
+) {
+  if (percent === null) return "处理中";
+  const percentage = `${percent.toFixed(1)}%`;
+  if (progress?.totalFiles && progress.processedFiles > 0) {
+    return `${percentage} · ${progress.processedFiles}/${progress.totalFiles} 文件`;
+  }
+  if (progress?.totalBytes) {
+    return `${percentage} · ${formatBytes(progress.processedBytes)}/${formatBytes(progress.totalBytes)}`;
+  }
+  return percentage;
+}
+
+function BackupOperationChecklist({
+  title,
+  steps,
+  progress,
+}: {
+  title: string;
+  steps: ChecklistStep[];
+  progress?: api.BackupOperationProgress;
+}) {
+  const completed = steps.filter((step) => step.state === "done").length;
+  const percent = operationPercent(progress);
+  const allDone = completed === steps.length;
+
+  return (
+    <section className="backup-operation-checklist" role="status" aria-live="polite">
+      <div className="backup-operation-checklist__head">
+        <strong>{title}</strong>
+        <span className={allDone ? "is-complete" : ""}>
+          {allDone ? (
+            <>
+              <Check size={12} strokeWidth={2.8} />
+              完成
+            </>
+          ) : (
+            `${Math.min(completed + 1, steps.length)} / ${steps.length}`
+          )}
+        </span>
+      </div>
+      <ol className="backup-operation-steps">
+        {steps.map((step, index) => (
+          <li key={step.title} className={`is-${step.state}`}>
+            <span className="backup-operation-step__marker" aria-hidden="true">
+              {step.state === "done" ? (
+                <Check size={14} strokeWidth={2.6} />
+              ) : step.state === "active" ? (
+                <Loader2 size={14} className="admin-spin" />
+              ) : (
+                index + 1
+              )}
+            </span>
+            <div className="backup-operation-step__content">
+              <strong>{step.title}</strong>
+              <span className="sr-only">
+                {step.state === "done" ? "已完成" : step.state === "active" ? "进行中" : "等待"}
+              </span>
+              {step.state === "active" && (
+                <div className="backup-operation-step__progress">
+                  <div
+                    className={`backup-progress ${percent === null ? "is-indeterminate" : ""}`}
+                    role={percent === null ? undefined : "progressbar"}
+                    aria-valuemin={percent === null ? undefined : 0}
+                    aria-valuemax={percent === null ? undefined : 100}
+                    aria-valuenow={percent === null ? undefined : Math.round(percent)}
+                  >
+                    <span style={percent === null ? undefined : { width: `${percent}%` }} />
+                  </div>
+                  <span>{operationDetail(progress, percent)}</span>
+                </div>
+              )}
+            </div>
+          </li>
+        ))}
+      </ol>
+    </section>
+  );
+}
+
+function uploadFinalizeStepIndex(phase: string | undefined) {
+  switch (phase) {
+    case "inspecting-archive":
+    case "verifying-archive":
+    case "verifying-database":
+      return 2;
+    case "publishing":
+      return 3;
+    default:
+      return 1;
+  }
+}
+
+function restorePrepareStepIndex(phase: string | undefined) {
+  switch (phase) {
+    case "extracting":
+      return 1;
+    case "checking-database":
+      return 2;
+    case "rewriting":
+      return 3;
+    case "preparing-switch":
+    case "ready":
+      return 4;
+    default:
+      return 0;
+  }
+}
+
 function readResumeState(): ResumeState | null {
   try {
     const parsed = JSON.parse(localStorage.getItem(RESUME_KEY) ?? "null") as ResumeState | null;
@@ -111,7 +239,6 @@ export function BackupPage() {
   const [deleteTarget, setDeleteTarget] = useState<api.BackupRecord | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [restoreTarget, setRestoreTarget] = useState<api.BackupRecord | null>(null);
-  const [restorePassword, setRestorePassword] = useState("");
   const [restoreText, setRestoreText] = useState("");
   const [restoreSubmitting, setRestoreSubmitting] = useState(false);
   const [restoring, setRestoring] = useState(false);
@@ -161,6 +288,47 @@ export function BackupPage() {
       active = false;
     };
   }, [resumeHint?.id]);
+
+  useEffect(() => {
+    if (!finalizing || !upload?.id) return;
+    let active = true;
+    let timer = 0;
+    const poll = async () => {
+      try {
+        const session = await api.getBackupUpload(upload.id);
+        if (active) setUpload(session);
+      } catch {
+        // The finalize request owns success and error reporting. A 404 here
+        // normally means it just published and removed the upload session.
+      }
+      if (active) timer = window.setTimeout(poll, 450);
+    };
+    void poll();
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+    };
+  }, [finalizing, upload?.id]);
+
+  useEffect(() => {
+    if (!restoreSubmitting) return;
+    let active = true;
+    let timer = 0;
+    const poll = async () => {
+      try {
+        const next = await api.listBackups();
+        if (active) setData(next);
+      } catch {
+        // The restore request surfaces the authoritative error.
+      }
+      if (active) timer = window.setTimeout(poll, 500);
+    };
+    void poll();
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+    };
+  }, [restoreSubmitting]);
 
   useEffect(() => {
     if (!restoring) return;
@@ -333,6 +501,17 @@ export function BackupPage() {
         }
         if (lastError) throw lastError;
       }
+      setUpload({
+        ...session,
+        state: "finalizing",
+        progress: {
+          phase: "preparing",
+          processedBytes: 0,
+          totalBytes: session.size,
+          processedFiles: 0,
+          totalFiles: session.totalChunks,
+        },
+      });
       setFinalizing(true);
       const completed = await api.finalizeBackupUpload(session.id);
       localStorage.removeItem(RESUME_KEY);
@@ -375,16 +554,17 @@ export function BackupPage() {
 
   async function handleRestore() {
     if (!restoreTarget || restoreSubmitting || restoring) return;
+    setData((currentData) =>
+      currentData ? { ...currentData, restoreProgress: undefined } : currentData
+    );
     setRestoreSubmitting(true);
     try {
       const result = await api.restoreBackup(restoreTarget.id, {
-        password: restorePassword,
         confirmation: restoreText,
       });
       setRestartManaged(result.restartManaged);
       setRestoreReport(result.report);
       setRestoreTarget(null);
-      setRestorePassword("");
       setRestoreText("");
       setRestoring(true);
       show("恢复已通过校验，服务正在切换数据并重启", "success");
@@ -398,7 +578,6 @@ export function BackupPage() {
   function closeRestore() {
     if (restoreSubmitting || restoring) return;
     setRestoreTarget(null);
-    setRestorePassword("");
     setRestoreText("");
   }
 
@@ -417,15 +596,67 @@ export function BackupPage() {
   const receivedBytes =
     upload?.received.reduce((sum, chunk) => sum + chunk.size, 0) ?? 0;
   const uploadPercent = upload?.size ? Math.min(100, (receivedBytes / upload.size) * 100) : 0;
+  const uploadFinalizeIndex = uploadFinalizeStepIndex(upload?.progress?.phase);
+  const uploadActiveProgress =
+    upload?.progress?.phase === "hashing" || upload?.progress?.phase === "verifying-archive"
+      ? upload.progress
+      : undefined;
+  const uploadFinalizeSteps: ChecklistStep[] = [
+    {
+      title: "分片写入暂存文件",
+      state: "done",
+    },
+    {
+      title: "校验完整文件",
+      state: checklistState(1, uploadFinalizeIndex),
+    },
+    {
+      title: "校验备份内容",
+      state: checklistState(2, uploadFinalizeIndex),
+    },
+    {
+      title: "原子入库",
+      state: checklistState(3, uploadFinalizeIndex),
+    },
+  ];
+  const restoreProgress = data?.restoreProgress;
+  const restoreActiveProgress = restoreProgress?.phase === "extracting" ? restoreProgress : undefined;
+  const restoreReady = restoreProgress?.phase === "ready";
+  const restorePrepareIndex = restorePrepareStepIndex(restoreProgress?.phase);
+  const restorePrepareSteps: ChecklistStep[] = [
+    {
+      title: "读取归档清单",
+      state: checklistState(0, restorePrepareIndex, restoreReady),
+    },
+    {
+      title: "单次校验并解压暂存",
+      state: checklistState(1, restorePrepareIndex, restoreReady),
+    },
+    {
+      title: "检查暂存数据库",
+      state: checklistState(2, restorePrepareIndex, restoreReady),
+    },
+    {
+      title: "适配本机运行数据",
+      state: checklistState(3, restorePrepareIndex, restoreReady),
+    },
+    {
+      title: "准备原子切换",
+      state: checklistState(4, restorePrepareIndex, restoreReady),
+    },
+  ];
+  const restoreWarnings = [
+    ...(restoreReport?.localStorageWarnings ?? []),
+    ...(restoreReport?.missingAssets ?? []),
+    ...(restoreReport?.warnings ?? []),
+  ];
 
   return (
     <div className="admin-page backup-page">
       <div className="admin-page__header backup-page__header">
         <div>
           <h1 className="admin-page__title">备份恢复</h1>
-          <p className="admin-page__subtitle">
-            完整保存数据库、配置、上传视频、封面、预览、帧签名与爬虫数据。
-          </p>
+          <p className="admin-page__subtitle">备份、迁移与完整恢复。</p>
         </div>
         <button
           type="button"
@@ -441,10 +672,8 @@ export function BackupPage() {
       <div className="backup-security-notice" role="note">
         <ShieldAlert size={19} />
         <div>
-          <strong>备份包不加密</strong>
-          <span>
-            其中包含网盘令牌、账号数据和媒体文件。请只通过 HTTPS 传输，并将下载文件保存在可信位置。
-          </span>
+          <strong>备份包含敏感数据</strong>
+          <span>请通过 HTTPS 传输并妥善保管。</span>
         </div>
       </div>
 
@@ -512,7 +741,7 @@ export function BackupPage() {
           <UploadCloud size={21} />
         </div>
         <p>
-          使用 16 MiB 分片，支持暂停、自动重试、乱序补传和刷新页面后续传。未完成分片保留 24 小时。
+          16 MiB 分片上传，支持暂停与断点续传。
         </p>
         {resumeHint && !file && (
           <div className="backup-resume-hint">
@@ -564,7 +793,13 @@ export function BackupPage() {
             </button>
           )}
         </div>
-        {upload && (
+        {upload && finalizing ? (
+          <BackupOperationChecklist
+            title="正在完整校验并入库"
+            steps={uploadFinalizeSteps}
+            progress={uploadActiveProgress}
+          />
+        ) : upload ? (
           <div className="backup-upload-progress">
             <div className="backup-progress">
               <span style={{ width: `${uploadPercent}%` }} />
@@ -576,10 +811,10 @@ export function BackupPage() {
               <span>
                 {formatBytes(receivedBytes)} / {formatBytes(upload.size)}
               </span>
-              <span>{finalizing ? "正在合并并完整校验…" : uploading ? "上传中" : "已暂停"}</span>
+              <span>{uploading ? "上传中" : "已暂停"}</span>
             </div>
           </div>
-        )}
+        ) : null}
       </section>
 
       <section className="backup-list-section">
@@ -686,22 +921,26 @@ export function BackupPage() {
             <button
               type="button"
               className="admin-btn is-danger"
-              disabled={!restorePassword || restoreText !== "确认恢复" || restoreSubmitting}
+              disabled={restoreText !== "确认恢复" || restoreSubmitting}
               onClick={handleRestore}
             >
               {restoreSubmitting ? <Loader2 size={14} className="admin-spin" /> : <RotateCcw size={14} />}
-              {restoreSubmitting ? "校验并暂存中…" : "确认恢复"}
+              {restoreSubmitting ? "单次校验并解压暂存中…" : "确认恢复"}
             </button>
           </>
         }
       >
-        {restoreTarget && (
+        {restoreTarget && restoreSubmitting ? (
+          <BackupOperationChecklist
+            title="正在校验并解压暂存"
+            steps={restorePrepareSteps}
+            progress={restoreActiveProgress}
+          />
+        ) : restoreTarget ? (
           <div className="backup-restore-form">
             <div className="backup-restore-warning">
               <CircleAlert size={18} />
-              <span>
-                服务会停止后台任务、切换全部持久数据并重启。现有会话、一次性分享和未完成远程上传将被清空。
-              </span>
+              <span>将替换全部持久数据并重启，现有登录会话会失效。</span>
             </div>
             <dl className="backup-restore-summary">
               <div>
@@ -720,68 +959,68 @@ export function BackupPage() {
                 <dt>包含数据</dt>
                 <dd>{restoreTarget.included?.join("、") || "全部持久数据"}</dd>
               </div>
-              <div>
-                <dt>路径处理</dt>
-                <dd>数据库内的预览、爬虫与删除载荷路径会改写到本机数据目录</dd>
-              </div>
-              <div>
-                <dt>本地存储</dt>
-                <dd>目标路径不存在的本地盘会标记为未连接，不阻止恢复</dd>
-              </div>
             </dl>
-            <label className="backup-field">
-              <span>当前管理员密码</span>
-              <PasswordInput
-                className="admin-input"
-                value={restorePassword}
-                onChange={(event) => setRestorePassword(event.target.value)}
-                autoComplete="current-password"
-              />
-            </label>
             <label className="backup-field">
               <span>输入“确认恢复”</span>
               <input
                 className="admin-input"
                 value={restoreText}
                 onChange={(event) => setRestoreText(event.target.value)}
+                placeholder="确认恢复"
                 autoComplete="off"
               />
             </label>
           </div>
-        )}
+        ) : null}
       </Modal>
 
       {restoring && !restoreTarget && (
-        <div className="backup-restarting" role="status">
-          <Loader2 size={28} className="admin-spin" />
-          <strong>正在应用恢复并重启服务</strong>
-          <span>
-            {restartManaged
-              ? "服务恢复后会自动返回登录页，所有用户需要重新登录。"
-              : "当前运行方式没有进程守护，请在服务器上手动重启后端；页面会继续检测。"}
-          </span>
-          {restoreReport && (
-            <div className="backup-restart-report">
-              <span>
-                备份校验：
-                {restoreReport.verificationStatus === "verified"
-                  ? "通过"
-                  : restoreReport.verificationStatus}
-              </span>
-              {!!restoreReport.pathRewrites?.length && (
-                <span>已准备 {restoreReport.pathRewrites.length} 项本地路径改写</span>
-              )}
-              {[
-                ...(restoreReport.localStorageWarnings ?? []),
-                ...(restoreReport.missingAssets ?? []),
-                ...(restoreReport.warnings ?? []),
-              ]
-                .slice(0, 6)
-                .map((warning, index) => (
-                  <span key={`${index}-${warning}`}>{warning}</span>
-                ))}
-            </div>
-          )}
+        <div className="backup-restarting">
+          <div className="backup-restarting__panel">
+            <BackupOperationChecklist
+              title="正在应用恢复并重启服务"
+              steps={[
+                {
+                  title: "校验并暂存备份数据",
+                  state: "done",
+                },
+                {
+                  title: "准备可回滚切换",
+                  state: "done",
+                },
+                {
+                  title: "切换持久数据",
+                  state: "active",
+                },
+                {
+                  title: "重启并重新登录",
+                  state: "pending",
+                },
+              ]}
+            />
+            <p className="backup-restarting__hint">
+              {restartManaged ? "服务就绪后返回登录页" : "请手动重启后端，页面会继续检测"}
+            </p>
+            {restoreReport && (
+              <details className="backup-restart-report">
+                <summary>恢复详情</summary>
+                <div>
+                  <span>
+                    校验
+                    {restoreReport.verificationStatus === "verified"
+                      ? "通过"
+                      : restoreReport.verificationStatus}
+                  </span>
+                  {!!restoreReport.pathRewrites?.length && (
+                    <span>{restoreReport.pathRewrites.length} 项路径适配</span>
+                  )}
+                  {restoreWarnings.slice(0, 6).map((warning, index) => (
+                    <span key={`${index}-${warning}`}>{warning}</span>
+                  ))}
+                </div>
+              </details>
+            )}
+          </div>
         </div>
       )}
     </div>
