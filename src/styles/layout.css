@@ -274,7 +274,7 @@
 
 .upload-mode-switch {
   display: inline-flex;
-  justify-self: start;
+  justify-self: center;
   padding: 3px;
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
@@ -596,6 +596,18 @@
   color: var(--text-faint);
   font-size: var(--font-xs);
   overflow-wrap: anywhere;
+}
+
+.remote-upload-job__meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px 8px;
+  min-width: 0;
+}
+
+.remote-upload-job__meta time {
+  flex: 0 0 auto;
 }
 
 .remote-upload-job__error {

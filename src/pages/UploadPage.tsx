@@ -261,9 +261,6 @@ export default function UploadPage() {
                   required
                 />
               </div>
-              <small>
-                仅支持无需 Referer、Cookie 或自定义请求头的公网 HTTP/HTTPS 文件直链
-              </small>
             </label>
           )}
 
@@ -333,7 +330,11 @@ export default function UploadPage() {
           </div>
         </form>
 
-        <section className="remote-upload-section" aria-labelledby="remote-upload-jobs">
+        <section
+          className="remote-upload-section"
+          aria-labelledby="remote-upload-jobs"
+          hidden={mode !== "remote"}
+        >
           <SectionHeader title="直链任务" />
           <div id="remote-upload-jobs" className="remote-upload-list">
             {jobsError ? (
@@ -370,8 +371,13 @@ export default function UploadPage() {
                         {job.sourceLabel}
                       </div>
                     ) : null}
-                    <div className="remote-upload-job__progress-copy">
-                      {progressLabel(job, percent)}
+                    <div className="remote-upload-job__meta">
+                      <span className="remote-upload-job__progress-copy">
+                        {progressLabel(job, percent)}
+                      </span>
+                      <time dateTime={job.createdAt}>
+                        {formatJobTime(job.createdAt)}
+                      </time>
                     </div>
                     {percent !== null && ACTIVE_REMOTE_STATES.has(job.state) ? (
                       <div
@@ -387,9 +393,6 @@ export default function UploadPage() {
                     {job.error ? (
                       <div className="remote-upload-job__error">{job.error}</div>
                     ) : null}
-                    <time dateTime={job.createdAt}>
-                      {formatJobTime(job.createdAt)}
-                    </time>
                   </div>
                   <div className="remote-upload-job__actions">
                     {job.canCancel ? (
