@@ -168,19 +168,22 @@ function DirTreeNode({
       {open && (
         <div className={isRoot ? undefined : "admin-skipdirs-children"}>
           {loading && (
-            <div className="admin-skipdirs-status">
+            <div
+              className="admin-skipdirs-status"
+              role="status"
+              aria-label="加载中"
+            >
               <span className="lds-ellipsis is-xs" aria-hidden="true">
                 <span />
                 <span />
                 <span />
                 <span />
               </span>
-              加载中
             </div>
           )}
           {error && <div className="admin-skipdirs-status is-error">{error}</div>}
           {loaded && !error && children.length === 0 && (
-            <div className="admin-skipdirs-status">（无子目录）</div>
+            <div className="admin-skipdirs-status">无子目录</div>
           )}
           {children.map((child) => (
             <DirTreeNode
