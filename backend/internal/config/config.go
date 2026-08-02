@@ -29,6 +29,7 @@ var (
 type Config struct {
 	Server       Server       `yaml:"server"`
 	Storage      Storage      `yaml:"storage"`
+	Logging      Logging      `yaml:"logging"`
 	Scanner      Scanner      `yaml:"scanner"`
 	Preview      Preview      `yaml:"preview"`
 	Proxy        Proxy        `yaml:"proxy"`
@@ -183,6 +184,17 @@ type Storage struct {
 	LocalPreviewDir string `yaml:"local_preview_dir"`
 }
 
+type Logging struct {
+	FileEnabled    *bool  `yaml:"file_enabled"`
+	Directory      string `yaml:"directory"`
+	MaxFileSizeMB  int    `yaml:"max_file_size_mb"`
+	MaxTotalSizeMB int    `yaml:"max_total_size_mb"`
+}
+
+func (l Logging) IsFileEnabled() bool {
+	return l.FileEnabled == nil || *l.FileEnabled
+}
+
 // ResolveStoragePaths returns the storage configuration used by the running
 // process. Values in config.yaml remain unchanged, while every subsystem gets
 // the same absolute paths resolved from the process startup directory.
@@ -199,6 +211,17 @@ func ResolveStoragePaths(storage Storage, baseDir string) (Storage, error) {
 		DBPath:          dbPath,
 		LocalPreviewDir: previewDir,
 	}, nil
+}
+
+// ResolveLoggingPaths returns the runtime logging configuration without
+// rewriting the relative path kept in config.yaml.
+func ResolveLoggingPaths(logging Logging, baseDir string) (Logging, error) {
+	directory, err := localpath.Resolve(baseDir, logging.Directory)
+	if err != nil {
+		return Logging{}, fmt.Errorf("resolve log directory: %w", err)
+	}
+	logging.Directory = directory
+	return logging, nil
 }
 
 type Scanner struct {
@@ -310,6 +333,25 @@ func (c *Config) applyDefaults() error {
 	}
 	if c.Storage.LocalPreviewDir == "" {
 		c.Storage.LocalPreviewDir = "./data/previews"
+	}
+	if c.Logging.FileEnabled == nil {
+		enabled := true
+		c.Logging.FileEnabled = &enabled
+	}
+	if strings.TrimSpace(c.Logging.Directory) == "" {
+		c.Logging.Directory = "./data/logs"
+	}
+	if c.Logging.MaxFileSizeMB == 0 {
+		c.Logging.MaxFileSizeMB = 10
+	}
+	if c.Logging.MaxFileSizeMB < 1 || c.Logging.MaxFileSizeMB > 1024 {
+		return errors.New("logging.max_file_size_mb must be between 1 and 1024")
+	}
+	if c.Logging.MaxTotalSizeMB == 0 {
+		c.Logging.MaxTotalSizeMB = 50
+	}
+	if c.Logging.MaxTotalSizeMB < c.Logging.MaxFileSizeMB || c.Logging.MaxTotalSizeMB > 10240 {
+		return errors.New("logging.max_total_size_mb must be at least max_file_size_mb and no more than 10240")
 	}
 	if c.Scanner.MaxDepth == 0 {
 		c.Scanner.MaxDepth = 5

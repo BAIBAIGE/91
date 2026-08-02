@@ -7,6 +7,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/video-site/backend/internal/applog"
 	"github.com/video-site/backend/internal/auth"
 	"github.com/video-site/backend/internal/backup"
 	"github.com/video-site/backend/internal/catalog"
@@ -18,6 +19,9 @@ type AdminServer struct {
 	Catalog *catalog.Catalog
 	Auth    *auth.Authenticator
 	Backups *backup.Manager
+	// Logs is the durable runtime log store exposed only through the
+	// administrator-authenticated routes below.
+	Logs *applog.Store
 	// ConfigManager owns the real config.yaml management surface. Both visual
 	// and source editors read and write this same document.
 	ConfigManager *config.Manager
@@ -274,6 +278,8 @@ func (a *AdminServer) Register(r chi.Router) {
 
 			// 运维任务
 			r.Get("/update/check", a.handleCheckUpdate)
+			r.Get("/logs", a.handleLogs)
+			r.Delete("/logs", a.handleClearLogs)
 			r.Get("/backups", a.handleListBackups)
 			r.Post("/backups", a.handleCreateBackup)
 			r.Post("/backups/current/cancel", a.handleCancelBackup)

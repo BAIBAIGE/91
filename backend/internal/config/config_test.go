@@ -132,6 +132,54 @@ func TestResolveStoragePathsUsesStartupDirectoryWithoutMutatingConfig(t *testing
 	}
 }
 
+func TestLoggingDefaultsAndCanBeDisabled(t *testing.T) {
+	defaults, err := Parse([]byte("{}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !defaults.Logging.IsFileEnabled() || defaults.Logging.Directory != "./data/logs" ||
+		defaults.Logging.MaxFileSizeMB != 10 || defaults.Logging.MaxTotalSizeMB != 50 {
+		t.Fatalf("logging defaults = %+v", defaults.Logging)
+	}
+
+	disabled, err := Parse([]byte("logging:\n  file_enabled: false\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if disabled.Logging.IsFileEnabled() {
+		t.Fatal("file logging should be disabled explicitly")
+	}
+}
+
+func TestResolveLoggingPathsUsesStartupDirectoryWithoutMutatingConfig(t *testing.T) {
+	baseDir := t.TempDir()
+	logging := Logging{Directory: "./data/logs", MaxFileSizeMB: 10, MaxTotalSizeMB: 200}
+
+	resolved, err := ResolveLoggingPaths(logging, baseDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.Directory != filepath.Join(baseDir, "data", "logs") {
+		t.Fatalf("resolved logging path = %q", resolved.Directory)
+	}
+	if logging.Directory != "./data/logs" {
+		t.Fatalf("source logging config was mutated: %+v", logging)
+	}
+}
+
+func TestParseRejectsInvalidLoggingSizeLimits(t *testing.T) {
+	tests := []string{
+		"logging:\n  max_file_size_mb: -1\n",
+		"logging:\n  max_file_size_mb: 20\n  max_total_size_mb: 10\n",
+		"logging:\n  max_total_size_mb: 10241\n",
+	}
+	for _, data := range tests {
+		if _, err := Parse([]byte(data)); err == nil {
+			t.Fatalf("Parse(%q) succeeded, want validation error", data)
+		}
+	}
+}
+
 func TestLoadLegacyDefaultScannerVideoExtensionsIncludeSTRM(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(path, []byte(`

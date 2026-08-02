@@ -1,6 +1,7 @@
 // 管理后台 API 客户端
 // 所有请求都带 cookie，401 会抛错让路由守卫跳登录
 const BASE = "/admin/api";
+export const ADMIN_LOG_REQUEST_TIMEOUT_MS = 15000;
 
 export class UnauthorizedError extends Error {
   constructor() {
@@ -80,6 +81,88 @@ export type UpdateCheck = {
 
 export function checkUpdate() {
   return request<UpdateCheck>("/update/check");
+}
+
+// ---------- Runtime logs ----------
+
+export type AdminLogSource = "application" | "http";
+export type AdminLogLevel = "info" | "warning" | "error";
+export type AdminLogMethod =
+  | "GET"
+  | "POST"
+  | "PUT"
+  | "PATCH"
+  | "DELETE"
+  | "OPTIONS"
+  | "HEAD";
+
+export type AdminLogEntry = {
+  id: number;
+  timestamp: string;
+  source: AdminLogSource;
+  level: AdminLogLevel;
+  method?: AdminLogMethod;
+  status?: number;
+  path?: string;
+  remote?: string;
+  bytes?: number;
+  elapsed?: string;
+  requestId?: string;
+  message: string;
+};
+
+export type AdminLogSnapshot = {
+  entries: AdminLogEntry[];
+  matched: number;
+  storageBytes: number;
+  maxStorageBytes: number;
+  nextCursor?: string;
+  reset?: boolean;
+};
+
+export function listLogs(
+  filters: {
+    source?: AdminLogSource;
+    level?: AdminLogLevel;
+    method?: AdminLogMethod;
+    query?: string;
+    limit?: number;
+    cursor?: string;
+  } = {},
+  signal?: AbortSignal
+) {
+  const params = new URLSearchParams();
+  params.set("limit", String(filters.limit ?? 500));
+  if (filters.cursor) params.set("cursor", filters.cursor);
+  if (filters.source) params.set("source", filters.source);
+  if (filters.level) params.set("level", filters.level);
+  if (filters.method) params.set("method", filters.method);
+  if (filters.query?.trim()) params.set("q", filters.query.trim());
+  const timeoutController = new AbortController();
+  let timedOut = false;
+  const abortFromCaller = () => timeoutController.abort();
+  if (signal?.aborted) timeoutController.abort();
+  else signal?.addEventListener("abort", abortFromCaller, { once: true });
+  const timeout = globalThis.setTimeout(() => {
+    timedOut = true;
+    timeoutController.abort();
+  }, ADMIN_LOG_REQUEST_TIMEOUT_MS);
+
+  return request<AdminLogSnapshot>(`/logs?${params.toString()}`, {
+    signal: timeoutController.signal,
+  })
+    .catch((error: unknown) => {
+      if (timedOut) throw new Error("日志请求超时，请稍后重试");
+      throw error;
+    })
+    .finally(() => {
+      globalThis.clearTimeout(timeout);
+      signal?.removeEventListener("abort", abortFromCaller);
+    });
+}
+
+export function clearLogs() {
+  return request<{ success: boolean }>("/logs", { method: "DELETE" });
 }
 
 // ---------- Full backup / migration restore ----------

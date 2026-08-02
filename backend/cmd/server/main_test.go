@@ -49,6 +49,8 @@ func TestLoadApplicationConfigSeparatesFileAndRuntimeStoragePaths(t *testing.T) 
 storage:
   db_path: "./data/video-site.db"
   local_preview_dir: "./data/previews"
+logging:
+  directory: "./data/logs"
 `), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -62,9 +64,15 @@ storage:
 		fileConfig.Storage.LocalPreviewDir != "./data/previews" {
 		t.Fatalf("file storage paths changed: %+v", fileConfig.Storage)
 	}
+	if fileConfig.Logging.Directory != "./data/logs" {
+		t.Fatalf("file logging path changed: %+v", fileConfig.Logging)
+	}
 	if runtimeConfig.Storage.DBPath != filepath.Join(workingDir, "data", "video-site.db") ||
 		runtimeConfig.Storage.LocalPreviewDir != filepath.Join(workingDir, "data", "previews") {
 		t.Fatalf("runtime storage paths = %+v", runtimeConfig.Storage)
+	}
+	if runtimeConfig.Logging.Directory != filepath.Join(workingDir, "data", "logs") {
+		t.Fatalf("runtime logging path = %+v", runtimeConfig.Logging)
 	}
 }
 

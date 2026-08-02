@@ -391,7 +391,7 @@ function VideoDetailContent({ id }: { id?: string }) {
                 删除视频
               </h2>
               <p className="vd-delete-text">
-                确定删除「{detail.title}」吗？此操作会从管理库移除该视频。
+                确定删除「{detail.title}」吗？
               </p>
             </div>
 

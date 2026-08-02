@@ -602,6 +602,7 @@ export function TagsPage() {
         }
         confirmText="确认"
         danger
+        hideIcon
         centerMessage
         modalClassName="admin-modal--delete-confirm admin-modal--tag-dialog admin-modal--tag-delete-confirm"
         loading={deletingId !== null || bulkDeleting}

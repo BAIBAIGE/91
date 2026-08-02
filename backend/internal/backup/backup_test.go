@@ -829,6 +829,13 @@ func TestRestoreSwitchesAllDataPreservesTargetRuntimeConfigAndClearsSessions(t *
 	writeTestFile(t, filepath.Join(env.root, "uploads", "new.mp4"), []byte("new-upload"))
 	env.cfg.Server.Listen = "0.0.0.0:7777"
 	env.cfg.Server.AllowedOrigins = []string{"https://target.example"}
+	loggingEnabled := true
+	env.cfg.Logging = config.Logging{
+		FileEnabled:    &loggingEnabled,
+		Directory:      "./target-data/logs",
+		MaxFileSizeMB:  25,
+		MaxTotalSizeMB: 300,
+	}
 	env.cfg.Preview.FFmpegPath = "/target/bin/ffmpeg"
 	env.cfg.Preview.FFprobePath = "/target/bin/ffprobe"
 	env.cfg.Server.Admin.Username = "target-admin"
@@ -944,6 +951,12 @@ func TestRestoreSwitchesAllDataPreservesTargetRuntimeConfigAndClearsSessions(t *
 	if restoredConfig.Preview.FFmpegPath != "/target/bin/ffmpeg" ||
 		restoredConfig.Preview.FFprobePath != "/target/bin/ffprobe" {
 		t.Fatalf("target executable paths were not preserved: %+v", restoredConfig.Preview)
+	}
+	if !restoredConfig.Logging.IsFileEnabled() ||
+		restoredConfig.Logging.Directory != "./target-data/logs" ||
+		restoredConfig.Logging.MaxFileSizeMB != 25 ||
+		restoredConfig.Logging.MaxTotalSizeMB != 300 {
+		t.Fatalf("target logging config was not preserved: %+v", restoredConfig.Logging)
 	}
 	if restoredConfig.Server.Admin.Username != "target-admin" ||
 		restoredConfig.Server.Admin.Password != "target-password" {

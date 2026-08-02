@@ -21,6 +21,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 
 	"github.com/video-site/backend/internal/api"
+	"github.com/video-site/backend/internal/applog"
 	"github.com/video-site/backend/internal/auth"
 	"github.com/video-site/backend/internal/backup"
 	"github.com/video-site/backend/internal/catalog"
@@ -55,6 +56,9 @@ func main() {
 		}
 		return
 	}
+	// stderr is always kept as the operational log sink. The durable admin log
+	// file is attached after configuration paths have been resolved.
+	log.SetOutput(os.Stderr)
 
 	cfgPath := "./config.yaml"
 	if v := os.Getenv("VIDEO_CONFIG"); v != "" {
@@ -146,6 +150,29 @@ func main() {
 			log.Fatalf("reload migrated config: %v", err)
 		}
 		log.Printf("[config] migrated runtime settings into config.yaml")
+	}
+
+	var logStore *applog.Store
+	if cfg.Logging.IsFileEnabled() {
+		logStore, err = applog.Open(applog.Config{
+			Directory:         cfg.Logging.Directory,
+			MaxLineBytes:      applog.DefaultMaxLineBytes,
+			MaxFileSizeBytes:  int64(cfg.Logging.MaxFileSizeMB) * 1024 * 1024,
+			MaxTotalSizeBytes: int64(cfg.Logging.MaxTotalSizeMB) * 1024 * 1024,
+		})
+		if err != nil {
+			log.Printf("[logging] file logging unavailable: %v", err)
+			logStore = nil
+		} else {
+			defer func() {
+				if closeErr := logStore.Close(); closeErr != nil {
+					fmt.Fprintf(os.Stderr, "close runtime log: %v\n", closeErr)
+				}
+			}()
+			log.SetOutput(io.MultiWriter(os.Stderr, logStore.Writer(applog.SourceApplication)))
+			log.Printf("[logging] durable runtime log enabled dir=%s max_file_mb=%d max_total_mb=%d",
+				logStore.Directory(), cfg.Logging.MaxFileSizeMB, cfg.Logging.MaxTotalSizeMB)
+		}
 	}
 
 	app := &App{
@@ -264,6 +291,7 @@ func main() {
 		Catalog:         cat,
 		Auth:            authr,
 		Backups:         backupManager,
+		Logs:            logStore,
 		ConfigManager:   configManager,
 		VersionFilePath: versionFilePath,
 		ImageVersion:    imageVersion,
@@ -416,7 +444,12 @@ func main() {
 	}
 
 	r := chi.NewRouter()
-	r.Use(middleware.Logger)
+	accessLogger := log.New(
+		os.Stdout,
+		"",
+		log.LstdFlags,
+	)
+	r.Use(requestLogMiddleware(accessLogger, log.Default(), logStore))
 	r.Use(middleware.Recoverer)
 	r.Use(corsMiddleware(cfg.Server.AllowedOrigins))
 
@@ -506,6 +539,11 @@ func loadApplicationConfig(path, workingDir string) (*config.Config, *config.Con
 	}
 	runtimeConfig := *fileConfig
 	runtimeConfig.Storage = runtimeStorage
+	runtimeLogging, err := config.ResolveLoggingPaths(fileConfig.Logging, workingDir)
+	if err != nil {
+		return nil, nil, err
+	}
+	runtimeConfig.Logging = runtimeLogging
 	return fileConfig, &runtimeConfig, nil
 }
 

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -8,11 +9,125 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/chi/v5/middleware"
+
+	"github.com/video-site/backend/internal/applog"
+	"github.com/video-site/backend/internal/requestmeta"
 )
 
 const frontendHashedAssetCacheControl = "public, max-age=31536000, immutable"
+
+type capturedLogFormatter struct {
+	access      *middleware.DefaultLogFormatter
+	panicLogger *log.Logger
+	logs        *applog.Store
+}
+
+func (f *capturedLogFormatter) NewLogEntry(r *http.Request) middleware.LogEntry {
+	remote := requestmeta.ClientIP(r)
+	requestForAccessLog := r
+	if remote != "" {
+		requestCopy := new(http.Request)
+		*requestCopy = *r
+		requestCopy.RemoteAddr = remote
+		requestForAccessLog = requestCopy
+	}
+	return &capturedLogEntry{
+		LogEntry:    f.access.NewLogEntry(requestForAccessLog),
+		panicLogger: f.panicLogger,
+		logs:        f.logs,
+		request:     r,
+		remote:      remote,
+	}
+}
+
+type capturedLogEntry struct {
+	middleware.LogEntry
+	panicLogger *log.Logger
+	logs        *applog.Store
+	request     *http.Request
+	remote      string
+}
+
+func (e *capturedLogEntry) Write(status, bytes int, header http.Header, elapsed time.Duration, extra any) {
+	// Keep the human-readable operational stream independently of file logging.
+	e.LogEntry.Write(status, bytes, header, elapsed, extra)
+	if e.logs == nil || e.request == nil {
+		return
+	}
+	target := e.request.URL.RequestURI()
+	if target == "" {
+		target = "/"
+	}
+	scheme := "http"
+	if e.request.TLS != nil {
+		scheme = "https"
+	}
+	requestID := middleware.GetReqID(e.request.Context())
+	prefix := ""
+	if requestID != "" {
+		prefix = "[" + requestID + "] "
+	}
+	remote := e.remote
+	if remote == "" {
+		remote = e.request.RemoteAddr
+	}
+	message := fmt.Sprintf("%s%q from %s - %d %dB in %s",
+		prefix,
+		e.request.Method+" "+scheme+"://"+e.request.Host+target+" "+e.request.Proto,
+		remote,
+		status,
+		bytes,
+		elapsed,
+	)
+	_ = e.logs.AppendEntry(applog.Entry{
+		Timestamp: time.Now(),
+		Source:    applog.SourceHTTP,
+		Method:    applog.Method(e.request.Method),
+		Status:    status,
+		Path:      target,
+		Remote:    remote,
+		Bytes:     bytes,
+		Elapsed:   elapsed.String(),
+		RequestID: requestID,
+		Message:   message,
+	})
+}
+
+func (e *capturedLogEntry) Panic(value any, stack []byte) {
+	if e.panicLogger != nil {
+		e.panicLogger.Printf("[http] panic: %v\n%s", value, stack)
+		return
+	}
+	fmt.Fprintf(os.Stderr, "[http] panic: %v\n%s", value, stack)
+}
+
+// requestLogMiddleware writes a human-readable access line to stdout and a
+// structured durable entry for the admin viewer. The viewer endpoint itself is
+// omitted so polling cannot generate self-referential log traffic.
+func requestLogMiddleware(accessLogger, panicLogger *log.Logger, logs *applog.Store) func(http.Handler) http.Handler {
+	requestLogger := middleware.RequestLogger(&capturedLogFormatter{
+		access: &middleware.DefaultLogFormatter{
+			Logger:  accessLogger,
+			NoColor: true,
+		},
+		panicLogger: panicLogger,
+		logs:        logs,
+	})
+	return func(next http.Handler) http.Handler {
+		logged := requestLogger(next)
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/admin/api/logs" {
+				next.ServeHTTP(w, r)
+				return
+			}
+			logged.ServeHTTP(w, r)
+		})
+	}
+}
 
 // corsMiddleware 返回一个 chi 中间件，按白名单匹配 Origin 决定是否回写
 // CORS 响应头。

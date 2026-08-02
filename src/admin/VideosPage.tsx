@@ -693,6 +693,7 @@ function CurrentVideosTab({
         message={deleteTarget ? `确定要删除「${deleteTarget.title}」吗？` : ""}
         confirmText="确认"
         danger
+        hideIcon
         centerMessage
         modalClassName="admin-modal--delete-confirm admin-modal--video-delete-flat"
         loading={deleting}
@@ -712,6 +713,7 @@ function CurrentVideosTab({
         message={`确定要删除已选中的 ${selectedIds.size} 个视频吗？`}
         confirmText="确认"
         danger
+        hideIcon
         centerMessage
         modalClassName="admin-modal--delete-confirm admin-modal--video-delete-flat"
         loading={batchDeleting}
@@ -1150,6 +1152,7 @@ function BlacklistTab({
         message={`确定删除全部待处理的黑名单源文件吗？当前共 ${sourceDeleteStatus?.pending ?? total} 个。`}
         confirmText="确认"
         danger
+        hideIcon
         centerMessage
         modalClassName="admin-modal--delete-confirm admin-modal--source-delete-flat"
         loading={sourceDeleteStarting}
@@ -1165,6 +1168,7 @@ function BlacklistTab({
         message={sourceDeleteTarget ? `确定删除「${sourceDeleteTarget.fileName || sourceDeleteTarget.id}」的源文件吗？` : ""}
         confirmText="确认"
         danger
+        hideIcon
         centerMessage
         modalClassName="admin-modal--delete-confirm admin-modal--source-delete-flat"
         loading={sourceDeleteStarting}
@@ -1180,6 +1184,7 @@ function BlacklistTab({
         message={`确定删除当前页选中的 ${selectedIds.size} 个拉黑视频源文件吗？`}
         confirmText="确认"
         danger
+        hideIcon
         centerMessage
         modalClassName="admin-modal--delete-confirm admin-modal--source-delete-flat"
         loading={sourceDeleteStarting}

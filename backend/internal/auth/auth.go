@@ -8,16 +8,14 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"errors"
-	"net"
 	"net/http"
-	"net/netip"
-	"strings"
 	"sync"
 	"time"
 
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/video-site/backend/internal/catalog"
+	"github.com/video-site/backend/internal/requestmeta"
 )
 
 const (
@@ -59,7 +57,7 @@ func SessionIdentityFromContext(ctx context.Context) (string, bool) {
 
 func (a *Authenticator) Login(w http.ResponseWriter, r *http.Request, user, pass string) (bool, error) {
 	expectedUser, expectedPass := a.Credentials()
-	ip := clientIP(r)
+	ip := requestmeta.ClientIP(r)
 	if ip != "" {
 		banned, err := a.Catalog.IsLoginIPBanned(r.Context(), ip)
 		if err != nil {
@@ -265,80 +263,11 @@ func randomToken() (string, error) {
 	return hex.EncodeToString(b), nil
 }
 
-func clientIP(r *http.Request) string {
-	remote := remoteIP(r.RemoteAddr)
-	if remote.IsValid() && isTrustedProxy(remote) {
-		if ip := forwardedClientIP(r.Header.Get("X-Forwarded-For")); ip != "" {
-			return ip
-		}
-		if ip := parseIPHeader(r.Header.Get("X-Real-IP")); ip != "" {
-			return ip
-		}
-	}
-	if remote.IsValid() {
-		return remote.String()
-	}
-	return ""
-}
-
-func remoteIP(remoteAddr string) netip.Addr {
-	host, _, err := net.SplitHostPort(remoteAddr)
-	if err == nil {
-		if ip, err := netip.ParseAddr(strings.TrimSpace(host)); err == nil {
-			return ip.Unmap()
-		}
-	}
-	ip, err := netip.ParseAddr(strings.TrimSpace(remoteAddr))
-	if err != nil {
-		return netip.Addr{}
-	}
-	return ip.Unmap()
-}
-
-func isTrustedProxy(ip netip.Addr) bool {
-	return ip.Unmap().IsLoopback()
-}
-
-func forwardedClientIP(header string) string {
-	parts := forwardedIPs(header)
-	for i := len(parts) - 1; i >= 0; i-- {
-		if ip := parseIPHeader(parts[i]); ip != "" {
-			return ip
-		}
-	}
-	return ""
-}
-
-func parseIPHeader(value string) string {
-	ip, err := netip.ParseAddr(strings.TrimSpace(value))
-	if err != nil {
-		return ""
-	}
-	return ip.Unmap().String()
-}
-
-func forwardedIPs(header string) []string {
-	if strings.TrimSpace(header) == "" {
-		return nil
-	}
-	parts := strings.Split(header, ",")
-	out := make([]string, 0, len(parts))
-	for _, part := range parts {
-		out = append(out, strings.TrimSpace(part))
-	}
-	return out
-}
-
-func isValidIP(ip string) bool {
-	_, err := netip.ParseAddr(strings.TrimSpace(ip))
-	return err == nil
-}
-
 // UserLogin authenticates a user (admin or regular) from the users table.
 // Falls back to config-based credentials for backward compatibility.
 // Returns the role on success, empty string on failure.
 func (a *Authenticator) UserLogin(w http.ResponseWriter, r *http.Request, user, pass string) (string, error) {
-	ip := clientIP(r)
+	ip := requestmeta.ClientIP(r)
 	if ip != "" {
 		banned, err := a.Catalog.IsLoginIPBanned(r.Context(), ip)
 		if err != nil {

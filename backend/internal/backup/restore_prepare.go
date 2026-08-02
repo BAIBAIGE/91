@@ -249,6 +249,7 @@ func mergeRestoreConfig(source, target config.Config) config.Config {
 	source.Server.Admin = target.Server.Admin
 	source.Server.AllowedOrigins = append([]string(nil), target.Server.AllowedOrigins...)
 	source.Storage = target.Storage
+	source.Logging = target.Logging
 	source.Preview.FFmpegPath = target.Preview.FFmpegPath
 	source.Preview.FFprobePath = target.Preview.FFprobePath
 	return source

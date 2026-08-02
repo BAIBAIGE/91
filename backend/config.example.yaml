@@ -20,6 +20,16 @@ storage:
   # 本地预览视频和封面目录
   local_preview_dir: "./data/previews"
 
+logging:
+  # 后台日志同时保留在磁盘；stdout/stderr 仍继续交给 Docker 或 systemd 收集。
+  file_enabled: true
+  # 放在 data 下可随 Docker 数据卷持久化，但不会进入业务备份包。
+  directory: "./data/logs"
+  # 单个日志文件达到此大小后轮转。
+  max_file_size_mb: 10
+  # 超过总量后从最旧的轮转文件开始清理。
+  max_total_size_mb: 50
+
 scanner:
   # 已废弃：旧版的"每天 02:00-07:00 按 IntervalSeconds 间隔重复扫盘"已被移除。
   # 现在所有定时任务统一由 nightly 调度器控制（默认每天 01:00 跑一条完整流水线）。

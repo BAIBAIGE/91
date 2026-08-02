@@ -5,6 +5,7 @@ import {
   Film,
   HardDrive,
   Home,
+  Logs,
   SlidersHorizontal,
   Tags,
   Users,
@@ -175,6 +176,19 @@ export function AdminLayout() {
               </span>
               <span className="admin-nav__text">
                 <span className="admin-nav__title">备份恢复</span>
+              </span>
+            </NavLink>
+            <NavLink
+              to="/admin/logs"
+              className={({ isActive }) =>
+                `admin-nav__link ${isActive ? "is-active" : ""}`
+              }
+            >
+              <span className="admin-nav__icon" aria-hidden="true">
+                <Logs size={15} />
+              </span>
+              <span className="admin-nav__text">
+                <span className="admin-nav__title">日志查看</span>
               </span>
             </NavLink>
           </div>

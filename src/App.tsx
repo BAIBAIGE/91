@@ -41,6 +41,9 @@ const BackupPage = lazy(() =>
 const UsersPage = lazy(() =>
   import("@/admin/UsersPage").then((module) => ({ default: module.UsersPage }))
 );
+const LogsPage = lazy(() =>
+  import("@/admin/LogsPage").then((module) => ({ default: module.LogsPage }))
+);
 
 function PageSuspense({ children }: { children: ReactNode }) {
   return <Suspense fallback={null}>{children}</Suspense>;
@@ -202,6 +205,14 @@ export default function App() {
             element={
               <PageSuspense>
                 <UsersPage />
+              </PageSuspense>
+            }
+          />
+          <Route
+            path="logs"
+            element={
+              <PageSuspense>
+                <LogsPage />
               </PageSuspense>
             }
           />

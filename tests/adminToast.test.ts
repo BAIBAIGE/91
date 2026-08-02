@@ -6,6 +6,10 @@ const toastSource = readFileSync(
   new URL("../src/admin/ToastContext.tsx", import.meta.url),
   "utf8"
 );
+const clipboardSource = readFileSync(
+  new URL("../src/lib/clipboard.ts", import.meta.url),
+  "utf8"
+);
 const adminCss = readFileSync(
   new URL("../src/styles/admin.css", import.meta.url),
   "utf8"
@@ -30,9 +34,10 @@ test("admin toasts auto-dismiss and copy their text when clicked", () => {
   assert.match(toastSource, /const TOAST_MAX_VISIBLE = 2/);
   assert.match(toastSource, /const TOAST_COPY_SUCCESS_TEXT = "已复制到剪贴板"/);
   assert.match(toastSource, /const TOAST_COPY_ERROR_TEXT = "复制失败，请手动复制"/);
-  assert.match(toastSource, /navigator\.clipboard\?\.writeText/);
-  assert.match(toastSource, /fallbackCopyText\(text\)/);
-  assert.match(toastSource, /document\.execCommand\("copy"\)/);
+  assert.match(toastSource, /copyTextToClipboard\(text\)/);
+  assert.match(clipboardSource, /navigator\.clipboard\?\.writeText/);
+  assert.match(clipboardSource, /return fallbackCopyText\(text\)/);
+  assert.match(clipboardSource, /document\.execCommand\("copy"\)/);
   assert.match(toastSource, /addToast\(TOAST_COPY_SUCCESS_TEXT,\s*"success",\s*false\)/);
   assert.match(toastSource, /addToast\(TOAST_COPY_ERROR_TEXT,\s*"error",\s*false\)/);
   assert.match(toastSource, /t\.copyable\s*\?\s*" is-copyable"\s*:\s*""/);
