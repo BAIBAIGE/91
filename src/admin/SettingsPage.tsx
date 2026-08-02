@@ -1,7 +1,8 @@
 import {
+  lazy,
+  Suspense,
   useEffect,
   useMemo,
-  useRef,
   useState,
   type FormEvent,
 } from "react";
@@ -10,19 +11,22 @@ import {
   Clock3,
   Loader2,
   RefreshCw,
-  Search,
   SlidersHorizontal,
 } from "lucide-react";
-import { parseDocument, type Document } from "yaml";
 import * as api from "./api";
 import { AdminLoading } from "./AdminLoading";
 import { useToast } from "./ToastContext";
 import { ConfigDiffModal } from "./settings/ConfigDiffModal";
 import { SettingsRow, SettingsSection } from "./settings/SettingsSection";
-
-type SettingsDraft = {
-  nightlyStartTime: string;
-};
+import {
+  DEFAULT_DRAFT,
+  applyVisualFields,
+  changedVisualFields,
+  isValidStartTime,
+  parseConfig,
+  type SettingsDraft,
+  type VisualField,
+} from "./settings/configYaml";
 
 type LoadedConfig = {
   content: string;
@@ -38,101 +42,29 @@ type PendingSave = {
 
 type EditorTab = "visual" | "source";
 type SectionID = "config-automation";
-type VisualField = keyof SettingsDraft;
 
-const DEFAULT_DRAFT: SettingsDraft = {
-  nightlyStartTime: "01:00",
-};
+const ConfigSourceEditor = lazy(() => import("./settings/ConfigSourceEditor"));
 
 const SECTION_META: Array<{
   id: SectionID;
   index: string;
   title: string;
-  keywords: string;
 }> = [
   {
     id: "config-automation",
     index: "01",
     title: "自动任务",
-    keywords: "自动任务 定时任务 每日启动时间 nightly start time 调度",
   },
 ];
 
-function isValidStartTime(value: string) {
-  if (!/^\d{2}:\d{2}$/.test(value)) return false;
-  const [hour, minute] = value.split(":").map(Number);
-  return hour >= 0 && hour <= 23 && minute >= 0 && minute <= 59;
-}
-
-function configDocument(source: string): Document {
-  const document = parseDocument(source, { prettyErrors: true });
-  if (document.errors.length > 0) {
-    throw new Error(document.errors[0].message);
-  }
-  const root = document.toJS();
-  if (root !== null && (typeof root !== "object" || Array.isArray(root))) {
-    throw new Error("config.yaml 顶层必须是映射对象");
-  }
-  return document;
-}
-
-function draftFromDocument(document: Document): SettingsDraft {
-  const configuredStart = document.getIn(["nightly", "start_time"]);
-  let nightlyStartTime = DEFAULT_DRAFT.nightlyStartTime;
-  if (configuredStart !== undefined && configuredStart !== null) {
-    if (typeof configuredStart !== "string" || !isValidStartTime(configuredStart)) {
-      throw new Error("nightly.start_time 必须是 HH:mm 格式的有效时间");
-    }
-    nightlyStartTime = configuredStart;
-  } else {
-    const legacyHour = document.getIn(["nightly", "cron_hour"]);
-    if (typeof legacyHour === "number" && legacyHour >= 1 && legacyHour <= 23) {
-      nightlyStartTime = `${String(legacyHour).padStart(2, "0")}:00`;
-    }
-  }
-  return { nightlyStartTime };
-}
-
-function parseConfig(source: string) {
-  const document = configDocument(source);
-  return { document, draft: draftFromDocument(document) };
-}
-
-function stringifyConfig(document: Document) {
-  return document.toString({ lineWidth: 0 });
-}
-
-function applyVisualFields(
-  source: string,
-  draft: SettingsDraft,
-  fields: ReadonlySet<VisualField>
-) {
-  const document = configDocument(source);
-  if (fields.has("nightlyStartTime")) {
-    document.setIn(["nightly", "start_time"], draft.nightlyStartTime);
-    document.deleteIn(["nightly", "cron_hour"]);
-  }
-  return stringifyConfig(document);
-}
-
-function changedVisualFields(saved: SettingsDraft, draft: SettingsDraft) {
-  const fields = new Set<VisualField>();
-  if (saved.nightlyStartTime !== draft.nightlyStartTime) {
-    fields.add("nightlyStartTime");
-  }
-  return fields;
-}
-
 export function SettingsPage() {
   const { show } = useToast();
-  const sourceGutterRef = useRef<HTMLDivElement>(null);
   const [loaded, setLoaded] = useState<LoadedConfig | null>(null);
   const [draft, setDraft] = useState<SettingsDraft>(DEFAULT_DRAFT);
   const [workingYAML, setWorkingYAML] = useState("");
   const [sourceTouched, setSourceTouched] = useState(false);
   const [activeTab, setActiveTab] = useState<EditorTab>("visual");
   const [activeSection, setActiveSection] = useState<SectionID>("config-automation");
-  const [searchQuery, setSearchQuery] = useState("");
   const [sourceError, setSourceError] = useState("");
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
@@ -147,16 +79,6 @@ export function SettingsPage() {
     loaded !== null &&
     (sourceTouched ? workingYAML !== loaded.content : visualDirtyFields.size > 0);
   const timeValid = isValidStartTime(draft.nightlyStartTime);
-  const normalizedSearch = searchQuery.trim().toLocaleLowerCase();
-  const visibleSections = useMemo(
-    () =>
-      normalizedSearch
-        ? SECTION_META.filter((section) =>
-            `${section.title} ${section.keywords}`.toLocaleLowerCase().includes(normalizedSearch)
-          )
-        : SECTION_META,
-    [normalizedSearch]
-  );
 
   async function load() {
     setLoading(true);
@@ -209,12 +131,6 @@ export function SettingsPage() {
     window.addEventListener("beforeunload", warnBeforeUnload);
     return () => window.removeEventListener("beforeunload", warnBeforeUnload);
   }, [dirty]);
-
-  useEffect(() => {
-    const firstVisible = visibleSections[0];
-    if (!firstVisible) return;
-    setActiveSection(firstVisible.id);
-  }, [visibleSections]);
 
   function candidateForLatest(latest: api.ConfigYAMLDocument) {
     if (!loaded) throw new Error("配置尚未加载");
@@ -414,128 +330,89 @@ export function SettingsPage() {
 
         {activeTab === "visual" ? (
           <div className="admin-config-visual" role="tabpanel">
-            <div className="admin-config-search">
-              <label htmlFor="config-search" className="sr-only">
-                搜索配置项
-              </label>
-              <input
-                id="config-search"
-                type="search"
-                value={searchQuery}
-                placeholder="搜索配置项..."
-                onChange={(event) => setSearchQuery(event.target.value)}
-              />
-              <Search size={16} aria-hidden="true" />
-            </div>
+            <nav
+              className="admin-config-section-nav"
+              role="tablist"
+              aria-label="配置分组"
+            >
+              {SECTION_META.map((section) => {
+                const Icon = Clock3;
+                return (
+                  <button
+                    key={section.id}
+                    id={`${section.id}-tab`}
+                    type="button"
+                    role="tab"
+                    aria-selected={activeSection === section.id}
+                    aria-controls={section.id}
+                    className={activeSection === section.id ? "is-active" : ""}
+                    onClick={() => setActiveSection(section.id)}
+                  >
+                    <span className="admin-config-section-nav__index">{section.index}</span>
+                    <span className="admin-config-section-nav__icon" aria-hidden="true">
+                      <Icon size={16} />
+                    </span>
+                    <span>{section.title}</span>
+                  </button>
+                );
+              })}
+            </nav>
 
-            {visibleSections.length > 0 ? (
-              <>
-                <nav
-                  className="admin-config-section-nav"
-                  role="tablist"
-                  aria-label="配置分组"
+            <div className="admin-config-sections">
+              {activeSection === "config-automation" && (
+                <SettingsSection
+                  id="config-automation"
+                  index="01"
+                  icon={<Clock3 size={16} />}
+                  title="自动任务"
+                  description="控制每日维护流水线的自动执行时间。"
                 >
-                  {visibleSections.map((section) => {
-                    const Icon = Clock3;
-                    return (
-                      <button
-                        key={section.id}
-                        id={`${section.id}-tab`}
-                        type="button"
-                        role="tab"
-                        aria-selected={activeSection === section.id}
-                        aria-controls={section.id}
-                        className={activeSection === section.id ? "is-active" : ""}
-                        onClick={() => setActiveSection(section.id)}
+                  <SettingsRow
+                    label="每日启动时间"
+                    htmlFor="nightly-start-time"
+                    description="按服务器本地时区执行，每天最多自动触发一次；保存后无需重启。"
+                  >
+                    <div className="admin-config-control admin-config-control--time">
+                      <input
+                        id="nightly-start-time"
+                        type="time"
+                        step={60}
+                        value={draft.nightlyStartTime}
+                        aria-invalid={!timeValid}
+                        aria-describedby="nightly-start-time-hint"
+                        onChange={(event) =>
+                          updateVisualField("nightlyStartTime", event.target.value)
+                        }
+                      />
+                      <span
+                        id="nightly-start-time-hint"
+                        className={!timeValid ? "is-error" : undefined}
                       >
-                        <span className="admin-config-section-nav__index">{section.index}</span>
-                        <span className="admin-config-section-nav__icon" aria-hidden="true">
-                          <Icon size={16} />
-                        </span>
-                        <span>{section.title}</span>
-                      </button>
-                    );
-                  })}
-                </nav>
-
-                <div className="admin-config-sections">
-                  {activeSection === "config-automation" &&
-                    visibleSections.some((section) => section.id === "config-automation") && (
-                    <SettingsSection
-                      id="config-automation"
-                      index="01"
-                      icon={<Clock3 size={16} />}
-                      title="自动任务"
-                      description="控制每日维护流水线的自动执行时间。"
-                    >
-                      <SettingsRow
-                        label="每日启动时间"
-                        htmlFor="nightly-start-time"
-                        description="按服务器本地时区执行，每天最多自动触发一次；保存后无需重启。"
-                      >
-                        <div className="admin-config-control admin-config-control--time">
-                          <input
-                            id="nightly-start-time"
-                            type="time"
-                            step={60}
-                            value={draft.nightlyStartTime}
-                            aria-invalid={!timeValid}
-                            aria-describedby="nightly-start-time-hint"
-                            onChange={(event) =>
-                              updateVisualField("nightlyStartTime", event.target.value)
-                            }
-                          />
-                          <span
-                            id="nightly-start-time-hint"
-                            className={!timeValid ? "is-error" : undefined}
-                          >
-                            {timeValid ? "24 小时制 · HH:mm" : "请选择有效时间"}
-                          </span>
-                        </div>
-                      </SettingsRow>
-                    </SettingsSection>
-                  )}
-                </div>
-              </>
-            ) : (
-              <div className="admin-config-search-empty">
-                <Search size={20} aria-hidden="true" />
-                <strong>没有匹配的配置项</strong>
-                <span>换一个关键词试试</span>
-              </div>
-            )}
+                        {timeValid ? "24 小时制 · HH:mm" : "请选择有效时间"}
+                      </span>
+                    </div>
+                  </SettingsRow>
+                </SettingsSection>
+              )}
+            </div>
           </div>
         ) : (
-          <div className="admin-config-source" role="tabpanel">
-            <div className="admin-config-source__toolbar">
-              <span>config.yaml</span>
-              <small>真实配置文件 · 未知字段与注释会保留</small>
-            </div>
-            <div className={`admin-config-source__editor ${sourceError ? "has-error" : ""}`}>
-              <div
-                ref={sourceGutterRef}
-                className="admin-config-source__gutter"
-                aria-hidden="true"
-              >
-                {workingYAML.split("\n").map((_, index) => (
-                  <span key={index}>{index + 1}</span>
-                ))}
-              </div>
-              <textarea
-                aria-label="config.yaml 源码"
+          <div role="tabpanel">
+            <Suspense
+              fallback={
+                <div className="admin-config-source__loading" role="status">
+                  <Loader2 size={18} className="admin-spin" aria-hidden="true" />
+                  <span>正在加载源码编辑器</span>
+                </div>
+              }
+            >
+              <ConfigSourceEditor
                 value={workingYAML}
-                spellCheck={false}
-                onChange={(event) => handleSourceChange(event.target.value)}
-                onScroll={(event) => {
-                  if (sourceGutterRef.current) {
-                    sourceGutterRef.current.style.transform = `translateY(-${event.currentTarget.scrollTop}px)`;
-                  }
-                }}
+                error={sourceError}
+                disabled={saving}
+                onChange={handleSourceChange}
               />
-            </div>
-            <p className={`admin-config-source__hint ${sourceError ? "is-error" : ""}`}>
-              {sourceError || "保存时会使用与服务启动相同的解析规则校验完整 YAML。"}
-            </p>
+            </Suspense>
           </div>
         )}
 

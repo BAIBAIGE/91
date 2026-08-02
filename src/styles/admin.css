@@ -5673,46 +5673,6 @@ body.admin-mobile-nav-open {
   min-width: 0;
 }
 
-.admin-config-search {
-  position: relative;
-  min-width: 0;
-}
-
-.admin-config-search input {
-  width: 100%;
-  min-height: 42px;
-  padding: 0 42px 0 13px;
-  border: 1px solid var(--border-default);
-  border-radius: 8px;
-  outline: none;
-  background: var(--bg-surface);
-  color: var(--text-strong);
-  font-size: 13px;
-  transition:
-    background var(--transition-fast),
-    border-color var(--transition-fast),
-    box-shadow var(--transition-fast);
-}
-
-.admin-config-search input::placeholder {
-  color: var(--text-faint);
-}
-
-.admin-config-search input:focus {
-  border-color: var(--text-strong);
-  background: var(--bg-elevated);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--text-strong) 12%, transparent);
-}
-
-.admin-config-search > svg {
-  position: absolute;
-  top: 50%;
-  right: 13px;
-  color: var(--text-faint);
-  pointer-events: none;
-  transform: translateY(-50%);
-}
-
 .admin-config-section-nav {
   position: sticky;
   top: 12px;
@@ -5967,68 +5927,144 @@ body.admin-mobile-nav-open {
   color: var(--danger);
 }
 
-.admin-config-search-empty {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
-  min-height: 360px;
-  padding: 32px;
-  border: 1px dashed var(--border-default);
-  border-radius: 8px;
-  color: var(--text-muted);
-  text-align: center;
-}
-
-.admin-config-search-empty strong {
-  color: var(--text-strong);
-  font-size: 14px;
-}
-
-.admin-config-search-empty span {
-  color: var(--text-faint);
-  font-size: 12px;
-}
-
 .admin-config-source {
+  gap: 12px;
+  min-width: 0;
   min-height: 0;
 }
 
 .admin-config-source__toolbar {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  min-height: 46px;
-  padding: 8px 12px;
+  gap: 8px;
+  padding: 8px;
   border: 1px solid var(--border-default);
   border-radius: 8px;
   background: color-mix(in srgb, var(--bg-surface) 76%, transparent);
 }
 
-.admin-config-source__toolbar > span {
-  color: var(--text-strong);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 12px;
-  font-weight: var(--weight-semibold);
+.admin-config-source__search {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-width: 0;
 }
 
-.admin-config-source__toolbar small {
+.admin-config-source__search > input {
+  width: 100%;
+  min-width: 0;
+  min-height: 38px;
+  padding: 0 126px 0 12px;
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+  outline: none;
+  background: var(--bg-sunken);
+  color: var(--text-strong);
+  font-size: 13px;
+  transition:
+    background var(--transition-fast),
+    border-color var(--transition-fast),
+    box-shadow var(--transition-fast);
+}
+
+.admin-config-source__search > input::placeholder {
   color: var(--text-faint);
+}
+
+.admin-config-source__search > input:focus {
+  border-color: var(--text-strong);
+  background: var(--bg-elevated);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--text-strong) 12%, transparent);
+}
+
+.admin-config-source__search-right {
+  position: absolute;
+  top: 50%;
+  right: 4px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  transform: translateY(-50%);
+}
+
+.admin-config-source__search-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 48px;
+  min-height: 26px;
+  padding: 0 7px;
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+  color: var(--text-muted);
   font-size: 11px;
+  font-weight: var(--weight-semibold);
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.admin-config-source__search-submit {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--text-strong);
+  border-radius: 6px;
+  background: var(--text-strong);
+  color: var(--bg-page);
+}
+
+.admin-config-source__search-submit:hover:not(:disabled) {
+  opacity: 0.86;
+}
+
+.admin-config-source__search-submit:disabled,
+.admin-config-source__search-actions button:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+}
+
+.admin-config-source__search-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.admin-config-source__search-actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+  background: var(--bg-elevated);
+  color: var(--text-muted);
+}
+
+.admin-config-source__search-actions button:hover:not(:disabled) {
+  border-color: var(--text-muted);
+  color: var(--text-strong);
+  background: color-mix(in srgb, var(--text-strong) 6%, var(--bg-elevated));
 }
 
 .admin-config-source__editor {
-  display: grid;
-  grid-template-columns: 48px minmax(0, 1fr);
   width: 100%;
-  height: clamp(420px, 64dvh, 760px);
+  height: clamp(500px, 70vh, 1040px);
+  min-width: 0;
+  min-height: 0;
   overflow: hidden;
   border: 1px solid var(--border-default);
   border-radius: 8px;
   background: var(--bg-surface);
+}
+
+@supports (height: 100dvh) {
+  .admin-config-source__editor {
+    height: clamp(500px, 70dvh, 1040px);
+  }
 }
 
 .admin-config-source__editor:focus-within {
@@ -6040,47 +6076,74 @@ body.admin-mobile-nav-open {
   border-color: var(--danger);
 }
 
-.admin-config-source__gutter {
-  display: flex;
-  align-self: start;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 0;
-  padding: 15px 9px;
+.admin-config-source__codemirror,
+.admin-config-source__codemirror > div,
+.admin-config-source__editor .cm-editor {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+}
+
+.admin-config-source__editor .cm-editor {
+  background: transparent;
+  color: var(--text-strong);
+  font-family:
+    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New",
+    monospace;
+  font-size: 13px;
+}
+
+.admin-config-source__editor .cm-scroller {
+  overflow: auto;
+  overscroll-behavior: contain;
+  touch-action: pan-x pan-y;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-gutter: stable;
+}
+
+.admin-config-source__editor .cm-gutters {
   border-right: 1px solid var(--border-default);
   background: color-mix(in srgb, var(--bg-elevated) 86%, transparent);
   color: var(--text-faint);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 12px;
-  line-height: 1.7;
-  user-select: none;
-  will-change: transform;
 }
 
-.admin-config-source__editor textarea {
-  width: 100%;
-  height: 100%;
-  padding: 15px 16px;
-  border: 0;
+.admin-config-source__editor .cm-lineNumbers .cm-gutterElement {
+  min-width: 40px;
+  padding: 0 8px 0 12px;
+  color: var(--text-faint);
+}
+
+.admin-config-source__editor .cm-activeLine,
+.admin-config-source__editor .cm-activeLineGutter {
+  background: color-mix(in srgb, var(--text-strong) 5%, transparent);
+}
+
+.admin-config-source__editor .cm-focused {
   outline: none;
-  resize: none;
-  background: transparent;
-  color: var(--text-strong);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 12px;
-  line-height: 1.7;
-  tab-size: 2;
 }
 
 .admin-config-source__hint {
   min-height: 18px;
-  margin: -8px 0 0;
+  margin: 0;
   color: var(--text-muted);
   font-size: 12px;
 }
 
 .admin-config-source__hint.is-error {
   color: var(--danger);
+}
+
+.admin-config-source__loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: clamp(500px, 70dvh, 1040px);
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  background: var(--bg-surface);
+  color: var(--text-muted);
+  font-size: 12px;
 }
 
 .admin-config-actions {
@@ -6445,18 +6508,16 @@ body.admin-mobile-nav-open {
   }
 
   .admin-config-source__toolbar {
-    align-items: flex-start;
-    flex-direction: column;
-    gap: 3px;
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .admin-config-source__editor {
-    grid-template-columns: 40px minmax(0, 1fr);
-    height: clamp(380px, 62dvh, 620px);
+    height: clamp(500px, 70dvh, 760px);
   }
 
-  .admin-config-source__gutter {
-    padding-inline: 7px;
+  .admin-config-source__search-actions button {
+    flex: 1;
+    width: auto;
   }
 
   .admin-config-actions {

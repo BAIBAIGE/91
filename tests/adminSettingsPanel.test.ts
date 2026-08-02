@@ -18,6 +18,14 @@ const sectionSource = readFileSync(
   new URL("../src/admin/settings/SettingsSection.tsx", import.meta.url),
   "utf8"
 );
+const configYamlSource = readFileSync(
+  new URL("../src/admin/settings/configYaml.ts", import.meta.url),
+  "utf8"
+);
+const sourceEditorSource = readFileSync(
+  new URL("../src/admin/settings/ConfigSourceEditor.tsx", import.meta.url),
+  "utf8"
+);
 const diffModalSource = readFileSync(
   new URL("../src/admin/settings/ConfigDiffModal.tsx", import.meta.url),
   "utf8"
@@ -44,8 +52,10 @@ test("configuration panel groups typed fields from the real YAML document", () =
   assert.match(pageSource, /<SettingsSection/);
   assert.match(pageSource, /<SettingsRow/);
   assert.match(pageSource, /type="time"/);
-  assert.match(pageSource, /parseDocument/);
-  assert.match(pageSource, /document\.setIn\(\["nightly", "start_time"\]/);
+  assert.match(pageSource, /applyVisualFields/);
+  assert.match(configYamlSource, /parseDocument/);
+  assert.match(configYamlSource, /nightlyStartTimeEdits/);
+  assert.doesNotMatch(configYamlSource, /document\.toString/);
   assert.match(pageSource, /api\.getConfigYAML\(\)/);
   assert.match(pageSource, /api\.updateConfigYAML\(pendingSave\.after, pendingSave\.version\)/);
   assert.match(pageSource, /有未保存更改/);
@@ -58,9 +68,13 @@ test("configuration panel follows the CLIProxy configuration workspace UI", () =
   assert.match(pageSource, /配置管理/);
   assert.match(pageSource, /可视化编辑/);
   assert.match(pageSource, /源码编辑/);
-  assert.match(pageSource, /placeholder="搜索配置项\.\.\."/);
+  assert.doesNotMatch(pageSource, /placeholder="搜索配置项\.\.\."/);
+  assert.doesNotMatch(pageSource, /admin-config-search/);
   assert.match(pageSource, /admin-config-section-nav/);
-  assert.match(pageSource, /<span>config\.yaml<\/span>/);
+  assert.match(pageSource, /lazy\(\(\) => import\("\.\/settings\/ConfigSourceEditor"\)\)/);
+  assert.match(sourceEditorSource, /placeholder="搜索配置内容\.\.\."/);
+  assert.match(sourceEditorSource, /<CodeMirror/);
+  assert.match(sourceEditorSource, /yaml\(\)/);
   assert.match(pageSource, /ConfigDiffModal/);
   assert.match(pageSource, /差异已更新，请重新确认/);
   assert.match(diffModalSource, /buildConfigDiff/);
@@ -89,6 +103,21 @@ test("configuration panel follows the CLIProxy configuration workspace UI", () =
   assert.match(
     adminCss,
     /@media \(max-width: 768px\)[\s\S]*?\.admin-config-row\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\)/s
+  );
+});
+
+test("configuration source editor uses one scrollable CodeMirror viewport", () => {
+  assert.doesNotMatch(pageSource, /<textarea|sourceGutterRef|admin-config-source__gutter/);
+  assert.match(sourceEditorSource, /height="100%"/);
+  assert.match(sourceEditorSource, /lineNumbers:\s*true/);
+  assert.match(sourceEditorSource, /foldGutter:\s*true/);
+  assert.match(
+    adminCss,
+    /\.admin-config-source__editor \.cm-scroller\s*\{[^}]*overflow:\s*auto;[^}]*overscroll-behavior:\s*contain;[^}]*touch-action:\s*pan-x pan-y;/s
+  );
+  assert.match(
+    adminCss,
+    /\.admin-config-source__editor\s*\{[^}]*height:\s*clamp\(500px, 70vh, 1040px\);[^}]*overflow:\s*hidden;/s
   );
 });
 
