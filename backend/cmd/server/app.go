@@ -37,10 +37,14 @@ type App struct {
 	// 全站主题（"dark" | "pink" | "sky"），从 DB 读
 	theme string
 
+	// configManager 将 config.yaml 的已校验热更新字段发布给运行时消费者；
+	// 文件本身是唯一持久化事实来源。
+	configManager *config.Manager
+
 	// crawlerUploader 把脚本爬虫保存在本地的视频上传到每个爬虫配置的目标 drive。
 	crawlerUploader crawlerUploadRunner
 
-	// nightlyRunner 是凌晨流水线调度器：每天 cron_hour 串行跑扫盘 → 脚本爬虫 → 上传。
+	// nightlyRunner 是凌晨流水线调度器：每天按配置时间串行跑扫盘 → 脚本爬虫 → 上传。
 	// 也响应 admin 「扫描所有网盘」按钮（TriggerNow）。
 	nightlyRunner *nightly.Runner
 

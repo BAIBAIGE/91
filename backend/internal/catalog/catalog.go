@@ -2926,6 +2926,26 @@ ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.upd
 	return err
 }
 
+// DeleteSettings removes obsolete keys atomically. Runtime state such as
+// nightly.last_run_date remains in SQLite; this is used only by explicit
+// schema migrations that move durable configuration elsewhere.
+func (c *Catalog) DeleteSettings(ctx context.Context, keys ...string) error {
+	if len(keys) == 0 {
+		return nil
+	}
+	tx, err := c.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, key := range keys {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM settings WHERE key = ?`, key); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
 // DropLegacyDuplicateReviewTable retires the queue left by releases that sent
 // the 0.80-0.92 content-similarity band to manual review. Callers invoke this
 // only after a successful content-deduplication pass under the new automatic

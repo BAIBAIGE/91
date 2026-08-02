@@ -121,10 +121,37 @@ func main() {
 			log.Printf("[restore] backup restored successfully; previous sessions were cleared")
 		}
 	}
+	configManager, err := config.NewManager(cfgPath)
+	if err != nil {
+		log.Fatalf("configure config manager: %v", err)
+	}
+	legacyRuntimeSettings, err := loadLegacyRuntimeSettings(context.Background(), cat)
+	if err != nil {
+		log.Fatalf("load legacy runtime settings: %v", err)
+	}
+	configMigrated, err := configManager.MigrateLegacyRuntimeSettings(legacyRuntimeSettings)
+	if err != nil {
+		log.Fatalf("migrate config.yaml runtime settings: %v", err)
+	}
+	if err := cat.DeleteSettings(
+		context.Background(),
+		legacyNightlyStartTimeSetting,
+		obsoleteDuplicateReviewEnabledSetting,
+	); err != nil {
+		log.Fatalf("remove migrated SQLite configuration: %v", err)
+	}
+	if configMigrated {
+		fileConfig, cfg, err = loadApplicationConfig(cfgPath, workingDir)
+		if err != nil {
+			log.Fatalf("reload migrated config: %v", err)
+		}
+		log.Printf("[config] migrated runtime settings into config.yaml")
+	}
 
 	app := &App{
 		cfg:                cfg,
 		cat:                cat,
+		configManager:      configManager,
 		registry:           proxy.NewRegistry(),
 		workers:            make(map[string]*preview.Worker),
 		thumbWorkers:       make(map[string]*preview.ThumbWorker),
@@ -237,6 +264,7 @@ func main() {
 		Catalog:         cat,
 		Auth:            authr,
 		Backups:         backupManager,
+		ConfigManager:   configManager,
 		VersionFilePath: versionFilePath,
 		ImageVersion:    imageVersion,
 		GitHubRepo:      githubRepo,
@@ -251,7 +279,7 @@ func main() {
 			if !setupRequired {
 				return nil
 			}
-			if err := config.WriteAdminCredentials(cfgPath, username, password); err != nil {
+			if err := configManager.UpdateAdminCredentials(username, password); err != nil {
 				return err
 			}
 			hashed, err := auth.HashPassword(password)
@@ -396,7 +424,7 @@ func main() {
 	adminServer.Register(r)
 	mountFrontend(r)
 
-	// 凌晨流水线：每天 cron_hour 触发一次，串行跑
+	// 凌晨流水线：每天按后台可热更新的 HH:mm 触发一次，串行跑
 	//   Phase 1 扫所有非爬虫 / localupload 网盘 + 删除检测 + 入队封面/预览视频
 	//   Phase 2 脚本爬虫 + 入队预览视频
 	//   Phase 3 爬虫本地视频 → 云盘上传
@@ -406,7 +434,7 @@ func main() {
 	// 也响应 admin "扫描所有网盘" 按钮（POST /admin/api/jobs/nightly/run → TriggerNow）。
 	app.nightlyRunner = nightly.New(nightly.Config{
 		Settings:              cat,
-		CronHour:              cfg.Nightly.CronHour,
+		StartTime:             app.liveConfigSettings().NightlyStartTime,
 		ListScanTargets:       app.listScanTargetIDs,
 		RunScan:               app.runScan,
 		ListCrawlerDrives:     app.listCrawlerDriveIDs,
@@ -416,6 +444,8 @@ func main() {
 		RestoreCrawlerVideos:  app.restoreScriptCrawlerVideos,
 		RunDedupeAssetCleanup: app.cleanupDuplicateVideoAssets,
 	})
+	configManager.SetApply(app.applyLiveConfig)
+	go configManager.Watch(ctx)
 	go app.nightlyRunner.Run(ctx)
 
 	srv := &http.Server{

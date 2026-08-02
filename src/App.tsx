@@ -33,6 +33,11 @@ const TagsPage = lazy(() =>
 const ThemePage = lazy(() =>
   import("@/admin/ThemePage").then((module) => ({ default: module.ThemePage }))
 );
+const SettingsPage = lazy(() =>
+  import("@/admin/SettingsPage").then((module) => ({
+    default: module.SettingsPage,
+  }))
+);
 const BackupPage = lazy(() =>
   import("@/admin/BackupPage").then((module) => ({ default: module.BackupPage }))
 );
@@ -175,6 +180,14 @@ export default function App() {
             element={
               <PageSuspense>
                 <TagsPage />
+              </PageSuspense>
+            }
+          />
+          <Route
+            path="settings"
+            element={
+              <PageSuspense>
+                <SettingsPage />
               </PageSuspense>
             }
           />

@@ -1,0 +1,115 @@
+package api
+
+import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/video-site/backend/internal/config"
+)
+
+func newConfigAPIForTest(t *testing.T, source string) (*AdminServer, string) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(source), 0o640); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	manager, err := config.NewManager(path)
+	if err != nil {
+		t.Fatalf("new config manager: %v", err)
+	}
+	return &AdminServer{ConfigManager: manager}, path
+}
+
+func TestConfigYAMLGetReturnsRealFileAndETag(t *testing.T) {
+	server, _ := newConfigAPIForTest(t, "# keep\nnightly:\n  start_time: \"01:00\"\n")
+	recorder := httptest.NewRecorder()
+	server.handleGetConfigYAML(recorder, httptest.NewRequest(http.MethodGet, "/admin/api/config.yaml", nil))
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s", recorder.Code, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), "# keep") {
+		t.Fatalf("response is not the source file: %s", recorder.Body.String())
+	}
+	if recorder.Header().Get("ETag") == "" {
+		t.Fatal("missing config version ETag")
+	}
+}
+
+func TestConfigYAMLPutValidatesPersistsAndPublishes(t *testing.T) {
+	server, path := newConfigAPIForTest(t, "# keep\nnightly:\n  start_time: \"01:00\"\nfuture:\n  value: keep\n")
+	get := httptest.NewRecorder()
+	server.handleGetConfigYAML(get, httptest.NewRequest(http.MethodGet, "/admin/api/config.yaml", nil))
+
+	candidate := "# keep\nnightly:\n  start_time: \"00:45\"\nfuture:\n  value: keep\n"
+	request := httptest.NewRequest(http.MethodPut, "/admin/api/config.yaml", strings.NewReader(candidate))
+	request.Header.Set("If-Match", get.Header().Get("ETag"))
+	recorder := httptest.NewRecorder()
+	server.handlePutConfigYAML(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s", recorder.Code, recorder.Body.String())
+	}
+	var response config.SaveResult
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if response.RestartRequired {
+		t.Fatal("live-only change should not require restart")
+	}
+	if response.Settings.NightlyStartTime != "00:45" {
+		t.Fatalf("published settings = %#v", response.Settings)
+	}
+	written, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(written) != candidate {
+		t.Fatalf("written config differs:\n%s", written)
+	}
+}
+
+func TestConfigYAMLPutRejectsStaleAndInvalidWrites(t *testing.T) {
+	server, path := newConfigAPIForTest(t, "nightly:\n  start_time: \"01:00\"\n")
+	original, _ := os.ReadFile(path)
+
+	staleRequest := httptest.NewRequest(http.MethodPut, "/admin/api/config.yaml", strings.NewReader("nightly:\n  start_time: \"02:00\"\n"))
+	staleRequest.Header.Set("If-Match", `"stale"`)
+	stale := httptest.NewRecorder()
+	server.handlePutConfigYAML(stale, staleRequest)
+	if stale.Code != http.StatusConflict {
+		t.Fatalf("stale status = %d, body=%s", stale.Code, stale.Body.String())
+	}
+
+	invalid := httptest.NewRecorder()
+	server.handlePutConfigYAML(invalid, httptest.NewRequest(http.MethodPut, "/admin/api/config.yaml", strings.NewReader("nightly:\n  start_time: \"25:00\"\n")))
+	if invalid.Code != http.StatusBadRequest {
+		t.Fatalf("invalid status = %d, body=%s", invalid.Code, invalid.Body.String())
+	}
+	written, _ := os.ReadFile(path)
+	if string(written) != string(original) {
+		t.Fatalf("rejected writes changed config:\n%s", written)
+	}
+}
+
+func TestConfigYAMLPutReportsRestartForNonLiveFields(t *testing.T) {
+	server, _ := newConfigAPIForTest(t, "server:\n  listen: \":8080\"\nnightly:\n  start_time: \"01:00\"\n")
+	request := httptest.NewRequest(http.MethodPut, "/admin/api/config.yaml", strings.NewReader("server:\n  listen: \":9090\"\nnightly:\n  start_time: \"01:00\"\n"))
+	recorder := httptest.NewRecorder()
+	server.handlePutConfigYAML(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s", recorder.Code, recorder.Body.String())
+	}
+	var response config.SaveResult
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if !response.RestartRequired {
+		t.Fatal("server.listen change should require restart")
+	}
+}

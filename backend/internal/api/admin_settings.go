@@ -9,7 +9,8 @@ import (
 //
 // 注意：早期的全局 previewEnabled 字段已经下沉为每盘 teaser_enabled，
 // 不再出现在这里；前端要切换某个盘的预览视频生成请用 POST /admin/api/drives 上传
-// teaserEnabled 字段。settings 目前保留全站主题和标签自动生成开关。
+// teaserEnabled 字段。config.yaml 中的应用配置由 /admin/api/config.yaml
+// 管理；这里仅保留已有的数据库型偏好设置。
 type settingsDTO struct {
 	Theme                   string `json:"theme"`
 	AutoGenerateTagsEnabled bool   `json:"autoGenerateTagsEnabled"`
@@ -70,7 +71,9 @@ func (a *AdminServer) handlePutSettings(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// 回显当前值
-	resp := settingsDTO{AutoGenerateTagsEnabled: false}
+	resp := settingsDTO{
+		AutoGenerateTagsEnabled: false,
+	}
 	if a.GetTheme != nil {
 		resp.Theme = a.GetTheme()
 	}

@@ -7,6 +7,7 @@ import {
   Home,
   MoreVertical,
   Palette,
+  SlidersHorizontal,
   Tags,
   Users,
 } from "lucide-react";
@@ -158,6 +159,19 @@ export function AdminLayout() {
           </div>
           <div className="admin-nav__group">
             <span className="admin-nav__group-label">系统</span>
+            <NavLink
+              to="/admin/settings"
+              className={({ isActive }) =>
+                `admin-nav__link ${isActive ? "is-active" : ""}`
+              }
+            >
+              <span className="admin-nav__icon" aria-hidden="true">
+                <SlidersHorizontal size={15} />
+              </span>
+              <span className="admin-nav__text">
+                <span className="admin-nav__title">配置面板</span>
+              </span>
+            </NavLink>
             <NavLink
               to="/admin/theme"
               className={({ isActive }) =>

@@ -22,7 +22,7 @@ storage:
 
 scanner:
   # 已废弃：旧版的"每天 02:00-07:00 按 IntervalSeconds 间隔重复扫盘"已被移除。
-  # 现在所有定时任务统一由 nightly 块控制（每天 01:00 跑一条完整流水线）。
+  # 现在所有定时任务统一由 nightly 调度器控制（默认每天 01:00 跑一条完整流水线）。
   # 字段保留仅为兼容旧 yaml，运行时被忽略。
   interval_seconds: 0
   # 单次扫描每家网盘目录递归层数上限
@@ -31,9 +31,9 @@ scanner:
   video_extensions: [".mp4", ".mkv", ".mov", ".webm", ".avi", ".strm"]
 
 nightly:
-  # 凌晨流水线触发整点，默认 1 即每天 01:00；需要改时间直接改这个值。
+  # 凌晨流水线的每日启动时间，24 小时制 HH:mm；后台保存后会热更新。
   # 运行时会统一编排扫描、媒体资产生成和后续清理任务。
-  cron_hour: 1
+  start_time: "01:00"
 
 preview:
   # 是否启用 ffmpeg 抽帧生成预览视频

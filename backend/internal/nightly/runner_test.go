@@ -67,6 +67,74 @@ func TestNewRejectsInvalidCronHour(t *testing.T) {
 	}
 }
 
+func TestNewPrefersExplicitStartTimeAndSupportsMidnight(t *testing.T) {
+	r := New(Config{CronHour: 8, StartTime: "00:15", Settings: newStubSettings()})
+	if got := r.StartTime(); got != "00:15" {
+		t.Fatalf("StartTime = %q, want 00:15", got)
+	}
+	if r.cfg.CronHour != 0 || r.cfg.CronMinute != 15 {
+		t.Fatalf("schedule = %02d:%02d, want 00:15", r.cfg.CronHour, r.cfg.CronMinute)
+	}
+}
+
+func TestNaturalRunMatchesHourAndMinute(t *testing.T) {
+	settings := newStubSettings()
+	now := time.Date(2026, 5, 27, 0, 14, 0, 0, time.Local)
+	var runs atomic.Int32
+	r := New(Config{
+		Settings:  settings,
+		StartTime: "00:15",
+		Now:       func() time.Time { return now },
+		ListScanTargets: func(context.Context) []string {
+			runs.Add(1)
+			return nil
+		},
+	})
+
+	r.tryNaturalRun(context.Background())
+	if got := runs.Load(); got != 0 {
+		t.Fatalf("runs before configured minute = %d, want 0", got)
+	}
+	now = now.Add(time.Minute)
+	r.tryNaturalRun(context.Background())
+	if got := runs.Load(); got != 1 {
+		t.Fatalf("runs at configured minute = %d, want 1", got)
+	}
+}
+
+func TestUpdateStartTimeChangesNaturalSchedule(t *testing.T) {
+	settings := newStubSettings()
+	now := time.Date(2026, 5, 27, 23, 45, 0, 0, time.Local)
+	var runs atomic.Int32
+	r := New(Config{
+		Settings:  settings,
+		StartTime: "01:00",
+		Now:       func() time.Time { return now },
+		ListScanTargets: func(context.Context) []string {
+			runs.Add(1)
+			return nil
+		},
+	})
+
+	if err := r.UpdateStartTime("23:45"); err != nil {
+		t.Fatalf("update start time: %v", err)
+	}
+	if got := r.StartTime(); got != "23:45" {
+		t.Fatalf("StartTime = %q, want 23:45", got)
+	}
+	r.tryNaturalRun(context.Background())
+	if got := runs.Load(); got != 1 {
+		t.Fatalf("runs after schedule update = %d, want 1", got)
+	}
+
+	if err := r.UpdateStartTime("24:00"); err == nil {
+		t.Fatal("invalid schedule update unexpectedly succeeded")
+	}
+	if got := r.StartTime(); got != "23:45" {
+		t.Fatalf("invalid update changed StartTime to %q", got)
+	}
+}
+
 // recorder accumulates the order of phase invocations so tests can assert
 // orchestration semantics.
 type recorder struct {

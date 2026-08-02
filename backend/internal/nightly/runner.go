@@ -1,7 +1,7 @@
 // Package nightly orchestrates the single nightly maintenance pipeline that
 // replaces the legacy scanLoop / crawlerLoop / crawler upload periodic loop.
 //
-// Pipeline (fired once per day at cron_hour, also via TriggerNow for admin
+// Pipeline (fired once per day at the configured HH:mm, also via TriggerNow for admin
 // "扫描所有网盘"):
 //
 //	Phase 1: for each non-crawler cloud drive
@@ -22,13 +22,15 @@
 //
 // State persistence: the date string of the most recent successfully started
 // run is stored in catalog.settings under the key "nightly.last_run_date".
-// This survives restarts so a quick crash inside cron_hour won't trigger a
+// This survives restarts so a quick crash inside the configured minute won't trigger a
 // duplicate pipeline.
 package nightly
 
 import (
 	"context"
+	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 )
@@ -53,8 +55,12 @@ type SettingStore interface {
 // avoids importing main / drives / preview from this package, keeping the
 // dependency graph clean.
 type Config struct {
-	Settings SettingStore
-	CronHour int // default 1 (01:00)
+	Settings   SettingStore
+	CronHour   int // legacy/default hour; zero falls back to 1 unless StartTime is set
+	CronMinute int // default 0
+	// StartTime is the preferred daily schedule in 24-hour HH:mm form. It can
+	// represent midnight and takes precedence over CronHour/CronMinute.
+	StartTime string
 
 	// ListScanTargets returns the drive IDs to run Phase 1 on, in deterministic
 	// order. Should exclude crawler and localupload drives.
@@ -108,9 +114,11 @@ type Status struct {
 
 // Runner drives the nightly pipeline.
 type Runner struct {
-	cfg     Config
-	trigger chan struct{} // buffered(1); manual "run now"
-	runMu   sync.Mutex    // prevents overlapping pipeline runs
+	cfg             Config
+	trigger         chan struct{} // buffered(1); manual "run now"
+	scheduleChanged chan struct{} // buffered(1); wake the natural scheduler
+	runMu           sync.Mutex    // prevents overlapping pipeline runs
+	scheduleMu      sync.RWMutex  // protects cfg CronHour/CronMinute/StartTime
 
 	stateMu        sync.Mutex
 	running        bool
@@ -122,25 +130,43 @@ type Runner struct {
 
 // New constructs a Runner. cfg is shallow-copied; defaults are applied.
 func New(cfg Config) *Runner {
-	if cfg.CronHour <= 0 || cfg.CronHour > 23 {
-		cfg.CronHour = 1
+	if strings.TrimSpace(cfg.StartTime) != "" {
+		hour, minute, normalized, err := parseStartTime(cfg.StartTime)
+		if err == nil {
+			cfg.CronHour = hour
+			cfg.CronMinute = minute
+			cfg.StartTime = normalized
+		} else {
+			cfg.CronHour = 1
+			cfg.CronMinute = 0
+			cfg.StartTime = "01:00"
+		}
+	} else {
+		if cfg.CronHour <= 0 || cfg.CronHour > 23 {
+			cfg.CronHour = 1
+		}
+		if cfg.CronMinute < 0 || cfg.CronMinute > 59 {
+			cfg.CronMinute = 0
+		}
+		cfg.StartTime = fmt.Sprintf("%02d:%02d", cfg.CronHour, cfg.CronMinute)
 	}
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
 	return &Runner{
-		cfg:     cfg,
-		trigger: make(chan struct{}, 1),
+		cfg:             cfg,
+		trigger:         make(chan struct{}, 1),
+		scheduleChanged: make(chan struct{}, 1),
 	}
 }
 
 // Run is a blocking loop until ctx is done. It wakes up once per minute and
-// either fires the natural cron-driven pipeline (when cron_hour matches and
+// either fires the natural cron-driven pipeline (when the configured minute matches and
 // today hasn't run) or honors a manual TriggerNow() request.
 func (r *Runner) Run(ctx context.Context) {
 	t := time.NewTicker(pollInterval)
 	defer t.Stop()
-	log.Printf("[nightly] runner started; cron_hour=%d", r.cfg.CronHour)
+	log.Printf("[nightly] runner started; start_time=%s", r.StartTime())
 	for {
 		select {
 		case <-ctx.Done():
@@ -148,11 +174,43 @@ func (r *Runner) Run(ctx context.Context) {
 			return
 		case <-t.C:
 			r.tryNaturalRun(ctx)
+		case <-r.scheduleChanged:
+			log.Printf("[nightly] schedule updated; start_time=%s", r.StartTime())
+			// Re-evaluate immediately so saving the current minute does not have
+			// to wait for the next heartbeat and accidentally miss today's run.
+			r.tryNaturalRun(ctx)
 		case <-r.trigger:
 			log.Printf("[nightly] manual trigger received")
 			r.runPipelineLocked(ctx, true)
 		}
 	}
+}
+
+// UpdateStartTime changes the natural daily schedule without restarting the
+// service. It does not interrupt a pipeline that is already running.
+func (r *Runner) UpdateStartTime(value string) error {
+	hour, minute, normalized, err := parseStartTime(value)
+	if err != nil {
+		return err
+	}
+	r.scheduleMu.Lock()
+	r.cfg.CronHour = hour
+	r.cfg.CronMinute = minute
+	r.cfg.StartTime = normalized
+	r.scheduleMu.Unlock()
+
+	select {
+	case r.scheduleChanged <- struct{}{}:
+	default:
+	}
+	return nil
+}
+
+// StartTime returns the current canonical HH:mm schedule.
+func (r *Runner) StartTime() string {
+	r.scheduleMu.RLock()
+	defer r.scheduleMu.RUnlock()
+	return r.cfg.StartTime
 }
 
 // TriggerNow asks the running loop to fire a pipeline ASAP. Only one manual
@@ -230,7 +288,10 @@ func (r *Runner) Status() Status {
 // tryNaturalRun checks the cron decision and runs the pipeline if due today.
 func (r *Runner) tryNaturalRun(ctx context.Context) {
 	now := r.cfg.Now()
-	if now.Hour() != r.cfg.CronHour {
+	r.scheduleMu.RLock()
+	hour, minute := r.cfg.CronHour, r.cfg.CronMinute
+	r.scheduleMu.RUnlock()
+	if now.Hour() != hour || now.Minute() != minute {
 		return
 	}
 	last, err := r.readLastRunDate(ctx)
@@ -243,6 +304,15 @@ func (r *Runner) tryNaturalRun(ctx context.Context) {
 	}
 	log.Printf("[nightly] natural cron trigger at %s", now.Format(time.RFC3339))
 	r.runPipelineLocked(ctx, false)
+}
+
+func parseStartTime(value string) (hour, minute int, normalized string, err error) {
+	trimmed := strings.TrimSpace(value)
+	parsed, parseErr := time.Parse("15:04", trimmed)
+	if parseErr != nil || len(trimmed) != len("15:04") {
+		return 0, 0, "", fmt.Errorf("invalid nightly start time %q: expected HH:mm", value)
+	}
+	return parsed.Hour(), parsed.Minute(), parsed.Format("15:04"), nil
 }
 
 // shouldRun returns true when "today" (per now) hasn't already been processed.

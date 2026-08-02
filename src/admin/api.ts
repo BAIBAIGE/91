@@ -1035,6 +1035,78 @@ export function updateSettings(body: Partial<Settings>) {
   });
 }
 
+export type ConfigYAMLDocument = {
+  content: string;
+  version: string;
+};
+
+export type ConfigSaveResult = {
+  version: string;
+  restartRequired: boolean;
+  settings: {
+    nightlyStartTime: string;
+  };
+};
+
+export class ConfigConflictError extends Error {
+  constructor(message = "config.yaml 已被其他操作修改") {
+    super(message);
+    this.name = "ConfigConflictError";
+  }
+}
+
+function etagVersion(value: string | null) {
+  return (value ?? "").replace(/^W\//, "").replace(/^"|"$/g, "");
+}
+
+async function configResponseError(res: Response): Promise<string> {
+  const text = await res.text().catch(() => "");
+  try {
+    const parsed = JSON.parse(text) as { error?: unknown };
+    if (typeof parsed.error === "string") return parsed.error;
+  } catch {
+    // Keep a plain-text response as-is.
+  }
+  return text || `HTTP ${res.status}`;
+}
+
+export async function getConfigYAML(): Promise<ConfigYAMLDocument> {
+  const res = await fetch(`${BASE}/config.yaml`, {
+    credentials: "include",
+    headers: { Accept: "application/yaml" },
+    cache: "no-store",
+  });
+  if (res.status === 401) throw new UnauthorizedError();
+  if (!res.ok) throw new Error(await configResponseError(res));
+  return {
+    content: await res.text(),
+    version: etagVersion(res.headers.get("ETag")),
+  };
+}
+
+export async function updateConfigYAML(
+  content: string,
+  version: string
+): Promise<ConfigSaveResult> {
+  const headers = new Headers({
+    "Content-Type": "application/yaml; charset=utf-8",
+    Accept: "application/json",
+  });
+  if (version) headers.set("If-Match", `"${version}"`);
+  const res = await fetch(`${BASE}/config.yaml`, {
+    method: "PUT",
+    credentials: "include",
+    headers,
+    body: content,
+  });
+  if (res.status === 401) throw new UnauthorizedError();
+  if (res.status === 409) {
+    throw new ConfigConflictError(await configResponseError(res));
+  }
+  if (!res.ok) throw new Error(await configResponseError(res));
+  return (await res.json()) as ConfigSaveResult;
+}
+
 
 // ---------- Jobs ----------
 

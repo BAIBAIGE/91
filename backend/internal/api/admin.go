@@ -10,6 +10,7 @@ import (
 	"github.com/video-site/backend/internal/auth"
 	"github.com/video-site/backend/internal/backup"
 	"github.com/video-site/backend/internal/catalog"
+	"github.com/video-site/backend/internal/config"
 	"github.com/video-site/backend/internal/drives/quark"
 )
 
@@ -17,6 +18,9 @@ type AdminServer struct {
 	Catalog *catalog.Catalog
 	Auth    *auth.Authenticator
 	Backups *backup.Manager
+	// ConfigManager owns the real config.yaml management surface. Both visual
+	// and source editors read and write this same document.
+	ConfigManager *config.Manager
 	// VersionFilePath points to the installer-written .version file.
 	VersionFilePath string
 	// ImageVersion is the Docker image version injected at build/runtime.
@@ -262,7 +266,9 @@ func (a *AdminServer) Register(r chi.Router) {
 			r.Get("/banned-ips", a.handleListBannedIPs)
 			r.Delete("/banned-ips/{ip}", a.handleUnbanIP)
 
-			// 运行时设置
+			// 配置文件与其它独立设置
+			r.Get("/config.yaml", a.handleGetConfigYAML)
+			r.Put("/config.yaml", a.handlePutConfigYAML)
 			r.Get("/settings", a.handleGetSettings)
 			r.Put("/settings", a.handlePutSettings)
 

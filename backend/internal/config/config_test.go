@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -179,6 +180,26 @@ func TestLoadDefaultNightlyCronHour(t *testing.T) {
 	}
 	if cfg.Nightly.CronHour != 1 {
 		t.Fatalf("nightly cron hour = %d, want 1", cfg.Nightly.CronHour)
+	}
+	if cfg.Nightly.StartTime != DefaultNightlyStartTime {
+		t.Fatalf("nightly start time = %q, want %q", cfg.Nightly.StartTime, DefaultNightlyStartTime)
+	}
+}
+
+func TestParseNightlyStartTime(t *testing.T) {
+	cfg, err := Parse([]byte("nightly:\n  start_time: \"00:15\"\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Nightly.StartTime != "00:15" {
+		t.Fatalf("start time = %q", cfg.Nightly.StartTime)
+	}
+}
+
+func TestParseRejectsInvalidNightlyStartTime(t *testing.T) {
+	_, err := Parse([]byte("nightly:\n  start_time: \"24:00\"\n"))
+	if !errors.Is(err, ErrInvalidNightlyStartTime) {
+		t.Fatalf("error = %v, want ErrInvalidNightlyStartTime", err)
 	}
 }
 
