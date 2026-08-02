@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"math/rand"
 	"os"
@@ -158,9 +159,9 @@ func TestCleanupContentDuplicateVideos(t *testing.T) {
 	}
 }
 
-// TestCleanupContentDuplicateVideosNearMissQueuesReview 构造相似度落在疑似区
-// （0.80~0.92）的一对：不自动删除，但要写入复核队列。
-func TestCleanupContentDuplicateVideosNearMissQueuesReview(t *testing.T) {
+// TestCleanupContentDuplicateVideosFormerReviewBandDeletes 构造原先会进入
+// 人工复核区（0.80~0.92）的一对，确认现在直接进入自动去重分组。
+func TestCleanupContentDuplicateVideosFormerReviewBandDeletes(t *testing.T) {
 	ctx := context.Background()
 	localDir := t.TempDir()
 	cat, err := catalog.Open(filepath.Join(t.TempDir(), "catalog.db"))
@@ -170,7 +171,7 @@ func TestCleanupContentDuplicateVideosNearMissQueuesReview(t *testing.T) {
 	t.Cleanup(func() { _ = cat.Close() })
 
 	base := syntheticFrames(77)
-	// ±73 均匀噪声 → 单帧 SSIM ≈ 0.86，落在疑似区。
+	// ±73 均匀噪声 → 单帧 SSIM ≈ 0.86，落在原人工复核区。
 	noisy := make([][]byte, len(base))
 	for k, f := range base {
 		frame := make([]byte, len(f))
@@ -229,21 +230,18 @@ func TestCleanupContentDuplicateVideosNearMissQueuesReview(t *testing.T) {
 	if err != nil {
 		t.Fatalf("cleanup: %v", err)
 	}
-	if stats.Deleted != 0 {
-		t.Fatalf("stats = %+v, near-miss must not delete", stats)
+	if stats.Deleted != 1 || stats.Groups != 1 {
+		t.Fatalf("stats = %+v, want former review-band pair auto-deduplicated", stats)
 	}
-	if stats.NearMisses != 1 {
-		t.Fatalf("stats = %+v, want 1 near miss", stats)
+	if _, err := cat.GetVideo(ctx, "gray-a"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("smaller duplicate still exists: %v", err)
 	}
-	pairs, total, err := cat.ListDuplicateReviewPairs(ctx, catalog.DuplicateReviewStatusPending, 1, 10)
-	if err != nil || total != 1 || len(pairs) != 1 {
-		t.Fatalf("review queue total=%d err=%v, want 1", total, err)
+	if _, err := cat.GetVideo(ctx, "gray-b"); err != nil {
+		t.Fatalf("larger canonical missing: %v", err)
 	}
-	if pairs[0].LeftVideoID != "gray-a" || pairs[0].RightVideoID != "gray-b" {
-		t.Fatalf("queued pair = (%s, %s)", pairs[0].LeftVideoID, pairs[0].RightVideoID)
-	}
-	if pairs[0].MedianSSIM < 0.80 || pairs[0].MedianSSIM >= 0.92 {
-		t.Fatalf("queued median = %f, expected in near-miss band", pairs[0].MedianSSIM)
+	deletedItems, _, err := cat.ListDeletedVideos(ctx, catalog.ListParams{Page: 1, PageSize: 10})
+	if err != nil || len(deletedItems) != 1 || deletedItems[0].CanonicalVideoID != "gray-b" {
+		t.Fatalf("tombstones = %#v err=%v", deletedItems, err)
 	}
 }
 
@@ -284,7 +282,7 @@ func TestCleanupContentDuplicateVideosNearMissDoesNotDelete(t *testing.T) {
 		videos = append(videos, v)
 	}
 
-	// 构造两份有效但不相似的签名：比较结果落在疑似区之下由随机帧保证,
+	// 构造两份有效但不相似的签名：比较结果落在自动阈值之下由随机帧保证，
 	// 这里直接分别注入不同 seed。
 	sigByPath := map[string]*mediasim.FrameSignature{
 		teasers[0]: {Frames: syntheticFrames(11)},

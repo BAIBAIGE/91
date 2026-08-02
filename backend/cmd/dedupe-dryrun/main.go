@@ -1,9 +1,9 @@
 // dedupe-dryrun：预演/执行夜间维护的内容级查重通道（Phase 5 content channel）。
 // 按与生产完全相同的判定规则（mediasim 阈值常量）打印将被合并的重复分组、
-// 保留/删除决策和疑似区（near-miss）名单。
+// 保留/删除决策。原人工复核区间现已并入自动重复判定。
 //
 // 默认只读，不写库、不删文件；加 -apply 后真正执行：删除项按重复墓碑落库并
-// 清理本地资产（与夜间维护同一条路径），near-miss 写入复核队列。
+// 清理本地资产（与夜间维护同一条路径）。
 //
 // 用法：在 backend 目录下运行
 //
@@ -39,7 +39,7 @@ func main() {
 	localDir := flag.String("local-dir", "data/previews", "本地预览目录(config storage.local_preview_dir)")
 	ffmpegPath := flag.String("ffmpeg", "ffmpeg", "ffmpeg 路径")
 	workers := flag.Int("workers", 8, "签名提取并发数")
-	apply := flag.Bool("apply", false, "真正执行：删除重复项并写入复核队列（默认只读预演）")
+	apply := flag.Bool("apply", false, "真正执行：删除重复项（默认只读预演）")
 	flag.Parse()
 
 	cat, err := catalog.Open(*dbPath)
@@ -118,7 +118,7 @@ func main() {
 			var err error
 			if !cached {
 				sig, err = mediasim.ExtractTeaserFrameSignature(ctx, *ffmpegPath, candidates[i].teaserPath)
-				if err == nil {
+				if err == nil && *apply {
 					if storeErr := mediasim.StoreCachedTeaserSignature(cachePath, candidates[i].teaserPath, sig); storeErr != nil {
 						fmt.Fprintf(os.Stderr, "  cache write failed id=%s: %v\n", candidates[i].video.ID, storeErr)
 					}
@@ -159,11 +159,6 @@ func main() {
 	}
 	union := func(a, b int) { parent[find(a)] = find(b) }
 
-	type nearMiss struct {
-		left, right *catalog.Video
-		cmp         mediasim.FrameSignatureComparison
-	}
-	var nearMisses []nearMiss
 	matched := 0
 	crossMatched := 0
 	for i := range candidates {
@@ -192,9 +187,6 @@ func main() {
 						cross.LeftStrong, cross.LeftFrames, cross.RightStrong, cross.RightFrames, cross.MedianBest, candidates[i].video.DurationSeconds)
 					continue
 				}
-			}
-			if cmp.IsContentNearMiss() {
-				nearMisses = append(nearMisses, nearMiss{candidates[i].video, candidates[j].video, cmp})
 			}
 		}
 	}
@@ -257,27 +249,12 @@ func main() {
 		fmt.Printf("\n将删除 %d 个视频（只读预演，加 -apply 执行）。\n", wouldDelete)
 	}
 
-	fmt.Printf("\n=== 疑似区（%s）：%d 对 ===\n",
-		map[bool]string{true: "已写入后台复核队列", false: "不自动处理，供人工复核"}[*apply], len(nearMisses))
-	queued := 0
-	for _, nm := range nearMisses {
-		fmt.Printf("  median=%.3f min=%.3f n=%d  %s (%q)  <->  %s (%q)\n",
-			nm.cmp.MedianSSIM, nm.cmp.MinSSIM, nm.cmp.Comparisons, nm.left.ID, nm.left.Title, nm.right.ID, nm.right.Title)
-		if *apply {
-			if err := cat.UpsertDuplicateReviewPair(ctx, nm.left.ID, nm.right.ID, nm.cmp.MedianSSIM, nm.cmp.MinSSIM, nm.cmp.Comparisons); err != nil {
-				fmt.Fprintf(os.Stderr, "  入队失败 %s|%s: %v\n", nm.left.ID, nm.right.ID, err)
-				continue
-			}
-			queued++
+	if *apply && deleteFailed == 0 {
+		if dropped, err := cat.DropLegacyDuplicateReviewTable(ctx); err != nil {
+			fmt.Fprintf(os.Stderr, "移除旧复核队列表失败: %v\n", err)
+		} else if dropped {
+			fmt.Println("旧复核队列表已在自动去重完成后移除。")
 		}
-	}
-	if *apply {
-		if pruned, err := cat.PruneDuplicateReviewPairs(ctx); err != nil {
-			fmt.Fprintf(os.Stderr, "清理失效复核对失败: %v\n", err)
-		} else if pruned > 0 {
-			fmt.Printf("已清理 %d 个失效复核对。\n", pruned)
-		}
-		fmt.Printf("复核队列新写入/刷新 %d 对。\n", queued)
 	}
 }
 

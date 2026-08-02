@@ -97,7 +97,7 @@ func TestCompareFrameSignatures(t *testing.T) {
 		other = append(other, randomFrame(int64(i+500)))
 	}
 	diff := CompareFrameSignatures(&FrameSignature{Frames: base}, &FrameSignature{Frames: other})
-	if diff.IsContentDuplicate() || diff.IsContentNearMiss() {
+	if diff.IsContentDuplicate() {
 		t.Fatalf("unrelated signatures matched: %+v", diff)
 	}
 
@@ -161,21 +161,17 @@ func TestCompareFrameSignaturesCross(t *testing.T) {
 
 func TestContentDuplicateRuleBoundaries(t *testing.T) {
 	cases := []struct {
-		cmp      FrameSignatureComparison
-		dup      bool
-		nearMiss bool
+		cmp FrameSignatureComparison
+		dup bool
 	}{
-		{FrameSignatureComparison{Comparisons: ContentDuplicateMinComparisons, MedianSSIM: ContentDuplicateSSIMThreshold}, true, false},
-		{FrameSignatureComparison{Comparisons: ContentDuplicateMinComparisons, MedianSSIM: ContentDuplicateSSIMThreshold - 0.001}, false, true},
-		{FrameSignatureComparison{Comparisons: ContentDuplicateMinComparisons, MedianSSIM: ContentDuplicateNearMissThreshold - 0.001}, false, false},
-		{FrameSignatureComparison{Comparisons: ContentDuplicateMinComparisons - 1, MedianSSIM: 0.99}, false, false},
+		{FrameSignatureComparison{Comparisons: ContentDuplicateMinComparisons, MedianSSIM: ContentDuplicateSSIMThreshold}, true},
+		{FrameSignatureComparison{Comparisons: ContentDuplicateMinComparisons, MedianSSIM: 0.919}, true},
+		{FrameSignatureComparison{Comparisons: ContentDuplicateMinComparisons, MedianSSIM: ContentDuplicateSSIMThreshold - 0.001}, false},
+		{FrameSignatureComparison{Comparisons: ContentDuplicateMinComparisons - 1, MedianSSIM: 0.99}, false},
 	}
 	for i, tc := range cases {
 		if got := tc.cmp.IsContentDuplicate(); got != tc.dup {
 			t.Fatalf("case %d IsContentDuplicate = %v, want %v", i, got, tc.dup)
-		}
-		if got := tc.cmp.IsContentNearMiss(); got != tc.nearMiss {
-			t.Fatalf("case %d IsContentNearMiss = %v, want %v", i, got, tc.nearMiss)
 		}
 	}
 }

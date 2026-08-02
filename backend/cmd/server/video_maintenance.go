@@ -30,7 +30,6 @@ type duplicateVideoMaintenanceStats struct {
 	ContentCandidates   int
 	ContentComparisons  int
 	ContentCrossMatched int
-	ContentNearMisses   int
 	ContentGroups       int
 	ContentDeleted      int
 }
@@ -71,6 +70,9 @@ func (a *App) cleanupDuplicateVideoAssets(ctx context.Context) error {
 	}
 	stats := duplicateVideoMaintenanceStats{VideosScanned: len(videos)}
 	if len(videos) == 0 {
+		if err := a.retireLegacyDuplicateReviewTable(ctx); err != nil {
+			return err
+		}
 		log.Printf("[dedupe-maintenance] no videos to maintain")
 		return nil
 	}
@@ -119,19 +121,27 @@ func (a *App) cleanupDuplicateVideoAssets(ctx context.Context) error {
 	stats.ContentCandidates = contentStats.Candidates
 	stats.ContentComparisons = contentStats.Comparisons
 	stats.ContentCrossMatched = contentStats.CrossMatched
-	stats.ContentNearMisses = contentStats.NearMisses
 	stats.ContentGroups = contentStats.Groups
 	stats.ContentDeleted = contentStats.Deleted
 
-	if pruned, err := a.cat.PruneDuplicateReviewPairs(ctx); err != nil {
-		log.Printf("[dedupe-maintenance] prune duplicate review pairs: %v", err)
-	} else if pruned > 0 {
-		log.Printf("[dedupe-maintenance] pruned %d stale duplicate review pairs", pruned)
+	if err := a.retireLegacyDuplicateReviewTable(ctx); err != nil {
+		return err
 	}
 
-	log.Printf("[dedupe-maintenance] videos=%d exact_groups=%d exact_deleted=%d near_candidates=%d near_ssim_comparisons=%d near_groups=%d near_deleted=%d content_candidates=%d content_comparisons=%d content_cross_matched=%d content_near_misses=%d content_groups=%d content_deleted=%d",
+	log.Printf("[dedupe-maintenance] videos=%d exact_groups=%d exact_deleted=%d near_candidates=%d near_ssim_comparisons=%d near_groups=%d near_deleted=%d content_candidates=%d content_comparisons=%d content_cross_matched=%d content_groups=%d content_deleted=%d",
 		stats.VideosScanned, stats.ExactGroups, stats.ExactDeleted, stats.NearCandidates, stats.NearSSIMComparisons, stats.NearGroups, stats.NearDeleted,
-		stats.ContentCandidates, stats.ContentComparisons, stats.ContentCrossMatched, stats.ContentNearMisses, stats.ContentGroups, stats.ContentDeleted)
+		stats.ContentCandidates, stats.ContentComparisons, stats.ContentCrossMatched, stats.ContentGroups, stats.ContentDeleted)
+	return nil
+}
+
+func (a *App) retireLegacyDuplicateReviewTable(ctx context.Context) error {
+	dropped, err := a.cat.DropLegacyDuplicateReviewTable(ctx)
+	if err != nil {
+		return fmt.Errorf("retire legacy duplicate review queue: %w", err)
+	}
+	if dropped {
+		log.Printf("[dedupe-maintenance] retired legacy duplicate review queue after automatic content dedupe")
+	}
 	return nil
 }
 

@@ -253,24 +253,6 @@ CREATE TABLE IF NOT EXISTS users (
     created_at INTEGER NOT NULL
 );
 
--- 内容级查重疑似区（near-miss）复核队列：夜间维护写入，管理后台裁决。
--- (left_video_id, right_video_id) 按字典序归一化，同一对只存一行；
--- status=dismissed 的对不会被夜间维护重新写回。
-CREATE TABLE IF NOT EXISTS duplicate_review_pairs (
-    id             INTEGER PRIMARY KEY AUTOINCREMENT,
-    left_video_id  TEXT NOT NULL,
-    right_video_id TEXT NOT NULL,
-    median_ssim    REAL NOT NULL DEFAULT 0,
-    min_ssim       REAL NOT NULL DEFAULT 0,
-    comparisons    INTEGER NOT NULL DEFAULT 0,
-    status         TEXT NOT NULL DEFAULT 'pending', -- pending / merged / dismissed
-    created_at     INTEGER NOT NULL,
-    updated_at     INTEGER NOT NULL,
-    UNIQUE(left_video_id, right_video_id)
-);
-CREATE INDEX IF NOT EXISTS idx_duplicate_review_pairs_status
-    ON duplicate_review_pairs(status, updated_at DESC);
-
 -- 短视频随机 feed 会话快照：token → 洗牌后的可见视频 id 列表（JSON 数组）。
 -- 持久化让后端重启/更新不再使旧 token 失效，前端可从上次游标续播同一轮。
 -- 过期与数量上限由 API 层在写入时清理。

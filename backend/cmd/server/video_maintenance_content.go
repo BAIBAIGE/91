@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log"
 	"sort"
-	"strings"
 
 	"github.com/video-site/backend/internal/catalog"
 	"github.com/video-site/backend/internal/mediaasset"
@@ -21,7 +20,6 @@ type contentDuplicateMaintenanceStats struct {
 	ExtractFailed int
 	Comparisons   int
 	CrossMatched  int
-	NearMisses    int
 	Groups        int
 	Deleted       int
 }
@@ -136,14 +134,6 @@ func (a *App) cleanupContentDuplicateVideos(ctx context.Context, localDir string
 					continue
 				}
 			}
-			if cmp.IsContentNearMiss() {
-				stats.NearMisses++
-				if err := a.cat.UpsertDuplicateReviewPair(ctx, left.ID, right.ID, cmp.MedianSSIM, cmp.MinSSIM, cmp.Comparisons); err != nil {
-					log.Printf("[dedupe-maintenance] queue near-miss review left=%s right=%s: %v", left.ID, right.ID, err)
-				}
-				log.Printf("[dedupe-maintenance] content near-miss (queued for review) left=%s right=%s median_ssim=%.3f min_ssim=%.3f comparisons=%d title_left=%q title_right=%q",
-					left.ID, right.ID, cmp.MedianSSIM, cmp.MinSSIM, cmp.Comparisons, left.Title, right.Title)
-			}
 		}
 	}
 
@@ -188,35 +178,6 @@ func (a *App) cleanupContentDuplicateVideos(ctx context.Context, localDir string
 		}
 	}
 	return stats, nil
-}
-
-// mergeDuplicateVideo 人工复核的合并动作：保留 keepID，把 removeID 按重复
-// 墓碑删除并清理本地资产，与夜间自动去重同一条删除路径。
-func (a *App) mergeDuplicateVideo(ctx context.Context, keepID, removeID string) error {
-	if a == nil || a.cat == nil {
-		return fmt.Errorf("catalog unavailable")
-	}
-	keepID = strings.TrimSpace(keepID)
-	removeID = strings.TrimSpace(removeID)
-	if keepID == "" || removeID == "" || keepID == removeID {
-		return fmt.Errorf("invalid merge pair (%q, %q)", keepID, removeID)
-	}
-	if _, err := a.cat.GetVideo(ctx, keepID); err != nil {
-		return fmt.Errorf("canonical video %s: %w", keepID, err)
-	}
-	remove, err := a.cat.GetVideo(ctx, removeID)
-	if err != nil {
-		return fmt.Errorf("duplicate video %s: %w", removeID, err)
-	}
-	localDir := ""
-	if a.cfg != nil {
-		localDir = strings.TrimSpace(a.cfg.Storage.LocalPreviewDir)
-	}
-	if err := a.deleteDuplicateVideoWithAssets(ctx, localDir, remove, keepID); err != nil {
-		return err
-	}
-	log.Printf("[duplicate-review] merged keep=%s removed=%s size=%d title=%q", keepID, removeID, remove.Size, remove.Title)
-	return nil
 }
 
 func collectContentDupCandidates(localDir string, videos []*catalog.Video, deleted map[string]struct{}) []contentDupCandidate {

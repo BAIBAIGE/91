@@ -146,10 +146,6 @@ func (c *Crawler) findContentDuplicate(ctx context.Context, source *catalog.Vide
 				}, nil
 			}
 		}
-		if cmp.IsContentNearMiss() {
-			log.Printf("[scriptcrawler] drive=%s source_id=%s content near-miss candidate=%s median_ssim=%.3f min_ssim=%.3f comparisons=%d candidate_title=%q",
-				c.cfg.Driver.ID(), source.ID, candidate.ID, cmp.MedianSSIM, cmp.MinSSIM, cmp.Comparisons, candidate.Title)
-		}
 	}
 	return nil, nil
 }

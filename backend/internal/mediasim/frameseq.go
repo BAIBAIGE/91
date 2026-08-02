@@ -24,17 +24,16 @@ const (
 	// 时长碰撞太普遍（全库实测 10 秒档有近 400 个），时长相等不构成信号。
 	ContentDuplicateMinDurationSeconds = 120
 	// ContentDuplicateSSIMThreshold 判定重复的对齐帧 SSIM 中位数下限。
-	// 全库实测（约 1 万对同时长负样本）：真重复 ≥0.90，非重复几乎全部 <0.5。
-	ContentDuplicateSSIMThreshold = 0.92
-	// ContentDuplicateNearMissThreshold 仅记录日志、不自动处理的疑似区下限。
-	ContentDuplicateNearMissThreshold = 0.80
+	// 全库实测（约 1 万对同时长负样本）中，非重复几乎全部低于 0.5；
+	// 原先进入人工复核的 [0.80, 0.92) 区间现统一按重复自动处理。
+	ContentDuplicateSSIMThreshold = 0.80
 	// ContentDuplicateMinComparisons 有效对齐比较帧数下限，不足视为证据不够。
 	ContentDuplicateMinComparisons = 6
 
 	// 交叉匹配（错位召回）：teaser 某段生成失败回退到备选起点时，两个真重复
 	// 的对齐帧会整段错位，对齐中位数骤降。此时改用双向逐帧最优匹配判定。
 	// 只在时长精确相等时启用（调用方保证），且单帧强匹配线远高于对齐阈值，
-	// 避免把"同场景不同片段"的静态画面对（对齐规则刻意留在疑似区的）捞进来。
+	// 避免把"同场景不同片段"的静态画面对误判为重复。
 	//
 	// ContentDuplicateCrossFrameSSIM 单帧视为强匹配的下限。
 	ContentDuplicateCrossFrameSSIM = 0.95
@@ -81,13 +80,6 @@ type FrameSignatureComparison struct {
 // IsContentDuplicate 按全库实测标定的阈值判定是否内容重复。
 func (c FrameSignatureComparison) IsContentDuplicate() bool {
 	return c.Comparisons >= ContentDuplicateMinComparisons && c.MedianSSIM >= ContentDuplicateSSIMThreshold
-}
-
-// IsContentNearMiss 报告比较结果是否落在仅记日志的疑似区。
-func (c FrameSignatureComparison) IsContentNearMiss() bool {
-	return c.Comparisons >= ContentDuplicateMinComparisons &&
-		c.MedianSSIM >= ContentDuplicateNearMissThreshold &&
-		c.MedianSSIM < ContentDuplicateSSIMThreshold
 }
 
 // CompareFrameSignatures 比较两个帧签名的对齐帧。

@@ -30,11 +30,6 @@ const VideosPage = lazy(() =>
 const TagsPage = lazy(() =>
   import("@/admin/TagsPage").then((module) => ({ default: module.TagsPage }))
 );
-const DuplicateReviewsPage = lazy(() =>
-  import("@/admin/DuplicateReviewsPage").then((module) => ({
-    default: module.DuplicateReviewsPage,
-  }))
-);
 const ThemePage = lazy(() =>
   import("@/admin/ThemePage").then((module) => ({ default: module.ThemePage }))
 );
@@ -172,14 +167,6 @@ export default function App() {
             element={
               <PageSuspense>
                 <VideosPage />
-              </PageSuspense>
-            }
-          />
-          <Route
-            path="duplicate-reviews"
-            element={
-              <PageSuspense>
-                <DuplicateReviewsPage />
               </PageSuspense>
             }
           />

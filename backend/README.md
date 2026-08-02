@@ -77,12 +77,11 @@ internal/
     shorts_feed.go          短视频模式取流
     video_shares.go         一次性免登录分享链接
     storage_usage*.go       存储占用接口（含 unix / windows 分支）
-    admin_*.go              管理后台：登录、网盘、爬虫、视频、重复复核、标签、用户、设置
+    admin_*.go              管理后台：登录、网盘、爬虫、视频、标签、用户、设置
   auth/                     管理员 session、密码哈希、登录失败封禁
   catalog/                  SQLite 元数据层
     catalog.go              视频、网盘、扫描状态
     tag_*.go                标签 CRUD、匹配、分类、迁移、维护
-    duplicate_review.go     疑似重复复核队列
     users.go video_shares.go
   config/                   YAML 配置与默认值
   drives/
@@ -324,11 +323,10 @@ flowchart LR
 
 ### 6. 去重体系
 
-去重分布在视频生命周期四个时机，外加人工复核兜底——完整的信号定义、阈值、判定流程图见 **[docs/DEDUP.md](docs/DEDUP.md)**。一段话版本：
+去重分布在视频生命周期四个时机——完整的信号定义、阈值、判定流程图见 **[docs/DEDUP.md](docs/DEDUP.md)**。一段话版本：
 
 - **文件级**：`(drive_id, file_id)` 表示同一个源文件；扫描按 `content_hash`（哈希缺失或未命中时以 `file_name + size_bytes` 弱兜底）跳过重复，前台软过滤还会使用 `size_bytes + sampled_sha256`。夜间 Phase 5 的精确硬去重只按 `size_bytes + sampled_sha256` 分组。
-- **内容级**：teaser 选段只由时长决定，时长几乎相等的视频比较对齐帧 SSIM（中位数 ≥0.92 判重，时长精确相等时另有交叉匹配兜底），能抓标题、封面完全对不上的跨源转码副本；爬虫导入时同样启用，重复视频在上传网盘前就被挡下。
-- **人工兜底**：夜间内容通道会把对齐中位数落在 `[0.80, 0.92)` 的疑似对写入 `duplicate_review_pairs`，由后台「重复复核」页并排裁决。
+- **内容级**：teaser 选段只由时长决定，时长几乎相等的视频比较对齐帧 SSIM（中位数 ≥0.80 判重，时长精确相等时另有交叉匹配兜底），能抓标题、封面完全对不上的跨源转码副本；爬虫导入时同样启用，重复视频在上传网盘前就被挡下。
 - **删除语义**：一律打 `reason=duplicate` 墓碑 + 指向保留项，清理本地 teaser、普通封面、Shorts 背景封面和帧签名，**不删网盘源文件**；墓碑阻止重新入库，可在黑名单恢复。
 
 ### 7. 鉴权与分享
@@ -344,5 +342,5 @@ flowchart LR
 ### 8. 日志与排查
 
 - 一键脚本部署（systemd）：`journalctl -u video-site-backend` / `-u video-site-frontend`；`start.sh` 模式日志在 `$LOG_DIR`（默认 `/tmp/video-site-91/`）。
-- 后端日志按模块带前缀，直接 grep：`[scanner]`、`[scriptcrawler]`、`[nightly]`、`[dedupe-maintenance]`、`[duplicate-review]`、`[local-upload-maintenance]` 等。爬虫 Python 子进程的输出并入后端日志。
-- 常见排查入口：网盘异常看后台网盘页的健康状态与 `lastError`；预览/封面卡住多半是上游限流，等冷却期过或看 `[nightly]` 是否在等队列排空；去重删了什么搜 `duplicate deleted`，拿不准的对搜 `near-miss`。
+- 后端日志按模块带前缀，直接 grep：`[scanner]`、`[scriptcrawler]`、`[nightly]`、`[dedupe-maintenance]`、`[local-upload-maintenance]` 等。爬虫 Python 子进程的输出并入后端日志。
+- 常见排查入口：网盘异常看后台网盘页的健康状态与 `lastError`；预览/封面卡住多半是上游限流，等冷却期过或看 `[nightly]` 是否在等队列排空；去重删了什么搜 `duplicate deleted`，内容匹配过程搜 `content duplicate matched`。

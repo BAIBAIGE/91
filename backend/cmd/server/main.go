@@ -339,9 +339,6 @@ func main() {
 		OnDeleteVideo: func(reqCtx context.Context, videoID string, deleteSource bool) (api.DeleteVideoResult, error) {
 			return app.deleteVideo(reqCtx, videoID, deleteSource)
 		},
-		OnMergeDuplicateVideo: func(reqCtx context.Context, keepID, removeID string) error {
-			return app.mergeDuplicateVideo(reqCtx, keepID, removeID)
-		},
 		OnStartBlacklistSourceDelete: func(req api.BlacklistSourceDeleteRequest) bool {
 			return app.startBlacklistSourceDelete(ctx, req)
 		},
