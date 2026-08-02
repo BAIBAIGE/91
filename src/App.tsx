@@ -30,9 +30,6 @@ const VideosPage = lazy(() =>
 const TagsPage = lazy(() =>
   import("@/admin/TagsPage").then((module) => ({ default: module.TagsPage }))
 );
-const ThemePage = lazy(() =>
-  import("@/admin/ThemePage").then((module) => ({ default: module.ThemePage }))
-);
 const SettingsPage = lazy(() =>
   import("@/admin/SettingsPage").then((module) => ({
     default: module.SettingsPage,
@@ -191,14 +188,7 @@ export default function App() {
               </PageSuspense>
             }
           />
-          <Route
-            path="theme"
-            element={
-              <PageSuspense>
-                <ThemePage />
-              </PageSuspense>
-            }
-          />
+          <Route path="theme" element={<Navigate to="/admin/drives" replace />} />
           <Route
             path="backup"
             element={

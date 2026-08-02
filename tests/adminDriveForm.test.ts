@@ -667,16 +667,14 @@ test("crawler management is a separate admin section", () => {
   assert.doesNotMatch(driveFormSource, /scriptcrawler/);
 });
 
-test("desktop system group contains update and logout while mobile menu stays unchanged", () => {
+test("system sidebar contains navigation only while global actions live in the layout", () => {
   assert.match(
     adminLayoutSource,
-    /admin-nav__group-label">系统[\s\S]*?admin-nav__title">主题外观[\s\S]*?className="admin-nav__link admin-nav__action"[\s\S]*?检查更新[\s\S]*?className="admin-nav__link admin-nav__action admin-nav__action--danger"[\s\S]*?退出登录/
+    /admin-nav__group-label">系统[\s\S]*?to="\/admin\/settings"[\s\S]*?to="\/admin\/backup"/
   );
-  assert.doesNotMatch(adminLayoutSource, /admin-sidebar__footer/);
-  assert.match(
-    adminLayoutSource,
-    /admin-sidebar__mobile-panel[\s\S]*?admin-sidebar__home[\s\S]*?admin-sidebar__check-update[\s\S]*?admin-sidebar__logout/
-  );
+  assert.doesNotMatch(adminLayoutSource, /to="\/admin\/theme"/);
+  assert.doesNotMatch(adminLayoutSource, /admin-nav__action|admin-sidebar__mobile-panel/);
+  assert.match(adminLayoutSource, /<AdminGlobalActions[\s\S]*?onCheckUpdate=[\s\S]*?onLogout=/);
 });
 
 test("admin shell stays mounted while lazy admin pages load", () => {

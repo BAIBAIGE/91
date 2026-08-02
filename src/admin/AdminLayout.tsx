@@ -5,13 +5,12 @@ import {
   Film,
   HardDrive,
   Home,
-  MoreVertical,
-  Palette,
   SlidersHorizontal,
   Tags,
   Users,
 } from "lucide-react";
 import * as api from "./api";
+import { AdminGlobalActions } from "./AdminGlobalActions";
 import { useAuth } from "./AuthContext";
 import { useToast } from "./ToastContext";
 import { Modal } from "./Modal";
@@ -22,23 +21,12 @@ export function AdminLayout() {
   const navigate = useNavigate();
   const { show } = useToast();
   const [checkingUpdate, setCheckingUpdate] = useState(false);
+  const [loggingOut, setLoggingOut] = useState(false);
   const [availableUpdate, setAvailableUpdate] = useState<api.UpdateCheck | null>(null);
-  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   useEffect(() => {
     document.title = "后台管理";
   }, []);
-
-  useEffect(() => {
-    if (!mobileMenuOpen) return;
-    function onKeyDown(e: KeyboardEvent) {
-      if (e.key === "Escape") {
-        setMobileMenuOpen(false);
-      }
-    }
-    document.addEventListener("keydown", onKeyDown);
-    return () => document.removeEventListener("keydown", onKeyDown);
-  }, [mobileMenuOpen]);
 
   async function handleCheckUpdate() {
     if (checkingUpdate) return;
@@ -62,12 +50,16 @@ export function AdminLayout() {
   }
 
   async function handleLogout() {
+    if (loggingOut) return;
+    setLoggingOut(true);
     try {
       await logout();
       show("已退出登录", "success");
       navigate("/login", { replace: true });
     } catch {
       show("退出失败", "error");
+    } finally {
+      setLoggingOut(false);
     }
   }
 
@@ -173,19 +165,6 @@ export function AdminLayout() {
               </span>
             </NavLink>
             <NavLink
-              to="/admin/theme"
-              className={({ isActive }) =>
-                `admin-nav__link ${isActive ? "is-active" : ""}`
-              }
-            >
-              <span className="admin-nav__icon" aria-hidden="true">
-                <Palette size={15} />
-              </span>
-              <span className="admin-nav__text">
-                <span className="admin-nav__title">主题外观</span>
-              </span>
-            </NavLink>
-            <NavLink
               to="/admin/backup"
               className={({ isActive }) =>
                 `admin-nav__link ${isActive ? "is-active" : ""}`
@@ -198,55 +177,15 @@ export function AdminLayout() {
                 <span className="admin-nav__title">备份恢复</span>
               </span>
             </NavLink>
-            <button
-              type="button"
-              className="admin-nav__link admin-nav__action"
-              onClick={handleCheckUpdate}
-              disabled={checkingUpdate}
-            >
-              <span className="admin-nav__text">
-                <span className="admin-nav__title">
-                  {checkingUpdate ? "检查中" : "检查更新"}
-                </span>
-              </span>
-            </button>
-            <button
-              type="button"
-              className="admin-nav__link admin-nav__action admin-nav__action--danger"
-              onClick={handleLogout}
-            >
-              <span className="admin-nav__text">
-                <span className="admin-nav__title">退出登录</span>
-              </span>
-            </button>
           </div>
         </nav>
-        <button
-          className="admin-sidebar__mobile-menu"
-          onClick={() => setMobileMenuOpen((v) => !v)}
-          aria-label="更多操作"
-        >
-          <MoreVertical size={18} />
-        </button>
       </aside>
-      {mobileMenuOpen && (
-        <div className="admin-sidebar__mobile-overlay" onClick={() => setMobileMenuOpen(false)} />
-      )}
-      <div className={`admin-sidebar__mobile-panel${mobileMenuOpen ? " is-open" : ""}`}>
-        <NavLink to="/" className="admin-sidebar__home" onClick={() => setMobileMenuOpen(false)}>
-          返回主站
-        </NavLink>
-        <button
-          className="admin-sidebar__check-update"
-          onClick={() => { handleCheckUpdate(); setMobileMenuOpen(false); }}
-          disabled={checkingUpdate}
-        >
-          {checkingUpdate ? "检查中" : "检查更新"}
-        </button>
-        <button className="admin-sidebar__logout" onClick={() => { handleLogout(); setMobileMenuOpen(false); }}>
-          退出登录
-        </button>
-      </div>
+      <AdminGlobalActions
+        checkingUpdate={checkingUpdate}
+        loggingOut={loggingOut}
+        onCheckUpdate={() => void handleCheckUpdate()}
+        onLogout={() => void handleLogout()}
+      />
       <main className="admin-main">
         <Outlet />
       </main>

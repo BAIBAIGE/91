@@ -1195,6 +1195,8 @@ test("mobile tags management does not create horizontal page overflow", () => {
 test("mobile admin top navigation stays compact", () => {
   const css = mobileCss();
   const activeNavLink = ruleBody(css, ".admin-nav__link.is-active");
+  const globalActions = ruleBody(css, ".admin-global-actions");
+  const themePopover = ruleBody(css, ".admin-theme-popover");
 
   assert.match(ruleBody(css, ".admin-shell"), /display\s*:\s*flex/);
   assert.match(ruleBody(css, ".admin-shell"), /flex-direction\s*:\s*column/);
@@ -1203,28 +1205,11 @@ test("mobile admin top navigation stays compact", () => {
   assert.match(ruleBody(css, ".admin-sidebar"), /min-height\s*:\s*calc\(48px\s*\+\s*env\(safe-area-inset-top,\s*0px\)\)/);
   assert.match(ruleBody(css, ".admin-sidebar"), /calc\(6px\s*\+\s*env\(safe-area-inset-top,\s*0px\)\)/);
   assert.match(ruleBody(css, ".admin-sidebar"), /overflow-x\s*:\s*hidden/);
-  assert.match(ruleBody(css, ".admin-sidebar__mobile-menu"), /position\s*:\s*absolute/);
-  assert.match(ruleBody(css, ".admin-sidebar__mobile-menu"), /top\s*:\s*calc\(env\(safe-area-inset-top,\s*0px\)\s*\+\s*24px\)/);
-  assert.match(ruleBody(css, ".admin-sidebar__mobile-menu"), /right\s*:\s*var\(--space-2\)/);
-  assert.match(ruleBody(css, ".admin-sidebar__mobile-menu"), /transform\s*:\s*translateY\(-50%\)/);
-  assert.match(ruleBody(css, ".admin-sidebar__mobile-panel"), /align-items\s*:\s*center/);
-  assert.match(ruleBody(css, ".admin-sidebar__mobile-panel"), /gap\s*:\s*0/);
-  assert.match(
-    ruleBodyByContains(css, ".admin-sidebar__mobile-panel .admin-sidebar__home"),
-    /justify-content\s*:\s*center/
-  );
-  assert.match(
-    ruleBodyByContains(css, ".admin-sidebar__mobile-panel .admin-sidebar__home"),
-    /width\s*:\s*min\(220px,\s*100%\)/
-  );
-  assert.match(
-    ruleBodyByContains(css, ".admin-sidebar__mobile-panel .admin-sidebar__check-update::before"),
-    /width\s*:\s*72px/
-  );
-  assert.match(
-    ruleBodyByContains(css, ".admin-sidebar__mobile-panel .admin-sidebar__logout::before"),
-    /background\s*:\s*var\(--border-subtle\)/
-  );
+  assert.match(globalActions, /top\s*:\s*calc\(6px\s*\+\s*env\(safe-area-inset-top,\s*0px\)\)/);
+  assert.match(globalActions, /right\s*:\s*var\(--space-2\)/);
+  assert.match(ruleBody(css, ".admin-global-action"), /width\s*:\s*34px/);
+  assert.match(themePopover, /width\s*:\s*min\(300px,\s*calc\(100vw\s*-\s*16px\)\)/);
+  assert.match(ruleBody(css, ".admin-theme-popover__grid"), /grid-template-columns\s*:\s*repeat\(2,/);
   assert.match(ruleBody(css, ".admin-nav"), /align-items\s*:\s*center/);
   assert.match(ruleBody(css, ".admin-nav"), /justify-content\s*:\s*flex-start/);
   assert.match(ruleBody(css, ".admin-nav"), /overflow-x\s*:\s*auto/);
@@ -1237,8 +1222,6 @@ test("mobile admin top navigation stays compact", () => {
   assert.match(activeNavLink, /background\s*:\s*var\(--accent-soft\)/);
   assert.match(activeNavLink, /border-color\s*:\s*var\(--border-accent\)/);
   assert.match(activeNavLink, /box-shadow\s*:\s*none/);
-  assert.match(ruleBody(css, ".admin-nav__action"), /display\s*:\s*none/);
-  assert.match(ruleBody(css, ".admin-nav .admin-nav__action"), /display\s*:\s*none/);
   assert.match(ruleBody(css, ".admin-main"), /padding\s*:\s*var\(--space-2\)\s+var\(--space-3\)\s+var\(--space-4\)/);
   assert.match(ruleBody(css, ".admin-page__header"), /margin-bottom\s*:\s*var\(--space-3\)/);
 });

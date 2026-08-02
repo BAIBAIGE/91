@@ -184,80 +184,94 @@
   display: none;
 }
 
-.admin-nav__action {
-  appearance: none;
-  font: inherit;
-  cursor: pointer;
-}
-
-.admin-nav__action:disabled {
-  opacity: 0.6;
-  cursor: wait;
-}
-
-.admin-nav__action--danger:hover {
-  border-color: rgba(255, 91, 91, 0.35);
-  background: var(--danger-soft);
-}
-
-.admin-nav__action--danger:hover .admin-nav__title {
-  color: var(--danger);
-}
-
-.admin-sidebar__home,
-.admin-sidebar__check-update,
-.admin-sidebar__logout {
+/* ----- Layout-level actions ----- */
+.admin-global-actions {
+  position: fixed;
+  top: var(--space-5);
+  right: var(--space-7);
+  z-index: calc(var(--z-nav) + 2);
   display: inline-flex;
   align-items: center;
-  gap: 0;
-  width: 100%;
-  min-height: 34px;
-  padding: 8px 12px;
-  border-radius: var(--radius-sm);
+  gap: 4px;
+  padding: 6px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  background: var(--glass-card);
   color: var(--text-muted);
-  font-size: var(--font-sm);
-  font-weight: var(--weight-medium);
-  text-align: left;
+  box-shadow: var(--shadow-lg), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
 }
 
-.admin-sidebar__home:hover,
-.admin-sidebar__check-update:hover:not(:disabled),
-.admin-sidebar__logout:hover {
+.admin-global-action {
+  appearance: none;
+  display: inline-grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 11px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition:
+    color var(--transition-fast),
+    background var(--transition-fast),
+    border-color var(--transition-fast),
+    transform var(--transition-fast);
+}
+
+.admin-global-action:hover:not(:disabled),
+.admin-global-action.is-active {
   color: var(--text-strong);
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--accent-softer);
+  border-color: var(--border-subtle);
 }
 
-.admin-sidebar__check-update:disabled {
-  opacity: 0.6;
+.admin-global-action--danger:hover:not(:disabled) {
+  color: var(--danger);
+  background: var(--danger-soft);
+  border-color: rgba(255, 91, 91, 0.24);
+}
+
+.admin-global-action:active:not(:disabled) {
+  transform: scale(0.94);
+}
+
+.admin-global-action:disabled {
+  opacity: 0.58;
   cursor: wait;
 }
 
-.admin-sidebar__logout:hover {
-  color: var(--danger);
-  background: var(--danger-soft);
+.admin-global-action__spin {
+  animation: admin-global-action-spin 800ms linear infinite;
 }
 
-@keyframes admin-update-spin {
+@keyframes admin-global-action-spin {
   to {
     transform: rotate(360deg);
   }
 }
 
-.admin-sidebar__mobile-menu {
-  display: none;
-  border: none;
-  background: transparent;
-  color: var(--text-muted);
-  cursor: pointer;
-  padding: 6px;
+.admin-theme-popover {
+  position: absolute;
+  top: calc(100% + 12px);
+  right: 0;
+  width: min(520px, calc(100vw - var(--admin-sidebar-width) - 64px));
+  max-height: calc(100dvh - 92px);
+  overflow-y: auto;
+  padding: var(--space-3);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-xl);
 }
 
-.admin-sidebar__mobile-overlay {
-  display: none;
-}
-
-.admin-sidebar__mobile-panel {
-  display: none;
+.admin-theme-popover__grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-2);
 }
 
 /* =========================================================
@@ -265,7 +279,7 @@
  * ========================================================= */
 .admin-main {
   min-width: 0;
-  padding: var(--space-7) var(--space-7);
+  padding: 88px var(--space-7) var(--space-7);
   background: var(--bg-page);
 }
 
@@ -1494,10 +1508,7 @@
 
 .admin-btn:focus-visible,
 .admin-nav__link:focus-visible,
-.admin-sidebar__home:focus-visible,
-.admin-sidebar__check-update:focus-visible,
-.admin-sidebar__logout:focus-visible,
-.admin-sidebar__mobile-menu:focus-visible {
+.admin-global-action:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
   box-shadow: none;
@@ -3064,7 +3075,7 @@
     overflow-y: hidden;
     padding:
       calc(6px + env(safe-area-inset-top, 0px))
-      calc(var(--space-2) + 42px)
+      calc(var(--space-2) + 120px)
       6px
       var(--space-2);
     background: var(--glass-nav);
@@ -3079,85 +3090,30 @@
 
   .admin-sidebar::-webkit-scrollbar { display: none; }
   .admin-sidebar__brand { display: none; }
-  .admin-nav__group--home { display: none; }
-  .admin-nav__action { display: none; }
 
-  .admin-sidebar__mobile-menu {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    position: absolute;
-    top: calc(env(safe-area-inset-top, 0px) + 24px);
+  .admin-global-actions {
+    top: calc(6px + env(safe-area-inset-top, 0px));
     right: var(--space-2);
-    width: 36px;
-    height: 36px;
-    transform: translateY(-50%);
-    z-index: 1;
-    border-radius: var(--radius-pill);
-    background: var(--glass-nav);
-    box-shadow: -10px 0 14px var(--bg-page);
+    gap: 2px;
+    padding: 3px;
+    border-radius: 13px;
   }
 
-  .admin-sidebar__mobile-overlay {
-    display: block;
-    position: fixed;
-    inset: 0;
-    background: rgba(0, 0, 0, 0.45);
-    z-index: calc(var(--z-nav) + 1);
+  .admin-global-action {
+    width: 34px;
+    height: 34px;
+    border-radius: 10px;
   }
 
-  .admin-sidebar__mobile-panel {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 0;
-    position: fixed;
-    bottom: 0;
-    left: 0;
-    right: 0;
-    background: var(--bg-surface);
-    border-top: 1px solid var(--border-default);
-    padding: 16px var(--space-4) calc(16px + env(safe-area-inset-bottom));
-    z-index: calc(var(--z-nav) + 2);
-    transform: translateY(100%);
-    transition: transform 0.2s ease-out;
-    box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.3);
+  .admin-theme-popover {
+    top: calc(100% + 8px);
+    width: min(300px, calc(100vw - 16px));
+    max-height: calc(100dvh - 62px - env(safe-area-inset-top, 0px));
+    padding: 10px;
   }
 
-  .admin-sidebar__mobile-panel .admin-sidebar__home,
-  .admin-sidebar__mobile-panel .admin-sidebar__check-update,
-  .admin-sidebar__mobile-panel .admin-sidebar__logout {
-    position: relative;
-    justify-content: center;
-    width: min(220px, 100%);
-    min-height: 38px;
-    padding: 8px 12px;
-    border: 0;
-    background: transparent;
-    font: inherit;
-    text-align: center;
-  }
-
-  .admin-sidebar__mobile-panel .admin-sidebar__check-update,
-  .admin-sidebar__mobile-panel .admin-sidebar__logout {
-    margin-top: 4px;
-    padding-top: 12px;
-  }
-
-  .admin-sidebar__mobile-panel .admin-sidebar__check-update::before,
-  .admin-sidebar__mobile-panel .admin-sidebar__logout::before {
-    content: "";
-    position: absolute;
-    top: 0;
-    left: 50%;
-    width: 72px;
-    height: 1px;
-    background: var(--border-subtle);
-    transform: translateX(-50%);
-  }
-
-  .admin-sidebar__mobile-panel.is-open {
-    transform: translateY(0);
+  .admin-theme-popover__grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .admin-nav {
@@ -3217,10 +3173,6 @@
     width: 15px;
     height: 15px;
     stroke-width: 2.2;
-  }
-
-  .admin-nav .admin-nav__action {
-    display: none;
   }
 
   .admin-nav__group > .admin-nav__link + .admin-nav__link {
@@ -6505,26 +6457,11 @@
 }
 
 /* =========================================================
- * Theme Page (外观)
+ * Theme popover
  *
- * 主题预览卡，点击切换全站主题。每张卡内嵌一个迷你
- * "页面骨架"展示该主题的色彩。卡片内部的颜色用 data-preview
- * 强制锁定，不跟随当前主题，让用户能预览未选中的主题长什么样。
+ * 预览卡内嵌一个迷你“页面骨架”。卡片内部颜色用 data-preview
+ * 锁定，不跟随当前主题，确保未选中的主题也能正确预览。
  * ========================================================= */
-
-.theme-page {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-4);
-}
-
-.theme-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(340px, 380px));
-  justify-content: center;
-  align-items: center;
-  gap: var(--space-8);
-}
 
 /* 单张主题卡 */
 .theme-card {
@@ -6534,7 +6471,8 @@
   padding: 0;
   background: var(--bg-surface);
   border: 1px solid var(--border-default);
-  border-radius: var(--radius-lg);
+  min-width: 0;
+  border-radius: var(--radius-md);
   overflow: hidden;
   cursor: pointer;
   text-align: left;
@@ -6567,10 +6505,10 @@
 .theme-card__preview {
   position: relative;
   aspect-ratio: 16 / 9;
-  padding: 14px;
+  padding: 9px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 6px;
   overflow: hidden;
 }
 
@@ -6593,7 +6531,7 @@
 /* 预览顶部模拟标题栏的小渐变条 */
 .theme-card__bar {
   width: 36%;
-  height: 6px;
+  height: 4px;
   border-radius: var(--radius-pill);
 }
 
@@ -6625,7 +6563,7 @@
   width: 0;
   height: 0;
   border-style: solid;
-  border-width: 8px 0 8px 14px;
+  border-width: 6px 0 6px 10px;
   border-color: transparent transparent transparent rgba(255, 255, 255, 0.85);
 }
 
@@ -6643,11 +6581,11 @@
 .theme-card__lines {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 4px;
 }
 
 .theme-card__line {
-  height: 6px;
+  height: 4px;
   border-radius: var(--radius-pill);
 }
 
@@ -6678,12 +6616,12 @@
 /* 模拟标签胶囊行 */
 .theme-card__chips {
   display: flex;
-  gap: 6px;
+  gap: 4px;
 }
 
 .theme-card__chip {
-  width: 36px;
-  height: 12px;
+  width: 24px;
+  height: 8px;
   border-radius: var(--radius-pill);
 }
 
@@ -6747,38 +6685,28 @@
 /* 卡片底部信息区 */
 .theme-card__body {
   display: flex;
-  flex-direction: column;
+  align-items: center;
+  justify-content: space-between;
   gap: var(--space-2);
-  padding: var(--space-4) var(--space-5);
+  min-height: 40px;
+  padding: 8px 10px;
   border-top: 1px solid var(--border-subtle);
 }
 
-.theme-card__head {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-}
-
-.theme-card__title-wrap {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-  flex: 1 1 auto;
-}
-
 .theme-card__title {
-  font-size: var(--font-lg);
-  font-weight: var(--weight-bold);
+  min-width: 0;
   color: var(--text-strong);
+  font-size: var(--font-sm);
+  font-weight: var(--weight-bold);
+  line-height: var(--line-tight);
   letter-spacing: -0.005em;
 }
 
 .theme-card__state {
   display: inline-grid;
   place-items: center;
-  width: 28px;
-  height: 28px;
+  width: 22px;
+  height: 22px;
   border-radius: 50%;
   color: var(--accent);
   background: var(--accent-soft);
@@ -6796,12 +6724,6 @@
 @keyframes theme-spin {
   to {
     transform: rotate(360deg);
-  }
-}
-
-@media (max-width: 640px) {
-  .theme-grid {
-    grid-template-columns: minmax(0, 1fr);
   }
 }
 

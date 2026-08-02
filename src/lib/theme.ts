@@ -5,7 +5,7 @@
 //      避免首屏闪烁。
 //   2. main.tsx 调 syncThemeFromServer()，异步 GET /api/settings/theme，
 //      若与本地不同则覆盖。
-//   3. 管理后台 ThemePage 切换时调 applyTheme(theme)，立刻生效。
+//   3. 管理后台全局主题菜单切换时调 applyTheme(theme)，立刻生效。
 //
 // 公开端点 /api/settings/theme 不需要登录，原因见 backend/internal/api/api.go 中
 // 的注释——登录页本身就要在用户登录之前正确显示主题。
