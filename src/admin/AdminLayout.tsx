@@ -1,14 +1,15 @@
-import { useEffect, useState } from "react";
-import { NavLink, Outlet, useNavigate } from "react-router-dom";
+import { useEffect, useRef, useState } from "react";
+import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import {
   ArchiveRestore,
   Film,
   HardDrive,
-  Home,
-  Logs,
+  Menu,
+  ScrollText,
   SlidersHorizontal,
   Tags,
   Users,
+  X,
 } from "lucide-react";
 import * as api from "./api";
 import { AdminGlobalActions } from "./AdminGlobalActions";
@@ -19,15 +20,50 @@ import { SpiderIcon } from "./icons/SpiderIcon";
 
 export function AdminLayout() {
   const { logout } = useAuth();
+  const location = useLocation();
   const navigate = useNavigate();
   const { show } = useToast();
+  const mobileNavigationToggleRef = useRef<HTMLButtonElement>(null);
   const [checkingUpdate, setCheckingUpdate] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
+  const [mobileNavigationOpen, setMobileNavigationOpen] = useState(false);
   const [availableUpdate, setAvailableUpdate] = useState<api.UpdateCheck | null>(null);
 
   useEffect(() => {
     document.title = "后台管理";
   }, []);
+
+  useEffect(() => {
+    setMobileNavigationOpen(false);
+  }, [location.pathname]);
+
+  useEffect(() => {
+    if (!mobileNavigationOpen) return;
+
+    const root = document.documentElement;
+    const body = document.body;
+    root.classList.add("admin-mobile-nav-open");
+    body.classList.add("admin-mobile-nav-open");
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key !== "Escape") return;
+      setMobileNavigationOpen(false);
+      window.requestAnimationFrame(() => mobileNavigationToggleRef.current?.focus());
+    }
+
+    function handleResize() {
+      if (window.innerWidth > 768) setMobileNavigationOpen(false);
+    }
+
+    document.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("resize", handleResize);
+    return () => {
+      root.classList.remove("admin-mobile-nav-open");
+      body.classList.remove("admin-mobile-nav-open");
+      document.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("resize", handleResize);
+    };
+  }, [mobileNavigationOpen]);
 
   async function handleCheckUpdate() {
     if (checkingUpdate) return;
@@ -66,19 +102,39 @@ export function AdminLayout() {
 
   return (
     <div className="admin-shell">
-      <aside className="admin-sidebar">
-        <nav className="admin-nav">
-          <div className="admin-nav__group admin-nav__group--home">
-            <span className="admin-nav__group-label">主站</span>
-            <NavLink to="/" className="admin-nav__link">
-              <span className="admin-nav__icon" aria-hidden="true">
-                <Home size={15} />
-              </span>
-              <span className="admin-nav__text">
-                <span className="admin-nav__title">返回主站</span>
-              </span>
-            </NavLink>
-          </div>
+      <button
+        ref={mobileNavigationToggleRef}
+        type="button"
+        className={`admin-mobile-nav-toggle${mobileNavigationOpen ? " is-open" : ""}`}
+        onClick={() => setMobileNavigationOpen((open) => !open)}
+        title={mobileNavigationOpen ? "关闭后台菜单" : "打开后台菜单"}
+        aria-label={mobileNavigationOpen ? "关闭后台菜单" : "打开后台菜单"}
+        aria-controls="admin-navigation"
+        aria-expanded={mobileNavigationOpen}
+      >
+        {mobileNavigationOpen ? (
+          <X size={18} aria-hidden="true" />
+        ) : (
+          <Menu size={18} aria-hidden="true" />
+        )}
+      </button>
+      <button
+        type="button"
+        className={`admin-mobile-nav-backdrop${mobileNavigationOpen ? " is-visible" : ""}`}
+        onClick={() => {
+          setMobileNavigationOpen(false);
+          window.requestAnimationFrame(() => mobileNavigationToggleRef.current?.focus());
+        }}
+        aria-label="关闭后台菜单"
+        aria-hidden={!mobileNavigationOpen}
+        tabIndex={mobileNavigationOpen ? 0 : -1}
+      />
+      <aside
+        id="admin-navigation"
+        className={`admin-sidebar${mobileNavigationOpen ? " is-open" : ""}`}
+        aria-label="后台导航"
+      >
+        <nav className="admin-nav" onClick={() => setMobileNavigationOpen(false)}>
           <div className="admin-nav__group">
             <span className="admin-nav__group-label">资源</span>
             <NavLink
@@ -153,19 +209,6 @@ export function AdminLayout() {
           <div className="admin-nav__group">
             <span className="admin-nav__group-label">系统</span>
             <NavLink
-              to="/admin/settings"
-              className={({ isActive }) =>
-                `admin-nav__link ${isActive ? "is-active" : ""}`
-              }
-            >
-              <span className="admin-nav__icon" aria-hidden="true">
-                <SlidersHorizontal size={15} />
-              </span>
-              <span className="admin-nav__text">
-                <span className="admin-nav__title">配置面板</span>
-              </span>
-            </NavLink>
-            <NavLink
               to="/admin/backup"
               className={({ isActive }) =>
                 `admin-nav__link ${isActive ? "is-active" : ""}`
@@ -185,10 +228,23 @@ export function AdminLayout() {
               }
             >
               <span className="admin-nav__icon" aria-hidden="true">
-                <Logs size={15} />
+                <ScrollText size={15} />
               </span>
               <span className="admin-nav__text">
                 <span className="admin-nav__title">日志查看</span>
+              </span>
+            </NavLink>
+            <NavLink
+              to="/admin/settings"
+              className={({ isActive }) =>
+                `admin-nav__link ${isActive ? "is-active" : ""}`
+              }
+            >
+              <span className="admin-nav__icon" aria-hidden="true">
+                <SlidersHorizontal size={15} />
+              </span>
+              <span className="admin-nav__text">
+                <span className="admin-nav__title">配置面板</span>
               </span>
             </NavLink>
           </div>

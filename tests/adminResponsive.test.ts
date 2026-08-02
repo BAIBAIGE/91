@@ -6,6 +6,10 @@ const adminCss = readFileSync(
   new URL("../src/styles/admin.css", import.meta.url),
   "utf8"
 );
+const adminLayoutSource = readFileSync(
+  new URL("../src/admin/AdminLayout.tsx", import.meta.url),
+  "utf8"
+);
 const videosPageSource = readFileSync(
   new URL("../src/admin/VideosPage.tsx", import.meta.url),
   "utf8"
@@ -413,23 +417,20 @@ test("admin sidebar active item frame only wraps the centered option", () => {
   assert.match(activeMarker, /display\s*:\s*none/);
 });
 
-test("admin sidebar separates adjacent options across every mobile group", () => {
+test("admin sidebar keeps desktop separators but groups the mobile drawer with labels", () => {
   assert.match(
     adminCss,
     /\.admin-nav__group > \.admin-nav__link \+ \.admin-nav__link::after\s*\{[^}]*content\s*:\s*"";[^}]*height\s*:\s*1px;[^}]*background\s*:\s*var\(--border-subtle\)/s
   );
   const css = mobileCss();
   const mobileSeparator = ruleBody(css, ".admin-nav__group > .admin-nav__link + .admin-nav__link::after");
-  const mobileGroupSeparator = ruleBody(
+  assert.match(mobileSeparator, /content\s*:\s*none/);
+  assert.match(mobileSeparator, /display\s*:\s*none/);
+  assert.match(ruleBody(css, ".admin-nav__group-label"), /display\s*:\s*block/);
+  assert.doesNotMatch(
     css,
-    ".admin-nav__group:not(.admin-nav__group--home) + .admin-nav__group > .admin-nav__link:first-of-type::after"
+    /\.admin-nav__group \+ \.admin-nav__group > \.admin-nav__link:first-of-type::after/
   );
-  assert.match(mobileSeparator, /width\s*:\s*1px/);
-  assert.match(mobileSeparator, /height\s*:\s*18px/);
-  assert.match(mobileGroupSeparator, /content\s*:\s*""/);
-  assert.match(mobileGroupSeparator, /width\s*:\s*1px/);
-  assert.match(mobileGroupSeparator, /height\s*:\s*18px/);
-  assert.match(mobileGroupSeparator, /background\s*:\s*var\(--border-subtle\)/);
 });
 
 test("current video list does not render the drive summary under filters", () => {
@@ -1192,37 +1193,65 @@ test("mobile tags management does not create horizontal page overflow", () => {
   assert.match(paginationInfo, /overflow-wrap\s*:\s*anywhere/);
 });
 
-test("mobile admin top navigation stays compact", () => {
+test("mobile admin navigation uses a CPA-style sliding drawer", () => {
   const css = mobileCss();
+  const shell = ruleBody(css, ".admin-shell");
+  const mobileToggle = ruleBody(css, ".admin-mobile-nav-toggle");
+  const mobileBackdrop = ruleBody(css, ".admin-mobile-nav-backdrop");
+  const visibleBackdrop = ruleBody(css, ".admin-mobile-nav-backdrop.is-visible");
+  const mobileSidebar = ruleBody(css, ".admin-sidebar");
+  const openSidebar = ruleBody(css, ".admin-sidebar.is-open");
+  const mobileNav = ruleBody(css, ".admin-nav");
+  const mobileNavLink = ruleBody(css, ".admin-nav__link");
   const activeNavLink = ruleBody(css, ".admin-nav__link.is-active");
   const globalActions = ruleBody(css, ".admin-global-actions");
   const themePopover = ruleBody(css, ".admin-theme-popover");
 
-  assert.match(ruleBody(css, ".admin-shell"), /display\s*:\s*flex/);
-  assert.match(ruleBody(css, ".admin-shell"), /flex-direction\s*:\s*column/);
-  assert.match(ruleBody(css, ".admin-sidebar"), /flex\s*:\s*0\s+0\s+calc\(48px\s*\+\s*env\(safe-area-inset-top,\s*0px\)\)/);
-  assert.match(ruleBody(css, ".admin-sidebar"), /height\s*:\s*calc\(48px\s*\+\s*env\(safe-area-inset-top,\s*0px\)\)/);
-  assert.match(ruleBody(css, ".admin-sidebar"), /min-height\s*:\s*calc\(48px\s*\+\s*env\(safe-area-inset-top,\s*0px\)\)/);
-  assert.match(ruleBody(css, ".admin-sidebar"), /calc\(6px\s*\+\s*env\(safe-area-inset-top,\s*0px\)\)/);
-  assert.match(ruleBody(css, ".admin-sidebar"), /overflow-x\s*:\s*hidden/);
+  assert.match(adminLayoutSource, /useState\(false\)[\s\S]*?mobileNavigationOpen/);
+  assert.match(adminLayoutSource, /aria-controls="admin-navigation"/);
+  assert.match(adminLayoutSource, /aria-expanded=\{mobileNavigationOpen\}/);
+  assert.match(adminLayoutSource, /mobileNavigationOpen \? \(\s*<X[\s\S]*?<Menu/);
+  assert.match(adminLayoutSource, /className=\{`admin-mobile-nav-backdrop\$\{mobileNavigationOpen \? " is-visible" : ""\}`\}/);
+  assert.match(adminLayoutSource, /document\.addEventListener\("keydown", handleKeyDown\)/);
+  assert.match(adminLayoutSource, /event\.key !== "Escape"/);
+  assert.match(adminLayoutSource, /root\.classList\.add\("admin-mobile-nav-open"\)/);
+  assert.match(adminLayoutSource, /<nav className="admin-nav" onClick=\{\(\) => setMobileNavigationOpen\(false\)\}>/);
+  assert.match(shell, /--admin-mobile-header-offset\s*:\s*calc\(58px\s*\+\s*env\(safe-area-inset-top,\s*0px\)\)/);
+  assert.match(shell, /display\s*:\s*block/);
+  assert.match(mobileToggle, /position\s*:\s*fixed/);
+  assert.match(mobileToggle, /top\s*:\s*calc\(6px\s*\+\s*env\(safe-area-inset-top,\s*0px\)\)/);
+  assert.match(mobileToggle, /left\s*:\s*var\(--space-2\)/);
+  assert.match(mobileToggle, /width\s*:\s*42px/);
+  assert.match(mobileBackdrop, /position\s*:\s*fixed/);
+  assert.match(mobileBackdrop, /opacity\s*:\s*0/);
+  assert.match(mobileBackdrop, /pointer-events\s*:\s*none/);
+  assert.match(visibleBackdrop, /opacity\s*:\s*1/);
+  assert.match(visibleBackdrop, /pointer-events\s*:\s*auto/);
+  assert.match(mobileSidebar, /position\s*:\s*fixed/);
+  assert.match(mobileSidebar, /width\s*:\s*min\(280px,\s*calc\(100vw\s*-\s*24px\)\)/);
+  assert.match(mobileSidebar, /transform\s*:\s*translateX\(calc\(-100%\s*-\s*24px\)\)/);
+  assert.match(mobileSidebar, /visibility\s*:\s*hidden/);
+  assert.match(openSidebar, /transform\s*:\s*translateX\(0\)/);
+  assert.match(openSidebar, /visibility\s*:\s*visible/);
   assert.match(globalActions, /top\s*:\s*calc\(6px\s*\+\s*env\(safe-area-inset-top,\s*0px\)\)/);
   assert.match(globalActions, /right\s*:\s*var\(--space-2\)/);
   assert.match(ruleBody(css, ".admin-global-action"), /width\s*:\s*34px/);
   assert.match(themePopover, /width\s*:\s*min\(300px,\s*calc\(100vw\s*-\s*16px\)\)/);
   assert.match(ruleBody(css, ".admin-theme-popover__grid"), /grid-template-columns\s*:\s*repeat\(2,/);
-  assert.match(ruleBody(css, ".admin-nav"), /align-items\s*:\s*center/);
-  assert.match(ruleBody(css, ".admin-nav"), /justify-content\s*:\s*flex-start/);
-  assert.match(ruleBody(css, ".admin-nav"), /overflow-x\s*:\s*auto/);
-  assert.match(ruleBody(css, ".admin-nav__link"), /height\s*:\s*34px/);
-  assert.match(ruleBody(css, ".admin-nav__link"), /gap\s*:\s*6px/);
-  assert.match(ruleBody(css, ".admin-nav__link"), /line-height\s*:\s*1/);
-  assert.match(ruleBody(css, ".admin-nav__link"), /flex\s*:\s*0\s+0\s+auto/);
+  assert.match(mobileNav, /flex-direction\s*:\s*column/);
+  assert.match(mobileNav, /align-items\s*:\s*stretch/);
+  assert.match(mobileNav, /overflow\s*:\s*visible/);
+  assert.match(mobileNavLink, /align-self\s*:\s*stretch/);
+  assert.match(mobileNavLink, /width\s*:\s*100%/);
+  assert.match(mobileNavLink, /min-height\s*:\s*40px/);
+  assert.match(mobileNavLink, /gap\s*:\s*10px/);
   assert.match(ruleBody(css, ".admin-nav__icon"), /display\s*:\s*inline-flex/);
-  assert.match(ruleBody(css, ".admin-nav__icon"), /width\s*:\s*16px/);
+  assert.match(ruleBody(css, ".admin-nav__icon"), /width\s*:\s*18px/);
   assert.match(activeNavLink, /background\s*:\s*var\(--accent-soft\)/);
   assert.match(activeNavLink, /border-color\s*:\s*var\(--border-accent\)/);
   assert.match(activeNavLink, /box-shadow\s*:\s*none/);
-  assert.match(ruleBody(css, ".admin-main"), /padding\s*:\s*var\(--space-2\)\s+var\(--space-3\)\s+var\(--space-4\)/);
+  assert.match(ruleBody(css, ".admin-main"), /padding\s*:\s*var\(--admin-mobile-header-offset\)\s+var\(--space-3\)\s+var\(--space-4\)/);
+  assert.match(adminCss, /html\.admin-mobile-nav-open,[\s\S]*?overscroll-behavior:\s*none/);
   assert.match(ruleBody(css, ".admin-page__header"), /margin-bottom\s*:\s*var\(--space-3\)/);
 });
 

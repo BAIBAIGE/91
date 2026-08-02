@@ -670,7 +670,7 @@ test("crawler management is a separate admin section", () => {
 test("system sidebar contains navigation only while global actions live in the layout", () => {
   assert.match(
     adminLayoutSource,
-    /admin-nav__group-label">系统[\s\S]*?to="\/admin\/settings"[\s\S]*?to="\/admin\/backup"/
+    /admin-nav__group-label">系统[\s\S]*?to="\/admin\/backup"[\s\S]*?to="\/admin\/logs"[\s\S]*?to="\/admin\/settings"/
   );
   assert.doesNotMatch(adminLayoutSource, /to="\/admin\/theme"/);
   assert.doesNotMatch(adminLayoutSource, /admin-nav__action|admin-sidebar__mobile-panel/);

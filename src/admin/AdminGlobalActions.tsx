@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { Check, Loader2, LogOut, Palette, RefreshCw } from "lucide-react";
+import { Link } from "react-router-dom";
+import { Check, Home, Loader2, LogOut, Palette, RefreshCw } from "lucide-react";
 import { applyTheme, getCurrentTheme } from "@/lib/theme";
 import * as api from "./api";
 import type { Theme } from "./api";
@@ -28,7 +29,7 @@ type AdminGlobalActionsProps = {
 };
 
 /**
- * 后台布局级操作区。侧边栏只保留页面导航，主题、更新和退出等
+ * 后台布局级操作区。侧边栏只保留后台页面导航，返回主站、主题、更新和退出等
  * 全局操作统一放在这里，避免桌面端与移动端维护两套行为。
  */
 export function AdminGlobalActions({
@@ -120,6 +121,15 @@ export function AdminGlobalActions({
       role="toolbar"
       aria-label="后台全局操作"
     >
+      <Link
+        to="/"
+        className="admin-global-action"
+        title="返回主站"
+        aria-label="返回主站"
+      >
+        <Home size={18} aria-hidden="true" />
+      </Link>
+
       <button
         ref={themeTriggerRef}
         type="button"

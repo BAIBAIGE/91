@@ -51,7 +51,7 @@ const adminCss = readFileSync(
 
 test("admin log viewer is reachable from the authenticated admin layout", () => {
   assert.match(appSource, /path="logs"[\s\S]*?<LogsPage \/>/);
-  assert.match(layoutSource, /to="\/admin\/logs"[\s\S]*?日志查看/);
+  assert.match(layoutSource, /to="\/admin\/logs"[\s\S]*?<ScrollText size=\{15\} \/>[\s\S]*?日志查看/);
   assert.match(logsPageSource, /useRuntimeLogs\(\{ autoRefresh \}\)/);
   assert.match(runtimeLogsSource, /LOG_REFRESH_INTERVAL_MS = 3000/);
   assert.doesNotMatch(runtimeLogsSource, /source: source \|\| undefined/);
@@ -207,7 +207,7 @@ test("admin log viewer is reachable from the authenticated admin layout", () => 
   );
   assert.match(
     adminCss,
-    /@media \(max-width: 768px\)[\s\S]*?\.admin-logs-page\s*\{[^}]*height:\s*auto[^}]*min-height:\s*calc\(100dvh - 48px - var\(--space-2\) - var\(--space-4\)\)[^}]*overflow:\s*visible/s
+    /@media \(max-width: 768px\)[\s\S]*?\.admin-logs-page\s*\{[^}]*height:\s*auto[^}]*min-height:\s*calc\(100dvh - var\(--admin-mobile-header-offset\) - var\(--space-4\)\)[^}]*overflow:\s*visible/s
   );
   assert.match(
     adminCss,
