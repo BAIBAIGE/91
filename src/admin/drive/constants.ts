@@ -80,20 +80,20 @@ export const emptyForm: FormState = {
   creds: {},
 };
 
-export const idleNightlyStatus = {
+export const idleMaintenanceStatus = {
   state: "idle" as const,
   running: false,
   queued: false,
 };
 
-export function nightlyButtonText(status: { running: boolean; queued: boolean }, triggering: boolean) {
+export function scanAllButtonText(status: { running: boolean; queued: boolean }, triggering: boolean) {
   if (triggering) return "触发中...";
   if (status.running) return "扫描运行中";
   if (status.queued) return "扫描已排队";
   return "扫描所有网盘";
 }
 
-export function nightlyBusyText(status: { running: boolean; queued: boolean }) {
+export function maintenanceBusyText(status: { running: boolean; queued: boolean }) {
   if (status.running || status.queued) return "当前有全量扫描任务正在进行，请稍后重试";
   return "";
 }

@@ -429,9 +429,9 @@ func main() {
 		SetTheme: func(theme string) error {
 			return app.SetTheme(ctx, theme)
 		},
-		OnRunNightlyJob: func() bool {
+		OnRunScanAllJob: func() bool {
 			if app.nightlyRunner != nil {
-				return app.nightlyRunner.TriggerNow()
+				return app.nightlyRunner.TriggerScanAll()
 			}
 			return false
 		},
@@ -464,7 +464,8 @@ func main() {
 	//   Phase 4 扫描爬虫本地目录并恢复已取消拉黑的视频
 	//   Phase 5 全库重复视频维护：精确指纹去重 + 标题/时长/封面近似去重
 	// 标签匹配不在夜间流水线中全库重算；新视频入库和管理员修改标签规则时按事件刷新。
-	// 也响应 admin "扫描所有网盘" 按钮（POST /admin/api/jobs/nightly/run → TriggerNow）。
+	// admin "扫描所有网盘" 使用同一个 Runner 的独立 scan-all 模式，只运行
+	// Phase 1 和 Phase 5，不触发爬虫、迁移或恢复，也不占用当天的定时执行标记。
 	app.nightlyRunner = nightly.New(nightly.Config{
 		Settings:              cat,
 		StartTime:             app.liveConfigSettings().NightlyStartTime,

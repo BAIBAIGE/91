@@ -254,8 +254,8 @@ func (p Proxy) AllowsForcedRelay() bool {
 
 // Nightly 是凌晨流水线（扫盘 → 爬虫 → 迁移 → 去重维护）的调度配置。
 //
-// 一个进程只跑一条 nightly 流水线；该 cron 时间到达且当天还没跑过时触发，
-// 也可被管理后台「扫描所有网盘」按钮手动触发。
+// 一个进程只跑一条 nightly 流水线；该 cron 时间到达且当天还没跑过时触发。
+// 管理后台「扫描所有网盘」与它共享任务协调器，但只运行扫盘和去重阶段。
 type Nightly struct {
 	// StartTime 是每日触发时间，采用严格的 24 小时 HH:mm 格式。该字段可在
 	// 管理后台热更新；配置面板与源码编辑器都直接读写 config.yaml。

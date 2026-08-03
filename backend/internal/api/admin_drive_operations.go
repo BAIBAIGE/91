@@ -521,13 +521,12 @@ func (a *AdminServer) handleGuangYaPanQRStatus(w http.ResponseWriter, r *http.Re
 	writeJSON(w, http.StatusOK, status)
 }
 
-// handleRunNightlyJob 触发一次完整的凌晨流水线（不论当前时间，不论今日是否已跑）。
-// 立即返回 202；进度通过 backend 日志和下次 GET /admin/api/drives 的状态变化观察。
-// 流水线已在跑或已排队时，Runner 会拒绝重复触发。
-func (a *AdminServer) handleRunNightlyJob(w http.ResponseWriter, r *http.Request) {
+// handleRunScanAllJob 触发手动全量扫盘：真实云盘扫描、新视频资产处理和视频去重。
+// 它不会运行脚本爬虫、爬虫上传或恢复阶段。任务已在跑或排队时拒绝重复触发。
+func (a *AdminServer) handleRunScanAllJob(w http.ResponseWriter, r *http.Request) {
 	accepted := false
-	if a.OnRunNightlyJob != nil {
-		accepted = a.OnRunNightlyJob()
+	if a.OnRunScanAllJob != nil {
+		accepted = a.OnRunScanAllJob()
 	}
 	resp := map[string]any{
 		"ok":       true,
@@ -540,8 +539,18 @@ func (a *AdminServer) handleRunNightlyJob(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusAccepted, resp)
 }
 
-func (a *AdminServer) handleNightlyJobStatus(w http.ResponseWriter, r *http.Request) {
+// handleRunNightlyJob 保留旧接口路径的兼容性；其行为与扫描所有网盘一致。
+func (a *AdminServer) handleRunNightlyJob(w http.ResponseWriter, r *http.Request) {
+	a.handleRunScanAllJob(w, r)
+}
+
+func (a *AdminServer) handleScanAllJobStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, a.nightlyJobStatus())
+}
+
+// handleNightlyJobStatus 保留旧接口路径的兼容性。
+func (a *AdminServer) handleNightlyJobStatus(w http.ResponseWriter, r *http.Request) {
+	a.handleScanAllJobStatus(w, r)
 }
 
 func (a *AdminServer) handleStopAllTasks(w http.ResponseWriter, r *http.Request) {

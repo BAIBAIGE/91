@@ -75,11 +75,12 @@ type AdminServer struct {
 	// Theme 读写（"dark" | "pink" | "sky"）
 	GetTheme func() string
 	SetTheme func(theme string) error
-	// OnRunNightlyJob 触发一次完整的凌晨流水线（Phase1 扫盘 + Phase2 爬虫 +
-	// Phase3 上传）。立即返回 —— 实际任务在后台跑，admin 在日志或下次状态查询里
-	// 看进度。若流水线正在跑或已排队，Runner 会拒绝重复触发。
-	OnRunNightlyJob func() bool
-	// GetNightlyJobStatus 返回凌晨流水线当前状态，用于前端禁用重复触发按钮。
+	// OnRunScanAllJob 触发一次手动全量扫盘：只扫描配置的真实云盘、等待新视频
+	// 资产生成并运行视频去重。爬虫、迁移和恢复只属于定时 nightly 流水线。
+	// 立即返回；若共享 Runner 正在跑或已排队，会拒绝重复触发。
+	OnRunScanAllJob func() bool
+	// GetNightlyJobStatus 返回共享维护 Runner 的状态，用于避免手动扫盘、单盘任务
+	// 和定时 nightly 流水线互相重叠。
 	GetNightlyJobStatus func() NightlyJobStatus
 	// ListDriveDirChildren 列出某个 drive 在 parentID 目录下的直接子目录。
 	// parentID 为空时使用 drive 的 RootID。返回 (子目录列表, error)。
@@ -291,6 +292,9 @@ func (a *AdminServer) Register(r chi.Router) {
 			r.Put("/backup-uploads/{id}/chunks/{index}", a.handleBackupUploadChunk)
 			r.Post("/backup-uploads/{id}/finalize", a.handleFinalizeBackupUpload)
 			r.Delete("/backup-uploads/{id}", a.handleCancelBackupUpload)
+			r.Get("/jobs/scan-all/status", a.handleScanAllJobStatus)
+			r.Post("/jobs/scan-all/run", a.handleRunScanAllJob)
+			// 兼容旧前端缓存；旧路径现在也遵循“只扫盘 + 去重”的语义。
 			r.Get("/jobs/nightly/status", a.handleNightlyJobStatus)
 			r.Post("/jobs/nightly/run", a.handleRunNightlyJob)
 			r.Post("/tasks/stop", a.handleStopAllTasks)

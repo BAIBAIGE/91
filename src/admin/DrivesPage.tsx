@@ -20,9 +20,9 @@ import {
   driveKindAbbr,
   driveKindIconPath,
   emptyForm,
-  idleNightlyStatus,
-  nightlyButtonText,
-  nightlyBusyText,
+  idleMaintenanceStatus,
+  scanAllButtonText,
+  maintenanceBusyText,
   usesRootDirectoryID,
   defaultRootId,
   credentialFields,
@@ -40,7 +40,7 @@ import { SkipDirsPanel } from "./drive/SkipDirsPanel";
 import { AdminEmptyVisual } from "./AdminEmptyVisual";
 
 const DRIVE_BUSY_MESSAGE = "当前存储有正在进行的任务，请稍后重试";
-const NIGHTLY_BUSY_MESSAGE = "当前有全量扫描任务正在进行，请稍后重试";
+const MAINTENANCE_BUSY_MESSAGE = "当前有全量扫描任务正在进行，请稍后重试";
 
 function isDriveBusy(d: api.AdminDrive) {
   return [
@@ -58,8 +58,8 @@ function isDriveBusy(d: api.AdminDrive) {
 export function DrivesPage() {
   const [list, setList] = useState<api.AdminDrive[]>([]);
   const [storage, setStorage] = useState<api.AdminDriveStorage | null>(null);
-  const [nightlyStatus, setNightlyStatus] =
-    useState<api.NightlyJobStatus>(idleNightlyStatus);
+  const [maintenanceStatus, setMaintenanceStatus] =
+    useState<api.MaintenanceJobStatus>(idleMaintenanceStatus);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [modalOpen, setModalOpen] = useState(false);
@@ -78,7 +78,7 @@ export function DrivesPage() {
   const [togglingTranscodeId, setTogglingTranscodeId] = useState("");
   const [scanningAll, setScanningAll] = useState(false);
   const [stoppingAll, setStoppingAll] = useState(false);
-  const [trackingNightly, setTrackingNightly] = useState(false);
+  const [trackingScanAll, setTrackingScanAll] = useState(false);
   const [scanningDriveIds, setScanningDriveIds] = useState<Record<string, boolean>>({});
   const scanningDriveIdsRef = useRef(new Set<string>());
   const [stoppingDriveId, setStoppingDriveId] = useState("");
@@ -86,7 +86,7 @@ export function DrivesPage() {
   const selectedDriveId = searchParams.get("drive") || null;
   const { show } = useToast();
   const pollConnectionLost = useRef(false);
-  const nightlyBusy = scanningAll || nightlyStatus.running || nightlyStatus.queued;
+  const maintenanceBusy = scanningAll || maintenanceStatus.running || maintenanceStatus.queued;
   const formDirty = form.id
     ? !sameForm(form, initialForm)
     : hasCreateFormChanges(form);
@@ -114,11 +114,11 @@ export function DrivesPage() {
       const [data, storageData, jobStatus] = await Promise.all([
         api.listDrives(),
         api.getDriveStorage(),
-        api.getNightlyJobStatus().catch(() => null),
+        api.getScanAllJobStatus().catch(() => null),
       ]);
       setList(data ?? []);
       setStorage(storageData);
-      if (jobStatus) setNightlyStatus(jobStatus);
+      if (jobStatus) setMaintenanceStatus(jobStatus);
     } catch (e) {
       const message = e instanceof Error ? e.message : "加载失败";
       setLoadError(message);
@@ -132,10 +132,10 @@ export function DrivesPage() {
     try {
       const [data, jobStatus] = await Promise.all([
         api.listDrives(),
-        api.getNightlyJobStatus().catch(() => null),
+        api.getScanAllJobStatus().catch(() => null),
       ]);
       setList(data ?? []);
-      if (jobStatus) setNightlyStatus(jobStatus);
+      if (jobStatus) setMaintenanceStatus(jobStatus);
       if (pollConnectionLost.current) {
         pollConnectionLost.current = false;
         show("连接已恢复，网盘数据已更新", "success");
@@ -162,20 +162,20 @@ export function DrivesPage() {
   }, [modalOpen]);
 
   useEffect(() => {
-    if (!trackingNightly) return;
+    if (!trackingScanAll) return;
     const timer = window.setInterval(async () => {
       try {
-        const status = await api.getNightlyJobStatus();
-        setNightlyStatus(status);
+        const status = await api.getScanAllJobStatus();
+        setMaintenanceStatus(status);
         if (status.running || (!status.queued && !status.running)) {
-          setTrackingNightly(false);
+          setTrackingScanAll(false);
         }
       } catch {
         // The normal drive polling already reports connection loss.
       }
     }, 2000);
     return () => window.clearInterval(timer);
-  }, [trackingNightly]);
+  }, [trackingScanAll]);
 
   function openCreate() {
     const nextForm = { ...emptyForm };
@@ -315,8 +315,8 @@ export function DrivesPage() {
   }
 
   async function handleRescan(d: api.AdminDrive) {
-    if (nightlyBusy) {
-      show(nightlyBusyText(nightlyStatus) || NIGHTLY_BUSY_MESSAGE, "info");
+    if (maintenanceBusy) {
+      show(maintenanceBusyText(maintenanceStatus) || MAINTENANCE_BUSY_MESSAGE, "info");
       return;
     }
     if (isDriveBusy(d) || scanningDriveIdsRef.current.has(d.id)) {
@@ -329,7 +329,7 @@ export function DrivesPage() {
       const resp = await api.rescan(d.id);
       if (!resp.accepted) {
         if (resp.status) {
-          setNightlyStatus(resp.status);
+          setMaintenanceStatus(resp.status);
         }
         show(resp.message || DRIVE_BUSY_MESSAGE, "info");
         refreshDriveList();
@@ -349,20 +349,20 @@ export function DrivesPage() {
     }
   }
 
-  async function handleRunNightly() {
-    if (nightlyBusy) {
-      show(nightlyBusyText(nightlyStatus) || NIGHTLY_BUSY_MESSAGE, "info");
+  async function handleScanAll() {
+    if (maintenanceBusy) {
+      show(maintenanceBusyText(maintenanceStatus) || MAINTENANCE_BUSY_MESSAGE, "info");
       return;
     }
     setScanningAll(true);
     try {
-      const resp = await api.runNightlyJob();
-      setNightlyStatus(resp.status);
+      const resp = await api.runScanAllJob();
+      setMaintenanceStatus(resp.status);
       if (resp.accepted) {
-        setTrackingNightly(!resp.status.running);
-        show("已触发扫描所有网盘，耗时较长，可在任务状态和 backend 日志观察进度", "success");
+        setTrackingScanAll(!resp.status.running);
+        show("已触发全部网盘扫描，完成新视频处理后将执行视频去重", "success");
       } else {
-        show(resp.message || NIGHTLY_BUSY_MESSAGE, "info");
+        show(resp.message || MAINTENANCE_BUSY_MESSAGE, "info");
       }
     } catch (e) {
       show(e instanceof Error ? e.message : "触发失败", "error");
@@ -376,8 +376,8 @@ export function DrivesPage() {
     setStoppingAll(true);
     try {
       const resp = await api.stopAllTasks();
-      setNightlyStatus(resp.status);
-      setTrackingNightly(false);
+      setMaintenanceStatus(resp.status);
+      setTrackingScanAll(false);
       show(
         resp.stoppedDrives > 0
           ? `已停止 ${resp.stoppedDrives} 个网盘的当前任务`
@@ -614,10 +614,10 @@ export function DrivesPage() {
                     type="button"
                     className="admin-btn"
                     onClick={() => handleRescan(d)}
-                    aria-disabled={nightlyBusy || isDriveBusy(d) || !!scanningDriveIds[d.id]}
+                    aria-disabled={maintenanceBusy || isDriveBusy(d) || !!scanningDriveIds[d.id]}
                     title={
-                      nightlyBusy
-                        ? nightlyBusyText(nightlyStatus) || NIGHTLY_BUSY_MESSAGE
+                      maintenanceBusy
+                        ? maintenanceBusyText(maintenanceStatus) || MAINTENANCE_BUSY_MESSAGE
                         : isDriveBusy(d) || scanningDriveIds[d.id]
                         ? DRIVE_BUSY_MESSAGE
                         : undefined
@@ -771,11 +771,11 @@ export function DrivesPage() {
             <button
               type="button"
               className="admin-btn"
-              onClick={handleRunNightly}
+              onClick={handleScanAll}
               disabled={scanningAll}
-              title={nightlyBusyText(nightlyStatus) || "立即扫描所有网盘。耗时较长，期间不要重复触发。"}
+              title={maintenanceBusyText(maintenanceStatus) || "扫描已配置网盘、处理新视频并执行视频去重。"}
             >
-              {nightlyButtonText(nightlyStatus, scanningAll)}
+              {scanAllButtonText(maintenanceStatus, scanningAll)}
             </button>
             <button
               type="button"

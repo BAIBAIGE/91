@@ -224,6 +224,80 @@ func TestRunPipelineHonoursPhaseOrder(t *testing.T) {
 	}
 }
 
+func TestRunScanAllOnlyScansConfiguredDrivesAndDedupes(t *testing.T) {
+	rec := &recorder{}
+	settings := newStubSettings()
+	now := time.Date(2026, 8, 3, 11, 30, 0, 0, time.Local)
+
+	r := New(Config{
+		Settings: settings,
+		Now:      func() time.Time { return now },
+		ListScanTargets: func(context.Context) []string {
+			rec.push("list-scan")
+			return []string{"drive-a", "drive-b"}
+		},
+		RunScan: func(_ context.Context, id string) {
+			rec.push("scan:" + id)
+		},
+		WaitPreviewQueuesIdle: func(context.Context) error {
+			rec.push("wait-idle")
+			return nil
+		},
+		ListCrawlerDrives: func(context.Context) []string {
+			rec.push("list-crawler")
+			return []string{"crawler-a"}
+		},
+		RunCrawlerCrawl: func(_ context.Context, id string) {
+			rec.push("crawl:" + id)
+		},
+		RunMigration: func(context.Context) error {
+			rec.push("migrate")
+			return nil
+		},
+		RestoreCrawlerVideos: func(_ context.Context, id string) error {
+			rec.push("restore:" + id)
+			return nil
+		},
+		RunDedupeAssetCleanup: func(context.Context) error {
+			rec.push("dedupe-cleanup")
+			return nil
+		},
+		RunTagMaintenance: func(context.Context) error {
+			rec.push("tag-maintenance")
+			return nil
+		},
+	})
+
+	if !r.TriggerScanAll() {
+		t.Fatal("TriggerScanAll should queue the manual scan")
+	}
+	mode := <-r.trigger
+	if mode != runModeScanAll {
+		t.Fatalf("queued mode = %v, want scan-all", mode)
+	}
+	r.runModeLocked(context.Background(), mode)
+
+	got := rec.snapshot()
+	want := []string{
+		"list-scan",
+		"scan:drive-a",
+		"scan:drive-b",
+		"wait-idle",
+		"dedupe-cleanup",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("call sequence len = %d, want %d; got=%v", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("call[%d] = %q, want %q (full=%v)", i, got[i], want[i], got)
+		}
+	}
+	if lastRun, _ := settings.GetSetting(context.Background(), settingLastRunDate, ""); lastRun != "" {
+		t.Fatalf("scan-all consumed scheduled nightly date: %q", lastRun)
+	}
+}
+
 func TestRunPipelineSkipsMigrationWhenNoCrawler(t *testing.T) {
 	rec := &recorder{}
 
@@ -330,7 +404,7 @@ func TestRunPipelineRecordsLastRunDateAfterCompletion(t *testing.T) {
 		WaitPreviewQueuesIdle: func(context.Context) error { return nil },
 	})
 
-	r.runPipelineLocked(context.Background(), false)
+	r.runModeLocked(context.Background(), runModeScheduled)
 
 	got, _ := settings.GetSetting(context.Background(), settingLastRunDate, "")
 	if got != "2026-05-27" {
@@ -338,7 +412,7 @@ func TestRunPipelineRecordsLastRunDateAfterCompletion(t *testing.T) {
 	}
 }
 
-func TestRunPipelineLockedDropsOverlappingTriggers(t *testing.T) {
+func TestRunModeLockedDropsOverlappingRuns(t *testing.T) {
 	var (
 		started      atomic.Int32
 		releaseFirst = make(chan struct{})
@@ -353,14 +427,14 @@ func TestRunPipelineLockedDropsOverlappingTriggers(t *testing.T) {
 		WaitPreviewQueuesIdle: func(context.Context) error { return nil },
 	})
 
-	go r.runPipelineLocked(context.Background(), false)
+	go r.runModeLocked(context.Background(), runModeScheduled)
 
 	// Wait for first to start
 	for started.Load() == 0 {
 		time.Sleep(5 * time.Millisecond)
 	}
 	// Second trigger should bail out without invoking ListScanTargets again
-	r.runPipelineLocked(context.Background(), true)
+	r.runModeLocked(context.Background(), runModeScheduled)
 	if started.Load() != 1 {
 		t.Fatalf("overlapping run should be dropped; started=%d", started.Load())
 	}
@@ -399,26 +473,26 @@ func TestCtxCancelPreventsLaterPhases(t *testing.T) {
 	}
 }
 
-func TestTriggerNowIsNonBlocking(t *testing.T) {
+func TestTriggerScanAllIsNonBlocking(t *testing.T) {
 	r := New(Config{Settings: newStubSettings()})
 	// fill the trigger channel
-	if !r.TriggerNow() {
-		t.Fatal("first TriggerNow should be accepted")
+	if !r.TriggerScanAll() {
+		t.Fatal("first TriggerScanAll should be accepted")
 	}
 	// Second call must not block
 	done := make(chan struct{})
 	var accepted bool
 	go func() {
-		accepted = r.TriggerNow()
+		accepted = r.TriggerScanAll()
 		close(done)
 	}()
 	select {
 	case <-done:
 	case <-time.After(100 * time.Millisecond):
-		t.Fatal("TriggerNow blocked when channel is full")
+		t.Fatal("TriggerScanAll blocked when channel is full")
 	}
 	if accepted {
-		t.Fatal("second TriggerNow should be ignored when trigger channel is full")
+		t.Fatal("second TriggerScanAll should be ignored when trigger channel is full")
 	}
 }
 
@@ -441,8 +515,8 @@ func TestStatusTracksQueuedRunningAndFinished(t *testing.T) {
 		t.Fatalf("initial status = %#v, want idle", got)
 	}
 
-	if !r.TriggerNow() {
-		t.Fatal("TriggerNow should queue a manual run")
+	if !r.TriggerScanAll() {
+		t.Fatal("TriggerScanAll should queue a manual run")
 	}
 	if got := r.Status(); got.State != "queued" || got.Running || !got.Queued {
 		t.Fatalf("queued status = %#v, want queued", got)
@@ -462,8 +536,8 @@ func TestStatusTracksQueuedRunningAndFinished(t *testing.T) {
 		t.Fatalf("running status = %#v, want running with startedAt", got)
 	}
 
-	if r.TriggerNow() {
-		t.Fatal("TriggerNow during a run should be ignored")
+	if r.TriggerScanAll() {
+		t.Fatal("TriggerScanAll during a run should be ignored")
 	}
 	if got := r.Status(); got.State != "running" || !got.Running || got.Queued {
 		t.Fatalf("status after ignored trigger = %#v, want running", got)
@@ -505,8 +579,8 @@ func TestStopCurrentCancelsRunningPipeline(t *testing.T) {
 	defer cancel()
 	go r.Run(ctx)
 
-	if !r.TriggerNow() {
-		t.Fatal("TriggerNow should queue a manual run")
+	if !r.TriggerScanAll() {
+		t.Fatal("TriggerScanAll should queue a manual run")
 	}
 	select {
 	case <-scanStarted:
@@ -526,8 +600,8 @@ func TestStopCurrentCancelsRunningPipeline(t *testing.T) {
 
 func TestStopCurrentDropsQueuedTrigger(t *testing.T) {
 	r := New(Config{Settings: newStubSettings()})
-	if !r.TriggerNow() {
-		t.Fatal("TriggerNow should queue a manual run")
+	if !r.TriggerScanAll() {
+		t.Fatal("TriggerScanAll should queue a manual run")
 	}
 	if !r.StopCurrent() {
 		t.Fatal("StopCurrent should report a queued pipeline")
@@ -535,12 +609,12 @@ func TestStopCurrentDropsQueuedTrigger(t *testing.T) {
 	if got := r.Status(); got.State != "idle" || got.Running || got.Queued {
 		t.Fatalf("status = %#v, want idle after dropping queued trigger", got)
 	}
-	if !r.TriggerNow() {
-		t.Fatal("TriggerNow should accept a new request after queued stop")
+	if !r.TriggerScanAll() {
+		t.Fatal("TriggerScanAll should accept a new request after queued stop")
 	}
 }
 
-func TestTriggerNowAcceptsOnlyOneConcurrentRequest(t *testing.T) {
+func TestTriggerScanAllAcceptsOnlyOneConcurrentRequest(t *testing.T) {
 	r := New(Config{Settings: newStubSettings()})
 
 	const callers = 16
@@ -549,7 +623,7 @@ func TestTriggerNowAcceptsOnlyOneConcurrentRequest(t *testing.T) {
 	for i := 0; i < callers; i++ {
 		go func() {
 			<-start
-			results <- r.TriggerNow()
+			results <- r.TriggerScanAll()
 		}()
 	}
 	close(start)

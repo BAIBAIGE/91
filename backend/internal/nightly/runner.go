@@ -1,8 +1,9 @@
 // Package nightly orchestrates the single nightly maintenance pipeline that
 // replaces the legacy scanLoop / crawlerLoop / crawler upload periodic loop.
 //
-// Pipeline (fired once per day at the configured HH:mm, also via TriggerNow for admin
-// "扫描所有网盘"):
+// The full pipeline is fired once per day at the configured HH:mm. The admin
+// "扫描所有网盘" action uses TriggerScanAll and intentionally runs only the
+// cloud-scan and duplicate-maintenance stages.
 //
 //	Phase 1: for each non-crawler cloud drive
 //	           scan + delete-detection + enqueue thumb + enqueue preview video
@@ -37,12 +38,19 @@ import (
 
 const (
 	// settingLastRunDate stores the YYYY-MM-DD of the last natural cron-triggered
-	// pipeline run. Manual TriggerNow() also updates this to keep behavior consistent.
+	// full pipeline run. Manual scan-all runs never update it.
 	settingLastRunDate = "nightly.last_run_date"
 	// dateLayout matches catalog.GetSetting string semantics; using ISO-8601 date.
 	dateLayout = "2006-01-02"
 	// pollInterval is the heartbeat for the natural cron decision loop.
 	pollInterval = time.Minute
+)
+
+type runMode uint8
+
+const (
+	runModeScheduled runMode = iota
+	runModeScanAll
 )
 
 // SettingStore is the minimal catalog.Catalog surface we rely on.
@@ -115,7 +123,7 @@ type Status struct {
 // Runner drives the nightly pipeline.
 type Runner struct {
 	cfg             Config
-	trigger         chan struct{} // buffered(1); manual "run now"
+	trigger         chan runMode  // buffered(1); mutually exclusive manual requests
 	scheduleChanged chan struct{} // buffered(1); wake the natural scheduler
 	runMu           sync.Mutex    // prevents overlapping pipeline runs
 	scheduleMu      sync.RWMutex  // protects cfg CronHour/CronMinute/StartTime
@@ -155,14 +163,14 @@ func New(cfg Config) *Runner {
 	}
 	return &Runner{
 		cfg:             cfg,
-		trigger:         make(chan struct{}, 1),
+		trigger:         make(chan runMode, 1),
 		scheduleChanged: make(chan struct{}, 1),
 	}
 }
 
 // Run is a blocking loop until ctx is done. It wakes up once per minute and
 // either fires the natural cron-driven pipeline (when the configured minute matches and
-// today hasn't run) or honors a manual TriggerNow() request.
+// today hasn't run) or honors a queued full/scan-all manual request.
 func (r *Runner) Run(ctx context.Context) {
 	t := time.NewTicker(pollInterval)
 	defer t.Stop()
@@ -179,9 +187,9 @@ func (r *Runner) Run(ctx context.Context) {
 			// Re-evaluate immediately so saving the current minute does not have
 			// to wait for the next heartbeat and accidentally miss today's run.
 			r.tryNaturalRun(ctx)
-		case <-r.trigger:
-			log.Printf("[nightly] manual trigger received")
-			r.runPipelineLocked(ctx, true)
+		case mode := <-r.trigger:
+			log.Printf("[scan-all] manual trigger received")
+			r.runModeLocked(ctx, mode)
 		}
 	}
 }
@@ -213,10 +221,15 @@ func (r *Runner) StartTime() string {
 	return r.cfg.StartTime
 }
 
-// TriggerNow asks the running loop to fire a pipeline ASAP. Only one manual
-// trigger can be active at a time: if a pipeline is already running or waiting
-// in the trigger channel, the request is ignored and returns false.
-func (r *Runner) TriggerNow() bool {
+// TriggerScanAll asks the runner to scan every configured non-crawler cloud
+// drive, wait for newly discovered video assets, and then run full-library
+// duplicate maintenance. It deliberately excludes crawler, migration, and
+// retained-video restore phases, and does not consume today's scheduled run.
+func (r *Runner) TriggerScanAll() bool {
+	return r.queueManualRun()
+}
+
+func (r *Runner) queueManualRun() bool {
 	r.stateMu.Lock()
 	if r.running || r.queued {
 		r.stateMu.Unlock()
@@ -226,7 +239,7 @@ func (r *Runner) TriggerNow() bool {
 	r.stateMu.Unlock()
 
 	select {
-	case r.trigger <- struct{}{}:
+	case r.trigger <- runModeScanAll:
 		return true
 	default:
 		r.stateMu.Lock()
@@ -303,7 +316,7 @@ func (r *Runner) tryNaturalRun(ctx context.Context) {
 		return
 	}
 	log.Printf("[nightly] natural cron trigger at %s", now.Format(time.RFC3339))
-	r.runPipelineLocked(ctx, false)
+	r.runModeLocked(ctx, runModeScheduled)
 }
 
 func parseStartTime(value string) (hour, minute int, normalized string, err error) {
@@ -320,24 +333,27 @@ func shouldRun(now time.Time, lastRunDate string) bool {
 	return lastRunDate != now.Format(dateLayout)
 }
 
-// runPipelineLocked guards against overlapping runs. If another pipeline is
-// in progress, the call returns immediately (logged once). After completion
-// (regardless of success), today's date is recorded so subsequent triggers
-// the same calendar day are skipped.
-//
-// 流水线没有总耗时上限：一直跑到 ctx 取消（进程退出）或所有 phase 完成。
-func (r *Runner) runPipelineLocked(ctx context.Context, manual bool) {
-	if manual {
+// runModeLocked guards both execution modes against overlap. Runs have no
+// fixed duration limit and stop only when canceled or their phases complete.
+func (r *Runner) runModeLocked(ctx context.Context, mode runMode) {
+	component := "nightly"
+	execution := "scheduled"
+	if mode == runModeScanAll {
+		component = "scan-all"
+		execution = "manual"
+	}
+
+	if mode == runModeScanAll {
 		r.stateMu.Lock()
 		queued := r.queued
 		r.stateMu.Unlock()
 		if !queued {
-			log.Printf("[nightly] manual trigger was canceled before start")
+			log.Printf("[%s] manual trigger was canceled before start", component)
 			return
 		}
 	}
 	if !r.runMu.TryLock() {
-		log.Printf("[nightly] another pipeline is already running, skipping this trigger")
+		log.Printf("[%s] another pipeline is already running, skipping this trigger", component)
 		return
 	}
 
@@ -350,20 +366,24 @@ func (r *Runner) runPipelineLocked(ctx context.Context, manual bool) {
 		r.runMu.Unlock()
 	}()
 
-	mode := "scheduled"
-	if manual {
-		mode = "manual"
-	}
-	log.Printf("[nightly] pipeline (%s) start", mode)
+	log.Printf("[%s] pipeline (%s) start", component, execution)
 
-	r.runPipeline(runCtx)
+	if mode == runModeScanAll {
+		r.runScanAllPipeline(runCtx)
+	} else {
+		r.runPipeline(runCtx)
+	}
 
 	finished := r.cfg.Now()
-	log.Printf("[nightly] pipeline (%s) finish; took=%s", mode, finished.Sub(started).Round(time.Second))
+	log.Printf("[%s] pipeline (%s) finish; took=%s", component, execution, finished.Sub(started).Round(time.Second))
+
+	if mode == runModeScanAll {
+		return
+	}
 
 	// Mark today as processed regardless of success/error. This is intentional:
-	// a partial / failing pipeline shouldn't trigger again the same day, the
-	// admin can inspect logs and click "扫描所有网盘" to retry explicitly.
+	// a partial / failing full pipeline should not automatically trigger again
+	// during the same scheduled minute. Scan-all returns above and never writes it.
 	dateStr := started.Format(dateLayout)
 	if err := r.cfg.Settings.SetSetting(ctx, settingLastRunDate, dateStr); err != nil {
 		log.Printf("[nightly] persist last_run_date: %v", err)
@@ -393,34 +413,12 @@ func (r *Runner) markFinished(finished time.Time) {
 // each phase is best-effort; downstream phases still attempt to run unless ctx
 // is dead.
 func (r *Runner) runPipeline(ctx context.Context) {
-	// ---------- Phase 1 ----------
-	if r.shouldStop(ctx, "phase 1") {
+	if !r.runScanPhase(ctx, "nightly", "phase 1") {
 		return
-	}
-	scanIDs := []string{}
-	if r.cfg.ListScanTargets != nil {
-		scanIDs = r.cfg.ListScanTargets(ctx)
-	}
-	if len(scanIDs) == 0 {
-		log.Printf("[nightly] phase 1 skipped: no cloud drives to scan")
-	} else {
-		log.Printf("[nightly] phase 1: scanning %d drive(s)", len(scanIDs))
-		for _, id := range scanIDs {
-			if ctx.Err() != nil {
-				log.Printf("[nightly] phase 1 aborted by ctx: %v", ctx.Err())
-				return
-			}
-			log.Printf("[nightly] phase 1: scanning drive=%s", id)
-			r.cfg.RunScan(ctx, id)
-		}
-		log.Printf("[nightly] phase 1: waiting for preview queues to drain")
-		if err := r.waitIdle(ctx, "phase 1"); err != nil {
-			return
-		}
 	}
 
 	// ---------- Phase 2 ----------
-	if r.shouldStop(ctx, "phase 2") {
+	if r.shouldStop(ctx, "nightly", "phase 2") {
 		return
 	}
 	crawlerIDs := []string{}
@@ -429,8 +427,8 @@ func (r *Runner) runPipeline(ctx context.Context) {
 	}
 	if len(crawlerIDs) == 0 {
 		log.Printf("[nightly] phase 2/3 skipped: no crawler configured")
-		r.runDedupeAssetCleanupPhase(ctx)
-		r.runTagMaintenancePhase(ctx)
+		r.runDedupeAssetCleanupPhase(ctx, "nightly", "phase 5")
+		r.runTagMaintenancePhase(ctx, "nightly", "phase 6")
 		return
 	}
 	log.Printf("[nightly] phase 2: crawling %d crawler drive(s)", len(crawlerIDs))
@@ -443,12 +441,12 @@ func (r *Runner) runPipeline(ctx context.Context) {
 		r.cfg.RunCrawlerCrawl(ctx, id)
 	}
 	log.Printf("[nightly] phase 2: waiting for teaser queue to drain")
-	if err := r.waitIdle(ctx, "phase 2"); err != nil {
+	if err := r.waitIdle(ctx, "nightly", "phase 2"); err != nil {
 		return
 	}
 
 	// ---------- Phase 3 ----------
-	if r.shouldStop(ctx, "phase 3") {
+	if r.shouldStop(ctx, "nightly", "phase 3") {
 		return
 	}
 	log.Printf("[nightly] phase 3: crawler upload")
@@ -459,7 +457,7 @@ func (r *Runner) runPipeline(ctx context.Context) {
 	}
 
 	// ---------- Phase 4 ----------
-	if r.shouldStop(ctx, "phase 4") {
+	if r.shouldStop(ctx, "nightly", "phase 4") {
 		return
 	}
 	if r.cfg.RestoreCrawlerVideos != nil {
@@ -471,53 +469,92 @@ func (r *Runner) runPipeline(ctx context.Context) {
 		}
 	}
 
-	r.runDedupeAssetCleanupPhase(ctx)
-	r.runTagMaintenancePhase(ctx)
+	r.runDedupeAssetCleanupPhase(ctx, "nightly", "phase 5")
+	r.runTagMaintenancePhase(ctx, "nightly", "phase 6")
 }
 
-func (r *Runner) shouldStop(ctx context.Context, phase string) bool {
+// runScanAllPipeline is the manual admin workflow: configured cloud drives are
+// scanned and newly discovered videos finish their generation work before
+// duplicate maintenance runs. Crawler-specific lifecycle phases belong only to
+// the scheduled/full pipeline above.
+func (r *Runner) runScanAllPipeline(ctx context.Context) {
+	if !r.runScanPhase(ctx, "scan-all", "scan") {
+		return
+	}
+	r.runDedupeAssetCleanupPhase(ctx, "scan-all", "dedupe")
+}
+
+func (r *Runner) runScanPhase(ctx context.Context, component, phase string) bool {
+	if r.shouldStop(ctx, component, phase) {
+		return false
+	}
+	scanIDs := []string{}
+	if r.cfg.ListScanTargets != nil {
+		scanIDs = r.cfg.ListScanTargets(ctx)
+	}
+	if len(scanIDs) == 0 {
+		log.Printf("[%s] %s skipped: no cloud drives to scan", component, phase)
+	} else {
+		log.Printf("[%s] %s: scanning %d drive(s)", component, phase, len(scanIDs))
+		for _, id := range scanIDs {
+			if ctx.Err() != nil {
+				log.Printf("[%s] %s aborted by ctx: %v", component, phase, ctx.Err())
+				return false
+			}
+			log.Printf("[%s] %s: scanning drive=%s", component, phase, id)
+			r.cfg.RunScan(ctx, id)
+		}
+		log.Printf("[%s] %s: waiting for preview queues to drain", component, phase)
+		if err := r.waitIdle(ctx, component, phase); err != nil {
+			return false
+		}
+	}
+	return true
+}
+
+func (r *Runner) shouldStop(ctx context.Context, component, phase string) bool {
 	if err := ctx.Err(); err != nil {
-		log.Printf("[nightly] %s: ctx done (%v), bailing out", phase, err)
+		log.Printf("[%s] %s: ctx done (%v), bailing out", component, phase, err)
 		return true
 	}
 	return false
 }
 
 // waitIdle calls the configured WaitPreviewQueuesIdle, logging the outcome.
-func (r *Runner) waitIdle(ctx context.Context, phase string) error {
+func (r *Runner) waitIdle(ctx context.Context, component, phase string) error {
 	if r.cfg.WaitPreviewQueuesIdle == nil {
 		return nil
 	}
 	if err := r.cfg.WaitPreviewQueuesIdle(ctx); err != nil {
-		log.Printf("[nightly] %s: wait preview queues: %v", phase, err)
+		log.Printf("[%s] %s: wait preview queues: %v", component, phase, err)
 		return err
 	}
 	return nil
 }
 
-func (r *Runner) runTagMaintenancePhase(ctx context.Context) {
+func (r *Runner) runTagMaintenancePhase(ctx context.Context, component, phase string) {
 	if r.cfg.RunTagMaintenance == nil {
 		return
 	}
-	if r.shouldStop(ctx, "phase 6") {
+	if r.shouldStop(ctx, component, phase) {
 		return
 	}
-	log.Printf("[nightly] phase 6: tag maintenance")
+	log.Printf("[%s] %s: tag maintenance", component, phase)
 	if err := r.cfg.RunTagMaintenance(ctx); err != nil {
-		log.Printf("[nightly] phase 6 tag maintenance: %v", err)
+		log.Printf("[%s] %s tag maintenance: %v", component, phase, err)
 	}
 }
 
-func (r *Runner) runDedupeAssetCleanupPhase(ctx context.Context) {
-	if r.shouldStop(ctx, "phase 5") {
+func (r *Runner) runDedupeAssetCleanupPhase(ctx context.Context, component, phase string) {
+	if r.shouldStop(ctx, component, phase) {
 		return
 	}
 	if r.cfg.RunDedupeAssetCleanup == nil {
 		return
 	}
-	log.Printf("[nightly] phase 5: duplicate video maintenance")
+	log.Printf("[%s] %s: duplicate video maintenance", component, phase)
 	if err := r.cfg.RunDedupeAssetCleanup(ctx); err != nil {
-		log.Printf("[nightly] phase 5 duplicate video maintenance: %v", err)
+		log.Printf("[%s] %s duplicate video maintenance: %v", component, phase, err)
 	}
 }
 

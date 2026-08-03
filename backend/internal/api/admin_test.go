@@ -540,26 +540,26 @@ func TestInstalledVersionPrefersDockerImageVersionOverVersionFile(t *testing.T) 
 	}
 }
 
-func TestHandleRunNightlyJobReturnsAcceptedStatus(t *testing.T) {
+func TestHandleRunScanAllJobReturnsAcceptedStatus(t *testing.T) {
 	called := false
-	req := httptest.NewRequest(http.MethodPost, "/admin/api/jobs/nightly/run", nil)
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/jobs/scan-all/run", nil)
 	rr := httptest.NewRecorder()
 
 	(&AdminServer{
-		OnRunNightlyJob: func() bool {
+		OnRunScanAllJob: func() bool {
 			called = true
 			return true
 		},
 		GetNightlyJobStatus: func() NightlyJobStatus {
 			return NightlyJobStatus{State: "queued", Queued: true}
 		},
-	}).handleRunNightlyJob(rr, req)
+	}).handleRunScanAllJob(rr, req)
 
 	if rr.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202; body = %s", rr.Code, rr.Body.String())
 	}
 	if !called {
-		t.Fatal("OnRunNightlyJob was not called")
+		t.Fatal("OnRunScanAllJob was not called")
 	}
 	var got struct {
 		OK       bool             `json:"ok"`
@@ -574,18 +574,18 @@ func TestHandleRunNightlyJobReturnsAcceptedStatus(t *testing.T) {
 	}
 }
 
-func TestHandleRunNightlyJobReturnsBusyMessageWhenRejected(t *testing.T) {
-	req := httptest.NewRequest(http.MethodPost, "/admin/api/jobs/nightly/run", nil)
+func TestHandleRunScanAllJobReturnsBusyMessageWhenRejected(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/jobs/scan-all/run", nil)
 	rr := httptest.NewRecorder()
 
 	(&AdminServer{
-		OnRunNightlyJob: func() bool {
+		OnRunScanAllJob: func() bool {
 			return false
 		},
 		GetNightlyJobStatus: func() NightlyJobStatus {
 			return NightlyJobStatus{State: "running", Running: true}
 		},
-	}).handleRunNightlyJob(rr, req)
+	}).handleRunScanAllJob(rr, req)
 
 	if rr.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202; body = %s", rr.Code, rr.Body.String())
@@ -676,11 +676,11 @@ func TestHandleRescanReturnsAcceptedFlagAndBusyMessage(t *testing.T) {
 	}
 }
 
-func TestHandleNightlyJobStatusDefaultsToIdle(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "/admin/api/jobs/nightly/status", nil)
+func TestHandleScanAllJobStatusDefaultsToIdle(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/jobs/scan-all/status", nil)
 	rr := httptest.NewRecorder()
 
-	(&AdminServer{}).handleNightlyJobStatus(rr, req)
+	(&AdminServer{}).handleScanAllJobStatus(rr, req)
 
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body = %s", rr.Code, rr.Body.String())

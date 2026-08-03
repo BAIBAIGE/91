@@ -44,8 +44,8 @@ type App struct {
 	// crawlerUploader 把脚本爬虫保存在本地的视频上传到每个爬虫配置的目标 drive。
 	crawlerUploader crawlerUploadRunner
 
-	// nightlyRunner 是凌晨流水线调度器：每天按配置时间串行跑扫盘 → 脚本爬虫 → 上传。
-	// 也响应 admin 「扫描所有网盘」按钮（TriggerNow）。
+	// nightlyRunner 协调两种互斥任务：定时完整流水线，以及 admin 手动触发的
+	// “扫所有真实网盘 → 等新视频资产 → 去重”精简流水线。
 	nightlyRunner *nightly.Runner
 
 	// scanQueueMu 保护 scanQueued 和 scanProgress。

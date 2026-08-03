@@ -748,7 +748,7 @@ test("drive list actions use ordinary text buttons in the requested positions", 
   );
   assert.match(
     drivesPageSource,
-    /className="admin-page__actions admin-drive-list-actions"[\s\S]*aria-label="所有网盘任务控制"[\s\S]*onClick=\{handleRunNightly\}[\s\S]*onClick=\{handleStopAllTasks\}[\s\S]*onClick=\{openCreate\}/
+    /className="admin-page__actions admin-drive-list-actions"[\s\S]*aria-label="所有网盘任务控制"[\s\S]*onClick=\{handleScanAll\}[\s\S]*onClick=\{handleStopAllTasks\}[\s\S]*onClick=\{openCreate\}/
   );
   assert.match(
     drivesPageSource,
@@ -760,7 +760,7 @@ test("drive list actions use ordinary text buttons in the requested positions", 
   assert.doesNotMatch(drivesPageSource, /<Plus size=\{14\}/);
   assert.match(
     drivesPageSource,
-    /className="admin-btn"\s+onClick=\{handleRunNightly\}/
+    /className="admin-btn"\s+onClick=\{handleScanAll\}/
   );
   assert.match(
     drivesPageSource,
@@ -981,10 +981,15 @@ test("drive rescan reports busy storage tasks instead of queueing duplicates", (
   assert.doesNotMatch(drivesPageSource, /disabled=\{!!scanningDriveId\}/);
 });
 
-test("nightly scan duplicate trigger uses full-scan busy message", () => {
-  assert.match(apiSource, /status:\s*NightlyJobStatus;\s*message\?:\s*string/);
+test("scan-all uses its dedicated endpoint and full-scan busy message", () => {
+  assert.match(apiSource, /status:\s*MaintenanceJobStatus;\s*message\?:\s*string/);
+  assert.match(
+    apiSource,
+    /function runScanAllJob\(\)[\s\S]*"\/jobs\/scan-all\/run"/
+  );
+  assert.doesNotMatch(apiSource, /function runNightlyJob\(/);
   assert.match(drivesPageSource, /当前有全量扫描任务正在进行，请稍后重试/);
-  assert.match(drivesPageSource, /resp\.message \|\| NIGHTLY_BUSY_MESSAGE/);
+  assert.match(drivesPageSource, /resp\.message \|\| MAINTENANCE_BUSY_MESSAGE/);
   assert.match(constantsSource, /当前有全量扫描任务正在进行，请稍后重试/);
 });
 

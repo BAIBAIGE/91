@@ -474,7 +474,7 @@ export function deleteDrive(id: string, body: DeleteDriveInput) {
 }
 
 export function rescan(id: string) {
-  return request<{ ok: boolean; accepted: boolean; message?: string; status?: NightlyJobStatus }>(
+  return request<{ ok: boolean; accepted: boolean; message?: string; status?: MaintenanceJobStatus }>(
     `/drives/${encodeURIComponent(id)}/rescan`,
     { method: "POST" }
   );
@@ -598,14 +598,14 @@ export function testCrawlerScript(body: { scriptPath: string; proxy?: string }) 
 }
 
 export function runCrawler(id: string) {
-  return request<{ ok: boolean; accepted: boolean; message?: string; status?: NightlyJobStatus }>(
+  return request<{ ok: boolean; accepted: boolean; message?: string; status?: MaintenanceJobStatus }>(
     `/crawlers/${encodeURIComponent(id)}/run`,
     { method: "POST" }
   );
 }
 
 export function uploadCrawlerVideos(id: string) {
-  return request<{ ok: boolean; accepted: boolean; message?: string; status?: NightlyJobStatus }>(
+  return request<{ ok: boolean; accepted: boolean; message?: string; status?: MaintenanceJobStatus }>(
     `/crawlers/${encodeURIComponent(id)}/upload`,
     { method: "POST" }
   );
@@ -1194,12 +1194,11 @@ export async function updateConfigYAML(
 // ---------- Jobs ----------
 
 /**
- * 立即触发一次完整的凌晨流水线（Phase1 扫盘 + Phase2 91 爬虫 + Phase3 迁移），
- * 不论当前时间或今日是否已跑。立即返回 202；进度通过任务状态和 backend 日志观察。
- *
- * 流水线已在跑或已排队时，后端会拒绝重复触发。
+ * 扫描所有已配置的真实网盘，等待新视频资产处理完成后执行全库视频去重。
+ * 不触发脚本爬虫、爬虫上传或恢复，也不占用当天的定时 nightly 执行标记。
+ * 任务已在跑或已排队时，后端会拒绝重复触发。
  */
-export type NightlyJobStatus = {
+export type MaintenanceJobStatus = {
   state: "idle" | "queued" | "running" | "running_queued";
   running: boolean;
   queued: boolean;
@@ -1207,19 +1206,19 @@ export type NightlyJobStatus = {
   lastFinishedAt?: string;
 };
 
-export function getNightlyJobStatus() {
-  return request<NightlyJobStatus>("/jobs/nightly/status");
+export function getScanAllJobStatus() {
+  return request<MaintenanceJobStatus>("/jobs/scan-all/status");
 }
 
-export function runNightlyJob() {
-  return request<{ ok: boolean; accepted: boolean; status: NightlyJobStatus; message?: string }>(
-    "/jobs/nightly/run",
+export function runScanAllJob() {
+  return request<{ ok: boolean; accepted: boolean; status: MaintenanceJobStatus; message?: string }>(
+    "/jobs/scan-all/run",
     { method: "POST" }
   );
 }
 
 export function stopAllTasks() {
-  return request<{ ok: boolean; stoppedDrives: number; status: NightlyJobStatus }>(
+  return request<{ ok: boolean; stoppedDrives: number; status: MaintenanceJobStatus }>(
     "/tasks/stop",
     { method: "POST" }
   );
