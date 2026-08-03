@@ -794,8 +794,8 @@ func (c *Crawler) processItem(ctx context.Context, item Item) (bool, error) {
 					log.Printf("[scriptcrawler] drive=%s common thumbs mkdir: %v", c.cfg.Driver.ID(), err)
 				} else {
 					dst := mediaasset.ThumbnailPathInDir(c.cfg.CommonThumbDir, videoID)
-					if err := copyFileAtomic(thumbPath, dst); err != nil {
-						log.Printf("[scriptcrawler] drive=%s source_id=%s copy thumbnail: %v", c.cfg.Driver.ID(), sourceID, err)
+					if err := mediaasset.NormalizeThumbnailJPEG(thumbPath, dst); err != nil {
+						log.Printf("[scriptcrawler] drive=%s source_id=%s normalize thumbnail: %v", c.cfg.Driver.ID(), sourceID, err)
 					} else {
 						commonThumbPath = dst
 						thumbReady = true
@@ -1016,7 +1016,7 @@ func (c *Crawler) restoreCrawlerThumbnail(video *catalog.Video, fileID string) b
 		if err := os.MkdirAll(c.cfg.CommonThumbDir, 0o755); err != nil {
 			return false
 		}
-		if err := copyFileAtomic(source, mediaasset.ThumbnailPathInDir(c.cfg.CommonThumbDir, video.ID)); err != nil {
+		if err := mediaasset.NormalizeThumbnailJPEG(source, mediaasset.ThumbnailPathInDir(c.cfg.CommonThumbDir, video.ID)); err != nil {
 			log.Printf("[scriptcrawler] drive=%s restore thumbnail video=%s: %v", c.cfg.Driver.ID(), video.ID, err)
 			return false
 		}

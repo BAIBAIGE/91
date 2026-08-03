@@ -12,6 +12,7 @@ require (
 	github.com/go-resty/resty/v2 v2.14.0
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 	golang.org/x/crypto v0.25.0
+	golang.org/x/image v0.29.0
 	golang.org/x/net v0.27.0
 	golang.org/x/sys v0.30.0
 	golang.org/x/text v0.28.0

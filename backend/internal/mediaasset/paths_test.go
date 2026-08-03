@@ -157,3 +157,21 @@ func TestEnsureShortsBackgroundCreatesSmallPreblurredJPEG(t *testing.T) {
 		)
 	}
 }
+
+func TestEnsureShortsBackgroundDecodesWebPWithJPEGSuffix(t *testing.T) {
+	localDir := t.TempDir()
+	sourcePath := ThumbnailPath(localDir, "webp-video")
+	writeTestWebP(t, sourcePath)
+	destinationPath := ShortsBackgroundPath(localDir, "webp-video")
+	if err := EnsureShortsBackground(sourcePath, destinationPath); err != nil {
+		t.Fatalf("EnsureShortsBackground: %v", err)
+	}
+	generated, err := os.Open(destinationPath)
+	if err != nil {
+		t.Fatalf("open generated background: %v", err)
+	}
+	defer generated.Close()
+	if _, err := jpeg.Decode(generated); err != nil {
+		t.Fatalf("decode generated JPEG: %v", err)
+	}
+}

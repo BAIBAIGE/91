@@ -200,6 +200,9 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	if _, err := app.normalizeLegacyThumbnailFiles(ctx); err != nil {
+		log.Printf("[thumbnail-maintenance] migration failed: %v", err)
+	}
 	app.loadTheme(ctx)
 	if removed, err := app.cleanupOrphanDriveVideos(ctx); err != nil {
 		log.Printf("[cleanup] orphan drive videos: %v", err)

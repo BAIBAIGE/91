@@ -1,10 +1,15 @@
 package mediasim
 
 import (
+	"encoding/base64"
 	"image"
 	"image/color"
+	"os"
+	"path/filepath"
 	"testing"
 )
+
+const similarityWebPBase64 = "UklGRrIBAABXRUJQVlA4TKUBAAAvSsAYAA8w//M///MfeJAkbXvaSG7m8Q3GfYSBJekwQztm/IcZlgwnmWImn2BK7aFmBtnVir6q//8VOkFE/xm4baTIu8c48ArEo6+B3zFKYln3pqClSCKX0begFTAXFOLXHSyF8cCNcZEG4OywuA4KVVfJCiArU7GAgJI8+lJP/OKMT/fBAjevg1cYB7YVkFuWga2lyPi5I0HFy5YTpWIHg0RZpkniRVW9odHAKOwosWuOGdxIyn2OvaCDvhg/we6TwadPBPbqBV58MsLmMJ8yZnOWk8SRz4N+QoyPL+MnamzMvcE1rHNEr91F9GKZPVUcS9w7PhhH36suB9qPeYb/oLk6cuTiJ0wOK3m5h1cKjW6EVZCYMK7dxcKCBdgP9HkKr9gkAO2P8GKZGWVdIAatQa+1IDpt6qyorVwdy01xdW8Jkfk6xjEXmVQQ+HQdFr6OKhIN34dXWq0+0qr6EJSCeeVLH9+gvGTLyqM65PQ44ihzlTXxQKjKbAvshXgir7Lil9w4L2bvMycmjQcqXaMCO6BlY28i+FOLzbfI1vEqxAhotocAAA=="
 
 func TestTitleSimilarityNormalizesPunctuationAndWhitespace(t *testing.T) {
 	score := TitleSimilarity("AB-123  测试视频.mp4", "ab123测试视频")
@@ -50,6 +55,28 @@ func TestSSIMScoresIdenticalAndDifferentImages(t *testing.T) {
 	}
 	if score := SSIM(red, blue); score >= 0.95 {
 		t.Fatalf("different SSIM = %.6f, want < 0.95", score)
+	}
+}
+
+func TestImageSSIMDecodesWebPWithJPEGSuffix(t *testing.T) {
+	data, err := base64.StdEncoding.DecodeString(similarityWebPBase64)
+	if err != nil {
+		t.Fatalf("decode WebP fixture: %v", err)
+	}
+	directory := t.TempDir()
+	leftPath := filepath.Join(directory, "left.jpg")
+	rightPath := filepath.Join(directory, "right.jpg")
+	for _, path := range []string{leftPath, rightPath} {
+		if err := os.WriteFile(path, data, 0o644); err != nil {
+			t.Fatalf("write WebP fixture: %v", err)
+		}
+	}
+	score, err := ImageSSIM(leftPath, rightPath)
+	if err != nil {
+		t.Fatalf("ImageSSIM: %v", err)
+	}
+	if score < 0.999 {
+		t.Fatalf("WebP SSIM = %.6f, want close to 1", score)
 	}
 }
 

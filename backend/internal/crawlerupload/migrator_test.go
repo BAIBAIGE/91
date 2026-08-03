@@ -2,6 +2,10 @@ package crawlerupload
 
 import (
 	"context"
+	"encoding/base64"
+	"image"
+	"image/color"
+	"image/jpeg"
 	"io"
 	"os"
 	"path/filepath"
@@ -14,6 +18,8 @@ import (
 	"github.com/video-site/backend/internal/drives"
 	"github.com/video-site/backend/internal/drives/scriptcrawler"
 )
+
+const crawlerUploadWebPBase64 = "UklGRrIBAABXRUJQVlA4TKUBAAAvSsAYAA8w//M///MfeJAkbXvaSG7m8Q3GfYSBJekwQztm/IcZlgwnmWImn2BK7aFmBtnVir6q//8VOkFE/xm4baTIu8c48ArEo6+B3zFKYln3pqClSCKX0begFTAXFOLXHSyF8cCNcZEG4OywuA4KVVfJCiArU7GAgJI8+lJP/OKMT/fBAjevg1cYB7YVkFuWga2lyPi5I0HFy5YTpWIHg0RZpkniRVW9odHAKOwosWuOGdxIyn2OvaCDvhg/we6TwadPBPbqBV58MsLmMJ8yZnOWk8SRz4N+QoyPL+MnamzMvcE1rHNEr91F9GKZPVUcS9w7PhhH36suB9qPeYb/oLk6cuTiJ0wOK3m5h1cKjW6EVZCYMK7dxcKCBdgP9HkKr9gkAO2P8GKZGWVdIAatQa+1IDpt6qyorVwdy01xdW8Jkfk6xjEXmVQQ+HQdFr6OKhIN34dXWq0+0qr6EJSCeeVLH9+gvGTLyqM65PQ44ihzlTXxQKjKbAvshXgir7Lil9w4L2bvMycmjQcqXaMCO6BlY28i+FOLzbfI1vEqxAhotocAAA=="
 
 type fakeRegistry struct {
 	byID map[string]drives.Drive
@@ -122,6 +128,13 @@ func TestRunOnceUploadsScriptCrawlerLocalVideo(t *testing.T) {
 	}
 
 	videoID := writeCrawlerVideo(t, cat, src, "source-001", ".mp4", []byte("video payload"), true)
+	webP, err := base64.StdEncoding.DecodeString(crawlerUploadWebPBase64)
+	if err != nil {
+		t.Fatalf("decode WebP fixture: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(src.ThumbsDir(), "source-001.jpg"), webP, 0o644); err != nil {
+		t.Fatalf("replace crawler thumbnail with WebP: %v", err)
+	}
 	commonThumbDir := filepath.Join(t.TempDir(), "thumbs")
 	m := New(Config{Catalog: cat, Registry: reg, CommonThumbDir: commonThumbDir})
 
@@ -162,8 +175,13 @@ func TestRunOnceUploadsScriptCrawlerLocalVideo(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(src.ThumbsDir(), "source-001.jpg")); !os.IsNotExist(err) {
 		t.Fatalf("local thumb still exists or stat failed: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(commonThumbDir, videoID+".jpg")); err != nil {
+	commonThumb, err := os.Open(filepath.Join(commonThumbDir, videoID+".jpg"))
+	if err != nil {
 		t.Fatalf("common thumbnail missing: %v", err)
+	}
+	defer commonThumb.Close()
+	if _, err := jpeg.Decode(commonThumb); err != nil {
+		t.Fatalf("common thumbnail was not normalized to JPEG: %v", err)
 	}
 }
 
@@ -288,8 +306,22 @@ func writeCrawlerVideo(t *testing.T, cat *catalog.Catalog, d *scriptcrawler.Driv
 	if err != nil {
 		t.Fatalf("thumb path: %v", err)
 	}
-	if err := os.WriteFile(thumbPath, []byte("thumb"), 0o644); err != nil {
-		t.Fatalf("write thumb: %v", err)
+	thumb, err := os.Create(thumbPath)
+	if err != nil {
+		t.Fatalf("create thumb: %v", err)
+	}
+	frame := image.NewRGBA(image.Rect(0, 0, 16, 16))
+	for y := 0; y < frame.Bounds().Dy(); y++ {
+		for x := 0; x < frame.Bounds().Dx(); x++ {
+			frame.SetRGBA(x, y, color.RGBA{R: 80, G: 120, B: 160, A: 255})
+		}
+	}
+	if err := jpeg.Encode(thumb, frame, &jpeg.Options{Quality: 90}); err != nil {
+		_ = thumb.Close()
+		t.Fatalf("encode thumb: %v", err)
+	}
+	if err := thumb.Close(); err != nil {
+		t.Fatalf("close thumb: %v", err)
 	}
 
 	now := time.Now()

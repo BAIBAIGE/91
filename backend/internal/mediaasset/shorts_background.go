@@ -37,17 +37,9 @@ func EnsureShortsBackground(sourcePath, destinationPath string) error {
 		return nil
 	}
 
-	source, err := os.Open(sourcePath)
-	if err != nil {
-		return err
-	}
-	frame, err := jpeg.Decode(source)
-	closeErr := source.Close()
+	frame, err := DecodeImage(sourcePath)
 	if err != nil {
 		return fmt.Errorf("decode shorts background source: %w", err)
-	}
-	if closeErr != nil {
-		return closeErr
 	}
 
 	resized := resizeForShortsBackground(frame)

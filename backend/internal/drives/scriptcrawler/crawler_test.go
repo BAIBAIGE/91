@@ -2,6 +2,7 @@ package scriptcrawler
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"image"
@@ -24,6 +25,7 @@ import (
 const (
 	scriptCrawlerDuplicateBytes = "duplicate-video-bytes"
 	scriptCrawlerUniqueBytes    = "unique-video-bytes"
+	scriptCrawlerWebPBase64     = "UklGRrIBAABXRUJQVlA4TKUBAAAvSsAYAA8w//M///MfeJAkbXvaSG7m8Q3GfYSBJekwQztm/IcZlgwnmWImn2BK7aFmBtnVir6q//8VOkFE/xm4baTIu8c48ArEo6+B3zFKYln3pqClSCKX0begFTAXFOLXHSyF8cCNcZEG4OywuA4KVVfJCiArU7GAgJI8+lJP/OKMT/fBAjevg1cYB7YVkFuWga2lyPi5I0HFy5YTpWIHg0RZpkniRVW9odHAKOwosWuOGdxIyn2OvaCDvhg/we6TwadPBPbqBV58MsLmMJ8yZnOWk8SRz4N+QoyPL+MnamzMvcE1rHNEr91F9GKZPVUcS9w7PhhH36suB9qPeYb/oLk6cuTiJ0wOK3m5h1cKjW6EVZCYMK7dxcKCBdgP9HkKr9gkAO2P8GKZGWVdIAatQa+1IDpt6qyorVwdy01xdW8Jkfk6xjEXmVQQ+HQdFr6OKhIN34dXWq0+0qr6EJSCeeVLH9+gvGTLyqM65PQ44ihzlTXxQKjKbAvshXgir7Lil9w4L2bvMycmjQcqXaMCO6BlY28i+FOLzbfI1vEqxAhotocAAA=="
 )
 
 func writeScriptCrawlerFFprobeStub(t *testing.T, dir string, ok bool) string {
@@ -86,6 +88,17 @@ func writeScriptCrawlerJPEG(t *testing.T, path string, c color.RGBA) {
 	defer f.Close()
 	if err := jpeg.Encode(f, img, &jpeg.Options{Quality: 95}); err != nil {
 		t.Fatalf("encode jpeg: %v", err)
+	}
+}
+
+func writeScriptCrawlerWebP(t *testing.T, path string) {
+	t.Helper()
+	data, err := base64.StdEncoding.DecodeString(scriptCrawlerWebPBase64)
+	if err != nil {
+		t.Fatalf("decode WebP fixture: %v", err)
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("write WebP fixture: %v", err)
 	}
 }
 
@@ -848,7 +861,7 @@ func TestCrawlerProcessItemKeepsLargerNearDuplicate(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("seed smaller video: %v", err)
 	}
-	writeScriptCrawlerJPEG(t, mediaasset.ThumbnailPathInDir(commonThumbDir, smallerID), color.RGBA{R: 80, G: 160, B: 80, A: 255})
+	writeScriptCrawlerWebP(t, mediaasset.ThumbnailPathInDir(commonThumbDir, smallerID))
 
 	outputDir := drv.OutputDir()
 	mediaPath := filepath.Join(outputDir, "larger-video.mp4")
@@ -856,7 +869,7 @@ func TestCrawlerProcessItemKeepsLargerNearDuplicate(t *testing.T) {
 		t.Fatalf("write media: %v", err)
 	}
 	thumbPath := filepath.Join(outputDir, "larger-thumb.jpg")
-	writeScriptCrawlerJPEG(t, thumbPath, color.RGBA{R: 81, G: 161, B: 81, A: 255})
+	writeScriptCrawlerWebP(t, thumbPath)
 
 	c := NewCrawler(CrawlerConfig{
 		Driver:         drv,
@@ -892,6 +905,15 @@ func TestCrawlerProcessItemKeepsLargerNearDuplicate(t *testing.T) {
 	}
 	if larger.Author != "" {
 		t.Fatalf("larger author = %q, want empty when crawler omits author", larger.Author)
+	}
+	normalizedThumbPath := mediaasset.ThumbnailPathInDir(commonThumbDir, larger.ID)
+	normalizedThumb, err := os.Open(normalizedThumbPath)
+	if err != nil {
+		t.Fatalf("open normalized thumbnail: %v", err)
+	}
+	defer normalizedThumb.Close()
+	if _, err := jpeg.Decode(normalizedThumb); err != nil {
+		t.Fatalf("crawler thumbnail was not normalized to JPEG: %v", err)
 	}
 }
 

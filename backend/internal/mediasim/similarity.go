@@ -2,13 +2,11 @@ package mediasim
 
 import (
 	"image"
-	_ "image/gif"
-	_ "image/jpeg"
-	_ "image/png"
 	"math"
-	"os"
 	"strings"
 	"unicode"
+
+	"github.com/video-site/backend/internal/mediaasset"
 )
 
 const (
@@ -217,16 +215,7 @@ func ImageSSIM(leftPath, rightPath string) (float64, error) {
 }
 
 func decodeImage(path string) (image.Image, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	img, _, err := image.Decode(f)
-	if err != nil {
-		return nil, err
-	}
-	return img, nil
+	return mediaasset.DecodeImage(path)
 }
 
 // SSIM compares two images after nearest-neighbor sampling onto the same grid.

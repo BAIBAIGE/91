@@ -974,7 +974,7 @@ func (m *Migrator) preserveCrawledThumbnail(ctx context.Context, src LocalSource
 			log.Printf("[crawlerupload] %s stat common thumb: %v", v.ID, err)
 			return
 		}
-		if err := copyFileAtomic(thumbPath, dst); err != nil {
+		if err := mediaasset.NormalizeThumbnailJPEG(thumbPath, dst); err != nil {
 			log.Printf("[crawlerupload] %s preserve crawled thumbnail: %v", v.ID, err)
 			return
 		}
@@ -1001,31 +1001,6 @@ func findCrawlerThumbPath(src LocalSource, fileID string) (string, bool) {
 		}
 	}
 	return "", false
-}
-
-func copyFileAtomic(src, dst string) error {
-	in, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer in.Close()
-
-	tmp := dst + ".part"
-	out, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
-	if err != nil {
-		return err
-	}
-	_, copyErr := io.Copy(out, in)
-	closeErr := out.Close()
-	if copyErr != nil {
-		_ = os.Remove(tmp)
-		return copyErr
-	}
-	if closeErr != nil {
-		_ = os.Remove(tmp)
-		return closeErr
-	}
-	return os.Rename(tmp, dst)
 }
 
 // CleanupLocal 删除已上传视频的本地 mp4 和 thumb。
