@@ -2,6 +2,7 @@ import { Suspense, lazy, useEffect, type ReactNode } from "react";
 import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { SkyStarfield } from "@/components/SkyStarfield";
 import { AdminLayout } from "@/admin/AdminLayout";
+import { DrivesPageLoading } from "@/admin/DrivesPageLoading";
 import { RequireAuth } from "@/admin/RequireAuth";
 import { RequireAdmin } from "@/admin/RequireAdmin";
 import { rememberVideoReturnPath, routeToPath } from "@/lib/videoReturnPath";
@@ -45,8 +46,14 @@ const LogsPage = lazy(() =>
   import("@/admin/LogsPage").then((module) => ({ default: module.LogsPage }))
 );
 
-function PageSuspense({ children }: { children: ReactNode }) {
-  return <Suspense fallback={null}>{children}</Suspense>;
+function PageSuspense({
+  children,
+  fallback = null,
+}: {
+  children: ReactNode;
+  fallback?: ReactNode;
+}) {
+  return <Suspense fallback={fallback}>{children}</Suspense>;
 }
 
 function VideoReturnPathRecorder() {
@@ -154,7 +161,7 @@ export default function App() {
           <Route
             path="drives"
             element={
-              <PageSuspense>
+              <PageSuspense fallback={<DrivesPageLoading />}>
                 <DrivesPage />
               </PageSuspense>
             }

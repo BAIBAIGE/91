@@ -10,8 +10,20 @@ const driveComponentsSource = readFileSync(
   new URL("../src/admin/drive/DriveComponents.tsx", import.meta.url),
   "utf8"
 );
+const storageSummarySource = readFileSync(
+  new URL("../src/admin/drive/StorageSummary.tsx", import.meta.url),
+  "utf8"
+);
+const drivesPageLoadingSource = readFileSync(
+  new URL("../src/admin/DrivesPageLoading.tsx", import.meta.url),
+  "utf8"
+);
 const skipDirsPanelSource = readFileSync(
   new URL("../src/admin/drive/SkipDirsPanel.tsx", import.meta.url),
+  "utf8"
+);
+const skipDirsLoadingIndicatorSource = readFileSync(
+  new URL("../src/admin/drive/SkipDirsLoadingIndicator.tsx", import.meta.url),
   "utf8"
 );
 const deleteDriveModalSource = readFileSync(
@@ -679,13 +691,21 @@ test("system sidebar contains navigation only while global actions live in the l
 
 test("admin shell stays mounted while lazy admin pages load", () => {
   assert.match(appSource, /import \{ AdminLayout \} from "@\/admin\/AdminLayout";/);
+  assert.match(
+    appSource,
+    /import \{ DrivesPageLoading \} from "@\/admin\/DrivesPageLoading";/
+  );
   assert.doesNotMatch(appSource, /const AdminLayout\s*=\s*lazy/);
   assert.doesNotMatch(appSource, /<Suspense fallback=\{null\}>\s*<Routes>/);
-  assert.match(appSource, /function PageSuspense\(\{ children \}: \{ children: ReactNode \}\)/);
+  assert.match(appSource, /function PageSuspense\(\{[\s\S]*fallback = null,[\s\S]*fallback\?: ReactNode/);
   assert.match(appSource, /path="\/admin"[\s\S]*<AdminLayout \/>/);
   assert.match(
     appSource,
-    /path="drives"[\s\S]*<PageSuspense>[\s\S]*<DrivesPage \/>[\s\S]*<\/PageSuspense>/
+    /path="drives"[\s\S]*<PageSuspense fallback=\{<DrivesPageLoading \/>\}>[\s\S]*<DrivesPage \/>[\s\S]*<\/PageSuspense>/
+  );
+  assert.match(
+    drivesPageLoadingSource,
+    /<StorageSummary storage=\{null\} loading \/>[\s\S]*<DriveListSkeleton \/>/
   );
 });
 
@@ -746,7 +766,7 @@ test("drive list actions use ordinary text buttons in the requested positions", 
   );
   assert.match(
     drivesPageSource,
-    /<AdminPageActions>\s*<div className="admin-page__actions admin-drive-list-actions">[\s\S]*?<\/AdminPageActions>\s*\{storage && <StorageSummary storage=\{storage\} \/>\}/
+    /<AdminPageActions>\s*<div className="admin-page__actions admin-drive-list-actions">[\s\S]*?<\/AdminPageActions>\s*\{\(storage \|\| loading\) && \(\s*<StorageSummary storage=\{storage\} loading=\{!storage\} \/>\s*\)\}/
   );
   assert.match(
     drivesPageSource,
@@ -810,6 +830,19 @@ test("drive list actions use ordinary text buttons in the requested positions", 
   assert.doesNotMatch(drivesPageSource, /admin-drive-list-toolbar|driveListSummary/);
   assert.doesNotMatch(adminCss, /--admin-drives-content-width|\.admin-drive-list-toolbar/);
   assert.doesNotMatch(adminCss, /\.admin-drive-footer-actions/);
+});
+
+test("drive loading keeps the storage summary shell and labels without value skeletons", () => {
+  for (const label of ["封面占用", "预览视频占用", "本地媒体合计", "磁盘可用"]) {
+    assert.match(storageSummarySource, new RegExp(`label: "${label}"`));
+  }
+  assert.match(storageSummarySource, /aria-busy=\{loading \|\| undefined\}/);
+  assert.match(
+    storageSummarySource,
+    /<strong aria-hidden=\{loading \|\| undefined\}>\s*\{loading \? "\\u00a0" : metric\.value\}\s*<\/strong>/
+  );
+  assert.doesNotMatch(storageSummarySource, /admin-storage-summary__value-skeleton/);
+  assert.doesNotMatch(adminCss, /admin-storage-summary__value-skeleton/);
 });
 
 test("empty drive list renders the shared empty visual and prompt", () => {
@@ -1056,17 +1089,32 @@ test("drive detail selection is stored in the URL history", () => {
   assert.doesNotMatch(drivesPageSource, /setSelectedDriveId/);
 });
 
-test("drive detail refresh state does not render list actions", () => {
+test("drive detail refresh state uses the detail skeleton without list actions", () => {
   const pendingDetailStart = drivesPageSource.indexOf("if (selectedDriveId && !selectedDrive)");
   const listViewStart = drivesPageSource.indexOf("// --- List view ---");
   assert.ok(pendingDetailStart > -1, "pending detail branch should be present");
   assert.ok(listViewStart > pendingDetailStart, "pending detail branch should precede list view");
 
   const pendingDetailSource = drivesPageSource.slice(pendingDetailStart, listViewStart);
-  assert.match(pendingDetailSource, /admin-drive-detail__header-bar/);
-  assert.match(pendingDetailSource, /<AdminLoading \/>/);
+  assert.match(
+    pendingDetailSource,
+    /if \(loading\) \{[\s\S]*<DriveDetailLoading[\s\S]*onBack=\{\(\) => closeDriveDetail\(\{ replace: true \}\)\}/
+  );
+  assert.doesNotMatch(pendingDetailSource, /<AdminLoading \/>/);
   assert.match(pendingDetailSource, /网盘不存在/);
   assert.doesNotMatch(pendingDetailSource, /扫描所有网盘|停止所有任务|添加网盘/);
+  assert.match(
+    drivesPageLoadingSource,
+    /className="admin-detail-tree-container"[\s\S]*<SkipDirsLoadingIndicator \/>/
+  );
+  assert.doesNotMatch(drivesPageLoadingSource, /admin-drive-detail-loading__tree/);
+  assert.doesNotMatch(adminCss, /admin-drive-detail-loading__tree/);
+  assert.match(skipDirsPanelSource, /const showLoading = open && !loaded && !error/);
+  assert.match(skipDirsPanelSource, /\{showLoading && <SkipDirsLoadingIndicator \/>\}/);
+  assert.match(
+    skipDirsLoadingIndicatorSource,
+    /className="lds-ellipsis is-xs"/
+  );
 });
 
 test("drive discard confirmation matches delete confirmation modal styling", () => {

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { ChevronRight, FolderX } from "lucide-react";
 import * as api from "../api";
 import { useToast } from "../ToastContext";
+import { SkipDirsLoadingIndicator } from "./SkipDirsLoadingIndicator";
 
 type SkipDirsPanelProps = {
   drive: api.AdminDrive;
@@ -107,6 +108,7 @@ function DirTreeNode({
   const isRoot = depth === 0;
   const isSelected = id !== "" && selected.has(id);
   const dimmed = ancestorSkipped;
+  const showLoading = open && !loaded && !error;
 
   const loadChildren = useCallback(async () => {
     if (loaded || loading) return;
@@ -165,20 +167,7 @@ function DirTreeNode({
 
       {open && (
         <div className={isRoot ? undefined : "admin-skipdirs-children"}>
-          {loading && (
-            <div
-              className="admin-skipdirs-status"
-              role="status"
-              aria-label="加载中"
-            >
-              <span className="lds-ellipsis is-xs" aria-hidden="true">
-                <span />
-                <span />
-                <span />
-                <span />
-              </span>
-            </div>
-          )}
+          {showLoading && <SkipDirsLoadingIndicator />}
           {error && <div className="admin-skipdirs-status is-error">{error}</div>}
           {loaded && !error && children.length === 0 && (
             <div className="admin-skipdirs-status">无子目录</div>

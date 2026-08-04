@@ -30,6 +30,10 @@ const drivesPageSource = readFileSync(
   new URL("../src/admin/DrivesPage.tsx", import.meta.url),
   "utf8"
 );
+const drivesPageLoadingSource = readFileSync(
+  new URL("../src/admin/DrivesPageLoading.tsx", import.meta.url),
+  "utf8"
+);
 const apiSource = readFileSync(
   new URL("../src/admin/api.ts", import.meta.url),
   "utf8"
@@ -854,9 +858,73 @@ test("admin loading spinner rotates around icon center", () => {
   assert.match(videosPageSource, /<AdminLoading \/>/);
   assert.equal(
     Array.from(drivesPageSource.matchAll(/<AdminLoading \/>/g)).length,
-    2
+    0
   );
   assert.match(adminCss, /@media \(prefers-reduced-motion: reduce\)\s*\{\s*\.admin-spin\s*\{\s*animation-duration\s*:\s*0\.9s\s*!important/s);
+});
+
+test("drive list loading uses a local card-grid skeleton", () => {
+  const skeleton = ruleBody(adminCss, ".admin-drive-card-skeleton");
+  const skeletonSurface = ruleBody(adminCss, ".admin-drive-skeleton-surface");
+
+  assert.match(drivesPageLoadingSource, /const DRIVE_LIST_SKELETON_COUNT = 6/);
+  assert.match(
+    drivesPageLoadingSource,
+    /className="admin-drives-grid admin-drives-grid--skeleton"[\s\S]*?aria-busy="true"/
+  );
+  assert.match(
+    drivesPageSource,
+    /\{loading \? \(\s*<DriveListSkeleton \/>\s*\) : loadError/
+  );
+  assert.match(skeleton, /height\s*:\s*230px/);
+  assert.match(skeleton, /border-radius\s*:\s*var\(--radius-md\)/);
+  assert.match(skeletonSurface, /background\s*:\s*linear-gradient/);
+  assert.match(
+    skeletonSurface,
+    /animation\s*:\s*admin-drive-skeleton-shimmer 1\.5s ease-in-out infinite/
+  );
+  assert.match(
+    adminCss,
+    /@media \(prefers-reduced-motion: reduce\)\s*\{\s*\.admin-drive-skeleton-surface\s*\{\s*animation\s*:\s*none/s
+  );
+});
+
+test("drive detail loading renders the real page shell without animated placeholders", () => {
+  const detailLoadingStart = drivesPageLoadingSource.indexOf(
+    "export function DriveDetailLoading"
+  );
+  const routeLoadingStart = drivesPageLoadingSource.indexOf(
+    "export function DrivesPageLoading"
+  );
+  const detailLoadingSource = drivesPageLoadingSource.slice(
+    detailLoadingStart,
+    routeLoadingStart
+  );
+
+  assert.ok(detailLoadingStart > -1);
+  assert.match(
+    detailLoadingSource,
+    /className="admin-drive-detail-layout admin-drive-detail-loading"[\s\S]*?aria-busy="true"/
+  );
+  assert.match(detailLoadingSource, /正在加载网盘详情/);
+  assert.match(drivesPageLoadingSource, /searchParams\.get\("drive"\)/);
+  for (const label of ["基本信息", "扫描跳过目录", "生成状态", "本地存储占用"]) {
+    assert.match(detailLoadingSource, new RegExp(label));
+  }
+  assert.match(detailLoadingSource, /className="admin-detail-card"/);
+  assert.match(detailLoadingSource, /className="admin-gen-columns"/);
+  assert.match(detailLoadingSource, /className="admin-local-storage-metrics"/);
+  assert.match(
+    detailLoadingSource,
+    /className="toggle-switch is-on"[\s\S]*disabled[\s\S]*aria-checked="true"/
+  );
+  assert.doesNotMatch(detailLoadingSource, /className="admin-status"/);
+  assert.doesNotMatch(detailLoadingSource, /admin-drive-skeleton-surface/);
+  assert.doesNotMatch(detailLoadingSource, /admin-drive-detail-skeleton__card/);
+  assert.match(
+    drivesPageSource,
+    /import \{ DriveDetailLoading, DriveListSkeleton \} from "\.\/DrivesPageLoading";/
+  );
 });
 
 test("mobile video management uses compact theme-aware video cards", () => {

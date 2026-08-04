@@ -18,7 +18,6 @@ import { Modal } from "./Modal";
 import { ConfirmModal } from "./ConfirmModal";
 import { formatBytes } from "./storageFormat";
 import { makeUniqueDriveId } from "./driveId";
-import { AdminLoading } from "./AdminLoading";
 import {
   FormState,
   driveKindAbbr,
@@ -33,11 +32,12 @@ import {
   rootDirectoryLabel,
 } from "./drive/constants";
 import {
-  StorageSummary,
   StatusTag,
   DriveCardMetrics,
   DriveGenerationPanel,
 } from "./drive/DriveComponents";
+import { StorageSummary } from "./drive/StorageSummary";
+import { DriveDetailLoading, DriveListSkeleton } from "./DrivesPageLoading";
 import { DriveForm } from "./drive/DriveForm";
 import { DeleteDriveModal } from "./drive/DeleteDriveModal";
 import { SkipDirsPanel } from "./drive/SkipDirsPanel";
@@ -528,7 +528,15 @@ export function DrivesPage() {
   }, [selectedDriveId, list]);
 
   if (selectedDriveId && !selectedDrive) {
-    const title = loading || loadError ? "网盘详情" : "网盘不存在";
+    if (loading) {
+      return (
+        <DriveDetailLoading
+          onBack={() => closeDriveDetail({ replace: true })}
+        />
+      );
+    }
+
+    const title = loadError ? "网盘详情" : "网盘不存在";
 
     return (
       <section className="admin-drives-page">
@@ -546,9 +554,7 @@ export function DrivesPage() {
           </div>
         </header>
 
-        {loading ? (
-          <AdminLoading />
-        ) : loadError ? (
+        {loadError ? (
           <div className="admin-error-state">
             <strong>网盘数据加载失败</strong>
             <span>{loadError}</span>
@@ -796,10 +802,12 @@ export function DrivesPage() {
         </div>
       </AdminPageActions>
 
-      {storage && <StorageSummary storage={storage} />}
+      {(storage || loading) && (
+        <StorageSummary storage={storage} loading={!storage} />
+      )}
 
       {loading ? (
-        <AdminLoading />
+        <DriveListSkeleton />
       ) : loadError ? (
         <div className="admin-error-state">
           <strong>网盘数据加载失败</strong>

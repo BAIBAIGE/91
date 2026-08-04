@@ -7036,6 +7036,40 @@ body.admin-mobile-nav-open {
   margin-top: var(--space-4);
 }
 
+.admin-drive-card-skeleton {
+  height: 230px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-sm);
+}
+
+.admin-drive-skeleton-surface {
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--bg-elevated) 88%, var(--bg-surface)) 0%,
+    color-mix(in srgb, var(--bg-elevated) 72%, var(--text-faint)) 50%,
+    color-mix(in srgb, var(--bg-elevated) 88%, var(--bg-surface)) 100%
+  );
+  background-size: 200% 100%;
+  animation: admin-drive-skeleton-shimmer 1.5s ease-in-out infinite;
+}
+
+@keyframes admin-drive-skeleton-shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .admin-drive-skeleton-surface {
+    animation: none;
+  }
+}
+
 .admin-drive-card {
   appearance: none;
   width: 100%;

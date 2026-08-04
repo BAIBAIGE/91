@@ -1,35 +1,11 @@
 import { Activity } from "lucide-react";
 import * as api from "../api";
-import { formatBytes } from "../storageFormat";
 import {
   generationStateLabel,
   generationStateClass,
   generationDetail,
   generationTitle,
 } from "./constants";
-
-export function StorageSummary({ storage }: { storage: api.AdminDriveStorage }) {
-  return (
-    <section className="admin-card admin-storage-summary" aria-label="本地媒体存储">
-      <div className="admin-storage-summary__metric">
-        <span>封面占用</span>
-        <strong>{formatBytes(storage.thumbnailBytes)}</strong>
-      </div>
-      <div className="admin-storage-summary__metric">
-        <span>预览视频占用</span>
-        <strong>{formatBytes(storage.teaserBytes)}</strong>
-      </div>
-      <div className="admin-storage-summary__metric">
-        <span>本地媒体合计</span>
-        <strong>{formatBytes(storage.totalBytes)}</strong>
-      </div>
-      <div className="admin-storage-summary__metric">
-        <span>磁盘可用</span>
-        <strong>{formatBytes(storage.availableBytes)}</strong>
-      </div>
-    </section>
-  );
-}
 
 export function GenerationCounts({
   ready,
