@@ -17,6 +17,11 @@ const topBarSource = readFileSync(
   "utf8"
 );
 
+const mainNavSource = readFileSync(
+  new URL("../src/components/MainNav.tsx", import.meta.url),
+  "utf8"
+);
+
 function ruleBody(css: string, selector: string): string {
   const escapedSelector = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const match = css.match(new RegExp(`${escapedSelector}\\s*\\{([^}]*)\\}`));
@@ -31,6 +36,56 @@ test("mobile menu links fill the full expanded menu row", () => {
   // mobile 展开态把链接铺满整行。
   const openBody = ruleBody(navigationCss, ".main-nav.is-open .main-nav__link");
   assert.match(openBody, /width\s*:\s*100%/);
+});
+
+test("short video navigation uses the supplied Font Awesome icon", () => {
+  assert.doesNotMatch(mainNavSource, /\bSparkles\b/);
+  assert.match(mainNavSource, /function ShortVideoIcon/);
+  assert.match(mainNavSource, /viewBox="0 0 448 512"/);
+  assert.match(mainNavSource, /fill="currentColor"/);
+  assert.match(mainNavSource, /M448\.5 209\.9c-44 \.1-87-13\.6-122\.8-39\.2/);
+  assert.match(mainNavSource, /\{ to: "\/shorts", label: "短视频", icon: ShortVideoIcon \}/);
+});
+
+test("video navigation uses the supplied Font Awesome icon", () => {
+  assert.doesNotMatch(mainNavSource, /\bFilm\b/);
+  assert.match(mainNavSource, /function VideoIcon/);
+  assert.match(mainNavSource, /viewBox="0 0 576 512"/);
+  assert.match(mainNavSource, /M549\.7 124\.1C543\.5 100\.4 524\.9 81\.8 501\.4 75\.5/);
+  assert.match(mainNavSource, /\{ to: "\/list", label: "视频", icon: VideoIcon \}/);
+});
+
+test("admin navigation uses the supplied Font Awesome icon", () => {
+  assert.doesNotMatch(mainNavSource, /\bSettings\b/);
+  assert.match(mainNavSource, /function AdminIcon/);
+  assert.match(mainNavSource, /viewBox="0 0 512 512"/);
+  assert.match(mainNavSource, /M195\.1 9\.5C198\.1-5\.3 211\.2-16 226\.4-16/);
+  assert.match(mainNavSource, /const adminNavItem = \{ to: "\/admin", label: "后台", icon: AdminIcon \}/);
+});
+
+test("upload navigation uses the supplied Font Awesome Pro icon", () => {
+  assert.doesNotMatch(mainNavSource, /icon: Upload\b/);
+  assert.match(mainNavSource, /commercial license: https:\/\/fontawesome\.com\/license/);
+  assert.match(mainNavSource, /function UploadIcon/);
+  assert.match(mainNavSource, /M512 384c0 35\.3-28\.7 64-64 64L64 448/);
+  assert.match(mainNavSource, /const uploadNavItem = \{ to: "\/upload", label: "上传", icon: UploadIcon \}/);
+});
+
+test("mobile navigation toggle uses the supplied Font Awesome Pro menu icon", () => {
+  assert.doesNotMatch(mainNavSource, /<Menu size=\{22\} \/>/);
+  assert.match(mainNavSource, /function MobileMenuIcon/);
+  assert.match(mainNavSource, /viewBox="0 0 540 540"/);
+  assert.match(mainNavSource, /opacity="\.4"/);
+  assert.match(mainNavSource, /M27 306c0 7\.5 6 13\.5 13\.5 13\.5/);
+  assert.match(mainNavSource, /M454\.9 216C481\.4 216 503 195 504 168\.7/);
+  assert.match(mainNavSource, /open \? <X size=\{22\} \/> : <MobileMenuIcon size=\{26\} \/>/);
+
+  const menuToggle = ruleBody(navigationCss, ".main-nav__toggle");
+  const hoveredMenuToggle = ruleBody(navigationCss, ".main-nav__toggle:hover");
+  assert.match(menuToggle, /background\s*:\s*transparent/);
+  assert.match(menuToggle, /border\s*:\s*0/);
+  assert.match(hoveredMenuToggle, /background\s*:\s*transparent/);
+  assert.doesNotMatch(hoveredMenuToggle, /border-color/);
 });
 
 test("main nav keeps tap targets below the iOS PWA status area", () => {
