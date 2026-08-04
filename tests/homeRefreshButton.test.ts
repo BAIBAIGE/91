@@ -108,7 +108,12 @@ test("home page reserves tag cloud space while tags load and uses one empty libr
   assert.match(tagCloudSource, /export function TagCloud\(\{ linkBasePath = "\/list", onTagSelect \}: TagCloudProps\)/);
   assert.match(tagCloudSource, /to=\{`\$\{linkBasePath\}\?tag=\$\{encodeURIComponent\(tag\.label\)\}`\}/);
   assert.match(tagCloudSource, /onClick=\{onTagSelect\}/);
-  assert.match(tagCloudSource, /className=\{`tag-cloud-container \$\{loading \? "is-loading" : ""\}`\}/);
+  assert.match(tagCloudSource, /const \[hasMoreRight, setHasMoreRight\] = useState\(false\)/);
+  assert.match(tagCloudSource, /const remaining = slider\.scrollWidth - slider\.clientWidth - slider\.scrollLeft/);
+  assert.match(tagCloudSource, /const nextHasMoreRight = remaining > 1/);
+  assert.match(tagCloudSource, /slider\.addEventListener\("scroll", updateScrollOverflow, \{ passive: true \}\)/);
+  assert.match(tagCloudSource, /new ResizeObserver\(updateScrollOverflow\)/);
+  assert.match(tagCloudSource, /className=\{`tag-cloud-container\$\{loading \? " is-loading" : ""\}\$\{hasMoreRight \? " has-more-right" : ""\}`\}/);
   assert.match(tagCloudSource, /aria-busy=\{loading \? "true" : undefined\}/);
   assert.match(tagCloudSource, /Array\.from\(\{ length: TAG_PLACEHOLDER_COUNT \}/);
   assert.match(tagCloudSource, /tag-chip--placeholder/);
@@ -119,12 +124,15 @@ test("home page reserves tag cloud space while tags load and uses one empty libr
   assert.doesNotMatch(tagCloudSource, /`\$\{tag\.count\} 个视频`/);
 
   const tagCloudContainer = ruleBody(searchCss, ".tag-cloud-container");
+  const overflowingTagCloud = ruleBody(searchCss, ".tag-cloud-container.has-more-right");
   const loadingTagCloud = ruleBody(searchCss, ".tag-cloud-container.is-loading");
   const reservedTagCloud = ruleBody(searchCss, ".tag-cloud-container.is-reserved");
   const tagCloudRow = ruleBody(searchCss, ".tag-cloud__row");
   const tagChip = ruleBody(searchCss, ".tag-chip");
   const tagPlaceholder = ruleBody(searchCss, ".tag-chip--placeholder");
   assert.match(tagCloudContainer, /min-height\s*:\s*34px/);
+  assert.match(tagCloudContainer, /mask-image\s*:\s*none/);
+  assert.match(overflowingTagCloud, /mask-image\s*:\s*linear-gradient\(to right, black 0%, black 93%, transparent 100%\)/);
   assert.match(loadingTagCloud, /pointer-events\s*:\s*none/);
   assert.match(reservedTagCloud, /mask-image\s*:\s*none/);
   assert.match(tagCloudRow, /flex-wrap\s*:\s*nowrap/);

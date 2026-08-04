@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { fetchTags, readCachedTags, type TagItem } from "@/data/videos";
 
@@ -15,11 +15,21 @@ export function TagCloud({ linkBasePath = "/list", onTagSelect }: TagCloudProps)
   const initialTagsRef = useRef<TagItem[] | null>(readCachedTags());
   const [tags, setTags] = useState<TagItem[]>(initialTagsRef.current ?? []);
   const [loaded, setLoaded] = useState(initialTagsRef.current !== null);
+  const [hasMoreRight, setHasMoreRight] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const visibleTags = useMemo(
     () => tags.filter((tag) => typeof tag.count !== "number" || tag.count > 0),
     [tags]
   );
+
+  const updateScrollOverflow = useCallback(() => {
+    const slider = containerRef.current;
+    if (!slider) return;
+
+    const remaining = slider.scrollWidth - slider.clientWidth - slider.scrollLeft;
+    const nextHasMoreRight = remaining > 1;
+    setHasMoreRight((current) => current === nextHasMoreRight ? current : nextHasMoreRight);
+  }, []);
 
   useEffect(() => {
     if (initialTagsRef.current !== null) return;
@@ -36,6 +46,10 @@ export function TagCloud({ linkBasePath = "/list", onTagSelect }: TagCloudProps)
       active = false;
     };
   }, []);
+
+  useLayoutEffect(() => {
+    updateScrollOverflow();
+  }, [updateScrollOverflow, visibleTags]);
 
   useEffect(() => {
     const slider = containerRef.current;
@@ -90,12 +104,21 @@ export function TagCloud({ linkBasePath = "/list", onTagSelect }: TagCloudProps)
       }
     };
 
+    const resizeObserver = typeof ResizeObserver === "undefined"
+      ? null
+      : new ResizeObserver(updateScrollOverflow);
+
     slider.addEventListener("mousedown", handleMouseDown);
     slider.addEventListener("mouseleave", handleMouseLeave);
     slider.addEventListener("mouseup", handleMouseUp);
     slider.addEventListener("mousemove", handleMouseMove);
     slider.addEventListener("wheel", handleWheel, { passive: false });
     slider.addEventListener("click", handleClick, { capture: true });
+    slider.addEventListener("scroll", updateScrollOverflow, { passive: true });
+    window.addEventListener("resize", updateScrollOverflow);
+    resizeObserver?.observe(slider);
+    if (slider.firstElementChild) resizeObserver?.observe(slider.firstElementChild);
+    updateScrollOverflow();
 
     return () => {
       slider.removeEventListener("mousedown", handleMouseDown);
@@ -104,8 +127,11 @@ export function TagCloud({ linkBasePath = "/list", onTagSelect }: TagCloudProps)
       slider.removeEventListener("mousemove", handleMouseMove);
       slider.removeEventListener("wheel", handleWheel);
       slider.removeEventListener("click", handleClick, { capture: true });
+      slider.removeEventListener("scroll", updateScrollOverflow);
+      window.removeEventListener("resize", updateScrollOverflow);
+      resizeObserver?.disconnect();
     };
-  }, [visibleTags]);
+  }, [updateScrollOverflow]);
 
   if (loaded && visibleTags.length === 0) return null;
 
@@ -124,7 +150,7 @@ export function TagCloud({ linkBasePath = "/list", onTagSelect }: TagCloudProps)
 
   return (
     <div
-      className={`tag-cloud-container ${loading ? "is-loading" : ""}`}
+      className={`tag-cloud-container${loading ? " is-loading" : ""}${hasMoreRight ? " has-more-right" : ""}`}
       aria-label="热门标签"
       aria-busy={loading ? "true" : undefined}
     >

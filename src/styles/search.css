@@ -204,7 +204,11 @@
   width: 100%;
   min-height: 34px;
   position: relative;
-  /* Premium horizontal fade mask */
+  mask-image: none;
+  -webkit-mask-image: none;
+}
+
+.tag-cloud-container.has-more-right {
   mask-image: linear-gradient(to right, black 0%, black 93%, transparent 100%);
   -webkit-mask-image: linear-gradient(to right, black 0%, black 93%, transparent 100%);
 }
@@ -427,6 +431,9 @@
   .tag-cloud-container {
     margin-top: var(--space-3);
     min-height: 32px;
+  }
+
+  .tag-cloud-container.has-more-right {
     /* Mobile-friendly fade mask */
     mask-image: linear-gradient(to right, black 0%, black 90%, transparent 100%);
     -webkit-mask-image: linear-gradient(to right, black 0%, black 90%, transparent 100%);
