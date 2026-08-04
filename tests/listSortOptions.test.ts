@@ -42,6 +42,10 @@ test("list page sort toolbar only exposes active sort options", () => {
 });
 
 test("listing page uses compact spacing after the tag cloud", () => {
+  assert.match(
+    listingPageSource,
+    /<SearchPanel variant="uiverse" placeholder="" \/>/
+  );
   assert.match(listingPageSource, /const \[params, setParams\] = useSearchParams\(\)/);
   assert.match(listingPageSource, /const sort = readListingSort\(params\)/);
   assert.match(listingPageSource, /setParams\(withListingSort\(params, nextSort\), \{ replace: true \}\)/);

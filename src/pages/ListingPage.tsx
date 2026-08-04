@@ -149,7 +149,7 @@ function ListingContent({
     <AppShell>
       <div className="container page-section listing-discovery-section">
         <PromoStrip />
-        <SearchPanel />
+        <SearchPanel variant="uiverse" placeholder="" />
         <TagCloud />
       </div>
 
