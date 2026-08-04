@@ -187,7 +187,11 @@ test("admin log viewer is reachable from the authenticated admin layout", () => 
   );
   assert.match(
     adminCss,
-    /\.admin-logs-page\s*\{[^}]*height:\s*calc\(100dvh - 88px - var\(--space-7\)\)[^}]*min-height:\s*0[^}]*overflow:\s*hidden/s
+    /\.admin-page-content\s*\{[^}]*display:\s*flex[^}]*flex:\s*1 1 auto[^}]*min-height:\s*0[^}]*flex-direction:\s*column/s
+  );
+  assert.match(
+    adminCss,
+    /\.admin-logs-page\s*\{[^}]*flex:\s*1 1 auto[^}]*height:\s*auto[^}]*min-height:\s*0[^}]*overflow:\s*hidden/s
   );
   assert.match(
     adminCss,
@@ -207,7 +211,7 @@ test("admin log viewer is reachable from the authenticated admin layout", () => 
   );
   assert.match(
     adminCss,
-    /@media \(max-width: 768px\)[\s\S]*?\.admin-logs-page\s*\{[^}]*height:\s*auto[^}]*min-height:\s*calc\(100dvh - var\(--admin-mobile-header-offset\) - var\(--space-4\)\)[^}]*overflow:\s*visible/s
+    /@media \(max-width: 768px\)[\s\S]*?\.admin-logs-page\s*\{[^}]*height:\s*auto[^}]*min-height:\s*0[^}]*overflow:\s*visible/s
   );
   assert.match(
     adminCss,

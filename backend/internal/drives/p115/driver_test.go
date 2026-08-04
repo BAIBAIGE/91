@@ -17,8 +17,168 @@ import (
 	"testing"
 	"time"
 
+	sdk "github.com/SheltonZhu/115driver/pkg/driver"
 	"github.com/video-site/backend/internal/drives"
 )
+
+type p115RoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f p115RoundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return f(request)
+}
+
+func newP115ListTestDriver(transport http.RoundTripper) *Driver {
+	driver := New(Config{ID: "115", Cookie: "UID=u;CID=c;SEID=s"})
+	driver.client = sdk.New(
+		sdk.WithClient(&http.Client{Transport: transport}),
+		sdk.UA("p115-list-test"),
+	)
+	driver.listInterval = 0
+	return driver
+}
+
+func TestListUsesContextAwareSDKRequest(t *testing.T) {
+	transport := p115RoundTripFunc(func(request *http.Request) (*http.Response, error) {
+		query := request.URL.Query()
+		if got := query.Get("cid"); got != "0" {
+			t.Errorf("cid = %q, want 0", got)
+		}
+		if got := query.Get("limit"); got != "1150" {
+			t.Errorf("limit = %q, want 1150", got)
+		}
+		body := `{"state":true,"cid":"0","count":1,"offset":0,"data":[{"fid":"file-1","cid":"0","n":"video.mp4","s":"12","sha":"ABC","pc":"pick-1","t":"2026-08-04 10:00","tp":"0"}]}`
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(body)),
+			Request:    request,
+		}, nil
+	})
+	driver := newP115ListTestDriver(transport)
+
+	entries, err := driver.List(context.Background(), "0")
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("entries = %#v, want one entry", entries)
+	}
+	entry := entries[0]
+	if entry.ID != "file-1" || entry.Name != "video.mp4" || entry.Size != 12 || entry.Hash != "ABC" {
+		t.Fatalf("entry = %#v", entry)
+	}
+	if got := driver.rememberedPickCode("file-1"); got != "pick-1" {
+		t.Fatalf("remembered pick code = %q, want pick-1", got)
+	}
+}
+
+func TestListCancelsInflightSDKRequest(t *testing.T) {
+	requestStarted := make(chan struct{})
+	var startedOnce sync.Once
+	transport := p115RoundTripFunc(func(request *http.Request) (*http.Response, error) {
+		startedOnce.Do(func() { close(requestStarted) })
+		<-request.Context().Done()
+		return nil, request.Context().Err()
+	})
+	driver := newP115ListTestDriver(transport)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	result := make(chan error, 1)
+	go func() {
+		_, err := driver.List(ctx, "0")
+		result <- err
+	}()
+
+	select {
+	case <-requestStarted:
+	case <-time.After(time.Second):
+		t.Fatal("115 list request did not start")
+	}
+	cancel()
+
+	select {
+	case err := <-result:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("list error = %v, want context.Canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("115 list request did not stop after context cancellation")
+	}
+}
+
+func TestListCancellationDoesNotWaitForAnotherListRequest(t *testing.T) {
+	firstRequestStarted := make(chan struct{})
+	releaseFirstRequest := make(chan struct{})
+	var startOnce sync.Once
+	var releaseOnce sync.Once
+	releaseFirst := func() { releaseOnce.Do(func() { close(releaseFirstRequest) }) }
+	defer releaseFirst()
+
+	transport := p115RoundTripFunc(func(request *http.Request) (*http.Response, error) {
+		startOnce.Do(func() {
+			close(firstRequestStarted)
+			<-releaseFirstRequest
+		})
+		body := `{"state":true,"cid":"0","count":0,"offset":0,"data":[]}`
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(body)),
+			Request:    request,
+		}, nil
+	})
+	driver := newP115ListTestDriver(transport)
+
+	firstResult := make(chan error, 1)
+	go func() {
+		_, err := driver.List(context.Background(), "0")
+		firstResult <- err
+	}()
+	select {
+	case <-firstRequestStarted:
+	case <-time.After(time.Second):
+		t.Fatal("first 115 list request did not start")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	secondResult := make(chan error, 1)
+	go func() {
+		_, err := driver.List(ctx, "0")
+		secondResult <- err
+	}()
+	cancel()
+
+	select {
+	case err := <-secondResult:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("waiting list error = %v, want context.Canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("canceled list remained blocked behind another list request")
+	}
+
+	releaseFirst()
+	if err := <-firstResult; err != nil {
+		t.Fatalf("first list: %v", err)
+	}
+}
+
+func TestListAppliesRequestTimeout(t *testing.T) {
+	transport := p115RoundTripFunc(func(request *http.Request) (*http.Response, error) {
+		<-request.Context().Done()
+		return nil, request.Context().Err()
+	})
+	driver := newP115ListTestDriver(transport)
+	driver.listTimeout = 20 * time.Millisecond
+
+	_, err := driver.List(context.Background(), "0")
+	if err == nil || !strings.Contains(err.Error(), "115 list request timed out after 20ms") {
+		t.Fatalf("list error = %v, want bounded request timeout", err)
+	}
+}
 
 func TestIsTransient115ListError(t *testing.T) {
 	cases := []struct {

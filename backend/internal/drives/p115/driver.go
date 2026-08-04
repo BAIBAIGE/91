@@ -31,6 +31,7 @@ const (
 	p115HLSMaxPlaylist            = 1 << 20
 	p115PickCodeCacheMaxEntries   = 4096
 	p115GenerationCacheMaxEntries = 1024
+	p115ListRequestTimeout        = 30 * time.Second
 )
 
 type cachedGenerationStream struct {
@@ -53,9 +54,10 @@ type Driver struct {
 	ua            string
 	uploadTempDir string
 
-	listMu       sync.Mutex
+	listGate     chan struct{}
 	lastListAt   time.Time
 	listInterval time.Duration
+	listTimeout  time.Duration
 
 	generationMu       sync.Mutex
 	pickCodes          map[string]string
@@ -88,7 +90,9 @@ func New(c Config) *Driver {
 		rootID:             rootID,
 		ua:                 ua,
 		uploadTempDir:      strings.TrimSpace(c.UploadTempDir),
+		listGate:           make(chan struct{}, 1),
 		listInterval:       2 * time.Second,
+		listTimeout:        p115ListRequestTimeout,
 		pickCodes:          make(map[string]string),
 		generationCache:    make(map[string]cachedGenerationStream),
 		generationInflight: make(map[string]*generationStreamCall),
@@ -135,15 +139,18 @@ func (d *Driver) List(ctx context.Context, dirID string) ([]drives.Entry, error)
 const p115ListCooldown = 10 * time.Minute
 
 func (d *Driver) listWithRetry(ctx context.Context, dirID string) (*[]sdk.File, error) {
-	d.listMu.Lock()
-	defer d.listMu.Unlock()
+	release, err := d.acquireListGate(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 
 	for attempt := 0; ; attempt++ {
-		if err := d.waitForListSlotLocked(ctx); err != nil {
+		if err := d.waitForListSlot(ctx); err != nil {
 			return nil, err
 		}
 
-		files, err := d.client.ListWithLimit(dirID, sdk.MaxDirPageLimit)
+		files, err := d.listWithLimitContext(ctx, dirID, sdk.MaxDirPageLimit)
 		if err == nil {
 			return files, nil
 		}
@@ -159,7 +166,95 @@ func (d *Driver) listWithRetry(ctx context.Context, dirID string) (*[]sdk.File, 
 	}
 }
 
-func (d *Driver) waitForListSlotLocked(ctx context.Context) error {
+// listWithLimitContext mirrors the SDK's ListWithLimit pagination while binding
+// every HTTP request to ctx. The upstream ListWithLimit API does not accept a
+// context, so calling it directly leaves an in-flight 115 request alive after an
+// administrator stops a scan.
+func (d *Driver) listWithLimitContext(ctx context.Context, dirID string, limit int64) (*[]sdk.File, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if limit <= 0 || limit > sdk.MaxDirPageLimit {
+		limit = sdk.MaxDirPageLimit
+	}
+
+	listOptions := sdk.DefaultListOptions()
+	if len(listOptions.ApiURLs) == 0 {
+		return nil, errors.New("115 list API URL is not configured")
+	}
+
+	files := make([]sdk.File, 0)
+	offset := int64(0)
+	for page := 0; ; page++ {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+
+		result, err := d.getFilesContext(
+			ctx,
+			dirID,
+			sdk.WithApiURL(listOptions.ApiURLs[page%len(listOptions.ApiURLs)]),
+			sdk.WithLimit(limit),
+			sdk.WithOffset(offset),
+		)
+		if err != nil {
+			return nil, err
+		}
+
+		for i := range result.Files {
+			file := (&sdk.File{}).From(&result.Files[i])
+			files = append(files, *file)
+		}
+		offset = int64(result.Offset) + limit
+		if offset >= int64(result.Count) {
+			return &files, nil
+		}
+	}
+}
+
+func (d *Driver) getFilesContext(ctx context.Context, dirID string, options ...sdk.GetFileOptions) (*sdk.FileListResp, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if d.client == nil || d.client.Client == nil {
+		return nil, errors.New("115 client not initialized")
+	}
+
+	requestCtx := ctx
+	cancel := func() {}
+	if d.listTimeout > 0 {
+		requestCtx, cancel = context.WithTimeout(ctx, d.listTimeout)
+	}
+	defer cancel()
+
+	request := d.client.Client.R().
+		SetContext(requestCtx).
+		ForceContentType("application/json;charset=UTF-8")
+	result, err := sdk.GetFiles(request, dirID, options...)
+	if err != nil {
+		// Prefer the parent cancellation reason. Some SDK error paths flatten the
+		// request error, which would otherwise hide context.Canceled from callers.
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
+		if errors.Is(requestCtx.Err(), context.DeadlineExceeded) {
+			return nil, fmt.Errorf("115 list request timed out after %s: %v", d.listTimeout, err)
+		}
+		return nil, err
+	}
+	return result, nil
+}
+
+func (d *Driver) acquireListGate(ctx context.Context) (func(), error) {
+	select {
+	case d.listGate <- struct{}{}:
+		return func() { <-d.listGate }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+func (d *Driver) waitForListSlot(ctx context.Context) error {
 	if d.listInterval <= 0 || d.lastListAt.IsZero() {
 		d.lastListAt = time.Now()
 		return ctx.Err()
@@ -265,29 +360,31 @@ func isTransient115StreamError(err error) bool {
 // ListDirsOnly 只列指定目录的直接**子目录**，不返回文件条目。专为 admin 后台
 // 的"设置跳过目录"树形浏览器优化 —— 那里只显示目录节点，文件无意义。
 //
-// 性能差异：默认 List 走 SDK 的 ListWithLimit，分页拉到 offset>=count，会把
+// 性能差异：默认 List 按 SDK 的 ListWithLimit 语义分页拉到 offset>=count，会把
 // 全部文件 + 目录一起拉下来。某个 115 根目录可能累积了几万个视频，叠加 driver
 // 自己的 2 秒间隔限频，单次根列出会卡几十秒。这里用 `WithOrder(FileOrderByType)`
 // 让目录排在最前，只读第一页（最多 1150 条），命中第一个非目录条目就停止 ——
 // 几乎所有网盘的"单层目录数"都远小于 1150，1 次 API 调用就能拿全。
 //
-// 仍然走 listMu / listWithRetry 同样的 2s 间隔 + 10 分钟冷却语义，避免和扫描
+// 仍然与 listWithRetry 共享串行门闩、2s 间隔和 10 分钟冷却语义，避免和扫描
 // 走的列目录请求并发触发风控。
 func (d *Driver) ListDirsOnly(ctx context.Context, dirID string) ([]drives.Entry, error) {
-	d.listMu.Lock()
-	defer d.listMu.Unlock()
+	release, err := d.acquireListGate(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 
 	for attempt := 0; ; attempt++ {
-		if err := d.waitForListSlotLocked(ctx); err != nil {
+		if err := d.waitForListSlot(ctx); err != nil {
 			return nil, err
 		}
 
-		req := d.client.NewRequest().ForceContentType("application/json;charset=UTF-8")
 		// 单页拉 MaxDirPageLimit=1150 条，按"file_type asc"排序让目录排前 ——
 		// 这样即使某个目录条目数量超过 1150，目录通常仍能落在第一页。但我们不
 		// 依赖这个顺序保证：扫完整页所有 entry，只挑目录（FileID=="" 即为目录），
 		// 文件直接忽略。1150 个 entry 解析是微秒级开销，无需提前 break。
-		resp, err := sdk.GetFiles(req, dirID,
+		resp, err := d.getFilesContext(ctx, dirID,
 			sdk.WithOrder(sdk.FileOrderByType),
 			sdk.WithAsc(true),
 			sdk.WithLimit(sdk.MaxDirPageLimit),

@@ -234,7 +234,6 @@ export function BackupPage() {
   };
 
   useEffect(() => {
-    document.title = "备份恢复";
     void refresh();
     const timer = window.setInterval(() => void refresh(true), 2000);
     return () => window.clearInterval(timer);

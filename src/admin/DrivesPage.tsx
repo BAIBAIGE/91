@@ -2,13 +2,17 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import {
   ArrowLeft,
+  Ban,
   ChevronRight,
   FolderTree,
   HardDrive,
   Loader2,
+  Plus,
   RefreshCw,
+  Search,
 } from "lucide-react";
 import * as api from "./api";
+import { AdminPageActions } from "./AdminPageActions";
 import { useToast } from "./ToastContext";
 import { Modal } from "./Modal";
 import { ConfirmModal } from "./ConfirmModal";
@@ -765,7 +769,7 @@ export function DrivesPage() {
   // --- List view ---
   return (
     <section className="admin-drives-page admin-drives-page--list">
-      <header className="admin-page__header">
+      <AdminPageActions>
         <div className="admin-page__actions admin-drive-list-actions">
           <div className="admin-task-controls" aria-label="所有网盘任务控制">
             <button
@@ -773,8 +777,9 @@ export function DrivesPage() {
               className="admin-btn"
               onClick={handleScanAll}
               disabled={scanningAll}
-              title={maintenanceBusyText(maintenanceStatus) || "扫描已配置网盘、处理新视频并执行视频去重。"}
+              title={maintenanceBusyText(maintenanceStatus) || "扫描已配置的存储、处理新视频并执行视频去重"}
             >
+              <Search size="1em" aria-hidden="true" />
               {scanAllButtonText(maintenanceStatus, scanningAll)}
             </button>
             <button
@@ -782,16 +787,14 @@ export function DrivesPage() {
               className="admin-btn"
               onClick={handleStopAllTasks}
               disabled={stoppingAll}
-              title="停止所有网盘当前的扫描、封面、预览视频和视频指纹生成任务。"
+              title="停止所有存储当前的扫描、封面、预览视频和视频指纹生成任务"
             >
+              <Ban size="1em" aria-hidden="true" />
               {stoppingAll ? "停止中..." : "停止所有任务"}
             </button>
           </div>
-          <button type="button" className="admin-btn" onClick={openCreate}>
-            添加网盘
-          </button>
         </div>
-      </header>
+      </AdminPageActions>
 
       {storage && <StorageSummary storage={storage} />}
 
@@ -858,6 +861,15 @@ export function DrivesPage() {
           className="admin-drive-empty-state"
         />
       )}
+
+      <button
+        type="button"
+        className="admin-btn admin-drive-create-fab"
+        onClick={openCreate}
+      >
+        <Plus size="1em" aria-hidden="true" />
+        添加网盘
+      </button>
 
       <Modal
         open={modalOpen}

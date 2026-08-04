@@ -290,9 +290,46 @@ body.admin-mobile-nav-open {
  * Main content
  * ========================================================= */
 .admin-main {
+  display: flex;
+  flex-direction: column;
   min-width: 0;
+  min-height: 100vh;
   padding: 88px var(--space-7) var(--space-7);
   background: var(--bg-page);
+}
+
+.admin-current-page-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  flex: 0 0 auto;
+  gap: var(--space-3);
+  margin-bottom: var(--space-5);
+}
+
+.admin-current-page-header .admin-page__title {
+  margin: 0;
+}
+
+.admin-current-page-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  min-width: 0;
+  margin-left: auto;
+}
+
+.admin-current-page-actions:empty {
+  display: none;
+}
+
+.admin-page-content {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
 }
 
 .admin-page__header {
@@ -319,14 +356,35 @@ body.admin-mobile-nav-open {
 }
 
 .admin-drive-list-actions {
-  width: 100%;
-  justify-content: space-between;
+  justify-content: flex-end;
 }
 
 .admin-drives-page--list {
   display: flex;
   flex-direction: column;
   min-height: calc(100vh - (var(--space-7) * 2));
+  padding-bottom: 72px;
+}
+
+.admin-drive-create-fab {
+  position: fixed;
+  right: var(--space-7);
+  bottom: var(--space-5);
+  z-index: calc(var(--z-nav) + 2);
+  width: fit-content;
+  min-width: 0;
+  min-height: 44px;
+  border-color: var(--border-subtle);
+  border-radius: 12px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.34);
+}
+
+.admin-btn.admin-drive-create-fab {
+  background: transparent;
+}
+
+.admin-btn.admin-drive-create-fab:hover:not(:disabled) {
+  background: transparent;
 }
 
 .admin-drive-empty-state {
@@ -357,6 +415,17 @@ body.admin-mobile-nav-open {
   min-height: 34px;
 }
 
+.admin-drive-list-actions .admin-task-controls .admin-btn {
+  padding-inline: var(--space-4);
+  border-radius: var(--radius-pill);
+  background: transparent;
+}
+
+.admin-drive-list-actions .admin-task-controls .admin-btn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--text-default) 8%, transparent);
+  box-shadow: none;
+}
+
 .admin-task-controls .admin-btn.is-primary {
   background: var(--accent);
   border-color: transparent;
@@ -375,26 +444,40 @@ body.admin-mobile-nav-open {
 }
 
 @media (max-width: 640px) {
+  .admin-current-page-header {
+    align-items: stretch;
+  }
+
+  .admin-current-page-actions {
+    width: 100%;
+    margin-left: 0;
+  }
+
   .admin-drive-list-actions {
     width: 100%;
   }
 
   .admin-drive-list-actions .admin-btn {
-    background: var(--bg-surface);
+    background: transparent;
     border-color: var(--border-subtle);
   }
 
-  .admin-task-controls {
+  .admin-drive-list-actions .admin-task-controls {
     width: 100%;
   }
 
-  .admin-task-controls .admin-btn {
+  .admin-drive-list-actions .admin-task-controls .admin-btn {
     flex: 1 1 130px;
   }
 
-  .admin-drive-list-actions > .admin-btn {
-    width: 100%;
-    min-height: 34px;
+  .admin-drives-page--list {
+    padding-bottom: calc(72px + env(safe-area-inset-bottom));
+  }
+
+  .admin-drive-create-fab {
+    right: var(--space-3);
+    bottom: calc(var(--space-3) + env(safe-area-inset-bottom));
+    max-width: calc(100vw - (var(--space-3) * 2));
   }
 
   .admin-detail-actions > .admin-btn {
@@ -5623,14 +5706,6 @@ body.admin-mobile-nav-open {
   width: min(100%, 360px);
 }
 
-.admin-config-header h1 {
-  margin: 0;
-  color: var(--text-strong);
-  font-size: 28px;
-  font-weight: var(--weight-bold);
-  letter-spacing: -0.02em;
-}
-
 .admin-config-tabs {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -6469,10 +6544,6 @@ body.admin-mobile-nav-open {
 
   .admin-config-header {
     width: min(100%, 360px);
-  }
-
-  .admin-config-header h1 {
-    font-size: 24px;
   }
 
   .admin-config-section-nav {
@@ -7474,20 +7545,7 @@ body.admin-mobile-nav-open {
   border-radius: 5px;
   background: var(--bg-elevated);
   cursor: pointer;
-  display: grid;
-  place-content: center;
-  transition: background var(--transition-fast), border-color var(--transition-fast),
-    box-shadow var(--transition-fast);
-}
-
-.admin-skipdirs-checkbox::before {
-  content: "";
-  width: 10px;
-  height: 8px;
-  background: var(--text-on-accent);
-  clip-path: polygon(14% 44%, 0 65%, 40% 100%, 100% 16%, 86% 0, 40% 62%);
-  transform: scale(0);
-  transition: transform 0.16s cubic-bezier(0.2, 0.8, 0.3, 1.4);
+  transition: background var(--transition-fast), border-color var(--transition-fast);
 }
 
 .admin-skipdirs-checkbox:hover:not(:checked) {
@@ -7495,13 +7553,8 @@ body.admin-mobile-nav-open {
 }
 
 .admin-skipdirs-checkbox:checked {
-  border-color: transparent;
-  background: var(--accent-gradient);
-  box-shadow: 0 1px 6px var(--accent-glow);
-}
-
-.admin-skipdirs-checkbox:checked::before {
-  transform: scale(1);
+  border-color: var(--accent);
+  background: var(--accent);
 }
 
 .admin-skipdirs-name {
@@ -7513,20 +7566,6 @@ body.admin-mobile-nav-open {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-
-.admin-skipdirs-flag {
-  flex: none;
-  margin-left: auto;
-  font-size: 10px;
-  font-weight: var(--weight-medium);
-  letter-spacing: 0.02em;
-  line-height: 1.6;
-  color: color-mix(in srgb, var(--accent) 62%, var(--text-muted));
-  background: transparent;
-  border: 1px solid color-mix(in srgb, var(--accent) 24%, transparent);
-  border-radius: var(--radius-pill);
-  padding: 1px 8px;
 }
 
 .admin-skipdirs-children {
@@ -8625,7 +8664,6 @@ body.admin-mobile-nav-open {
   min-height: calc(100dvh - 64px);
   color: var(--text-muted);
 }
-
 .lds-ellipsis {
   display: inline-block;
   position: relative;
@@ -9281,14 +9319,11 @@ body.admin-mobile-nav-open {
  * ========================================================= */
 .admin-logs-page {
   display: flex;
+  flex: 1 1 auto;
   flex-direction: column;
-  height: calc(100dvh - 88px - var(--space-7));
+  height: auto;
   min-height: 0;
   overflow: hidden;
-}
-
-.admin-logs-title {
-  margin: 0 0 var(--space-5);
 }
 
 .admin-log-viewer-slot,
@@ -9896,12 +9931,8 @@ body.admin-logs-fullscreen-active {
 @media (max-width: 768px) {
   .admin-logs-page {
     height: auto;
-    min-height: calc(100dvh - var(--admin-mobile-header-offset) - var(--space-4));
+    min-height: 0;
     overflow: visible;
-  }
-
-  .admin-logs-title {
-    margin-bottom: var(--space-4);
   }
 
   .admin-log-card {

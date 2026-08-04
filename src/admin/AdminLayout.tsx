@@ -13,9 +13,11 @@ import {
 } from "lucide-react";
 import * as api from "./api";
 import { AdminGlobalActions } from "./AdminGlobalActions";
+import { AdminPageActionsProvider } from "./AdminPageActions";
 import { useAuth } from "./AuthContext";
 import { useToast } from "./ToastContext";
 import { Modal } from "./Modal";
+import { getAdminPageTitle, shouldShowAdminPageHeader } from "./adminPageTitle";
 import { SpiderIcon } from "./icons/SpiderIcon";
 
 export function AdminLayout() {
@@ -23,15 +25,21 @@ export function AdminLayout() {
   const location = useLocation();
   const navigate = useNavigate();
   const { show } = useToast();
+  const currentPageTitle = getAdminPageTitle(location.pathname);
+  const showCurrentPageHeader = shouldShowAdminPageHeader(
+    location.pathname,
+    location.search
+  );
   const mobileNavigationToggleRef = useRef<HTMLButtonElement>(null);
+  const [pageActionsTarget, setPageActionsTarget] = useState<HTMLDivElement | null>(null);
   const [checkingUpdate, setCheckingUpdate] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
   const [mobileNavigationOpen, setMobileNavigationOpen] = useState(false);
   const [availableUpdate, setAvailableUpdate] = useState<api.UpdateCheck | null>(null);
 
   useEffect(() => {
-    document.title = "后台管理";
-  }, []);
+    document.title = currentPageTitle;
+  }, [currentPageTitle]);
 
   useEffect(() => {
     setMobileNavigationOpen(false);
@@ -257,7 +265,23 @@ export function AdminLayout() {
         onLogout={() => void handleLogout()}
       />
       <main className="admin-main">
-        <Outlet />
+        {showCurrentPageHeader && (
+          <header className="admin-current-page-header">
+            <h1 className="admin-page__title" aria-live="polite">
+              {currentPageTitle}
+            </h1>
+            <div
+              ref={setPageActionsTarget}
+              className="admin-current-page-actions"
+              aria-label="当前页面操作"
+            />
+          </header>
+        )}
+        <AdminPageActionsProvider target={pageActionsTarget}>
+          <div className="admin-page-content">
+            <Outlet />
+          </div>
+        </AdminPageActionsProvider>
       </main>
       {availableUpdate && (
         <Modal

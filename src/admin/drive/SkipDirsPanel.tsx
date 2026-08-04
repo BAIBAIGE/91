@@ -160,8 +160,6 @@ function DirTreeNode({
           <span className="admin-skipdirs-name" title={name} onClick={handleToggleOpen}>
             {name}
           </span>
-
-          {isSelected && <span className="admin-skipdirs-flag">已跳过</span>}
         </div>
       )}
 

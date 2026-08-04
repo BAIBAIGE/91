@@ -325,13 +325,6 @@ export function LogsPage() {
   });
 
   useEffect(() => {
-    document.title = "日志查看";
-    return () => {
-      document.title = "后台管理";
-    };
-  }, []);
-
-  useEffect(() => {
     try {
       window.localStorage.setItem(AUTO_REFRESH_STORAGE_KEY, String(autoRefresh));
     } catch {
@@ -734,7 +727,6 @@ export function LogsPage() {
   return (
     <>
       <div className="admin-page admin-logs-page">
-        <h1 className="admin-page__title admin-logs-title">日志查看</h1>
         <div
           ref={inlineLogViewerSlotRef}
           className="admin-log-viewer-slot"

@@ -14,6 +14,10 @@ const pageSource = readFileSync(
   new URL("../src/admin/SettingsPage.tsx", import.meta.url),
   "utf8"
 );
+const pageTitleSource = readFileSync(
+  new URL("../src/admin/adminPageTitle.ts", import.meta.url),
+  "utf8"
+);
 const sectionSource = readFileSync(
   new URL("../src/admin/settings/SettingsSection.tsx", import.meta.url),
   "utf8"
@@ -65,7 +69,7 @@ test("configuration panel groups typed fields from the real YAML document", () =
 });
 
 test("configuration panel follows the CLIProxy configuration workspace UI", () => {
-  assert.match(pageSource, /配置管理/);
+  assert.match(pageTitleSource, /title: "配置管理"/);
   assert.match(pageSource, /可视化编辑/);
   assert.match(pageSource, /源码编辑/);
   assert.doesNotMatch(pageSource, /placeholder="搜索配置项\.\.\."/);

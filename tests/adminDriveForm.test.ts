@@ -734,6 +734,8 @@ test("drive management exposes stop task controls", () => {
   assert.match(apiSource, /stopAllTasks/);
   assert.match(apiSource, /"\/tasks\/stop"/);
   assert.match(drivesPageSource, /停止所有任务/);
+  assert.match(drivesPageSource, /停止所有存储当前的扫描、封面、预览视频和视频指纹生成任务/);
+  assert.doesNotMatch(drivesPageSource, /停止所有网盘当前的扫描、封面、预览视频和视频指纹生成任务。/);
   assert.doesNotMatch(drivesPageSource, /停止所有网盘任务/);
 });
 
@@ -744,37 +746,69 @@ test("drive list actions use ordinary text buttons in the requested positions", 
   );
   assert.match(
     drivesPageSource,
-    /<header className="admin-page__header">\s*<div className="admin-page__actions admin-drive-list-actions">/
+    /<AdminPageActions>\s*<div className="admin-page__actions admin-drive-list-actions">[\s\S]*?<\/AdminPageActions>\s*\{storage && <StorageSummary storage=\{storage\} \/>\}/
   );
   assert.match(
     drivesPageSource,
-    /className="admin-page__actions admin-drive-list-actions"[\s\S]*aria-label="所有网盘任务控制"[\s\S]*onClick=\{handleScanAll\}[\s\S]*onClick=\{handleStopAllTasks\}[\s\S]*onClick=\{openCreate\}/
+    /className="admin-page__actions admin-drive-list-actions"[\s\S]*aria-label="所有网盘任务控制"[\s\S]*onClick=\{handleScanAll\}[\s\S]*onClick=\{handleStopAllTasks\}/
   );
   assert.match(
     drivesPageSource,
-    /<button type="button" className="admin-btn" onClick=\{openCreate\}>\s*添加网盘\s*<\/button>/
+    /className="admin-btn admin-drive-create-fab"\s*onClick=\{openCreate\}\s*>\s*<Plus size="1em" aria-hidden="true" \/>\s*添加网盘/
   );
   assert.doesNotMatch(drivesPageSource, /className="admin-drive-footer-actions"/);
   assert.doesNotMatch(drivesPageSource, /PlayCircle/);
   assert.doesNotMatch(drivesPageSource, /<CircleStop size=\{14\}/);
-  assert.doesNotMatch(drivesPageSource, /<Plus size=\{14\}/);
   assert.match(
     drivesPageSource,
-    /className="admin-btn"\s+onClick=\{handleScanAll\}/
+    /className="admin-btn"\s+onClick=\{handleScanAll\}[\s\S]*?<Search size="1em" aria-hidden="true" \/>\s*\{scanAllButtonText\(maintenanceStatus, scanningAll\)\}/
   );
   assert.match(
     drivesPageSource,
-    /className="admin-btn"\s+onClick=\{handleStopAllTasks\}/
+    /className="admin-btn"\s+onClick=\{handleStopAllTasks\}[\s\S]*?<Ban size="1em" aria-hidden="true" \/>\s*\{stoppingAll \? "停止中\.\.\." : "停止所有任务"\}/
   );
   assert.match(
     drivesPageSource,
     /title=\{form\.id && list\.find\(\(x\) => x\.id === form\.id\) \? "编辑网盘" : "添加网盘"\}/
   );
-  assert.match(adminCss, /\.admin-drive-list-actions\s*\{[^}]*justify-content\s*:\s*space-between/s);
   assert.match(
     adminCss,
-    /@media \(max-width: 640px\)\s*\{[\s\S]*?\.admin-drive-list-actions \.admin-btn\s*\{[^}]*background\s*:\s*var\(--bg-surface\);[^}]*border-color\s*:\s*var\(--border-subtle\)/s
+    /\.admin-current-page-header\s*\{[^}]*display\s*:\s*flex[^}]*align-items\s*:\s*center[^}]*justify-content\s*:\s*space-between[^}]*flex-wrap\s*:\s*wrap/s
   );
+  assert.match(
+    adminCss,
+    /\.admin-current-page-actions\s*\{[^}]*display\s*:\s*flex[^}]*justify-content\s*:\s*flex-end[^}]*margin-left\s*:\s*auto/s
+  );
+  assert.match(
+    adminCss,
+    /\.admin-drive-list-actions \.admin-task-controls \.admin-btn\s*\{[^}]*padding-inline\s*:\s*var\(--space-4\)[^}]*border-radius\s*:\s*var\(--radius-pill\)[^}]*background\s*:\s*transparent/s
+  );
+  assert.match(
+    adminCss,
+    /\.admin-drive-list-actions \.admin-task-controls \.admin-btn:hover:not\(:disabled\)\s*\{[^}]*background\s*:\s*color-mix\(in srgb, var\(--text-default\) 8%, transparent\)[^}]*box-shadow\s*:\s*none/s
+  );
+  assert.match(
+    adminCss,
+    /\.admin-drive-create-fab\s*\{[^}]*position\s*:\s*fixed[^}]*right\s*:\s*var\(--space-7\)[^}]*bottom\s*:\s*var\(--space-5\)[^}]*width\s*:\s*fit-content[^}]*min-width\s*:\s*0[^}]*min-height\s*:\s*44px[^}]*box-shadow\s*:\s*0 12px 32px/s
+  );
+  assert.match(
+    adminCss,
+    /\.admin-btn\.admin-drive-create-fab\s*\{[^}]*background\s*:\s*transparent/s
+  );
+  assert.match(
+    adminCss,
+    /\.admin-btn\.admin-drive-create-fab:hover:not\(:disabled\)\s*\{[^}]*background\s*:\s*transparent/s
+  );
+  assert.match(
+    adminCss,
+    /@media \(max-width: 640px\)\s*\{[\s\S]*?\.admin-drive-list-actions \.admin-btn\s*\{[^}]*background\s*:\s*transparent;[^}]*border-color\s*:\s*var\(--border-subtle\)/s
+  );
+  assert.match(
+    adminCss,
+    /@media \(max-width: 640px\)\s*\{[\s\S]*?\.admin-drive-create-fab\s*\{[^}]*right\s*:\s*var\(--space-3\)[^}]*bottom\s*:\s*calc\(var\(--space-3\) \+ env\(safe-area-inset-bottom\)\)/s
+  );
+  assert.doesNotMatch(drivesPageSource, /admin-drive-list-toolbar|driveListSummary/);
+  assert.doesNotMatch(adminCss, /--admin-drives-content-width|\.admin-drive-list-toolbar/);
   assert.doesNotMatch(adminCss, /\.admin-drive-footer-actions/);
 });
 
@@ -988,6 +1022,8 @@ test("scan-all uses its dedicated endpoint and full-scan busy message", () => {
     /function runScanAllJob\(\)[\s\S]*"\/jobs\/scan-all\/run"/
   );
   assert.doesNotMatch(apiSource, /function runNightlyJob\(/);
+  assert.match(drivesPageSource, /扫描已配置的存储、处理新视频并执行视频去重/);
+  assert.doesNotMatch(drivesPageSource, /扫描已配置网盘、处理新视频并执行视频去重。/);
   assert.match(drivesPageSource, /当前有全量扫描任务正在进行，请稍后重试/);
   assert.match(drivesPageSource, /resp\.message \|\| MAINTENANCE_BUSY_MESSAGE/);
   assert.match(constantsSource, /当前有全量扫描任务正在进行，请稍后重试/);
@@ -1123,11 +1159,18 @@ test("drive preview generation uses an accessible slider switch", () => {
   assert.doesNotMatch(driveComponentsSource, /预览视频：开|预览视频：关|PowerOff/);
 });
 
-test("drive skip directory tree only displays directory names", () => {
+test("drive skip directory tree uses a solid selection box without status pills", () => {
   assert.doesNotMatch(skipDirsPanelSource, /SelectedDirsChips/);
   assert.doesNotMatch(skipDirsPanelSource, /admin-mono-cell/);
   assert.doesNotMatch(skipDirsPanelSource, /根目录/);
   assert.match(skipDirsPanelSource, /\{name\}/);
+  assert.doesNotMatch(skipDirsPanelSource, /admin-skipdirs-flag|已跳过/);
+  assert.doesNotMatch(adminCss, /\.admin-skipdirs-checkbox(?::checked)?::before/);
+  assert.match(
+    adminCss,
+    /\.admin-skipdirs-checkbox:checked\s*\{[^}]*border-color:\s*var\(--accent\)[^}]*background:\s*var\(--accent\)/s
+  );
+  assert.doesNotMatch(adminCss, /\.admin-skipdirs-flag\s*\{/);
 });
 
 test("drive cards label fingerprint count as video fingerprint count", () => {

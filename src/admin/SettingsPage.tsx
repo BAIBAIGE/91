@@ -118,7 +118,6 @@ export function SettingsPage() {
   }
 
   useEffect(() => {
-    document.title = "配置管理";
     void load();
   }, []);
 
@@ -305,7 +304,6 @@ export function SettingsPage() {
     <>
       <form className="admin-config-page" onSubmit={prepareSave}>
         <header className="admin-config-header">
-          <h1>配置管理</h1>
           <div className="admin-config-tabs" role="tablist" aria-label="配置编辑模式">
             <button
               type="button"
