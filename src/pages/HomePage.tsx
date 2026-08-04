@@ -282,7 +282,12 @@ export default function HomePage() {
     <AppShell mobileAutoHideNav>
       <div className="container page-section home-discovery-section">
         <PromoStrip />
-        <SearchPanel value={activeSearchQuery} onSearch={handleSearch} />
+        <SearchPanel
+          value={activeSearchQuery}
+          onSearch={handleSearch}
+          variant="uiverse"
+          placeholder=""
+        />
         {!hasActiveSearch && (
           hasAnyVideos || hasActiveTag ? (
             <TagCloud linkBasePath="/" onTagSelect={resetSearchResults} />

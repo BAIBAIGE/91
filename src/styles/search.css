@@ -93,6 +93,111 @@
   display: none;
 }
 
+/* Adapted from uiverse.io by @satyamchaudharydev. */
+.search-panel--uiverse {
+  --search-uiverse-timing: 0.3s;
+  --search-uiverse-height: 40px;
+  --search-uiverse-border-height: 2px;
+  --search-uiverse-bg: color-mix(in srgb, var(--bg-surface) 42%, transparent);
+  --search-uiverse-border-color: var(--accent);
+  --search-uiverse-border-radius: 30px;
+  --search-uiverse-focus-radius: 1px;
+  width: 100%;
+  margin-inline: auto;
+}
+
+.search-panel--uiverse .search-panel__form {
+  position: relative;
+  width: 100%;
+  height: var(--search-uiverse-height);
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 0;
+  padding: 0 0.8em;
+  border: 1px solid var(--border-default);
+  border-radius: var(--search-uiverse-border-radius);
+  background: var(--search-uiverse-bg);
+  box-shadow: var(--shadow-sm), var(--shadow-inset);
+  backdrop-filter: blur(16px) saturate(140%);
+  -webkit-backdrop-filter: blur(16px) saturate(140%);
+  transition: border-radius 0.5s ease;
+}
+
+.search-panel--uiverse .search-panel__form::before {
+  content: "";
+  position: absolute;
+  width: 100%;
+  height: var(--search-uiverse-border-height);
+  left: 0;
+  bottom: 0;
+  border-radius: 1px;
+  background: var(--search-uiverse-border-color);
+  transform: scaleX(0);
+  transform-origin: center;
+  transition: transform var(--search-uiverse-timing) ease;
+  pointer-events: none;
+}
+
+.search-panel--uiverse .search-panel__form:focus-within {
+  border-color: transparent;
+  border-radius: var(--search-uiverse-focus-radius);
+  box-shadow: var(--shadow-sm), var(--shadow-inset);
+}
+
+.search-panel--uiverse .search-panel__form:focus-within::before {
+  transform: scaleX(1);
+}
+
+.search-panel--uiverse .search-panel__input {
+  flex: 1 1 auto;
+  width: 100%;
+  min-width: 0;
+  height: 100%;
+  padding: 0.7em 0.5em;
+  border: 0;
+  background: transparent;
+  color: var(--text-strong);
+  font-size: 0.9rem;
+}
+
+.search-panel--uiverse .search-panel__uiverse-submit,
+.search-panel--uiverse .search-panel__reset {
+  flex: 0 0 auto;
+  padding: 0;
+  border: 0;
+  display: grid;
+  place-items: center;
+  background: none;
+  color: var(--text-muted);
+  box-shadow: none;
+}
+
+.search-panel--uiverse .search-panel__reset {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity var(--transition-fast), color var(--transition-fast);
+}
+
+.search-panel--uiverse .search-panel__uiverse-submit:hover,
+.search-panel--uiverse .search-panel__reset:hover {
+  background: none;
+  color: var(--text-muted);
+  box-shadow: none;
+}
+
+.search-panel--uiverse .search-panel__reset.is-visible {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+}
+
+.search-panel--uiverse svg {
+  width: 17px;
+  margin-top: 3px;
+}
+
 /* ----- Tag cloud ----- */
 .tag-cloud-container {
   margin-top: var(--space-4);
