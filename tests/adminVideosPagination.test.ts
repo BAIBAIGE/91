@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
 const videosPageSource = readFileSync(new URL("../src/admin/VideosPage.tsx", import.meta.url), "utf8");
+const searchPanelSource = readFileSync(new URL("../src/components/SearchPanel.tsx", import.meta.url), "utf8");
 const apiSource = readFileSync(new URL("../src/admin/api.ts", import.meta.url), "utf8");
 const emptyVisualSource = readFileSync(new URL("../src/admin/AdminEmptyVisual.tsx", import.meta.url), "utf8");
 const adminCss = readFileSync(new URL("../src/styles/admin.css", import.meta.url), "utf8");
@@ -137,14 +138,23 @@ test("normal videos support composable advanced filters", () => {
   assert.match(videosPageSource, /className="admin-btn admin-video-advanced-clear"/);
 });
 
-test("admin video searches debounce typed input before querying", () => {
-  assert.match(videosPageSource, /const ADMIN_SEARCH_DEBOUNCE_MS = 500;/);
+test("admin video searches reuse the debounced home search component", () => {
+  const searchBoxSource = videosPageSource.slice(
+    videosPageSource.indexOf("function SearchBox"),
+    videosPageSource.indexOf("function Pagination")
+  );
+
+  assert.match(videosPageSource, /import \{ SearchPanel \} from "@\/components\/SearchPanel";/);
+  assert.match(searchBoxSource, /<SearchPanel[\s\S]*?className="admin-videos-filter__search search-panel--transparent"[\s\S]*?value=\{keyword\}[\s\S]*?onSearch=\{onSearch\}[\s\S]*?variant="uiverse"/);
+  assert.match(searchBoxSource, /placeholder=""/);
+  assert.doesNotMatch(videosPageSource, /搜索标题 \/ 作者|搜索文件名/);
   assert.equal(
-    Array.from(videosPageSource.matchAll(/}, ADMIN_SEARCH_DEBOUNCE_MS\);/g)).length,
+    Array.from(videosPageSource.matchAll(/<SearchBox keyword=\{searchKeyword\} onSearch=\{handleSearch\}/g)).length,
     2
   );
-  assert.match(videosPageSource, /onChange=\{\(e\) => onChange\(e\.target\.value\)\}/);
-  assert.doesNotMatch(videosPageSource, /onChange=\{\(e\) => setSearchKeyword/);
+  assert.match(searchPanelSource, /const SEARCH_DEBOUNCE_MS = 500;/);
+  assert.match(searchPanelSource, /window\.setTimeout\(\(\) => \{\s*commitSearch\(keyword\);/);
+  assert.doesNotMatch(videosPageSource, /ADMIN_SEARCH_DEBOUNCE_MS/);
 });
 
 test("admin video pagination only shows current and total pages", () => {

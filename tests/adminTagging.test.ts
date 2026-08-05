@@ -10,6 +10,10 @@ const tagsPageSource = readFileSync(
   new URL("../src/admin/TagsPage.tsx", import.meta.url),
   "utf8"
 );
+const searchPanelSource = readFileSync(
+  new URL("../src/components/SearchPanel.tsx", import.meta.url),
+  "utf8"
+);
 const adminCss = readFileSync(
   new URL("../src/styles/admin.css", import.meta.url),
   "utf8"
@@ -51,12 +55,12 @@ test("admin tags keep builtin, user, and auto-generated tag management", () => {
   assert.match(tagsPageSource, /<aside className="admin-tags-filter-panel" aria-label="标签分类">/);
   assert.match(tagsPageSource, /<div className="admin-tags-main">/);
   assert.ok(
-    tagsPageSource.indexOf('className="admin-tags-search"') <
+    tagsPageSource.indexOf('className="admin-tags-search search-panel--transparent"') <
       tagsPageSource.indexOf('className="admin-tags-filter-panel"'),
     "tag search should appear before source filter"
   );
-  assert.match(tagsPageSource, /placeholder="搜索标签名或包含词"/);
-  assert.doesNotMatch(tagsPageSource, /搜索标签名或规则词/);
+  assert.match(tagsPageSource, /<SearchPanel[\s\S]*?className="admin-tags-search search-panel--transparent"[\s\S]*?value=\{searchQuery\}[\s\S]*?onSearch=\{setSearchQuery\}[\s\S]*?variant="uiverse"[\s\S]*?placeholder=""/);
+  assert.doesNotMatch(tagsPageSource, /搜索标签名或包含词|搜索标签名或规则词/);
   assert.match(tagsPageSource, /admin-tags-filter-tab__text/);
   assert.doesNotMatch(tagsPageSource, /admin-tags-filter-tab__count/);
   assert.doesNotMatch(tagsPageSource, /aria-label=\{`\$\{label\} \(\$\{count\}\)`\}/);
@@ -120,12 +124,9 @@ test("admin tags keep builtin, user, and auto-generated tag management", () => {
   assert.doesNotMatch(tagsPageSource, /function tagDisplayAliases/);
   assert.match(tagsPageSource, /avCodePrefixes: joinRuleTerms\(rules\.avCodePrefixes\)/);
   assert.match(tagsPageSource, /tagRuleTerms\(t\)\.some/);
-  assert.match(tagsPageSource, /const ADMIN_SEARCH_DEBOUNCE_MS = 500;/);
-  assert.match(tagsPageSource, /const \[searchInput, setSearchInput\] = useState\(""\)/);
-  assert.match(tagsPageSource, /window\.setTimeout\(\(\) => \{\s*setSearchQuery\(searchInput\);/);
-  assert.match(tagsPageSource, /value=\{searchInput\}/);
-  assert.match(tagsPageSource, /onChange=\{\(e\) => setSearchInput\(e\.target\.value\)\}/);
-  assert.doesNotMatch(tagsPageSource, /onChange=\{\(e\) => setSearchQuery\(e\.target\.value\)\}/);
+  assert.match(searchPanelSource, /const SEARCH_DEBOUNCE_MS = 500;/);
+  assert.match(searchPanelSource, /window\.setTimeout\(\(\) => \{\s*commitSearch\(keyword\);/);
+  assert.doesNotMatch(tagsPageSource, /ADMIN_SEARCH_DEBOUNCE_MS|searchInput|setSearchInput/);
   assert.doesNotMatch(tagsPageSource, /admin-tag-card__keywords|admin-tag-card__keyword-pill|tagKeywordTerms/);
   assert.doesNotMatch(tagsPageSource, /function uniqueDisplayAliases/);
   assert.doesNotMatch(tagsPageSource, /系统内置车牌已自动参与匹配/);

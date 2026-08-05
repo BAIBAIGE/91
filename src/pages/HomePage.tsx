@@ -287,6 +287,7 @@ export default function HomePage() {
           onSearch={handleSearch}
           variant="uiverse"
           placeholder=""
+          className="search-panel--public search-panel--transparent"
         />
         {!hasActiveSearch && (
           hasAnyVideos || hasActiveTag ? (

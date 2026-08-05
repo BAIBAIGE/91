@@ -9,6 +9,7 @@ type SearchPanelProps = {
   onSearch?: (keyword: string) => void;
   variant?: "default" | "uiverse";
   placeholder?: string;
+  className?: string;
 };
 
 export function SearchPanel({
@@ -16,6 +17,7 @@ export function SearchPanel({
   onSearch,
   variant = "default",
   placeholder = "搜索视频标题或作者",
+  className,
 }: SearchPanelProps = {}) {
   const isUiverse = variant === "uiverse";
   const navigate = useNavigate();
@@ -60,7 +62,7 @@ export function SearchPanel({
 
   const searchInput = (
     <input
-      className="search-panel__input"
+      className={isUiverse ? "search-panel__uiverse-input" : "search-panel__input"}
       type="text"
       value={keyword}
       onChange={(e) => setKeyword(e.target.value)}
@@ -71,66 +73,64 @@ export function SearchPanel({
 
   return (
     <form
-      className={`search-panel${isUiverse ? " search-panel--uiverse" : ""}`}
+      className={`search-panel${isUiverse ? " search-panel--uiverse" : ""}${className ? ` ${className}` : ""}`}
       onSubmit={handleSubmit}
       role="search"
     >
-      <div className="search-panel__form">
-        {isUiverse ? (
-          <>
-            <button className="search-panel__uiverse-submit" type="submit" aria-label="搜索">
-              <svg
-                width="17"
-                height="16"
-                fill="none"
-                xmlns="http://www.w3.org/2000/svg"
-                aria-hidden="true"
-              >
-                <path
-                  d="M7.667 12.667A5.333 5.333 0 107.667 2a5.333 5.333 0 000 10.667zM14.334 14l-2.9-2.9"
-                  stroke="currentColor"
-                  strokeWidth="1.333"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-              </svg>
-            </button>
-            {searchInput}
-            <button
-              className={`search-panel__reset${keyword ? " is-visible" : ""}`}
-              type="button"
-              onClick={handleReset}
-              aria-label="清空搜索"
+      {isUiverse ? (
+        <>
+          <button className="search-panel__uiverse-submit" type="submit" aria-label="搜索">
+            <svg
+              width="17"
+              height="16"
+              fill="none"
+              xmlns="http://www.w3.org/2000/svg"
+              aria-hidden="true"
             >
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                fill="none"
-                viewBox="0 0 24 24"
+              <path
+                d="M7.667 12.667A5.333 5.333 0 107.667 2a5.333 5.333 0 000 10.667zM14.334 14l-2.9-2.9"
                 stroke="currentColor"
-                strokeWidth="2"
-                aria-hidden="true"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  d="M6 18L18 6M6 6l12 12"
-                />
-              </svg>
-            </button>
-          </>
-        ) : (
-          <>
-            <div className="search-panel__input-wrapper">
-              <Search size={16} className="search-panel__search-icon" aria-hidden="true" />
-              {searchInput}
-            </div>
-            <button className="search-panel__submit" type="submit" aria-label="搜索">
-              <Search size={16} className="search-panel__submit-icon" aria-hidden="true" />
-              <span className="search-panel__submit-text">搜索</span>
-            </button>
-          </>
-        )}
-      </div>
+                strokeWidth="1.333"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+          </button>
+          {searchInput}
+          <button
+            className="search-panel__reset"
+            type="button"
+            onClick={handleReset}
+            aria-label="清空搜索"
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              strokeWidth="2"
+              aria-hidden="true"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M6 18L18 6M6 6l12 12"
+              />
+            </svg>
+          </button>
+        </>
+      ) : (
+        <div className="search-panel__form">
+          <div className="search-panel__input-wrapper">
+            <Search size={16} className="search-panel__search-icon" aria-hidden="true" />
+            {searchInput}
+          </div>
+          <button className="search-panel__submit" type="submit" aria-label="搜索">
+            <Search size={16} className="search-panel__submit-icon" aria-hidden="true" />
+            <span className="search-panel__submit-text">搜索</span>
+          </button>
+        </div>
+      )}
     </form>
   );
 }

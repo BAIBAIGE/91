@@ -93,106 +93,100 @@
   display: none;
 }
 
-/* Adapted from uiverse.io by @satyamchaudharydev. */
-.search-panel--uiverse {
-  --search-uiverse-timing: 0.3s;
-  --search-uiverse-height: 40px;
-  --search-uiverse-border-height: 2px;
-  --search-uiverse-bg: color-mix(in srgb, var(--bg-surface) 42%, transparent);
-  --search-uiverse-border-color: var(--accent);
-  --search-uiverse-border-radius: 30px;
-  --search-uiverse-focus-radius: 1px;
-  width: 100%;
-  margin-inline: auto;
+/* From uiverse.io by @satyamchaudharydev */
+/* removing default style of button */
+.search-panel--uiverse button {
+  border: none;
+  background: none;
+  color: var(--text-muted);
 }
 
-.search-panel--uiverse .search-panel__form {
+/* styling of whole input container */
+.search-panel--uiverse {
+  --timing: 0.3s;
+  --width-of-input: min(100%, 360px);
+  --height-of-input: 40px;
+  --border-height: 2px;
+  --input-bg: var(--bg-surface);
+  --border-color: var(--accent);
+  --border-radius: 30px;
+  --after-border-radius: 1px;
   position: relative;
-  width: 100%;
-  height: var(--search-uiverse-height);
+  width: var(--width-of-input);
+  height: var(--height-of-input);
   display: flex;
   align-items: center;
-  flex-wrap: nowrap;
-  gap: 0;
-  padding: 0 0.8em;
-  border: 1px solid var(--border-default);
-  border-radius: var(--search-uiverse-border-radius);
-  background: var(--search-uiverse-bg);
-  box-shadow: var(--shadow-sm), var(--shadow-inset);
-  backdrop-filter: blur(16px) saturate(140%);
-  -webkit-backdrop-filter: blur(16px) saturate(140%);
+  padding-inline: 0.8em;
+  border-radius: var(--border-radius);
   transition: border-radius 0.5s ease;
+  background: var(--input-bg, var(--bg-surface));
 }
 
-.search-panel--uiverse .search-panel__form::before {
+.search-panel--uiverse.search-panel--public {
+  --width-of-input: 100%;
+}
+
+.search-panel--uiverse.search-panel--transparent {
+  --input-bg: transparent;
+  border: 1px solid var(--border-default);
+}
+
+/* styling of Input */
+.search-panel--uiverse .search-panel__uiverse-input {
+  font-size: 0.9rem;
+  background-color: transparent;
+  width: 100%;
+  height: 100%;
+  padding-inline: 0.5em;
+  padding-block: 0.7em;
+  border: none;
+}
+
+/* styling of animated border */
+.search-panel--uiverse::before {
   content: "";
   position: absolute;
+  background: var(--border-color);
+  transform: scaleX(0);
+  transform-origin: center;
   width: 100%;
-  height: var(--search-uiverse-border-height);
+  height: var(--border-height);
   left: 0;
   bottom: 0;
   border-radius: 1px;
-  background: var(--search-uiverse-border-color);
-  transform: scaleX(0);
-  transform-origin: center;
-  transition: transform var(--search-uiverse-timing) ease;
-  pointer-events: none;
+  transition: transform var(--timing) ease;
 }
 
-.search-panel--uiverse .search-panel__form:focus-within {
-  border-color: transparent;
-  border-radius: var(--search-uiverse-focus-radius);
-  box-shadow: var(--shadow-sm), var(--shadow-inset);
+/* Hover on Input */
+.search-panel--uiverse:focus-within {
+  border-radius: var(--after-border-radius);
 }
 
-.search-panel--uiverse .search-panel__form:focus-within::before {
-  transform: scaleX(1);
+.search-panel--uiverse .search-panel__uiverse-input:focus {
+  outline: none;
 }
 
-.search-panel--uiverse .search-panel__input {
-  flex: 1 1 auto;
-  width: 100%;
-  min-width: 0;
-  height: 100%;
-  padding: 0.7em 0.5em;
-  border: 0;
-  background: transparent;
-  color: var(--text-strong);
-  font-size: 0.9rem;
+/* here is code of animated border */
+.search-panel--uiverse:focus-within::before {
+  transform: scale(1);
 }
 
-.search-panel--uiverse .search-panel__uiverse-submit,
+/* styling of close button */
+/* == you can click the close button to remove text == */
 .search-panel--uiverse .search-panel__reset {
-  flex: 0 0 auto;
-  padding: 0;
-  border: 0;
-  display: grid;
-  place-items: center;
+  border: none;
   background: none;
-  color: var(--text-muted);
-  box-shadow: none;
-}
-
-.search-panel--uiverse .search-panel__reset {
   opacity: 0;
   visibility: hidden;
-  pointer-events: none;
-  transition: opacity var(--transition-fast), color var(--transition-fast);
 }
 
-.search-panel--uiverse .search-panel__uiverse-submit:hover,
-.search-panel--uiverse .search-panel__reset:hover {
-  background: none;
-  color: var(--text-muted);
-  box-shadow: none;
-}
-
-.search-panel--uiverse .search-panel__reset.is-visible {
+/* close button shown when typing */
+.search-panel--uiverse .search-panel__uiverse-input:not(:placeholder-shown) ~ .search-panel__reset {
   opacity: 1;
   visibility: visible;
-  pointer-events: auto;
 }
 
+/* sizing svg icons */
 .search-panel--uiverse svg {
   width: 17px;
   margin-top: 3px;

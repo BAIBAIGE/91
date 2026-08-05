@@ -31,6 +31,7 @@ import { driveKindAbbr, driveKindIconPath, kindLabel } from "./drive/constants";
 import { SpiderIcon } from "./icons/SpiderIcon";
 import { readAdminVideosPage, withAdminVideosPage } from "./videosSearchParams";
 import { useAdminFloatingActionSpace } from "./useAdminFloatingActionSpace";
+import { SearchPanel } from "@/components/SearchPanel";
 
 const DESKTOP_VIDEOS_PAGE_SIZE = 50;
 const MOBILE_VIDEOS_PAGE_SIZE = 20;
@@ -39,7 +40,6 @@ const VIDEOS_MOBILE_QUERY = "(max-width: 640px)";
 const REGEN_PREVIEW_STATUS = "generating";
 const REGEN_PREVIEW_POLL_INTERVAL_MS = 2000;
 const REGEN_PREVIEW_TRACK_TIMEOUT_MS = 30 * 60 * 1000;
-const ADMIN_SEARCH_DEBOUNCE_MS = 500;
 const LOCAL_UPLOAD_SOURCE_ID = "local-upload";
 
 type TabKey = "current" | "blacklist";
@@ -171,7 +171,6 @@ function CurrentVideosTab({
   const [crawlers, setCrawlers] = useState<api.AdminCrawler[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
-  const [keyword, setKeyword] = useState("");
   const [searchKeyword, setSearchKeyword] = useState("");
   const [advancedFiltersOpen, setAdvancedFiltersOpen] = useState(false);
   const [draftFilters, setDraftFilters] = useState<VideoAdvancedFilterValues>(() => ({ ...EMPTY_VIDEO_FILTERS }));
@@ -266,15 +265,6 @@ function CurrentVideosTab({
   useEffect(() => {
     setSelectedIds(new Set());
   }, [searchKeyword, appliedFilters]);
-
-  useEffect(() => {
-    if (keyword === searchKeyword) return;
-    const timer = window.setTimeout(() => {
-      setSearchKeyword(keyword);
-      setPage(1);
-    }, ADMIN_SEARCH_DEBOUNCE_MS);
-    return () => window.clearTimeout(timer);
-  }, [keyword, searchKeyword]);
 
   useEffect(() => {
     if (trackedRegenCount === 0 && !hasGeneratingPreview) return;
@@ -446,11 +436,10 @@ function CurrentVideosTab({
     setSelectedIds(new Set());
   };
 
-  function handleSearchSubmit(e: React.FormEvent) {
-    e.preventDefault();
+  const handleSearch = useCallback((keyword: string) => {
     setSearchKeyword(keyword);
     setPage(1);
-  }
+  }, [setPage]);
 
   function openAdvancedFilters() {
     setDraftFilters({ ...appliedFilters });
@@ -487,7 +476,7 @@ function CurrentVideosTab({
   return (
     <div className={`admin-videos-current${selectMode ? " has-bulk-actions" : ""}`}>
       <div className="admin-page__actions admin-videos-filter admin-videos-filter--current">
-        <SearchBox keyword={keyword} onChange={setKeyword} onSubmit={handleSearchSubmit} />
+        <SearchBox keyword={searchKeyword} onSearch={handleSearch} />
         <div className="admin-videos-filter__current-actions" data-admin-floating-actions>
           <button
             type="button"
@@ -723,7 +712,6 @@ function BlacklistTab({
   const [drives, setDrives] = useState<api.AdminDrive[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
-  const [keyword, setKeyword] = useState("");
   const [searchKeyword, setSearchKeyword] = useState("");
   const [total, setTotal] = useState(0);
   const [selectMode, setSelectMode] = useState(false);
@@ -814,15 +802,6 @@ function BlacklistTab({
     previousPageSizeRef.current = pageSize;
     setPage(1);
   }, [pageSize, setPage]);
-
-  useEffect(() => {
-    if (keyword === searchKeyword) return;
-    const timer = window.setTimeout(() => {
-      setSearchKeyword(keyword);
-      setPage(1);
-    }, ADMIN_SEARCH_DEBOUNCE_MS);
-    return () => window.clearTimeout(timer);
-  }, [keyword, searchKeyword]);
 
   const driveNameMap = new Map(drives.map((d) => [d.id, d.name || d.id]));
   driveNameMap.set(LOCAL_UPLOAD_SOURCE_ID, "上传来源");
@@ -934,16 +913,15 @@ function BlacklistTab({
     setSelectedIds(new Set());
   };
 
-  function handleSearchSubmit(e: React.FormEvent) {
-    e.preventDefault();
+  const handleSearch = useCallback((keyword: string) => {
     setSearchKeyword(keyword);
     setPage(1);
-  }
+  }, [setPage]);
 
   return (
     <div className={`admin-videos-blacklist${selectMode ? " has-bulk-actions" : ""}`}>
       <div className="admin-page__actions admin-videos-filter admin-videos-filter--blacklist">
-        <SearchBox keyword={keyword} onChange={setKeyword} onSubmit={handleSearchSubmit} placeholder="搜索文件名" />
+        <SearchBox keyword={searchKeyword} onSearch={handleSearch} />
         {hasBlacklistActions && (
           <div
             className="admin-videos-filter__actions admin-blacklist-source-delete"
@@ -1709,25 +1687,19 @@ function AdvancedVideoFilters({
 
 function SearchBox({
   keyword,
-  onChange,
-  onSubmit,
-  placeholder = "搜索标题 / 作者",
+  onSearch,
 }: {
   keyword: string;
-  onChange: (v: string) => void;
-  onSubmit: (e: React.FormEvent) => void;
-  placeholder?: string;
+  onSearch: (keyword: string) => void;
 }) {
   return (
-    <form className="admin-videos-filter__search" onSubmit={onSubmit}>
-      <Search size={14} className="admin-videos-filter__search-icon" />
-      <input
-        aria-label={placeholder}
-        value={keyword}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder={placeholder}
-      />
-    </form>
+    <SearchPanel
+      className="admin-videos-filter__search search-panel--transparent"
+      value={keyword}
+      onSearch={onSearch}
+      variant="uiverse"
+      placeholder=""
+    />
   );
 }
 

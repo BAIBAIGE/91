@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
-import { Film, RefreshCw, Search } from "lucide-react";
+import { Film, RefreshCw } from "lucide-react";
+import { SearchPanel } from "@/components/SearchPanel";
 import * as api from "./api";
 import { useToast } from "./ToastContext";
 import { ConfirmModal } from "./ConfirmModal";
@@ -11,7 +12,6 @@ import { useAdminFloatingActionSpace } from "./useAdminFloatingActionSpace";
 const DESKTOP_TAGS_PAGE_SIZE = 24;
 const MOBILE_TAGS_PAGE_SIZE = 8;
 const TAGS_MOBILE_QUERY = "(max-width: 640px)";
-const ADMIN_SEARCH_DEBOUNCE_MS = 500;
 const TAG_SOURCE_FILTERS = ["builtin", "user", "generated"];
 const TAG_DISPLAY_GROUP_ORDER: Record<string, number> = {
   builtin: 0,
@@ -34,7 +34,6 @@ export function TagsPage() {
   const [saving, setSaving] = useState(false);
   const [deletingId, setDeletingId] = useState<number | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<DeleteConfirmState>(null);
-  const [searchInput, setSearchInput] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [filterSource, setFilterSource] = useState<string>("all");
   const [selectMode, setSelectMode] = useState(false);
@@ -210,14 +209,6 @@ export function TagsPage() {
   const showPagination = filteredTags.length > pageSize;
 
   useEffect(() => {
-    if (searchInput === searchQuery) return;
-    const timer = window.setTimeout(() => {
-      setSearchQuery(searchInput);
-    }, ADMIN_SEARCH_DEBOUNCE_MS);
-    return () => window.clearTimeout(timer);
-  }, [searchInput, searchQuery]);
-
-  useEffect(() => {
     setPage(1);
   }, [searchQuery, filterSource, pageSize]);
 
@@ -264,16 +255,13 @@ export function TagsPage() {
       <div className="admin-tags-layout">
         <div className="admin-tags-main">
           <div className="admin-tags-toolbar">
-            <div className="admin-tags-search">
-              <Search className="admin-tags-search__icon" size={14} />
-              <input
-                aria-label="搜索标签名或包含词"
-                type="text"
-                value={searchInput}
-                onChange={(e) => setSearchInput(e.target.value)}
-                placeholder="搜索标签名或包含词"
-              />
-            </div>
+            <SearchPanel
+              className="admin-tags-search search-panel--transparent"
+              value={searchQuery}
+              onSearch={setSearchQuery}
+              variant="uiverse"
+              placeholder=""
+            />
 
             <aside className="admin-tags-filter-panel" aria-label="标签分类">
               <div className="admin-tags-filter-tabs">

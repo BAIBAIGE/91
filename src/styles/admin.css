@@ -4319,8 +4319,6 @@ body.admin-mobile-nav-open {
 .admin-videos-filter--blacklist .admin-videos-filter__search {
   grid-column: 2;
   justify-self: center;
-  width: 100%;
-  max-width: 360px;
   min-width: 0;
 }
 
@@ -4370,38 +4368,8 @@ body.admin-mobile-nav-open {
 }
 
 .admin-videos-filter__search {
-  position: relative;
-  display: flex;
-  align-items: center;
   min-width: 0;
-}
-
-.admin-videos-filter__search-icon {
-  position: absolute;
-  left: 10px;
-  color: var(--text-faint);
-  pointer-events: none;
-}
-
-.admin-videos-filter__search input {
-  width: 100%;
-  padding: 8px 32px;
-  border: 1px solid var(--border-default);
-  border-radius: var(--radius-sm);
-  background: var(--bg-surface);
-  color: var(--text-strong);
-  font-size: var(--font-sm);
-  text-align: center;
-}
-
-.admin-videos-filter__search input::placeholder {
-  color: var(--text-faint);
-}
-
-.admin-videos-filter__search input:focus {
-  outline: none;
-  border-color: var(--border-accent);
-  box-shadow: 0 0 0 3px var(--accent-soft);
+  margin-top: 0;
 }
 
 .admin-video-advanced-toggle {
@@ -5058,8 +5026,6 @@ body.admin-mobile-nav-open {
   .admin-videos-filter--blacklist .admin-videos-filter__search,
   .admin-videos-filter--current .admin-videos-filter__search {
     grid-column: 1;
-    width: 100%;
-    max-width: none;
     min-width: 0;
   }
 
@@ -7740,36 +7706,8 @@ body.admin-mobile-nav-open {
   grid-column: 2;
   grid-row: 1;
   justify-self: center;
-  position: relative;
-  width: 100%;
-  max-width: 360px;
-}
-
-.admin-tags-search input {
-  width: 100%;
-  padding: 8px 32px;
-  font-size: var(--font-sm);
-  text-align: center;
-  border: 1px solid var(--border-default);
-  border-radius: var(--radius-sm);
-  background: var(--bg-surface);
-  color: var(--text-strong);
-  transition: all var(--transition-fast);
-}
-
-.admin-tags-search input:focus {
-  outline: none;
-  border-color: var(--border-accent);
-  box-shadow: 0 0 0 3px var(--accent-soft);
-}
-
-.admin-tags-search__icon {
-  position: absolute;
-  left: 10px;
-  top: 50%;
-  transform: translateY(-50%);
-  color: var(--text-faint);
-  pointer-events: none;
+  min-width: 0;
+  margin-top: 0;
 }
 
 .admin-tags-filter-tabs {
@@ -7963,9 +7901,7 @@ body.admin-mobile-nav-open {
   .admin-tags-search {
     grid-column: 1;
     grid-row: 1;
-    width: 100%;
     min-width: 0;
-    max-width: none;
   }
 
   .admin-tags-filter-panel {

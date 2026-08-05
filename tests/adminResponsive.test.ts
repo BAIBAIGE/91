@@ -6,6 +6,10 @@ const adminCss = readFileSync(
   new URL("../src/styles/admin.css", import.meta.url),
   "utf8"
 );
+const searchCss = readFileSync(
+  new URL("../src/styles/search.css", import.meta.url),
+  "utf8"
+);
 const themeTokensCss = readFileSync(
   new URL("../src/styles/tokens.css", import.meta.url),
   "utf8"
@@ -555,13 +559,15 @@ test("desktop current video list uses long cards without a header row", () => {
   assert.match(adminCss, /\.admin-videos-current \.admin-videos-table td\[data-label="来源"\][\s\S]*display\s*:\s*none/);
 });
 
-test("desktop video management toolbar follows tag management layout", () => {
+test("desktop video management toolbar keeps its layout and reuses the home search style", () => {
   const css = adminCss;
   const currentFilter = ruleBodyByContains(css, ".admin-videos-filter--current");
   const blacklistFilter = ruleBodyByContains(css, ".admin-videos-filter--blacklist");
   const currentFilterSearch = ruleBodyByContains(css, ".admin-videos-filter--current .admin-videos-filter__search");
   const blacklistFilterSearch = ruleBodyByContains(css, ".admin-videos-filter--blacklist .admin-videos-filter__search");
-  const searchInput = ruleBody(css, ".admin-videos-filter__search input");
+  const adminSearch = allRuleBodies(css, ".admin-videos-filter__search");
+  const sharedSearchForm = ruleBody(searchCss, ".search-panel--uiverse");
+  const sharedSearchInput = ruleBody(searchCss, ".search-panel--uiverse .search-panel__uiverse-input");
   const actions = ruleBody(css, ".admin-videos-filter__actions");
   const batch = ruleBody(css, ".admin-videos-filter__batch");
   const tabs = ruleBody(css, ".admin-video-tabs");
@@ -582,13 +588,18 @@ test("desktop video management toolbar follows tag management layout", () => {
   assert.match(videosPageSource, /admin-videos-filter--blacklist[\s\S]*?\{tabSelector\}/);
   assert.match(currentFilterSearch, /min-width\s*:\s*0/);
   assert.match(currentFilterSearch, /grid-column\s*:\s*2/);
-  assert.match(currentFilterSearch, /max-width\s*:\s*360px/);
+  assert.match(currentFilterSearch, /justify-self\s*:\s*center/);
   assert.match(blacklistFilterSearch, /min-width\s*:\s*0/);
   assert.match(blacklistFilterSearch, /grid-column\s*:\s*2/);
-  assert.match(blacklistFilterSearch, /max-width\s*:\s*360px/);
-  assert.match(searchInput, /padding\s*:\s*8px\s+32px/);
-  assert.match(searchInput, /text-align\s*:\s*center/);
-  assert.match(searchInput, /background\s*:\s*var\(--bg-surface\)/);
+  assert.match(blacklistFilterSearch, /justify-self\s*:\s*center/);
+  assert.match(videosPageSource, /<SearchPanel[\s\S]*?className="admin-videos-filter__search search-panel--transparent"[\s\S]*?variant="uiverse"/);
+  assert.match(adminSearch, /margin-top\s*:\s*0/);
+  assert.match(sharedSearchForm, /--width-of-input\s*:\s*min\(100%,\s*360px\)/);
+  assert.match(sharedSearchForm, /width\s*:\s*var\(--width-of-input\)/);
+  assert.match(sharedSearchForm, /background\s*:\s*var\(--input-bg, var\(--bg-surface\)\)/);
+  assert.match(sharedSearchInput, /padding-inline\s*:\s*0\.5em/);
+  assert.match(sharedSearchInput, /background-color\s*:\s*transparent/);
+  assert.doesNotMatch(adminCss, /\.admin-videos-filter__search input\s*\{/);
   assert.match(actions, /grid-column\s*:\s*3/);
   assert.match(actions, /display\s*:\s*inline-flex/);
   assert.match(actions, /justify-content\s*:\s*flex-end/);
@@ -1181,7 +1192,7 @@ test("mobile tags management does not create horizontal page overflow", () => {
   const mobileBoard = allRuleBodies(css, ".admin-tags-board");
   const toolbar = allRuleBodies(css, ".admin-tags-toolbar");
   const search = allRuleBodies(css, ".admin-tags-search");
-  const searchInput = ruleBody(adminCss, ".admin-tags-search input");
+  const sharedSearch = ruleBody(searchCss, ".search-panel--uiverse");
   const toolbarActions = allRuleBodies(css, ".admin-tags-toolbar-actions");
   const toolbarActionButton = allRuleBodies(css, ".admin-tags-toolbar-actions .admin-btn");
   const toolbarActionDivider = allRuleBodies(css, ".admin-tags-toolbar-actions .admin-btn + .admin-btn::before");
@@ -1220,15 +1231,12 @@ test("mobile tags management does not create horizontal page overflow", () => {
   assert.match(allRuleBodies(adminCss, ".admin-tags-search"), /grid-column\s*:\s*2/);
   assert.match(allRuleBodies(adminCss, ".admin-tags-search"), /grid-row\s*:\s*1/);
   assert.match(allRuleBodies(adminCss, ".admin-tags-search"), /justify-self\s*:\s*center/);
-  assert.match(ruleBody(adminCss, ".admin-tags-search"), /width\s*:\s*100%/);
-  assert.match(ruleBody(adminCss, ".admin-tags-search"), /max-width\s*:\s*360px/);
-  assert.match(searchInput, /padding\s*:\s*8px\s+32px/);
-  assert.match(searchInput, /text-align\s*:\s*center/);
+  assert.match(tagsPageSource, /className="admin-tags-search search-panel--transparent"/);
+  assert.match(sharedSearch, /--width-of-input\s*:\s*min\(100%,\s*360px\)/);
+  assert.doesNotMatch(adminCss, /\.admin-tags-search input\s*\{|\.admin-tags-search__icon/);
   assert.match(search, /grid-column\s*:\s*1/);
   assert.match(search, /grid-row\s*:\s*1/);
-  assert.match(search, /width\s*:\s*100%/);
   assert.match(search, /min-width\s*:\s*0/);
-  assert.match(search, /max-width\s*:\s*none/);
   assert.match(toolbarActions, /position\s*:\s*fixed/);
   assert.match(toolbarActions, /right\s*:\s*var\(--space-3\)/);
   assert.match(toolbarActions, /bottom\s*:\s*calc\(var\(--space-3\) \+ env\(safe-area-inset-bottom\)\)/);
