@@ -6,6 +6,7 @@ import { ConfirmModal } from "./ConfirmModal";
 import { Modal } from "./Modal";
 import { AdminEmptyVisual } from "./AdminEmptyVisual";
 import { AdminLoading } from "./AdminLoading";
+import { useAdminFloatingActionSpace } from "./useAdminFloatingActionSpace";
 
 const DESKTOP_TAGS_PAGE_SIZE = 24;
 const MOBILE_TAGS_PAGE_SIZE = 8;
@@ -25,6 +26,7 @@ type DeleteConfirmState =
   | null;
 
 export function TagsPage() {
+  const floatingActionPageRef = useAdminFloatingActionSpace<HTMLElement>();
   const [tags, setTags] = useState<api.AdminTag[]>([]);
   const [label, setLabel] = useState("");
   const [loading, setLoading] = useState(true);
@@ -206,7 +208,6 @@ export function TagsPage() {
     [filteredTags, pageStartIndex, pageEndIndex]
   );
   const showPagination = filteredTags.length > pageSize;
-  const placeholderTags = showPagination ? Math.max(0, pageSize - pagedTags.length) : 0;
 
   useEffect(() => {
     if (searchInput === searchQuery) return;
@@ -256,7 +257,10 @@ export function TagsPage() {
   }
 
   return (
-    <section className={`admin-tags-page${selectMode ? " has-bulk-actions" : ""}${searchEmpty ? " is-search-empty" : ""}`}>
+    <section
+      ref={floatingActionPageRef}
+      className={`admin-page admin-page--with-floating-actions admin-tags-page${selectMode ? " has-bulk-actions" : ""}${searchEmpty ? " is-search-empty" : ""}`}
+    >
       <div className="admin-tags-layout">
         <div className="admin-tags-main">
           <div className="admin-tags-toolbar">
@@ -298,7 +302,7 @@ export function TagsPage() {
               </div>
             </aside>
 
-            <div className="admin-tags-toolbar-actions">
+            <div className="admin-tags-toolbar-actions" data-admin-floating-actions>
               <button
                 type="button"
                 className="admin-btn"
@@ -421,27 +425,6 @@ export function TagsPage() {
                         </div>
                       );
                     })}
-                    {Array.from({ length: placeholderTags }, (_, index) => (
-                      <div
-                        key={`placeholder-${index}`}
-                        className="admin-tag-card admin-tag-card--placeholder"
-                        aria-hidden="true"
-                      >
-                        <div className="admin-tag-card__head">
-                          <span className="admin-tag-card__title">placeholder</span>
-                          <span className="admin-tag-card__source-badge">placeholder</span>
-                        </div>
-                        <div className="admin-tag-card__footer">
-                          <span className="admin-tag-card__count">
-                            <Film size={13} />
-                            <strong>0</strong> 视频
-                          </span>
-                          <div className="admin-tag-card__footer-actions">
-                            <span className="admin-tag-card__edit">placeholder</span>
-                          </div>
-                        </div>
-                      </div>
-                    ))}
                   </div>
 
                   {showPagination && (
@@ -491,7 +474,12 @@ export function TagsPage() {
         </div>
       </div>
       {selectMode && (
-        <div className="admin-tags-bulk-toolbar" role="region" aria-label="标签批量操作">
+        <div
+          className="admin-tags-bulk-toolbar"
+          data-admin-floating-actions
+          role="region"
+          aria-label="标签批量操作"
+        >
           <div className="admin-tags-bulk-actions">
             <span className="admin-tags-bulk-actions__count">已选择 {selected.size} 项</span>
             <button

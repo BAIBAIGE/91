@@ -2,6 +2,7 @@ import { Suspense, lazy, useEffect, type ReactNode } from "react";
 import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { SkyStarfield } from "@/components/SkyStarfield";
 import { AdminLayout } from "@/admin/AdminLayout";
+import { CrawlersPageLoading } from "@/admin/CrawlersPageLoading";
 import { DrivesPageLoading } from "@/admin/DrivesPageLoading";
 import { RequireAuth } from "@/admin/RequireAuth";
 import { RequireAdmin } from "@/admin/RequireAdmin";
@@ -169,7 +170,7 @@ export default function App() {
           <Route
             path="crawlers"
             element={
-              <PageSuspense>
+              <PageSuspense fallback={<CrawlersPageLoading />}>
                 <CrawlersPage />
               </PageSuspense>
             }

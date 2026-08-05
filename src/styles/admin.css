@@ -9,7 +9,10 @@
  * ========================================================= */
 .admin-shell {
   --admin-sidebar-width: 232px;
+  --admin-header-height: 80px;
+  height: 100vh;
   min-height: 100vh;
+  overflow: hidden;
   background: var(--bg-page);
   color: var(--text-default);
   display: grid;
@@ -27,7 +30,26 @@
   position: sticky;
   top: 0;
   height: 100vh;
+  min-height: 0;
+  overflow-y: auto;
   z-index: var(--z-nav);
+  scrollbar-width: none;
+}
+
+.admin-sidebar::-webkit-scrollbar {
+  display: none;
+}
+
+@media (min-width: 769px) {
+  .admin-sidebar {
+    background: transparent;
+    border-right: 1px solid var(--glass-sidebar-border);
+    box-shadow:
+      14px 0 40px var(--glass-sidebar-shadow),
+      inset -1px 0 0 var(--glass-sidebar-highlight);
+    backdrop-filter: saturate(145%) blur(22px);
+    -webkit-backdrop-filter: saturate(145%) blur(22px);
+  }
 }
 
 .admin-mobile-nav-toggle,
@@ -292,10 +314,18 @@ body.admin-mobile-nav-open {
 .admin-main {
   display: flex;
   flex-direction: column;
+  height: 100vh;
   min-width: 0;
-  min-height: 100vh;
+  min-height: 0;
+  overflow-y: auto;
   padding: 88px var(--space-7) var(--space-7);
   background: var(--bg-page);
+  scrollbar-gutter: stable;
+}
+
+.admin-main--logs {
+  overflow: hidden;
+  scrollbar-gutter: auto;
 }
 
 .admin-current-page-header {
@@ -332,6 +362,34 @@ body.admin-mobile-nav-open {
   flex-direction: column;
 }
 
+.admin-page-content--logs {
+  overflow: hidden;
+}
+
+@supports (height: 100dvh) {
+  .admin-shell,
+  .admin-sidebar,
+  .admin-main {
+    height: 100dvh;
+  }
+}
+
+/* Route pages consume the space left by the shared header. On desktop the main
+ * content column owns scrolling; on mobile these pages expand with the document. */
+.admin-page {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* Fixed page actions reserve their measured viewport footprint through a
+ * shared hook. This stays accurate when mobile bars wrap or safe areas change. */
+.admin-page--with-floating-actions {
+  padding-bottom: var(--admin-floating-actions-space, 0px);
+}
+
 .admin-page__header {
   display: flex;
   align-items: center;
@@ -359,14 +417,7 @@ body.admin-mobile-nav-open {
   justify-content: flex-end;
 }
 
-.admin-drives-page--list {
-  display: flex;
-  flex-direction: column;
-  min-height: calc(100vh - (var(--space-7) * 2));
-  padding-bottom: 72px;
-}
-
-.admin-drive-create-fab {
+.admin-create-fab {
   position: fixed;
   right: var(--space-7);
   bottom: var(--space-5);
@@ -379,11 +430,11 @@ body.admin-mobile-nav-open {
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.34);
 }
 
-.admin-btn.admin-drive-create-fab {
+.admin-btn.admin-create-fab {
   background: transparent;
 }
 
-.admin-btn.admin-drive-create-fab:hover:not(:disabled) {
+.admin-btn.admin-create-fab:hover:not(:disabled) {
   background: transparent;
 }
 
@@ -470,11 +521,7 @@ body.admin-mobile-nav-open {
     flex: 1 1 130px;
   }
 
-  .admin-drives-page--list {
-    padding-bottom: calc(72px + env(safe-area-inset-bottom));
-  }
-
-  .admin-drive-create-fab {
+  .admin-create-fab {
     right: var(--space-3);
     bottom: calc(var(--space-3) + env(safe-area-inset-bottom));
     max-width: calc(100vw - (var(--space-3) * 2));
@@ -528,12 +575,6 @@ body.admin-mobile-nav-open {
   margin-inline: auto;
 }
 
-.admin-crawlers-page {
-  display: flex;
-  flex-direction: column;
-  min-height: calc(100vh - (var(--space-7) * 2));
-}
-
 .admin-crawlers-page .admin-crawler-console {
   flex: 1 1 auto;
 }
@@ -543,27 +584,11 @@ body.admin-mobile-nav-open {
   flex-direction: column;
 }
 
-.admin-crawler-page-actions {
-  margin-left: auto;
-}
-
-.admin-crawlers-page .admin-page__header {
+.admin-crawler-list__controls {
+  display: flex;
   align-items: flex-start;
-  justify-content: space-between;
-  flex-wrap: nowrap;
-}
-
-.admin-crawlers-page .admin-page__header > .admin-crawler-global-teaser {
-  width: auto;
-  justify-items: start;
-}
-
-.admin-crawlers-page .admin-page__header > .admin-crawler-page-actions {
-  width: auto;
-  flex: 0 0 auto;
-  justify-content: flex-end;
-  margin-left: auto;
-  padding-top: 14px;
+  justify-content: flex-start;
+  padding: var(--space-4) var(--space-4) 0;
 }
 
 .admin-crawler-global-teaser {
@@ -674,6 +699,13 @@ body.admin-mobile-nav-open {
   padding: var(--space-4);
 }
 
+.admin-crawler-card-skeleton {
+  height: 64px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-sm);
+}
+
 .admin-crawler-row {
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
@@ -699,7 +731,7 @@ body.admin-mobile-nav-open {
   width: 100%;
   min-width: 0;
   display: grid;
-  grid-template-columns: 38px minmax(160px, 1fr);
+  grid-template-columns: 20px minmax(160px, 1fr);
   align-items: center;
   gap: var(--space-3);
   padding: 0;
@@ -717,15 +749,8 @@ body.admin-mobile-nav-open {
   border-radius: var(--radius-sm);
 }
 
-.admin-crawler-row__brand {
-  width: 38px;
-  height: 38px;
-  display: grid;
-  place-items: center;
-  border-radius: var(--radius-xs);
+.admin-crawler-row__icon {
   color: var(--accent);
-  background: var(--accent-soft);
-  border: 1px solid rgba(255, 138, 60, 0.2);
 }
 
 .admin-crawler-row__title-wrap {
@@ -1163,7 +1188,7 @@ body.admin-mobile-nav-open {
 
 @media (max-width: 1180px) {
   .admin-crawler-row__main {
-    grid-template-columns: 38px minmax(0, 1fr);
+    grid-template-columns: 20px minmax(0, 1fr);
   }
 }
 
@@ -1178,6 +1203,10 @@ body.admin-mobile-nav-open {
 
   .admin-crawler-row__actions {
     justify-content: flex-start;
+  }
+
+  .admin-crawler-card-skeleton {
+    height: 108px;
   }
 }
 
@@ -1232,6 +1261,10 @@ body.admin-mobile-nav-open {
 }
 
 @media (max-width: 520px) {
+  .admin-crawler-card-skeleton {
+    height: 176px;
+  }
+
   .admin-crawler-overview {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -3154,8 +3187,12 @@ body.admin-mobile-nav-open {
 @media (max-width: 768px) {
   .admin-shell {
     --admin-mobile-header-offset: calc(58px + env(safe-area-inset-top, 0px));
+    --admin-header-height: var(--admin-mobile-header-offset);
+    --admin-mobile-scroll-range: var(--space-9);
     display: block;
+    height: auto;
     min-height: 100dvh;
+    overflow: visible;
   }
 
   .admin-mobile-nav-toggle {
@@ -3231,7 +3268,7 @@ body.admin-mobile-nav-open {
     left: 0;
     z-index: calc(var(--z-nav) + 1);
     width: min(280px, calc(100vw - 24px));
-    height: 100dvh;
+    height: auto;
     min-height: 0;
     align-items: stretch;
     overflow-x: hidden;
@@ -3385,20 +3422,22 @@ body.admin-mobile-nav-open {
 
   .admin-main {
     width: 100%;
-    min-height: 100dvh;
+    height: auto;
+    /* Keep short admin routes intentionally scrollable. Besides making page
+     * movement consistent, this gives mobile browser chrome room to collapse. */
+    min-height: calc(100dvh + var(--admin-mobile-scroll-range));
+    overflow: visible;
     padding: var(--admin-mobile-header-offset) var(--space-3) var(--space-4);
+    scrollbar-gutter: auto;
   }
 
-  .admin-drives-page--list {
-    min-height: calc(100dvh - var(--admin-mobile-header-offset) - var(--space-4));
+  .admin-main--logs {
+    height: auto;
+    overflow: visible;
   }
 
-  .admin-crawlers-page {
-    min-height: calc(100dvh - var(--admin-mobile-header-offset) - var(--space-4));
-  }
-
-  .admin-tags-page.is-search-empty {
-    min-height: calc(100dvh - var(--admin-mobile-header-offset) - var(--space-4));
+  .admin-page-content--logs {
+    overflow: visible;
   }
 
   .admin-page__header {
@@ -4249,7 +4288,8 @@ body.admin-mobile-nav-open {
 }
 
 .admin-page-loading {
-  min-height: calc(100dvh - 48px - var(--space-7) * 2 - 44px - var(--space-4));
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .admin-videos-filter {
@@ -4260,8 +4300,9 @@ body.admin-mobile-nav-open {
 .admin-videos-current,
 .admin-videos-blacklist {
   display: flex;
+  flex: 1 1 auto;
   flex-direction: column;
-  min-height: calc(100vh - (var(--space-7) * 2));
+  min-height: 0;
 }
 
 .admin-videos-filter--current,
@@ -4317,11 +4358,6 @@ body.admin-mobile-nav-open {
 .admin-blacklist-table.is-row-select-mode tbody tr:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
-}
-
-.admin-video-placeholder-row {
-  visibility: hidden;
-  pointer-events: none;
 }
 
 .admin-blacklist-table.is-row-select-mode tbody tr.is-disabled-select {
@@ -4791,6 +4827,7 @@ body.admin-mobile-nav-open {
 /* 视频管理：当前 / 隐藏 / 拉黑 分段标签 */
 .admin-video-tabs {
   display: flex;
+  flex: none;
   gap: 4px;
   padding: 3px;
   margin: 0 auto var(--space-4);
@@ -4799,7 +4836,7 @@ body.admin-mobile-nav-open {
   border-radius: var(--radius-sm);
   width: fit-content;
   max-width: 100%;
-  overflow-x: auto;
+  overflow: visible;
 }
 
 .admin-video-tab {
@@ -4950,11 +4987,6 @@ body.admin-mobile-nav-open {
   border-radius: 12px;
   background: var(--bg-surface);
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.34);
-}
-
-.admin-videos-current.has-bulk-actions,
-.admin-videos-blacklist.has-bulk-actions {
-  padding-bottom: 72px;
 }
 
 .admin-videos-bulk-actions {
@@ -5145,11 +5177,6 @@ body.admin-mobile-nav-open {
     text-align: center;
   }
 
-  .admin-videos-current,
-  .admin-videos-blacklist {
-    padding-bottom: calc(72px + env(safe-area-inset-bottom));
-  }
-
   .admin-videos-current.has-bulk-actions .admin-videos-filter__current-actions,
   .admin-videos-blacklist.has-bulk-actions .admin-videos-filter__actions {
     display: none;
@@ -5177,11 +5204,6 @@ body.admin-mobile-nav-open {
     max-width: none;
     margin: 0;
     padding: 10px;
-  }
-
-  .admin-videos-current.has-bulk-actions,
-  .admin-videos-blacklist.has-bulk-actions {
-    padding-bottom: calc(144px + env(safe-area-inset-bottom));
   }
 
   .admin-videos-bulk-actions {
@@ -5693,9 +5715,7 @@ body.admin-mobile-nav-open {
   flex-direction: column;
   gap: clamp(18px, 2.4vw, 28px);
   width: min(100%, 1480px);
-  min-height: calc(100vh - (var(--space-7) * 2));
   margin: 0 auto;
-  padding-bottom: 88px;
 }
 
 .admin-config-header {
@@ -5827,7 +5847,7 @@ body.admin-mobile-nav-open {
   width: 100%;
   max-width: 100%;
   min-width: 0;
-  height: clamp(420px, calc(100dvh - 340px), 680px);
+  height: clamp(520px, calc(100dvh - var(--admin-header-height) - 250px), 780px);
   box-sizing: border-box;
   overflow-y: auto;
   overscroll-behavior: auto;
@@ -6538,8 +6558,8 @@ body.admin-mobile-nav-open {
 @media (max-width: 768px) {
   .admin-config-page {
     gap: 18px;
-    min-height: calc(100dvh - var(--admin-mobile-header-offset) - var(--space-6));
-    padding: var(--space-3) 0 82px;
+    padding-top: var(--space-3);
+    padding-inline: 0;
   }
 
   .admin-config-header {
@@ -6555,7 +6575,7 @@ body.admin-mobile-nav-open {
 
   .admin-config-section {
     gap: 14px;
-    height: clamp(420px, calc(100dvh - 310px), 620px);
+    height: clamp(420px, calc(100dvh - var(--admin-header-height) - 260px), 680px);
     padding: 16px;
   }
 
@@ -7026,6 +7046,34 @@ body.admin-mobile-nav-open {
   margin: 6px 0;
 }
 
+/* ----- Shared card skeleton surface ----- */
+.admin-card-skeleton-surface {
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--bg-elevated) 88%, var(--bg-surface)) 0%,
+    color-mix(in srgb, var(--bg-elevated) 72%, var(--text-faint)) 50%,
+    color-mix(in srgb, var(--bg-elevated) 88%, var(--bg-surface)) 100%
+  );
+  background-size: 200% 100%;
+  animation: admin-card-skeleton-shimmer 1.5s ease-in-out infinite;
+}
+
+@keyframes admin-card-skeleton-shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .admin-card-skeleton-surface {
+    animation: none;
+  }
+}
+
 /* =========================================================
  * Drives Dashboard & Details View Layouts
  * ========================================================= */
@@ -7041,33 +7089,6 @@ body.admin-mobile-nav-open {
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-sm);
-}
-
-.admin-drive-skeleton-surface {
-  background: linear-gradient(
-    90deg,
-    color-mix(in srgb, var(--bg-elevated) 88%, var(--bg-surface)) 0%,
-    color-mix(in srgb, var(--bg-elevated) 72%, var(--text-faint)) 50%,
-    color-mix(in srgb, var(--bg-elevated) 88%, var(--bg-surface)) 100%
-  );
-  background-size: 200% 100%;
-  animation: admin-drive-skeleton-shimmer 1.5s ease-in-out infinite;
-}
-
-@keyframes admin-drive-skeleton-shimmer {
-  0% {
-    background-position: 200% 0;
-  }
-
-  100% {
-    background-position: -200% 0;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .admin-drive-skeleton-surface {
-    animation: none;
-  }
 }
 
 .admin-drive-card {
@@ -7623,9 +7644,11 @@ body.admin-mobile-nav-open {
  * ========================================================= */
 .admin-tags-layout {
   display: grid;
+  flex: 1 1 auto;
   grid-template-columns: minmax(0, 1fr);
   gap: var(--space-5);
-  align-items: start;
+  align-items: stretch;
+  min-height: 0;
 }
 
 .admin-tags-job-actions {
@@ -7647,7 +7670,10 @@ body.admin-mobile-nav-open {
 
 .admin-tags-main {
   --tags-cards-width: calc((240px * 4) + (var(--space-3) * 3));
+  display: flex;
+  flex-direction: column;
   min-width: 0;
+  min-height: 0;
 }
 
 .admin-tags-filter-panel {
@@ -7680,21 +7706,6 @@ body.admin-mobile-nav-open {
   width: 100%;
   min-height: 0;
   padding: 0 16px 96px;
-}
-
-.admin-tags-page.is-search-empty {
-  display: flex;
-  flex-direction: column;
-  min-height: calc(100vh - (var(--space-7) * 2));
-}
-
-.admin-tags-page.is-search-empty .admin-tags-layout,
-.admin-tags-page.is-search-empty .admin-tags-main {
-  display: flex;
-  flex: 1 1 auto;
-  flex-direction: column;
-  width: 100%;
-  min-height: 0;
 }
 
 @media (max-width: 900px) {
@@ -7858,10 +7869,6 @@ body.admin-mobile-nav-open {
   min-width: 0;
 }
 
-.admin-tags-page.has-bulk-actions {
-  padding-bottom: 72px;
-}
-
 .admin-tags-bulk-toolbar {
   position: fixed;
   left: auto;
@@ -7935,11 +7942,6 @@ body.admin-mobile-nav-open {
   -webkit-tap-highlight-color: transparent;
   -webkit-user-select: none;
   user-select: none;
-}
-
-.admin-tag-card--placeholder {
-  visibility: hidden;
-  pointer-events: none;
 }
 
 @media (max-width: 640px) {
@@ -8025,10 +8027,6 @@ body.admin-mobile-nav-open {
     background: var(--border-subtle);
   }
 
-  .admin-tags-page {
-    padding-bottom: calc(72px + env(safe-area-inset-bottom));
-  }
-
   .admin-tags-page.has-bulk-actions .admin-tags-toolbar-actions {
     display: none;
   }
@@ -8059,10 +8057,6 @@ body.admin-mobile-nav-open {
     max-width: none;
     margin: 0;
     padding: 10px;
-  }
-
-  .admin-tags-page.has-bulk-actions {
-    padding-bottom: calc(144px + env(safe-area-inset-bottom));
   }
 
   .admin-tags-bulk-actions {
@@ -8694,8 +8688,9 @@ body.admin-mobile-nav-open {
 /* ----- Loading ellipsis (Uiverse.io by Shoh2008) ----- */
 .admin-loading {
   display: grid;
+  flex: 1 1 auto;
   place-items: center;
-  min-height: calc(100dvh - 64px);
+  min-height: 0;
   color: var(--text-muted);
 }
 .lds-ellipsis {
@@ -10043,9 +10038,9 @@ body.admin-logs-fullscreen-active {
 
   .admin-log-panel {
     flex: 0 0 auto;
-    min-height: 520px;
-    height: clamp(520px, 68dvh, 760px);
-    max-height: none;
+    min-height: 360px;
+    height: 420px;
+    max-height: 480px;
     resize: none;
   }
 

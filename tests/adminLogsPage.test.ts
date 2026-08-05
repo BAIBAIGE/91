@@ -215,8 +215,9 @@ test("admin log viewer is reachable from the authenticated admin layout", () => 
   );
   assert.match(
     adminCss,
-    /@media \(max-width: 768px\)[\s\S]*?\.admin-log-panel\s*\{[^}]*flex:\s*0 0 auto[^}]*min-height:\s*520px[^}]*height:\s*clamp\(520px, 68dvh, 760px\)/s
+    /@media \(max-width: 768px\)[\s\S]*?\.admin-log-panel\s*\{[^}]*flex:\s*0 0 auto[^}]*min-height:\s*360px[^}]*height:\s*420px[^}]*max-height:\s*480px/s
   );
+  assert.doesNotMatch(adminCss, /\.admin-log-panel\s*\{[^}]*68dvh/s);
   assert.match(
     adminCss,
     /@media \(max-width: 768px\)[\s\S]*?\.admin-log-card\.is-fullscreen \.admin-log-panel\s*\{[^}]*flex:\s*1 1 auto[^}]*min-height:\s*0[^}]*height:\s*auto/s

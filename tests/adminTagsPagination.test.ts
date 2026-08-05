@@ -31,14 +31,9 @@ test("admin tag pagination only shows page count and hides for a single page", (
   assert.doesNotMatch(tagsPageSource, /每页 \{pageSize\} 个/);
 });
 
-test("admin tag pagination keeps its position when the page has fewer cards", () => {
-  assert.match(tagsPageSource, /const placeholderTags = showPagination \? Math\.max\(0, pageSize - pagedTags\.length\) : 0;/);
-  assert.match(tagsPageSource, /Array\.from\(\{ length: placeholderTags \}/);
-  assert.match(tagsPageSource, /className="admin-tag-card admin-tag-card--placeholder"/);
-  assert.match(
-    adminCss,
-    /\.admin-tag-card--placeholder\s*\{[^}]*visibility\s*:\s*hidden;[^}]*pointer-events\s*:\s*none/s
-  );
+test("admin tag pagination does not create invisible rows on a short final page", () => {
+  assert.doesNotMatch(tagsPageSource, /placeholderTags|admin-tag-card--placeholder/);
+  assert.doesNotMatch(adminCss, /\.admin-tag-card--placeholder/);
 });
 
 test("admin tag search miss uses the shared no-results visual", () => {
@@ -50,16 +45,21 @@ test("admin tag search miss uses the shared no-results visual", () => {
     /searchEmpty \? \(\s*<AdminEmptyVisual[\s\S]*?variant="no-results"[\s\S]*?text="未查询到"[\s\S]*?admin-tags-empty-search[\s\S]*?\) : \(\s*<div className="admin-tags-board">/
   );
   assert.match(
-    adminCss,
-    /\.admin-tags-page\.is-search-empty\s*\{[^}]*display\s*:\s*flex;[^}]*flex-direction\s*:\s*column;[^}]*min-height\s*:\s*calc\(100vh - \(var\(--space-7\) \* 2\)\)/s
+    tagsPageSource,
+    /className=\{`admin-page admin-page--with-floating-actions admin-tags-page\$\{selectMode \? " has-bulk-actions" : ""\}\$\{searchEmpty \? " is-search-empty" : ""\}`\}/
   );
   assert.match(
     adminCss,
-    /\.admin-tags-page\.is-search-empty \.admin-tags-layout,\s*\.admin-tags-page\.is-search-empty \.admin-tags-main\s*\{[^}]*display\s*:\s*flex;[^}]*width\s*:\s*100%;[^}]*min-height\s*:\s*0;/s
+    /\.admin-tags-layout\s*\{[^}]*display\s*:\s*grid;[^}]*flex\s*:\s*1 1 auto;[^}]*align-items\s*:\s*stretch;[^}]*min-height\s*:\s*0/s
+  );
+  assert.match(
+    adminCss,
+    /\.admin-tags-main\s*\{[^}]*display\s*:\s*flex;[^}]*flex-direction\s*:\s*column;[^}]*min-height\s*:\s*0/s
   );
   assert.match(
     adminCss,
     /\.admin-tags-empty-search\s*\{[^}]*box-sizing\s*:\s*border-box;[^}]*flex\s*:\s*1 1 auto;[^}]*min-height\s*:\s*0;[^}]*padding\s*:\s*0 16px 96px/s
   );
+  assert.doesNotMatch(adminCss, /\.admin-tags-page\.is-search-empty\s*\{[^}]*100(?:d)?vh/s);
   assert.doesNotMatch(adminCss, /\.admin-tags-page\.is-search-empty \.admin-tags-board[\s\S]*?display\s*:\s*flex/);
 });

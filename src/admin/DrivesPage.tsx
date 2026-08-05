@@ -42,6 +42,7 @@ import { DriveForm } from "./drive/DriveForm";
 import { DeleteDriveModal } from "./drive/DeleteDriveModal";
 import { SkipDirsPanel } from "./drive/SkipDirsPanel";
 import { AdminEmptyVisual } from "./AdminEmptyVisual";
+import { useAdminFloatingActionSpace } from "./useAdminFloatingActionSpace";
 
 const DRIVE_BUSY_MESSAGE = "当前存储有正在进行的任务，请稍后重试";
 const MAINTENANCE_BUSY_MESSAGE = "当前有全量扫描任务正在进行，请稍后重试";
@@ -60,6 +61,7 @@ function isDriveBusy(d: api.AdminDrive) {
 }
 
 export function DrivesPage() {
+  const floatingActionPageRef = useAdminFloatingActionSpace<HTMLElement>();
   const [list, setList] = useState<api.AdminDrive[]>([]);
   const [storage, setStorage] = useState<api.AdminDriveStorage | null>(null);
   const [maintenanceStatus, setMaintenanceStatus] =
@@ -539,7 +541,7 @@ export function DrivesPage() {
     const title = loadError ? "网盘详情" : "网盘不存在";
 
     return (
-      <section className="admin-drives-page">
+      <section className="admin-page admin-drives-page">
         <header className="admin-drive-detail__header-bar">
           <button
             type="button"
@@ -577,7 +579,7 @@ export function DrivesPage() {
     const driveStorage = storage?.drives[d.id];
 
     return (
-      <section className="admin-drives-page">
+      <section className="admin-page admin-drives-page">
         <header className="admin-drive-detail__header-bar">
           <button
             type="button"
@@ -774,7 +776,10 @@ export function DrivesPage() {
 
   // --- List view ---
   return (
-    <section className="admin-drives-page admin-drives-page--list">
+    <section
+      ref={floatingActionPageRef}
+      className="admin-page admin-page--with-floating-actions admin-drives-page admin-drives-page--list"
+    >
       <AdminPageActions>
         <div className="admin-page__actions admin-drive-list-actions">
           <div className="admin-task-controls" aria-label="所有网盘任务控制">
@@ -871,8 +876,9 @@ export function DrivesPage() {
       )}
 
       <button
+        data-admin-floating-actions
         type="button"
-        className="admin-btn admin-drive-create-fab"
+        className="admin-btn admin-create-fab"
         onClick={openCreate}
       >
         <Plus size="1em" aria-hidden="true" />

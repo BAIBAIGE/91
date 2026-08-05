@@ -54,9 +54,14 @@ test("admin layout displays and applies the current route title", () => {
   assert.match(adminLayout, /ref=\{setPageActionsTarget\}[\s\S]*className="admin-current-page-actions"/);
   assert.match(
     adminLayout,
-    /<AdminPageActionsProvider target=\{pageActionsTarget\}>[\s\S]*?<Outlet \/>[\s\S]*?<\/AdminPageActionsProvider>/
+    /<AdminPageActionsProvider[\s\S]*?activePathname=\{location\.pathname\}[\s\S]*?target=\{pageActionsTarget\}\s*>[\s\S]*?<Outlet \/>[\s\S]*?<\/AdminPageActionsProvider>/
   );
-  assert.match(adminPageActions, /createPortal\(children, target\)/);
+  assert.match(adminPageActions, /const ownerPathnameRef = useRef\(context\?\.activePathname\)/);
+  assert.match(
+    adminPageActions,
+    /ownerPathnameRef\.current !== context\.activePathname[\s\S]*?return null/
+  );
+  assert.match(adminPageActions, /createPortal\(children, context\.target\)/);
 });
 
 test("every admin page has a centralized title", () => {

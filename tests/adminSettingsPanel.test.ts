@@ -108,6 +108,11 @@ test("configuration panel follows the CLIProxy configuration workspace UI", () =
     adminCss,
     /@media \(max-width: 768px\)[\s\S]*?\.admin-config-row\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\)/s
   );
+  assert.match(
+    adminCss,
+    /@media \(max-width: 768px\)[\s\S]*?\.admin-config-section\s*\{[^}]*height:\s*clamp\(420px,\s*calc\(100dvh - var\(--admin-header-height\) - 260px\),\s*680px\)/s
+  );
+  assert.match(pageSource, /data-admin-floating-actions/);
 });
 
 test("configuration source editor uses one scrollable CodeMirror viewport", () => {

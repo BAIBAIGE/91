@@ -28,7 +28,9 @@ import { formatBytes } from "./storageFormat";
 import { AdminEmptyVisual } from "./AdminEmptyVisual";
 import { AdminLoading } from "./AdminLoading";
 import { driveKindAbbr, driveKindIconPath, kindLabel } from "./drive/constants";
+import { SpiderIcon } from "./icons/SpiderIcon";
 import { readAdminVideosPage, withAdminVideosPage } from "./videosSearchParams";
+import { useAdminFloatingActionSpace } from "./useAdminFloatingActionSpace";
 
 const DESKTOP_VIDEOS_PAGE_SIZE = 50;
 const MOBILE_VIDEOS_PAGE_SIZE = 20;
@@ -76,6 +78,7 @@ const TABS: { key: TabKey; label: string }[] = [
  * 激活标签和当前页同步到 URL 的 ?tab= / ?page=。
  */
 export function VideosPage() {
+  const floatingActionPageRef = useAdminFloatingActionSpace<HTMLElement>();
   const [searchParams, setSearchParams] = useSearchParams();
   const rawTab = searchParams.get("tab");
   const activeTab: TabKey = rawTab === "blacklist" ? "blacklist" : "current";
@@ -105,7 +108,10 @@ export function VideosPage() {
   }
 
   return (
-    <section>
+    <section
+      ref={floatingActionPageRef}
+      className="admin-page admin-page--with-floating-actions admin-videos-page"
+    >
       {activeTab === "current" && (
         <CurrentVideosTab
           tabSelector={<VideoTabSelector activeTab={activeTab} onSelect={selectTab} />}
@@ -307,7 +313,6 @@ function CurrentVideosTab({
     if (!loading && page > totalPages) setPage(totalPages);
   }, [loading, page, totalPages, setPage]);
   const showPagination = totalPages > 1;
-  const placeholderRows = showPagination ? Math.max(0, pageSize - listItems.length) : 0;
   const activeAdvancedFilterCount = countVideoAdvancedFilters(appliedFilters);
   const hasActiveSearch = searchKeyword.trim().length > 0 || activeAdvancedFilterCount > 0;
   const hasVideoActions = listItems.length > 0;
@@ -483,7 +488,7 @@ function CurrentVideosTab({
     <div className={`admin-videos-current${selectMode ? " has-bulk-actions" : ""}`}>
       <div className="admin-page__actions admin-videos-filter admin-videos-filter--current">
         <SearchBox keyword={keyword} onChange={setKeyword} onSubmit={handleSearchSubmit} />
-        <div className="admin-videos-filter__current-actions">
+        <div className="admin-videos-filter__current-actions" data-admin-floating-actions>
           <button
             type="button"
             className="admin-btn admin-video-advanced-toggle"
@@ -541,7 +546,7 @@ function CurrentVideosTab({
       </Modal>
 
       {!loading && selectMode && (
-        <div className="admin-videos-list-toolbar">
+        <div className="admin-videos-list-toolbar" data-admin-floating-actions>
           <div className="admin-videos-bulk-actions">
             <span className="admin-videos-bulk-actions__count">已选择 {selectedIds.size} 项</span>
             <button
@@ -640,34 +645,6 @@ function CurrentVideosTab({
                   </tr>
                 );
               })}
-              {Array.from({ length: placeholderRows }, (_, index) => (
-                <tr
-                  key={`placeholder-${index}`}
-                  className="admin-video-placeholder-row"
-                  aria-hidden="true"
-                >
-                  <td data-label="标题">
-                    <div className="admin-video-title-cell">
-                      <div className="admin-video-thumb-wrap" aria-hidden="true" />
-                      <div className="admin-video-title-body">
-                        <div className="admin-video-title">placeholder</div>
-                        <div className="admin-video-filemeta-pills">
-                          <span className="admin-video-filemeta-pill">placeholder</span>
-                        </div>
-                      </div>
-                    </div>
-                  </td>
-                  <td data-label="作者">placeholder</td>
-                  <td data-label="时长">placeholder</td>
-                  <td data-label="来源" className="admin-mono-cell">
-                    placeholder
-                  </td>
-                  <td className="is-actions" data-label="操作">
-                    <span className="admin-btn">placeholder</span>
-                    <span className="admin-btn">placeholder</span>
-                  </td>
-                </tr>
-              ))}
             </tbody>
           </table>
           {showPagination && <Pagination page={page} totalPages={totalPages} onPage={setPage} />}
@@ -854,7 +831,6 @@ function BlacklistTab({
     if (!loading && page > totalPages) setPage(totalPages);
   }, [loading, page, totalPages, setPage]);
   const showPagination = totalPages > 1;
-  const placeholderRows = showPagination ? Math.max(0, pageSize - list.length) : 0;
   const sourceDeleteRunning = !!sourceDeleteStatus?.running;
   const hasActiveSearch = searchKeyword.trim().length > 0;
   const hasBlacklistActions = list.length > 0;
@@ -969,7 +945,10 @@ function BlacklistTab({
       <div className="admin-page__actions admin-videos-filter admin-videos-filter--blacklist">
         <SearchBox keyword={keyword} onChange={setKeyword} onSubmit={handleSearchSubmit} placeholder="搜索文件名" />
         {hasBlacklistActions && (
-          <div className="admin-videos-filter__actions admin-blacklist-source-delete">
+          <div
+            className="admin-videos-filter__actions admin-blacklist-source-delete"
+            data-admin-floating-actions
+          >
             {sourceDeleteStatus?.running && (
               <span className="admin-blacklist-source-delete__status">
                 正在删除 {sourceDeleteStatus.processed}/{sourceDeleteStatus.total}
@@ -997,7 +976,10 @@ function BlacklistTab({
       {tabSelector}
 
       {!loading && selectMode && (
-        <div className="admin-videos-list-toolbar admin-blacklist-bulk-toolbar">
+        <div
+          className="admin-videos-list-toolbar admin-blacklist-bulk-toolbar"
+          data-admin-floating-actions
+        >
           <div className="admin-videos-bulk-actions">
             <span className="admin-videos-bulk-actions__count">已选择 {selectedIds.size} 项</span>
             <button
@@ -1118,28 +1100,6 @@ function BlacklistTab({
                 </tr>
                 );
               })}
-              {Array.from({ length: placeholderRows }, (_, index) => (
-                <tr
-                  key={`placeholder-${index}`}
-                  className="admin-video-placeholder-row"
-                  aria-hidden="true"
-                >
-                  <td data-label="文件名">
-                    <div className="admin-blacklist-filecell">
-                      <span className="admin-blacklist-filename">placeholder</span>
-                    </div>
-                  </td>
-                  <td data-label="来源" className="admin-mono-cell">
-                    placeholder
-                  </td>
-                  <td className="is-actions" data-label="操作">
-                    <div className="admin-blacklist-actions">
-                      <span className="admin-btn">placeholder</span>
-                      <span className="admin-btn admin-blacklist-delete-source-btn">placeholder</span>
-                    </div>
-                  </td>
-                </tr>
-              ))}
             </tbody>
           </table>
           {showPagination && <Pagination page={page} totalPages={totalPages} onPage={setPage} />}
@@ -1615,7 +1575,7 @@ function VideoSourcePickerIcon({
   if (crawler) {
     return (
       <span className="admin-video-source-picker__icon is-crawler" aria-hidden="true">
-        <SpiderIcon />
+        <SpiderIcon size={18} />
       </span>
     );
   }
@@ -1623,27 +1583,6 @@ function VideoSourcePickerIcon({
     <span className="admin-video-source-picker__icon is-all" aria-hidden="true">
       全
     </span>
-  );
-}
-
-function SpiderIcon() {
-  return (
-    <svg
-      width="18"
-      height="18"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <path d="M5 4v2l5 5M2.5 9.5 4 11h6M4 19v-2l6-6" />
-      <path d="M19 4v2l-5 5M21.5 9.5 20 11h-6M20 19v-2l-6-6" />
-      <circle cx="12" cy="15" r="4" />
-      <circle cx="12" cy="9" r="2" />
-    </svg>
   );
 }
 

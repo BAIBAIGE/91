@@ -31,7 +31,7 @@ export function DriveListSkeleton() {
       {Array.from({ length: DRIVE_LIST_SKELETON_COUNT }, (_, index) => (
         <div
           key={index}
-          className="admin-drive-card-skeleton admin-drive-skeleton-surface"
+          className="admin-drive-card-skeleton admin-card-skeleton-surface"
           aria-hidden="true"
         />
       ))}
@@ -41,7 +41,7 @@ export function DriveListSkeleton() {
 
 export function DriveDetailLoading({ onBack }: { onBack: () => void }) {
   return (
-    <section className="admin-drives-page">
+    <section className="admin-page admin-drives-page">
       <header className="admin-drive-detail__header-bar">
         <button
           type="button"
@@ -216,7 +216,7 @@ export function DrivesPageLoading() {
   }
 
   return (
-    <section className="admin-drives-page admin-drives-page--list">
+    <section className="admin-page admin-drives-page admin-drives-page--list">
       <StorageSummary storage={null} loading />
       <DriveListSkeleton />
     </section>

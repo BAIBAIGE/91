@@ -34,8 +34,16 @@ const crawlerPageSource = readFileSync(
   new URL("../src/admin/CrawlersPage.tsx", import.meta.url),
   "utf8"
 );
+const crawlerPageLoadingSource = readFileSync(
+  new URL("../src/admin/CrawlersPageLoading.tsx", import.meta.url),
+  "utf8"
+);
 const adminLayoutSource = readFileSync(
   new URL("../src/admin/AdminLayout.tsx", import.meta.url),
+  "utf8"
+);
+const spiderIconSource = readFileSync(
+  new URL("../src/admin/icons/SpiderIcon.tsx", import.meta.url),
   "utf8"
 );
 const confirmModalSource = readFileSync(
@@ -433,9 +441,24 @@ test("crawler management is a separate admin section", () => {
   assert.match(adminLayoutSource, /import \{ SpiderIcon \} from "\.\/icons\/SpiderIcon";/);
   assert.match(adminLayoutSource, /<SpiderIcon size=\{15\} \/>/);
   assert.doesNotMatch(adminLayoutSource, /<Bot\b/);
+  assert.match(spiderIconSource, /Font Awesome Pro 7\.3\.1 by @fontawesome/);
+  assert.match(spiderIconSource, /Commercial License, Copyright 2026 Fonticons, Inc\./);
+  assert.match(spiderIconSource, /xmlns="http:\/\/www\.w3\.org\/2000\/svg"/);
+  assert.match(spiderIconSource, /viewBox="0 0 512 512"/);
+  assert.match(spiderIconSource, /fill="currentColor"/);
+  assert.match(spiderIconSource, /M362\.7-30\.9c7\.2-2\.8 15\.2 0 19\.2 6\.2/);
+  assert.match(spiderIconSource, /zM256\.5 128c-26\.5 0-48 21\.5-48 48/);
+  assert.doesNotMatch(spiderIconSource, /stroke(?:Width|Linecap|Linejoin)?=/);
   assert.match(
     appSource,
-    /path="crawlers"[\s\S]*<PageSuspense>[\s\S]*<CrawlersPage \/>[\s\S]*<\/PageSuspense>/
+    /path="crawlers"[\s\S]*<PageSuspense fallback=\{<CrawlersPageLoading \/>\}>[\s\S]*<CrawlersPage \/>[\s\S]*<\/PageSuspense>/
+  );
+  assert.doesNotMatch(crawlerPageSource, /SpiderWebAnimation/);
+  assert.doesNotMatch(crawlerPageLoadingSource, /SpiderWebAnimation/);
+  assert.doesNotMatch(adminCss, /admin-spider-animation/);
+  assert.equal(
+    existsSync(new URL("../spider-web-animation.html", import.meta.url)),
+    false
   );
   assert.match(crawlerPageSource, /export function CrawlersPage/);
   assert.match(crawlerPageSource, /SpiderIcon/);
@@ -443,9 +466,14 @@ test("crawler management is a separate admin section", () => {
   assert.doesNotMatch(crawlerPageSource, /<h1 className="admin-page__title">爬虫管理<\/h1>/);
   assert.doesNotMatch(crawlerPageSource, /<RefreshCw size=\{14\}[\s\S]*刷新/);
   assert.doesNotMatch(crawlerPageSource, /<Plus size=\{1[34]\}/);
-  assert.match(crawlerPageSource, /<header className="admin-page__header">\s*<div className="admin-crawler-global-teaser">/);
-  assert.match(crawlerPageSource, /className="admin-detail-actions-inline admin-crawler-page-actions"/);
-  assert.match(adminCss, /\.admin-crawler-page-actions\s*\{[^}]*margin-left\s*:\s*auto/s);
+  assert.match(
+    crawlerPageSource,
+    /className="admin-btn admin-create-fab"\s*onClick=\{\(\) => setEditorTarget\(null\)\}\s*>\s*<Plus size="1em" aria-hidden="true" \/>\s*添加爬虫/
+  );
+  assert.doesNotMatch(crawlerPageSource, /admin-crawler-page-actions|<header className="admin-page__header">/);
+  assert.match(crawlerPageSource, /useAdminFloatingActionSpace<HTMLElement>\(\)/);
+  assert.match(crawlerPageSource, /data-admin-floating-actions/);
+  assert.match(adminCss, /\.admin-page--with-floating-actions\s*\{[^}]*--admin-floating-actions-space/s);
   assert.doesNotMatch(crawlerPageSource, /className="admin-btn is-primary"[\s\S]*添加爬虫/);
   assert.doesNotMatch(crawlerPageSource, /导入脚本 → 测试运行 → 保存启用，三步接入一个新片源/);
   assert.doesNotMatch(crawlerPageSource, /导入脚本后才能保存/);
@@ -512,6 +540,8 @@ test("crawler management is a separate admin section", () => {
   const crawlerRowSource = crawlerPageSource.match(/function CrawlerRow[\s\S]*?(?=function CrawlerDetail\()/)?.[0] ?? "";
   assert.ok(crawlerRowSource, "crawler row component should exist");
   assert.match(crawlerRowSource, /const crawling = running \|\| crawler\.scanGenerationStatus\?\.state === "scanning"/);
+  assert.match(crawlerRowSource, /<SpiderIcon size=\{20\} className="admin-crawler-row__icon" \/>/);
+  assert.doesNotMatch(crawlerRowSource, /admin-crawler-row__brand/);
   assert.match(crawlerRowSource, /className="admin-crawler-row__title-line"/);
   assert.match(crawlerRowSource, /className="admin-crawler-row__meta"/);
   assert.match(crawlerRowSource, /admin-status admin-generation-state is-generating[\s\S]*正在抓取/);
@@ -540,6 +570,9 @@ test("crawler management is a separate admin section", () => {
     adminCss,
     /\.admin-crawler-row__title-line\s*\{[^}]*display\s*:\s*flex;[^}]*flex-wrap\s*:\s*wrap/s
   );
+  assert.match(adminCss, /\.admin-crawler-row__main\s*\{[^}]*grid-template-columns\s*:\s*20px minmax\(160px,\s*1fr\)/s);
+  assert.match(adminCss, /\.admin-crawler-row__icon\s*\{[^}]*color\s*:\s*var\(--accent\)/s);
+  assert.doesNotMatch(adminCss, /\.admin-crawler-row__brand/);
   assert.match(
     adminCss,
     /\.admin-crawler-row__meta\s*\{[^}]*overflow\s*:\s*hidden;[^}]*text-overflow\s*:\s*ellipsis;[^}]*white-space\s*:\s*nowrap/s
@@ -613,8 +646,14 @@ test("crawler management is a separate admin section", () => {
   assert.match(crawlerPageSource, /api\.setDriveTeaserEnabled/);
   assert.match(crawlerPageSource, /toggleCrawlerTeasers/);
   assert.match(crawlerPageSource, /className="admin-crawler-global-teaser"/);
+  assert.equal(crawlerPageSource.match(/className="admin-crawler-global-teaser"/g)?.length, 1);
   assert.match(crawlerPageSource, /const allCrawlerTeasersEnabled = !hasCrawlers \|\| list\.every/);
   assert.match(crawlerPageSource, /暂无爬虫，新增后默认开启预览视频生成/);
+  assert.match(
+    crawlerPageSource,
+    /<div\s+className="admin-card admin-crawler-list"\s+aria-busy=\{loading \|\| undefined\}\s*>\s*<div className="admin-crawler-list__controls">\s*<div className="admin-crawler-global-teaser">/
+  );
+  assert.doesNotMatch(crawlerPageSource, /admin-crawler-row__preview-toggle|onToggleTeaser/);
   assert.match(crawlerPageSource, /className=\{`toggle-switch \$\{allCrawlerTeasersEnabled \? "is-on" : ""\}/);
   assert.match(crawlerPageSource, /role="switch"/);
   assert.match(crawlerPageSource, /aria-checked=\{allCrawlerTeasersEnabled\}/);
@@ -640,6 +679,7 @@ test("crawler management is a separate admin section", () => {
   assert.doesNotMatch(crawlerPageSource, /label: "本轮总数"/);
   assert.doesNotMatch(crawlerPageSource, /admin-crawler-preview-card-toggle \$\{crawler\.teaserEnabled/);
   assert.doesNotMatch(adminCss, /admin-crawler-preview-card-toggle\.is-on/);
+  assert.match(adminCss, /\.admin-crawler-list__controls\s*\{[^}]*align-items\s*:\s*flex-start;[^}]*justify-content\s*:\s*flex-start/s);
   assert.match(adminCss, /\.admin-crawler-global-teaser\s*\{[^}]*display\s*:\s*inline-grid;[^}]*justify-items\s*:\s*center/s);
   assert.match(adminCss, /\.admin-crawler-console\s*\{[^}]*width\s*:\s*min\(100%,\s*920px\);[^}]*margin-inline\s*:\s*auto/s);
   assert.match(adminCss, /\.admin-crawler-list\s*\{[^}]*border\s*:\s*0;[^}]*background\s*:\s*transparent;[^}]*box-shadow\s*:\s*none/s);
@@ -695,6 +735,10 @@ test("admin shell stays mounted while lazy admin pages load", () => {
     appSource,
     /import \{ DrivesPageLoading \} from "@\/admin\/DrivesPageLoading";/
   );
+  assert.match(
+    appSource,
+    /import \{ CrawlersPageLoading \} from "@\/admin\/CrawlersPageLoading";/
+  );
   assert.doesNotMatch(appSource, /const AdminLayout\s*=\s*lazy/);
   assert.doesNotMatch(appSource, /<Suspense fallback=\{null\}>\s*<Routes>/);
   assert.match(appSource, /function PageSuspense\(\{[\s\S]*fallback = null,[\s\S]*fallback\?: ReactNode/);
@@ -702,6 +746,10 @@ test("admin shell stays mounted while lazy admin pages load", () => {
   assert.match(
     appSource,
     /path="drives"[\s\S]*<PageSuspense fallback=\{<DrivesPageLoading \/>\}>[\s\S]*<DrivesPage \/>[\s\S]*<\/PageSuspense>/
+  );
+  assert.match(
+    appSource,
+    /path="crawlers"[\s\S]*<PageSuspense fallback=\{<CrawlersPageLoading \/>\}>[\s\S]*<CrawlersPage \/>[\s\S]*<\/PageSuspense>/
   );
   assert.match(
     drivesPageLoadingSource,
@@ -774,7 +822,7 @@ test("drive list actions use ordinary text buttons in the requested positions", 
   );
   assert.match(
     drivesPageSource,
-    /className="admin-btn admin-drive-create-fab"\s*onClick=\{openCreate\}\s*>\s*<Plus size="1em" aria-hidden="true" \/>\s*添加网盘/
+    /className="admin-btn admin-create-fab"\s*onClick=\{openCreate\}\s*>\s*<Plus size="1em" aria-hidden="true" \/>\s*添加网盘/
   );
   assert.doesNotMatch(drivesPageSource, /className="admin-drive-footer-actions"/);
   assert.doesNotMatch(drivesPageSource, /PlayCircle/);
@@ -809,15 +857,15 @@ test("drive list actions use ordinary text buttons in the requested positions", 
   );
   assert.match(
     adminCss,
-    /\.admin-drive-create-fab\s*\{[^}]*position\s*:\s*fixed[^}]*right\s*:\s*var\(--space-7\)[^}]*bottom\s*:\s*var\(--space-5\)[^}]*width\s*:\s*fit-content[^}]*min-width\s*:\s*0[^}]*min-height\s*:\s*44px[^}]*box-shadow\s*:\s*0 12px 32px/s
+    /\.admin-create-fab\s*\{[^}]*position\s*:\s*fixed[^}]*right\s*:\s*var\(--space-7\)[^}]*bottom\s*:\s*var\(--space-5\)[^}]*width\s*:\s*fit-content[^}]*min-width\s*:\s*0[^}]*min-height\s*:\s*44px[^}]*box-shadow\s*:\s*0 12px 32px/s
   );
   assert.match(
     adminCss,
-    /\.admin-btn\.admin-drive-create-fab\s*\{[^}]*background\s*:\s*transparent/s
+    /\.admin-btn\.admin-create-fab\s*\{[^}]*background\s*:\s*transparent/s
   );
   assert.match(
     adminCss,
-    /\.admin-btn\.admin-drive-create-fab:hover:not\(:disabled\)\s*\{[^}]*background\s*:\s*transparent/s
+    /\.admin-btn\.admin-create-fab:hover:not\(:disabled\)\s*\{[^}]*background\s*:\s*transparent/s
   );
   assert.match(
     adminCss,
@@ -825,7 +873,7 @@ test("drive list actions use ordinary text buttons in the requested positions", 
   );
   assert.match(
     adminCss,
-    /@media \(max-width: 640px\)\s*\{[\s\S]*?\.admin-drive-create-fab\s*\{[^}]*right\s*:\s*var\(--space-3\)[^}]*bottom\s*:\s*calc\(var\(--space-3\) \+ env\(safe-area-inset-bottom\)\)/s
+    /@media \(max-width: 640px\)\s*\{[\s\S]*?\.admin-create-fab\s*\{[^}]*right\s*:\s*var\(--space-3\)[^}]*bottom\s*:\s*calc\(var\(--space-3\) \+ env\(safe-area-inset-bottom\)\)/s
   );
   assert.doesNotMatch(drivesPageSource, /admin-drive-list-toolbar|driveListSummary/);
   assert.doesNotMatch(adminCss, /--admin-drives-content-width|\.admin-drive-list-toolbar/);
@@ -862,7 +910,7 @@ test("empty drive list renders the shared empty visual and prompt", () => {
 });
 
 test("empty crawler list renders the shared empty visual", () => {
-  assert.match(crawlerPageSource, /<section className="admin-page admin-crawlers-page">/);
+  assert.match(crawlerPageSource, /className="admin-page admin-page--with-floating-actions admin-crawlers-page"/);
   assert.match(
     crawlerPageSource,
     /<AdminEmptyVisual[\s\S]*?variant="empty"[\s\S]*?text="暂无爬虫"[\s\S]*?className="admin-crawler-empty"/
@@ -870,7 +918,11 @@ test("empty crawler list renders the shared empty visual", () => {
   assert.doesNotMatch(crawlerPageSource, /<SpiderIcon size=\{28\} \/>/);
   assert.match(
     adminCss,
-    /\.admin-crawlers-page\s*\{[^}]*display\s*:\s*flex;[^}]*flex-direction\s*:\s*column;[^}]*min-height\s*:\s*calc\(100vh - \(var\(--space-7\) \* 2\)\)/s
+    /\.admin-page\s*\{[^}]*display\s*:\s*flex;[^}]*flex\s*:\s*1 1 auto;[^}]*flex-direction\s*:\s*column;[^}]*min-height\s*:\s*0/s
+  );
+  assert.doesNotMatch(
+    adminCss,
+    /\.admin-crawlers-page\s*\{[^}]*min-height\s*:\s*calc\(100(?:d)?vh/s
   );
   assert.match(
     adminCss,
@@ -879,7 +931,7 @@ test("empty crawler list renders the shared empty visual", () => {
 });
 
 test("drive management status pills omit the leading status dot", () => {
-  assert.match(drivesPageSource, /<section className="admin-drives-page">/);
+  assert.match(drivesPageSource, /<section className="admin-page admin-drives-page">/);
   assert.match(adminCss, /\.admin-drives-page \.admin-status\s*\{[^}]*gap\s*:\s*0/s);
   assert.match(
     adminCss,

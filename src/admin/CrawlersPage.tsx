@@ -12,6 +12,7 @@ import {
   Check,
   Download,
   FileCode2,
+  Plus,
   TestTube,
   Upload,
 } from "lucide-react";
@@ -23,7 +24,8 @@ import { generationStateClass, generationStateLabel } from "./drive/constants";
 import { CrawlerUploadTargetField } from "./drive/CrawlerUploadTargetField";
 import { SpiderIcon } from "./icons/SpiderIcon";
 import { AdminEmptyVisual } from "./AdminEmptyVisual";
-import { AdminLoading } from "./AdminLoading";
+import { CrawlerListSkeleton } from "./CrawlersPageLoading";
+import { useAdminFloatingActionSpace } from "./useAdminFloatingActionSpace";
 
 const BUSY_STATES = new Set(["scanning", "generating", "uploading", "queued"]);
 const POLL_INTERVAL_MS = 5000;
@@ -44,6 +46,7 @@ function crawlerBusy(crawler: api.AdminCrawler) {
 }
 
 export function CrawlersPage() {
+  const floatingActionPageRef = useAdminFloatingActionSpace<HTMLElement>();
   const [list, setList] = useState<api.AdminCrawler[]>([]);
   const [uploadTargets, setUploadTargets] = useState<api.AdminDrive[]>([]);
   const [loading, setLoading] = useState(true);
@@ -204,46 +207,47 @@ export function CrawlersPage() {
   const partialCrawlerTeasersEnabled = !allCrawlerTeasersEnabled && list.some((item) => item.teaserEnabled);
 
   return (
-    <section className="admin-page admin-crawlers-page">
-      <header className="admin-page__header">
-        <div className="admin-crawler-global-teaser">
-          <span>预览视频</span>
-          <button
-            type="button"
-            className={`toggle-switch ${allCrawlerTeasersEnabled ? "is-on" : ""} ${
-              togglingTeasers ? "is-saving" : ""
-            }`}
-            role="switch"
-            aria-checked={allCrawlerTeasersEnabled}
-            aria-label="切换全部爬虫预览视频生成"
-            disabled={!hasCrawlers || togglingTeasers}
-            onClick={toggleCrawlerTeasers}
-            title={
-              !hasCrawlers
-                ? "暂无爬虫，新增后默认开启预览视频生成"
-                : partialCrawlerTeasersEnabled
-                ? "部分爬虫已开启，点击开启全部"
-                : allCrawlerTeasersEnabled
-                  ? "关闭所有爬虫预览视频生成"
-                  : "开启所有爬虫预览视频生成"
-            }
-          >
-            <span className="toggle-switch__dot" />
-          </button>
-        </div>
-        <div className="admin-detail-actions-inline admin-crawler-page-actions">
-          <button className="admin-btn" onClick={() => setEditorTarget(null)}>
-            添加爬虫
-          </button>
-        </div>
-      </header>
-
+    <section
+      ref={floatingActionPageRef}
+      className="admin-page admin-page--with-floating-actions admin-crawlers-page"
+    >
       <div className="admin-crawler-console">
-        {loading ? (
-          <AdminLoading />
-        ) : (
-          <div className="admin-card admin-crawler-list">
-            {list.length === 0 ? (
+        <div
+          className="admin-card admin-crawler-list"
+          aria-busy={loading || undefined}
+        >
+          <div className="admin-crawler-list__controls">
+            <div className="admin-crawler-global-teaser">
+              <span>预览视频</span>
+              <button
+                type="button"
+                className={`toggle-switch ${allCrawlerTeasersEnabled ? "is-on" : ""} ${
+                  togglingTeasers ? "is-saving" : ""
+                }`}
+                role="switch"
+                aria-checked={allCrawlerTeasersEnabled}
+                aria-label="切换全部爬虫预览视频生成"
+                disabled={loading || !hasCrawlers || togglingTeasers}
+                onClick={toggleCrawlerTeasers}
+                title={
+                  loading
+                    ? "正在加载爬虫列表"
+                    : !hasCrawlers
+                      ? "暂无爬虫，新增后默认开启预览视频生成"
+                      : partialCrawlerTeasersEnabled
+                        ? "部分爬虫已开启，点击开启全部"
+                        : allCrawlerTeasersEnabled
+                          ? "关闭所有爬虫预览视频生成"
+                          : "开启所有爬虫预览视频生成"
+                }
+              >
+                <span className="toggle-switch__dot" />
+              </button>
+            </div>
+          </div>
+          {loading ? (
+            <CrawlerListSkeleton />
+          ) : list.length === 0 ? (
             <AdminEmptyVisual
               variant="empty"
               text="暂无爬虫"
@@ -276,10 +280,19 @@ export function CrawlersPage() {
                 />
               ))}
             </div>
-            )}
-          </div>
-        )}
+          )}
+        </div>
       </div>
+
+      <button
+        data-admin-floating-actions
+        type="button"
+        className="admin-btn admin-create-fab"
+        onClick={() => setEditorTarget(null)}
+      >
+        <Plus size="1em" aria-hidden="true" />
+        添加爬虫
+      </button>
 
       {editorTarget !== undefined && (
         <CrawlerEditorModal
@@ -343,9 +356,7 @@ function CrawlerRow({
     <div className={`admin-crawler-row ${expanded ? "is-expanded" : ""}`}>
       <div className="admin-crawler-row__line">
         <button type="button" className="admin-crawler-row__main" onClick={onToggleOpen} aria-expanded={expanded}>
-          <span className="admin-crawler-row__brand">
-            <SpiderIcon size={16} />
-          </span>
+          <SpiderIcon size={20} className="admin-crawler-row__icon" />
           <span className="admin-crawler-row__title-wrap">
             <span className="admin-crawler-row__title-line">
               <strong>{crawler.name}</strong>

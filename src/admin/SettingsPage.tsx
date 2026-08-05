@@ -17,6 +17,7 @@ import * as api from "./api";
 import { AdminLoading } from "./AdminLoading";
 import { useToast } from "./ToastContext";
 import { ConfigDiffModal } from "./settings/ConfigDiffModal";
+import { useAdminFloatingActionSpace } from "./useAdminFloatingActionSpace";
 import { SettingsRow, SettingsSection } from "./settings/SettingsSection";
 import {
   DEFAULT_DRAFT,
@@ -58,6 +59,7 @@ const SECTION_META: Array<{
 ];
 
 export function SettingsPage() {
+  const floatingActionPageRef = useAdminFloatingActionSpace<HTMLFormElement>();
   const { show } = useToast();
   const [loaded, setLoaded] = useState<LoadedConfig | null>(null);
   const [draft, setDraft] = useState<SettingsDraft>(DEFAULT_DRAFT);
@@ -289,7 +291,7 @@ export function SettingsPage() {
 
   if (loadError || !loaded) {
     return (
-      <div className="admin-config-page admin-config-page--error">
+      <div className="admin-page admin-config-page admin-config-page--error">
         <SlidersHorizontal size={26} aria-hidden="true" />
         <strong>配置加载失败</strong>
         <span>{loadError || "暂时无法读取 config.yaml"}</span>
@@ -302,7 +304,11 @@ export function SettingsPage() {
 
   return (
     <>
-      <form className="admin-config-page" onSubmit={prepareSave}>
+      <form
+        ref={floatingActionPageRef}
+        className="admin-page admin-page--with-floating-actions admin-config-page"
+        onSubmit={prepareSave}
+      >
         <header className="admin-config-header">
           <div className="admin-config-tabs" role="tablist" aria-label="配置编辑模式">
             <button
@@ -414,7 +420,12 @@ export function SettingsPage() {
           </div>
         )}
 
-        <div className="admin-config-actions" role="status" aria-live="polite">
+        <div
+          className="admin-config-actions"
+          data-admin-floating-actions
+          role="status"
+          aria-live="polite"
+        >
           <span
             className={`admin-config-actions__status ${
               sourceError ? "is-error" : dirty ? "is-dirty" : "is-saved"

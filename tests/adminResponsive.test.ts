@@ -6,6 +6,10 @@ const adminCss = readFileSync(
   new URL("../src/styles/admin.css", import.meta.url),
   "utf8"
 );
+const themeTokensCss = readFileSync(
+  new URL("../src/styles/tokens.css", import.meta.url),
+  "utf8"
+);
 const adminLayoutSource = readFileSync(
   new URL("../src/admin/AdminLayout.tsx", import.meta.url),
   "utf8"
@@ -24,6 +28,10 @@ const tagsPageSource = readFileSync(
 );
 const crawlersPageSource = readFileSync(
   new URL("../src/admin/CrawlersPage.tsx", import.meta.url),
+  "utf8"
+);
+const crawlersPageLoadingSource = readFileSync(
+  new URL("../src/admin/CrawlersPageLoading.tsx", import.meta.url),
   "utf8"
 );
 const drivesPageSource = readFileSync(
@@ -163,7 +171,8 @@ test("mobile user management cards keep identity, metadata, and actions separate
   assert.match(usersPageSource, /<AdminLoading \/>/);
   assert.doesNotMatch(usersPageSource, /<span>加载中\.\.\.<\/span>/);
   assert.doesNotMatch(usersPageSource, /加载中\.\.\./);
-  assert.match(pageLoading, /min-height\s*:\s*calc\(100dvh - 48px - var\(--space-7\) \* 2 - 44px - var\(--space-4\)\)/);
+  assert.match(pageLoading, /flex\s*:\s*1 1 auto/);
+  assert.match(pageLoading, /min-height\s*:\s*0/);
   assert.match(createUserModal, /width\s*:\s*min\(380px,\s*100%\)/);
   assert.match(createUserModal, /border\s*:\s*0/);
   assert.match(createUserModal, /box-shadow\s*:\s*none/);
@@ -343,12 +352,11 @@ test("current video bulk actions use ordinary text buttons", () => {
 
 test("admin tag bulk actions use a fixed floating toolbar", () => {
   const css = mobileCss();
-  const pageWithBulk = ruleBody(adminCss, ".admin-tags-page.has-bulk-actions");
+  const floatingSpace = ruleBody(adminCss, ".admin-page--with-floating-actions");
   const toolbar = ruleBody(adminCss, ".admin-tags-bulk-toolbar");
   const actions = ruleBody(adminCss, ".admin-tags-bulk-actions");
   const count = ruleBodyByContains(adminCss, ".admin-tags-bulk-actions__count");
   const mobileToolbar = allRuleBodies(css, ".admin-tags-bulk-toolbar");
-  const mobilePageWithBulk = allRuleBodies(css, ".admin-tags-page.has-bulk-actions");
   const mobileActions = allRuleBodies(css, ".admin-tags-bulk-actions");
   const mobileButton = allRuleBodies(css, ".admin-tags-bulk-actions__btn");
   const mobileExit = allRuleBodies(css, ".admin-tags-bulk-actions__mobile-exit");
@@ -373,7 +381,8 @@ test("admin tag bulk actions use a fixed floating toolbar", () => {
   assert.doesNotMatch(adminCss, /admin-tags-bulkbar/);
   assert.doesNotMatch(adminCss, /admin-tag-card__check/);
   assert.doesNotMatch(adminCss, /admin-tags-bulk-actions__btn\.is-danger/);
-  assert.match(pageWithBulk, /padding-bottom\s*:\s*72px/);
+  assert.match(tagsPageSource, /data-admin-floating-actions/);
+  assert.match(floatingSpace, /padding-bottom\s*:\s*var\(--admin-floating-actions-space,\s*0px\)/);
   assert.match(toolbar, /position\s*:\s*fixed/);
   assert.match(toolbar, /right\s*:\s*var\(--space-7\)/);
   assert.match(toolbar, /bottom\s*:\s*var\(--space-5\)/);
@@ -383,7 +392,7 @@ test("admin tag bulk actions use a fixed floating toolbar", () => {
   assert.match(mobileToolbar, /left\s*:\s*var\(--space-3\)/);
   assert.match(mobileToolbar, /right\s*:\s*var\(--space-3\)/);
   assert.match(mobileToolbar, /bottom\s*:\s*calc\(var\(--space-3\)\s*\+\s*env\(safe-area-inset-bottom\)\)/);
-  assert.match(mobilePageWithBulk, /padding-bottom\s*:\s*calc\(144px\s*\+\s*env\(safe-area-inset-bottom\)\)/);
+  assert.doesNotMatch(css, /\.admin-tags-page\.has-bulk-actions\s*\{[^}]*padding-bottom/s);
   assert.match(css, /\.admin-tags-page\.has-bulk-actions \.admin-tags-toolbar-actions\s*\{[^}]*display\s*:\s*none/s);
   assert.match(mobileActions, /display\s*:\s*grid/);
   assert.match(mobileActions, /grid-template-columns\s*:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)/);
@@ -421,6 +430,26 @@ test("admin sidebar active item frame only wraps the centered option", () => {
   assert.match(activeMarker, /display\s*:\s*none/);
 });
 
+test("desktop admin sidebar uses a fully transparent glass surface without changing the mobile drawer", () => {
+  const desktopSidebarMatch = adminCss.match(
+    /@media \(min-width:\s*769px\)\s*\{\s*\.admin-sidebar\s*\{([^}]*)\}/
+  );
+  assert.ok(desktopSidebarMatch, "Expected a desktop-only sidebar rule");
+  const desktopSidebar = desktopSidebarMatch[1];
+  const mobileSidebar = ruleBody(mobileCss(), ".admin-sidebar");
+
+  assert.match(desktopSidebar, /background\s*:\s*transparent/);
+  assert.doesNotMatch(desktopSidebar, /background\s*:[^;]*var\(--glass-sidebar/);
+  assert.match(desktopSidebar, /border-right\s*:\s*1px solid var\(--glass-sidebar-border\)/);
+  assert.match(desktopSidebar, /box-shadow\s*:[\s\S]*var\(--glass-sidebar-shadow\)/);
+  assert.match(desktopSidebar, /backdrop-filter\s*:\s*saturate\(145%\) blur\(22px\)/);
+  assert.match(desktopSidebar, /-webkit-backdrop-filter\s*:\s*saturate\(145%\) blur\(22px\)/);
+  assert.equal(themeTokensCss.match(/--glass-sidebar-highlight\s*:/g)?.length, 3);
+  assert.equal(themeTokensCss.match(/--glass-sidebar-border\s*:/g)?.length, 3);
+  assert.equal(themeTokensCss.match(/--glass-sidebar-shadow\s*:/g)?.length, 3);
+  assert.match(mobileSidebar, /background\s*:\s*var\(--bg-surface\)/);
+});
+
 test("admin sidebar keeps desktop separators but groups the mobile drawer with labels", () => {
   assert.match(
     adminCss,
@@ -446,7 +475,6 @@ test("current video list does not render the drive summary under filters", () =>
   const filter = ruleBody(adminCss, ".admin-videos-filter");
   const toolbar = ruleBody(adminCss, ".admin-videos-list-toolbar");
   const currentToolbar = ruleBodyByContains(adminCss, ".admin-videos-current .admin-videos-list-toolbar");
-  const currentWithBulk = ruleBodyByContains(adminCss, ".admin-videos-current.has-bulk-actions");
 
   assert.doesNotMatch(videosPageSource, /listSummary/);
   assert.doesNotMatch(videosPageSource, /全部网盘：共/);
@@ -475,7 +503,8 @@ test("current video list does not render the drive summary under filters", () =>
   assert.match(currentToolbar, /bottom\s*:\s*var\(--space-5\)/);
   assert.match(currentToolbar, /max-width\s*:\s*calc\(100vw\s*-\s*var\(--admin-sidebar-width\)\s*-\s*\(var\(--space-7\)\s*\*\s*2\)\)/);
   assert.match(currentToolbar, /margin\s*:\s*0/);
-  assert.match(currentWithBulk, /padding-bottom\s*:\s*72px/);
+  assert.match(videosPageSource, /className="admin-videos-list-toolbar" data-admin-floating-actions/);
+  assert.match(ruleBody(adminCss, ".admin-page--with-floating-actions"), /--admin-floating-actions-space/);
 });
 
 test("desktop current video list uses long cards without a header row", () => {
@@ -567,6 +596,9 @@ test("desktop video management toolbar follows tag management layout", () => {
   assert.match(batch, /justify-self\s*:\s*end/);
   assert.match(batch, /white-space\s*:\s*nowrap/);
   assert.doesNotMatch(batch, /display\s*:\s*none/);
+  assert.match(tabs, /flex\s*:\s*none/);
+  assert.match(tabs, /overflow\s*:\s*visible/);
+  assert.doesNotMatch(tabs, /overflow-[xy]\s*:\s*(?:auto|scroll)/);
   assert.match(tabs, /background\s*:\s*var\(--bg-sunken\)/);
   assert.match(tabs, /padding\s*:\s*3px/);
   assert.match(tabs, /border-radius\s*:\s*var\(--radius-sm\)/);
@@ -748,8 +780,6 @@ test("admin video management controls wrap instead of covering text on mobile", 
   );
   const bulkToolbar = ruleBodyByContains(css, ".admin-videos-current .admin-videos-list-toolbar");
   const blacklistBulkToolbar = ruleBodyByContains(css, ".admin-blacklist-bulk-toolbar");
-  const currentWithBulk = ruleBodyByContains(css, ".admin-videos-current.has-bulk-actions");
-  const blacklistWithBulk = ruleBodyByContains(css, ".admin-videos-blacklist.has-bulk-actions");
   const bulkActions = allRuleBodies(css, ".admin-videos-bulk-actions");
   const bulkCount = allRuleBodies(css, ".admin-videos-bulk-actions__count");
   const bulkButton = allRuleBodies(css, ".admin-videos-bulk-actions__btn");
@@ -821,8 +851,7 @@ test("admin video management controls wrap instead of covering text on mobile", 
   assert.match(blacklistBulkToolbar, /position\s*:\s*fixed/);
   assert.match(blacklistBulkToolbar, /bottom\s*:\s*calc\(var\(--space-3\)\s*\+\s*env\(safe-area-inset-bottom\)\)/);
   assert.match(blacklistBulkToolbar, /margin\s*:\s*0/);
-  assert.match(currentWithBulk, /padding-bottom\s*:\s*calc\(144px\s*\+\s*env\(safe-area-inset-bottom\)\)/);
-  assert.match(blacklistWithBulk, /padding-bottom\s*:\s*calc\(144px\s*\+\s*env\(safe-area-inset-bottom\)\)/);
+  assert.doesNotMatch(css, /\.admin-videos-(?:current|blacklist)\.has-bulk-actions\s*\{[^}]*padding-bottom/s);
   assert.match(bulkActions, /display\s*:\s*grid/);
   assert.match(bulkActions, /grid-template-columns\s*:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)/);
   assert.match(bulkCount, /grid-column\s*:\s*1\s*\/\s*-1/);
@@ -851,10 +880,12 @@ test("admin loading spinner rotates around icon center", () => {
   assert.match(spinner, /transform-box\s*:\s*fill-box/);
   assert.match(spinner, /transform-origin\s*:\s*center/);
   assert.match(spinner, /will-change\s*:\s*transform/);
-  assert.match(pageLoading, /min-height\s*:\s*calc\(100dvh - 64px\)/);
+  assert.match(pageLoading, /flex\s*:\s*1 1 auto/);
+  assert.match(pageLoading, /min-height\s*:\s*0/);
   assert.match(usersPageSource, /<AdminLoading \/>/);
   assert.match(tagsPageSource, /<AdminLoading \/>/);
-  assert.match(crawlersPageSource, /<AdminLoading \/>/);
+  assert.doesNotMatch(crawlersPageSource, /AdminLoading/);
+  assert.match(crawlersPageSource, /<CrawlerListSkeleton \/>/);
   assert.match(videosPageSource, /<AdminLoading \/>/);
   assert.equal(
     Array.from(drivesPageSource.matchAll(/<AdminLoading \/>/g)).length,
@@ -865,12 +896,12 @@ test("admin loading spinner rotates around icon center", () => {
 
 test("drive list loading uses a local card-grid skeleton", () => {
   const skeleton = ruleBody(adminCss, ".admin-drive-card-skeleton");
-  const skeletonSurface = ruleBody(adminCss, ".admin-drive-skeleton-surface");
+  const skeletonSurface = ruleBody(adminCss, ".admin-card-skeleton-surface");
 
   assert.match(drivesPageLoadingSource, /const DRIVE_LIST_SKELETON_COUNT = 6/);
   assert.match(
     drivesPageLoadingSource,
-    /className="admin-drives-grid admin-drives-grid--skeleton"[\s\S]*?aria-busy="true"/
+    /className="admin-drives-grid admin-drives-grid--skeleton"[\s\S]*?aria-busy="true"[\s\S]*?admin-drive-card-skeleton admin-card-skeleton-surface/
   );
   assert.match(
     drivesPageSource,
@@ -881,12 +912,37 @@ test("drive list loading uses a local card-grid skeleton", () => {
   assert.match(skeletonSurface, /background\s*:\s*linear-gradient/);
   assert.match(
     skeletonSurface,
-    /animation\s*:\s*admin-drive-skeleton-shimmer 1\.5s ease-in-out infinite/
+    /animation\s*:\s*admin-card-skeleton-shimmer 1\.5s ease-in-out infinite/
   );
   assert.match(
     adminCss,
-    /@media \(prefers-reduced-motion: reduce\)\s*\{\s*\.admin-drive-skeleton-surface\s*\{\s*animation\s*:\s*none/s
+    /@media \(prefers-reduced-motion: reduce\)\s*\{\s*\.admin-card-skeleton-surface\s*\{\s*animation\s*:\s*none/s
   );
+});
+
+test("crawler loading keeps the real page structure and skeletonizes only crawler cards", () => {
+  const skeleton = ruleBody(adminCss, ".admin-crawler-card-skeleton");
+  const sharedSurface = ruleBody(adminCss, ".admin-card-skeleton-surface");
+
+  assert.match(crawlersPageLoadingSource, /const CRAWLER_LIST_SKELETON_COUNT = 3/);
+  assert.match(
+    crawlersPageLoadingSource,
+    /className="admin-page admin-page--with-floating-actions admin-crawlers-page"[\s\S]*?className="admin-card admin-crawler-list" aria-busy="true"[\s\S]*?className="admin-crawler-list__controls"[\s\S]*?<CrawlerListSkeleton \/>/
+  );
+  assert.match(
+    crawlersPageLoadingSource,
+    /className="admin-crawler-table admin-crawler-table--skeleton"[\s\S]*?role="status"[\s\S]*?aria-busy="true"[\s\S]*?admin-crawler-card-skeleton admin-card-skeleton-surface/
+  );
+  assert.match(
+    crawlersPageSource,
+    /className="admin-card admin-crawler-list"[\s\S]*?aria-busy=\{loading \|\| undefined\}[\s\S]*?\{loading \? \(\s*<CrawlerListSkeleton \/>/
+  );
+  assert.match(crawlersPageSource, /disabled=\{loading \|\| !hasCrawlers \|\| togglingTeasers\}/);
+  assert.doesNotMatch(crawlersPageSource, /AdminLoading/);
+  assert.match(skeleton, /height\s*:\s*64px/);
+  assert.match(skeleton, /border\s*:\s*1px solid var\(--border-subtle\)/);
+  assert.match(skeleton, /border-radius\s*:\s*var\(--radius-sm\)/);
+  assert.match(sharedSurface, /background\s*:\s*linear-gradient/);
 });
 
 test("drive detail loading renders the real page shell without animated placeholders", () => {
@@ -919,7 +975,7 @@ test("drive detail loading renders the real page shell without animated placehol
     /className="toggle-switch is-on"[\s\S]*disabled[\s\S]*aria-checked="true"/
   );
   assert.doesNotMatch(detailLoadingSource, /className="admin-status"/);
-  assert.doesNotMatch(detailLoadingSource, /admin-drive-skeleton-surface/);
+  assert.doesNotMatch(detailLoadingSource, /admin-card-skeleton-surface/);
   assert.doesNotMatch(detailLoadingSource, /admin-drive-detail-skeleton__card/);
   assert.match(
     drivesPageSource,
@@ -1191,7 +1247,7 @@ test("mobile tags management does not create horizontal page overflow", () => {
   assert.match(toolbarActionDivider, /content\s*:\s*""/);
   assert.match(toolbarActionDivider, /height\s*:\s*18px/);
   assert.match(toolbarActionDivider, /background\s*:\s*var\(--border-subtle\)/);
-  assert.match(css, /\.admin-tags-page\s*\{[^}]*padding-bottom\s*:\s*calc\(72px \+ env\(safe-area-inset-bottom\)\)/s);
+  assert.doesNotMatch(css, /\.admin-tags-page\s*\{[^}]*padding-bottom/s);
   assert.match(css, /\.admin-tags-page\.has-bulk-actions \.admin-tags-toolbar-actions\s*\{[^}]*display\s*:\s*none/s);
   assert.match(desktopFilterPanel, /grid-column\s*:\s*2/);
   assert.match(desktopFilterPanel, /grid-row\s*:\s*2/);
@@ -1286,6 +1342,8 @@ test("mobile admin navigation uses a CPA-style sliding drawer", () => {
   assert.match(adminLayoutSource, /<nav className="admin-nav" onClick=\{\(\) => setMobileNavigationOpen\(false\)\}>/);
   assert.match(shell, /--admin-mobile-header-offset\s*:\s*calc\(58px\s*\+\s*env\(safe-area-inset-top,\s*0px\)\)/);
   assert.match(shell, /display\s*:\s*block/);
+  assert.match(shell, /height\s*:\s*auto/);
+  assert.match(shell, /overflow\s*:\s*visible/);
   assert.match(mobileToggle, /position\s*:\s*fixed/);
   assert.match(mobileToggle, /top\s*:\s*calc\(6px\s*\+\s*env\(safe-area-inset-top,\s*0px\)\)/);
   assert.match(mobileToggle, /left\s*:\s*var\(--space-2\)/);
@@ -1318,29 +1376,47 @@ test("mobile admin navigation uses a CPA-style sliding drawer", () => {
   assert.match(activeNavLink, /background\s*:\s*var\(--accent-soft\)/);
   assert.match(activeNavLink, /border-color\s*:\s*var\(--border-accent\)/);
   assert.match(activeNavLink, /box-shadow\s*:\s*none/);
-  assert.match(ruleBody(css, ".admin-main"), /padding\s*:\s*var\(--admin-mobile-header-offset\)\s+var\(--space-3\)\s+var\(--space-4\)/);
+  const mobileMain = ruleBody(css, ".admin-main");
+  assert.match(mobileMain, /height\s*:\s*auto/);
+  assert.match(
+    mobileMain,
+    /min-height\s*:\s*calc\(100dvh\s*\+\s*var\(--admin-mobile-scroll-range\)\)/
+  );
+  assert.match(mobileMain, /overflow\s*:\s*visible/);
+  assert.match(mobileMain, /padding\s*:\s*var\(--admin-mobile-header-offset\)\s+var\(--space-3\)\s+var\(--space-4\)/);
   assert.match(adminCss, /html\.admin-mobile-nav-open,[\s\S]*?overscroll-behavior:\s*none/);
   assert.match(ruleBody(css, ".admin-page__header"), /margin-bottom\s*:\s*var\(--space-3\)/);
 });
 
-test("crawler header keeps preview toggle and add action aligned across breakpoints", () => {
-  const header = ruleBody(adminCss, ".admin-crawlers-page .admin-page__header");
-  const teaser = ruleBody(
-    adminCss,
-    ".admin-crawlers-page .admin-page__header > .admin-crawler-global-teaser"
-  );
-  const actions = ruleBody(
-    adminCss,
-    ".admin-crawlers-page .admin-page__header > .admin-crawler-page-actions"
-  );
+test("crawler card keeps the single global preview toggle at the upper left", () => {
+  const controls = ruleBody(adminCss, ".admin-crawler-list__controls");
+  const teaser = ruleBody(adminCss, ".admin-crawler-global-teaser");
 
-  assert.match(header, /align-items\s*:\s*flex-start/);
-  assert.match(header, /justify-content\s*:\s*space-between/);
-  assert.match(header, /flex-wrap\s*:\s*nowrap/);
-  assert.match(teaser, /width\s*:\s*auto/);
-  assert.match(teaser, /justify-items\s*:\s*start/);
-  assert.match(actions, /width\s*:\s*auto/);
-  assert.match(actions, /justify-content\s*:\s*flex-end/);
-  assert.match(actions, /margin-left\s*:\s*auto/);
-  assert.match(actions, /padding-top\s*:\s*14px/);
+  assert.match(
+    crawlersPageSource,
+    /<div\s+className="admin-card admin-crawler-list"\s+aria-busy=\{loading \|\| undefined\}\s*>\s*<div className="admin-crawler-list__controls">\s*<div className="admin-crawler-global-teaser">/
+  );
+  assert.equal(crawlersPageSource.match(/className="admin-crawler-global-teaser"/g)?.length, 1);
+  assert.doesNotMatch(crawlersPageSource, /admin-crawler-row__preview-toggle|onToggleTeaser/);
+  assert.match(controls, /display\s*:\s*flex/);
+  assert.match(controls, /align-items\s*:\s*flex-start/);
+  assert.match(controls, /justify-content\s*:\s*flex-start/);
+  assert.match(controls, /padding\s*:\s*var\(--space-4\)\s+var\(--space-4\)\s+0/);
+  assert.match(teaser, /display\s*:\s*inline-grid/);
+  assert.match(teaser, /justify-items\s*:\s*center/);
+});
+
+test("crawler create action reuses the drive floating action button", () => {
+  const fab = ruleBody(adminCss, ".admin-create-fab");
+
+  assert.match(
+    crawlersPageSource,
+    /className="admin-btn admin-create-fab"[\s\S]*?<Plus size="1em" aria-hidden="true" \/>[\s\S]*?添加爬虫/
+  );
+  assert.match(fab, /position\s*:\s*fixed/);
+  assert.match(fab, /right\s*:\s*var\(--space-7\)/);
+  assert.match(fab, /bottom\s*:\s*var\(--space-5\)/);
+  assert.match(fab, /min-height\s*:\s*44px/);
+  assert.match(fab, /box-shadow\s*:\s*0 12px 32px/);
+  assert.doesNotMatch(crawlersPageSource, /admin-crawler-page-actions/);
 });

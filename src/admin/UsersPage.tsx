@@ -12,11 +12,13 @@ import { Modal } from "./Modal";
 import { ConfirmModal } from "./ConfirmModal";
 import { PasswordInput } from "./PasswordInput";
 import { AdminLoading } from "./AdminLoading";
+import { useAdminFloatingActionSpace } from "./useAdminFloatingActionSpace";
 
 type Tab = "users" | "ips";
 const MIN_PASSWORD_LENGTH = 6;
 
 export function UsersPage() {
+  const floatingActionPageRef = useAdminFloatingActionSpace<HTMLDivElement>();
   const [tab, setTab] = useState<Tab>("users");
   const [users, setUsers] = useState<api.AdminUser[]>([]);
   const [ips, setIps] = useState<api.BannedIP[]>([]);
@@ -157,7 +159,10 @@ export function UsersPage() {
   }
 
   return (
-    <div className="admin-page">
+    <div
+      ref={floatingActionPageRef}
+      className="admin-page admin-page--with-floating-actions"
+    >
       <div className="admin-users-toolbar">
         <div className="admin-users-tabs admin-tags-filter-tabs" role="tablist" aria-label="用户分组">
           <button
@@ -179,7 +184,7 @@ export function UsersPage() {
             <span className="admin-tags-filter-tab__text">封禁IP</span>
           </button>
         </div>
-        <div className="admin-users-toolbar-actions">
+        <div className="admin-users-toolbar-actions" data-admin-floating-actions>
           {tab === "users" && (
             <button className="admin-btn admin-users-create-fab" onClick={() => setShowCreate(true)}>
               新建用户

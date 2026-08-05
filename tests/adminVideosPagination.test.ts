@@ -48,7 +48,9 @@ test("normal videos support composable advanced filters", () => {
   assert.match(sourcePickerSource, /role="group" aria-label="爬虫"/);
   assert.match(sourcePickerSource, /placeholder="搜索网盘或爬虫"/);
   assert.match(sourcePickerSource, /driveKindIconPath\(drive\.kind\)/);
-  assert.match(sourcePickerSource, /<SpiderIcon \/>/);
+  assert.match(videosPageSource, /import \{ SpiderIcon \} from "\.\/icons\/SpiderIcon";/);
+  assert.match(sourcePickerSource, /<SpiderIcon size=\{18\} \/>/);
+  assert.doesNotMatch(videosPageSource, /function SpiderIcon\(\)/);
   assert.match(videosPageSource, /const LOCAL_UPLOAD_SOURCE_ID = "local-upload";/);
   assert.match(sourcePickerSource, /<strong>上传来源<\/strong>/);
   assert.match(sourcePickerSource, /selectSource\("drive", LOCAL_UPLOAD_SOURCE_ID\)/);
@@ -179,23 +181,17 @@ test("admin video pagination clamps stale deep links after totals load", () => {
   assert.match(blacklistSource, clamp);
 });
 
-test("video pagination keeps its position when the page has fewer rows", () => {
+test("video pagination does not create invisible rows on a short final page", () => {
   const currentSource = videosPageSource.slice(
     videosPageSource.indexOf("function CurrentVideosTab"),
     videosPageSource.indexOf("// ---------- 拉黑视频 ----------")
   );
   const blacklistSource = videosPageSource.slice(videosPageSource.indexOf("function BlacklistTab"));
   assert.equal(Array.from(videosPageSource.matchAll(/const showPagination = totalPages > 1;/g)).length, 2);
-  assert.match(currentSource, /const placeholderRows = showPagination \? Math\.max\(0, pageSize - listItems\.length\) : 0;/);
-  assert.match(blacklistSource, /const placeholderRows = showPagination \? Math\.max\(0, pageSize - list\.length\) : 0;/);
-  assert.equal(Array.from(videosPageSource.matchAll(/Array\.from\(\{ length: placeholderRows \}/g)).length, 2);
-  assert.match(videosPageSource, /className="admin-video-placeholder-row"/);
+  assert.doesNotMatch(currentSource, /placeholderRows|admin-video-placeholder-row/);
+  assert.doesNotMatch(blacklistSource, /placeholderRows|admin-video-placeholder-row/);
   assert.match(blacklistSource, /admin-table is-selectable admin-blacklist-table/);
-  assert.match(blacklistSource, /data-label="文件名"[\s\S]*?admin-blacklist-filecell[\s\S]*?placeholder/);
-  assert.match(
-    adminCss,
-    /\.admin-video-placeholder-row\s*\{[^}]*visibility\s*:\s*hidden;[^}]*pointer-events\s*:\s*none/s
-  );
+  assert.doesNotMatch(adminCss, /\.admin-video-placeholder-row/);
 });
 
 test("empty video tabs use the correct visual and distinguish search misses", () => {
@@ -209,7 +205,10 @@ test("empty video tabs use the correct visual and distinguish search misses", ()
   assert.match(currentSource, /const hasVideoActions = listItems\.length > 0;/);
   assert.match(blacklistSource, /const hasBlacklistActions = list\.length > 0;/);
   assert.match(currentSource, /\{hasVideoActions && \(\s*<button[\s\S]*?批量选择/);
-  assert.match(blacklistSource, /\{hasBlacklistActions && \(\s*<div className="admin-videos-filter__actions admin-blacklist-source-delete">[\s\S]*?删除全部[\s\S]*?批量选择/);
+  assert.match(
+    blacklistSource,
+    /\{hasBlacklistActions && \(\s*<div[\s\S]*?className="admin-videos-filter__actions admin-blacklist-source-delete"[\s\S]*?data-admin-floating-actions[\s\S]*?删除全部[\s\S]*?批量选择/
+  );
   assert.match(currentSource, /admin-empty-state admin-empty-state--plain/);
   assert.match(blacklistSource, /admin-empty-state admin-empty-state--plain/);
   assert.match(currentSource, /variant=\{hasActiveSearch \? "no-results" : "empty"\}/);
@@ -227,8 +226,9 @@ test("empty video tabs use the correct visual and distinguish search misses", ()
   );
   assert.match(
     adminCss,
-    /\.admin-videos-current,[\s\S]*?\.admin-videos-blacklist\s*\{[^}]*display\s*:\s*flex;[^}]*flex-direction\s*:\s*column;[^}]*min-height\s*:\s*calc\(100vh - \(var\(--space-7\) \* 2\)\)/s
+    /\.admin-videos-current,[\s\S]*?\.admin-videos-blacklist\s*\{[^}]*display\s*:\s*flex;[^}]*flex\s*:\s*1 1 auto;[^}]*flex-direction\s*:\s*column;[^}]*min-height\s*:\s*0/s
   );
+  assert.match(videosPageSource, /className="admin-page admin-page--with-floating-actions admin-videos-page"/);
   assert.match(
     adminCss,
     /\.admin-videos-current > \.admin-empty-state--plain,[\s\S]*?\.admin-videos-blacklist > \.admin-empty-state--plain\s*\{[^}]*box-sizing\s*:\s*border-box;[^}]*flex\s*:\s*1 1 auto;[^}]*min-height\s*:\s*0;[^}]*padding\s*:\s*0 16px 96px/s

@@ -93,6 +93,9 @@
   /* 半透明玻璃 */
   --glass-nav: rgba(13, 14, 19, 0.78);
   --glass-card: rgba(20, 22, 28, 0.72);
+  --glass-sidebar-highlight: rgba(255, 255, 255, 0.08);
+  --glass-sidebar-border: rgba(255, 255, 255, 0.11);
+  --glass-sidebar-shadow: rgba(0, 0, 0, 0.28);
 
   /* ----- 边框 ----- */
   --border-subtle: rgba(255, 255, 255, 0.06);
@@ -194,6 +197,9 @@
   /* 半透明玻璃（白底叠透明粉） */
   --glass-nav: rgba(255, 250, 252, 0.78);
   --glass-card: rgba(255, 255, 255, 0.72);
+  --glass-sidebar-highlight: rgba(255, 255, 255, 0.58);
+  --glass-sidebar-border: rgba(255, 91, 138, 0.18);
+  --glass-sidebar-shadow: rgba(180, 90, 120, 0.14);
 
   /* ----- 边框（暗色描边） ----- */
   --border-subtle: rgba(255, 91, 138, 0.1);
@@ -295,6 +301,9 @@
   /* 半透明玻璃（蓝白叠透明） */
   --glass-nav: rgba(232, 244, 255, 0.78);
   --glass-card: rgba(255, 255, 255, 0.72);
+  --glass-sidebar-highlight: rgba(255, 255, 255, 0.5);
+  --glass-sidebar-border: rgba(60, 100, 170, 0.18);
+  --glass-sidebar-shadow: rgba(40, 80, 160, 0.14);
 
   /* ----- 边框（深蓝描边） ----- */
   --border-subtle: rgba(60, 100, 170, 0.1);
@@ -445,17 +454,6 @@
 }
 
 @media (min-width: 769px) {
-  :root .admin-sidebar,
-  :root[data-theme="dark"] .admin-sidebar {
-    background:
-      linear-gradient(90deg, rgba(18, 20, 27, 0.86) 0%, rgba(18, 20, 27, 0.66) 72%, rgba(18, 20, 27, 0.24) 100%),
-      linear-gradient(180deg, rgba(255, 255, 255, 0.045) 0%, rgba(255, 138, 60, 0.008) 100%);
-    border-right: 0;
-    box-shadow: none;
-    backdrop-filter: blur(10px);
-    -webkit-backdrop-filter: blur(10px);
-  }
-
   :root .admin-sidebar__brand,
   :root[data-theme="dark"] .admin-sidebar__brand {
     border-color: rgba(255, 255, 255, 0.07);
@@ -496,16 +494,6 @@
     color: rgba(255, 176, 112, 0.76);
   }
 
-  :root[data-theme="pink"] .admin-sidebar {
-    background:
-      linear-gradient(90deg, rgba(255, 255, 255, 0.58) 0%, rgba(255, 245, 249, 0.34) 72%, transparent 100%),
-      linear-gradient(180deg, rgba(255, 91, 138, 0.08) 0%, rgba(255, 255, 255, 0.18) 100%);
-    border-right: 0;
-    box-shadow: none;
-    backdrop-filter: blur(10px);
-    -webkit-backdrop-filter: blur(10px);
-  }
-
   :root[data-theme="pink"] .admin-sidebar__brand {
     border-color: rgba(255, 91, 138, 0.11);
   }
@@ -537,16 +525,6 @@
   :root[data-theme="pink"] .admin-nav__link.is-active .admin-nav__icon {
     background: rgba(255, 91, 138, 0.16);
     border-color: rgba(255, 91, 138, 0.42);
-  }
-
-  :root[data-theme="sky"] .admin-sidebar {
-    background:
-      linear-gradient(90deg, rgba(255, 255, 255, 0.34) 0%, rgba(255, 255, 255, 0.18) 72%, transparent 100%),
-      linear-gradient(180deg, rgba(255, 255, 255, 0.22) 0%, rgba(232, 244, 255, 0.08) 100%);
-    border-right: 0;
-    box-shadow: none;
-    backdrop-filter: blur(10px);
-    -webkit-backdrop-filter: blur(10px);
   }
 
   :root[data-theme="sky"] .admin-sidebar__brand {
