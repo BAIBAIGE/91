@@ -108,7 +108,7 @@ test("mobile list pagination contains only real records", () => {
   assert.doesNotMatch(tagsPageSource, /placeholderTags|admin-tag-card--placeholder/);
   assert.doesNotMatch(videosPageSource, /placeholderRows|admin-video-placeholder-row/);
   assert.doesNotMatch(adminCss, /\.admin-(?:tag-card|video)-placeholder/);
-  assert.match(videosPageSource, /const MOBILE_VIDEOS_PAGE_SIZE = 20;/);
+  assert.match(videosPageSource, /const MOBILE_BLACKLIST_PAGE_SIZE = 20;/);
 });
 
 test("mobile logs keep one stable, intentional inner viewport", () => {

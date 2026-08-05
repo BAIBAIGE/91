@@ -22,6 +22,11 @@ const mainNavSource = readFileSync(
   "utf8"
 );
 
+const uploadIconSource = readFileSync(
+  new URL("../src/components/icons/UploadIcon.tsx", import.meta.url),
+  "utf8"
+);
+
 function ruleBody(css: string, selector: string): string {
   const escapedSelector = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const match = css.match(new RegExp(`${escapedSelector}\\s*\\{([^}]*)\\}`));
@@ -65,9 +70,10 @@ test("admin navigation uses the supplied Font Awesome icon", () => {
 
 test("upload navigation uses the supplied Font Awesome Pro icon", () => {
   assert.doesNotMatch(mainNavSource, /icon: Upload\b/);
-  assert.match(mainNavSource, /commercial license: https:\/\/fontawesome\.com\/license/);
-  assert.match(mainNavSource, /function UploadIcon/);
-  assert.match(mainNavSource, /M512 384c0 35\.3-28\.7 64-64 64L64 448/);
+  assert.match(mainNavSource, /import \{ UploadIcon \} from "@\/components\/icons\/UploadIcon";/);
+  assert.match(uploadIconSource, /commercial license: https:\/\/fontawesome\.com\/license/);
+  assert.match(uploadIconSource, /export function UploadIcon/);
+  assert.match(uploadIconSource, /M512 384c0 35\.3-28\.7 64-64 64L64 448/);
   assert.match(mainNavSource, /const uploadNavItem = \{ to: "\/upload", label: "上传", icon: UploadIcon \}/);
 });
 

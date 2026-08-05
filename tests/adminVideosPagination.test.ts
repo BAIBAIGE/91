@@ -7,6 +7,10 @@ const searchPanelSource = readFileSync(new URL("../src/components/SearchPanel.ts
 const apiSource = readFileSync(new URL("../src/admin/api.ts", import.meta.url), "utf8");
 const emptyVisualSource = readFileSync(new URL("../src/admin/AdminEmptyVisual.tsx", import.meta.url), "utf8");
 const adminCss = readFileSync(new URL("../src/styles/admin.css", import.meta.url), "utf8");
+const filterAllIconSource = readFileSync(
+  new URL("../src/components/icons/FilterAllIcon.tsx", import.meta.url),
+  "utf8"
+);
 
 test("admin empty visual places the requested image above its text", () => {
   assert.match(emptyVisualSource, /import emptyImage from "@\/assets\/admin\/empty\.webp"/);
@@ -15,25 +19,40 @@ test("admin empty visual places the requested image above its text", () => {
   assert.match(emptyVisualSource, /admin-empty-visual__media[\s\S]*?<img[\s\S]*?admin-empty-visual__text/);
 });
 
-test("normal videos use ten items while blacklist remains responsive", () => {
-  assert.match(videosPageSource, /const NORMAL_VIDEOS_PAGE_SIZE = 10;/);
-  assert.match(videosPageSource, /const DESKTOP_VIDEOS_PAGE_SIZE = 50;/);
-  assert.match(videosPageSource, /const MOBILE_VIDEOS_PAGE_SIZE = 20;/);
+test("normal videos use sixteen desktop cards while mobile and blacklist retain their capacities", () => {
+  assert.match(videosPageSource, /const DESKTOP_CURRENT_VIDEOS_PAGE_SIZE = 16;/);
+  assert.match(videosPageSource, /const MOBILE_CURRENT_VIDEOS_PAGE_SIZE = 10;/);
+  assert.match(videosPageSource, /const DESKTOP_BLACKLIST_PAGE_SIZE = 50;/);
+  assert.match(videosPageSource, /const MOBILE_BLACKLIST_PAGE_SIZE = 20;/);
   assert.match(videosPageSource, /const VIDEOS_MOBILE_QUERY = "\(max-width: 640px\)";/);
   assert.match(videosPageSource, /window\.matchMedia\(VIDEOS_MOBILE_QUERY\)/);
-  assert.match(videosPageSource, /function CurrentVideosTab[\s\S]*?const pageSize = NORMAL_VIDEOS_PAGE_SIZE;/);
-  assert.match(videosPageSource, /function BlacklistTab[\s\S]*?const pageSize = useVideosPageSize\(\);/);
-  assert.match(videosPageSource, /api\.listVideos\(\{[\s\S]*?page,[\s\S]*?size: pageSize,[\s\S]*?keyword: searchKeyword,[\s\S]*?\.\.\.appliedFilters/);
+  assert.match(
+    videosPageSource,
+    /function CurrentVideosTab[\s\S]*?const pageSize = useVideosPageSize\(\s*DESKTOP_CURRENT_VIDEOS_PAGE_SIZE,\s*MOBILE_CURRENT_VIDEOS_PAGE_SIZE\s*\);/
+  );
+  assert.match(
+    videosPageSource,
+    /function BlacklistTab[\s\S]*?const pageSize = useVideosPageSize\(\s*DESKTOP_BLACKLIST_PAGE_SIZE,\s*MOBILE_BLACKLIST_PAGE_SIZE\s*\);/
+  );
+  assert.match(
+    videosPageSource,
+    /function useVideosPageSize\(desktopPageSize: number, mobilePageSize: number\)/
+  );
+  assert.match(
+    videosPageSource,
+    /const activeListQueryKey = JSON\.stringify\(\[\s*page,\s*pageSize,\s*searchKeyword,\s*sourceDriveId,\s*sourceCrawlerId,\s*appliedFilters,?\s*\]\);/
+  );
+  assert.match(videosPageSource, /api\.listVideos\(\{[\s\S]*?page,[\s\S]*?size: pageSize,[\s\S]*?keyword: searchKeyword,[\s\S]*?driveId: sourceDriveId,[\s\S]*?crawlerId: sourceCrawlerId,[\s\S]*?\.\.\.appliedFilters/);
 });
 
-test("normal videos support composable advanced filters", () => {
+test("normal videos keep source navigation separate from composable advanced filters", () => {
   const clearFiltersSource = videosPageSource.slice(
     videosPageSource.indexOf("function clearAdvancedFilters"),
     videosPageSource.indexOf("\n\n  return (", videosPageSource.indexOf("function clearAdvancedFilters"))
   );
-  const sourcePickerSource = videosPageSource.slice(
-    videosPageSource.indexOf("function VideoSourcePicker"),
-    videosPageSource.indexOf("function AdvancedVideoFilters")
+  const sourceNavigationSource = videosPageSource.slice(
+    videosPageSource.indexOf("function VideoSourceNavigation"),
+    videosPageSource.indexOf("// ---------- 当前视频")
   );
   const advancedFilterSource = videosPageSource.slice(
     videosPageSource.indexOf("function AdvancedVideoFilters"),
@@ -42,52 +61,46 @@ test("normal videos support composable advanced filters", () => {
   assert.match(videosPageSource, /className="admin-video-advanced-filters"/);
   assert.match(videosPageSource, /aria-haspopup="dialog"/);
   assert.match(videosPageSource, /<Modal[\s\S]*?open=\{advancedFiltersOpen\}[\s\S]*?title="高级筛选"/);
-  assert.match(advancedFilterSource, /<span>来源<\/span>[\s\S]*?<VideoSourcePicker/);
-  assert.match(sourcePickerSource, /aria-haspopup="listbox"[\s\S]*?aria-expanded=\{open\}/);
-  assert.match(sourcePickerSource, /role="listbox" aria-label="来源"/);
-  assert.match(sourcePickerSource, /role="group" aria-label="网盘"/);
-  assert.match(sourcePickerSource, /role="group" aria-label="爬虫"/);
-  assert.match(sourcePickerSource, /placeholder="搜索网盘或爬虫"/);
-  assert.match(sourcePickerSource, /driveKindIconPath\(drive\.kind\)/);
+  assert.doesNotMatch(advancedFilterSource, /来源|driveId|crawlerId|VideoSourcePicker/);
+  assert.doesNotMatch(videosPageSource, /function VideoSourcePicker|admin-video-source-picker/);
+  assert.match(sourceNavigationSource, /role="group" aria-label="视频来源筛选"/);
+  assert.match(sourceNavigationSource, /\{ key: "all", label: "全部", all: true \}/);
+  assert.match(videosPageSource, /const \[sourceCatalogLoaded, setSourceCatalogLoaded\] = useState\(false\);/);
+  assert.match(videosPageSource, /const \[hasLocalUploads, setHasLocalUploads\] = useState\(false\);/);
+  assert.match(videosPageSource, /setHasLocalUploads\(localUploadResult\.value\.total > 0\);/);
+  assert.match(videosPageSource, /setSourceCatalogLoaded\(true\);/);
+  assert.match(videosPageSource, /hasLocalUploads=\{hasLocalUploads\}/);
+  assert.match(videosPageSource, /sourceCatalogLoaded=\{sourceCatalogLoaded\}/);
+  assert.match(sourceNavigationSource, /if \(sourceCatalogLoaded\) \{[\s\S]*?sourceItems\.push\(/);
+  assert.match(sourceNavigationSource, /\.\.\.\(hasLocalUploads[\s\S]*?label: "本地上传",[\s\S]*?upload: true,[\s\S]*?: \[\]\)/);
+  assert.ok(
+    sourceNavigationSource.indexOf("...drives") <
+      sourceNavigationSource.indexOf('label: "本地上传"')
+  );
+  assert.ok(
+    sourceNavigationSource.indexOf('label: "本地上传"') <
+      sourceNavigationSource.indexOf("...crawlers")
+  );
+  assert.match(videosPageSource, /import \{ UploadIcon \} from "@\/components\/icons\/UploadIcon";/);
+  assert.match(videosPageSource, /import \{ FilterAllIcon \} from "@\/components\/icons\/FilterAllIcon";/);
+  assert.match(sourceNavigationSource, /<FilterAllIcon size=\{15\} className="admin-video-source-tab__glyph is-all" \/>/);
+  assert.match(sourceNavigationSource, /<UploadIcon size=\{15\} className="admin-video-source-tab__glyph is-upload" \/>/);
+  assert.match(filterAllIconSource, /<rect x="3\.5" y="3\.5" width="5" height="5" rx="1\.4" \/>/);
+  assert.match(filterAllIconSource, /<circle cx="12" cy="12" r="1\.6" fill="currentColor" stroke="none" \/>/);
+  assert.match(sourceNavigationSource, /`drive:\$\{drive\.id\}`/);
+  assert.match(sourceNavigationSource, /`crawler:\$\{crawler\.id\}`/);
+  assert.match(sourceNavigationSource, /driveKindIconPath\(drive\.kind\)/);
   assert.match(videosPageSource, /import \{ SpiderIcon \} from "\.\/icons\/SpiderIcon";/);
-  assert.match(sourcePickerSource, /<SpiderIcon size=\{18\} \/>/);
+  assert.match(sourceNavigationSource, /<SpiderIcon size=\{16\} className="admin-video-source-tab__glyph is-crawler" \/>/);
+  assert.doesNotMatch(sourceNavigationSource, /admin-video-source-tab__icon is-(?:all|upload|crawler)/);
   assert.doesNotMatch(videosPageSource, /function SpiderIcon\(\)/);
   assert.match(videosPageSource, /const LOCAL_UPLOAD_SOURCE_ID = "local-upload";/);
-  assert.match(sourcePickerSource, /<strong>上传来源<\/strong>/);
-  assert.match(sourcePickerSource, /selectSource\("drive", LOCAL_UPLOAD_SOURCE_ID\)/);
-  assert.match(sourcePickerSource, /<VideoSourcePickerIcon upload \/>/);
-  assert.ok(
-    sourcePickerSource.indexOf("<strong>上传来源</strong>") >
-      sourcePickerSource.indexOf('role="group" aria-label="爬虫"')
-  );
-  assert.doesNotMatch(sourcePickerSource, /<Bot\b/);
-  assert.match(sourcePickerSource, /document\.addEventListener\("pointerdown", closeOnOutsidePointer\)/);
-  assert.match(sourcePickerSource, /useLayoutEffect\(\(\) => \{[\s\S]*?getBoundingClientRect\(\)[\s\S]*?spaceBelow < 240 && spaceAbove > spaceBelow/);
-  assert.match(sourcePickerSource, /window\.addEventListener\("scroll", updateMenuPosition, true\)/);
-  assert.match(sourcePickerSource, /\[role="option"\]\[aria-selected="true"\][\s\S]*?scrollIntoView\(\{ block: "nearest" \}\)/);
-  assert.match(sourcePickerSource, /data-placement=\{menuPosition\?\.placement \?\? "bottom"\}/);
-  assert.match(sourcePickerSource, /visibility: menuPosition \? "visible" : "hidden"/);
-  assert.match(sourcePickerSource, /event\.key === "Escape" && open/);
-  assert.match(sourcePickerSource, /event\.key === "Tab"[\s\S]*?!pickerRoot\.contains\(activeElement\)[\s\S]*?setOpen\(false\)/);
-  assert.doesNotMatch(sourcePickerSource, /onBlur=|relatedTarget/);
-  assert.match(sourcePickerSource, /function openPicker\(focusTarget\?: "first" \| "last"\)/);
-  assert.doesNotMatch(sourcePickerSource, /searchRef\.current\?\.focus\(\)/);
-  assert.doesNotMatch(sourcePickerSource, /admin-video-source-picker__badge|<small>/);
-  assert.doesNotMatch(sourcePickerSource, />网盘与爬虫<|>PikPak<|>脚本爬虫</);
-  assert.doesNotMatch(sourcePickerSource, /filtered(?:Drives|Crawlers)\.length\}[^)]*<\/div>/);
-  assert.equal(Array.from(sourcePickerSource.matchAll(/<select/g)).length, 0);
-  assert.doesNotMatch(videosPageSource, /<optgroup|<option value="">全部来源/);
   assert.match(adminCss, /\.admin-video-advanced-range__inputs\s*\{[^}]*grid-template-columns:\s*max-content auto max-content;[^}]*margin-top:\s*var\(--space-2\);/s);
   assert.match(adminCss, /input\[type="date"\]\s*\{[^}]*width:\s*136px;/s);
   assert.match(adminCss, /input\[type="number"\]\s*\{[^}]*width:\s*104px;/s);
-  assert.doesNotMatch(adminCss, /\.admin-video-source-picker__badge/);
-  assert.match(adminCss, /\.admin-video-source-picker__menu\s*\{[^}]*position:\s*fixed;[^}]*z-index:\s*calc\(var\(--z-modal\) \+ 1\);[^}]*display:\s*flex;/s);
-  assert.match(adminCss, /\.admin-video-source-picker__list\s*\{[^}]*flex:\s*1 1 auto;[^}]*min-height:\s*0;/s);
-  assert.doesNotMatch(adminCss, /\.admin-video-source-picker\.is-open \.admin-video-source-picker__trigger/);
-  assert.doesNotMatch(adminCss, /\.admin-video-source-picker__group-title span:last-child/);
+  assert.doesNotMatch(adminCss, /admin-video-source-picker|admin-video-advanced-field--source/);
   assert.match(videosPageSource, /<legend>入库时间<\/legend>/);
   assert.match(videosPageSource, /<legend>视频时长\(分钟\)<\/legend>/);
-  assert.doesNotMatch(advancedFilterSource, /<span>上传来源<\/span>/);
   assert.doesNotMatch(videosPageSource, /admin-video-upload-source-options|uploadSource/);
   assert.equal(Array.from(advancedFilterSource.matchAll(/admin-video-advanced-range__placeholder/g)).length, 2);
   assert.equal(Array.from(advancedFilterSource.matchAll(/年\/月\/日/g)).length, 2);
@@ -117,23 +130,28 @@ test("normal videos support composable advanced filters", () => {
   );
   assert.match(videosPageSource, /function openNativeDatePicker\(input: HTMLInputElement\)[\s\S]*?input\.showPicker\(\)/);
   assert.doesNotMatch(videosPageSource, /视频时间|publishedFrom|publishedTo/);
-  assert.match(videosPageSource, /Promise\.all\(\[api\.listTags\(\), api\.listDrives\(\), api\.listCrawlers\(\)\]\)/);
+  assert.match(videosPageSource, /Promise\.allSettled\(\[[\s\S]*?api\.listDrives\(\),[\s\S]*?api\.listCrawlers\(\),[\s\S]*?api\.listVideos\(\{ driveId: LOCAL_UPLOAD_SOURCE_ID, page: 1, size: 1 \}\),[\s\S]*?\]\)/);
+  assert.match(videosPageSource, /void api\.listTags\(\)/);
   assert.match(videosPageSource, /setAppliedFilters\(\{ \.\.\.draftFilters \}\)/);
   assert.match(clearFiltersSource, /setDraftFilters\(\{ \.\.\.EMPTY_VIDEO_FILTERS \}\)/);
   assert.doesNotMatch(clearFiltersSource, /setAppliedFilters|setPage|setAdvancedFiltersOpen/);
   assert.match(videosPageSource, /const activeAdvancedFilterCount = countVideoAdvancedFilters\(appliedFilters\);/);
+  const advancedCountSource = videosPageSource.slice(
+    videosPageSource.indexOf("function countVideoAdvancedFilters"),
+    videosPageSource.indexOf("function dateRangeIsReversed")
+  );
+  assert.doesNotMatch(advancedCountSource, /driveId|crawlerId/);
   for (const key of ["driveId", "crawlerId", "createdFrom", "createdTo", "durationMinMinutes", "durationMaxMinutes"]) {
     assert.match(apiSource, new RegExp(`if \\(params\\.${key}\\) qs\\.set\\("${key}", params\\.${key}\\)`));
   }
   assert.doesNotMatch(apiSource, /publishedFrom|publishedTo/);
   assert.match(adminCss, /\.admin-modal\.admin-modal--video-filters\s*\{[^}]*width\s*:\s*min\(700px,\s*100%\)/s);
   assert.match(adminCss, /\.admin-video-advanced-filters__grid\s*\{[^}]*grid-template-columns\s*:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)/s);
-  assert.match(adminCss, /\.admin-modal--video-filters \.admin-video-source-picker,\s*\.admin-modal--video-filters \.admin-video-advanced-range__inputs\s*\{[^}]*width:\s*min\(100%,\s*294px\);[^}]*margin-inline:\s*auto/s);
+  assert.match(adminCss, /\.admin-modal--video-filters \.admin-video-advanced-range__inputs\s*\{[^}]*width:\s*min\(100%,\s*294px\);[^}]*margin-inline:\s*auto/s);
   assert.match(adminCss, /@media \(max-width: 520px\)[\s\S]*?\.admin-video-advanced-range__inputs\s*\{[^}]*margin-top:\s*8px/s);
   assert.match(adminCss, /@media \(max-width: 520px\)[\s\S]*?\.admin-video-advanced-range__inputs\.is-date-range\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\) auto minmax\(0,\s*1fr\)/s);
   assert.match(adminCss, /@media \(max-width: 520px\)[\s\S]*?\.admin-video-advanced-range__inputs\.is-duration-range\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\) auto minmax\(0,\s*1fr\)/s);
   assert.match(adminCss, /@media \(max-width: 520px\)[\s\S]*?\.admin-video-advanced-range input\[type="date"\],[\s\S]*?height:\s*40px;[^}]*border:\s*0;/s);
-  assert.match(adminCss, /\.admin-modal--video-filters \.admin-video-source-picker__trigger\s*\{[^}]*min-height:\s*42px;[^}]*border:\s*0;/s);
   assert.match(adminCss, /\.admin-modal--video-filters \.admin-modal__footer\s*\{[^}]*display:\s*grid;[^}]*grid-template-columns:\s*auto repeat\(2,\s*minmax\(0,\s*1fr\)\)/s);
   assert.match(videosPageSource, /className="admin-btn admin-video-advanced-clear"/);
 });
@@ -157,24 +175,35 @@ test("admin video searches reuse the debounced home search component", () => {
   assert.doesNotMatch(videosPageSource, /ADMIN_SEARCH_DEBOUNCE_MS/);
 });
 
-test("admin video pagination only shows current and total pages", () => {
-  const paginationCalls = Array.from(
-    videosPageSource.matchAll(/<Pagination page=\{page\} totalPages=\{totalPages\} onPage=\{setPage\} \/>/g)
+test("admin video pagination follows the compact CPA previous and next layout", () => {
+  const paginationSource = videosPageSource.slice(
+    videosPageSource.indexOf("function Pagination"),
+    videosPageSource.indexOf("function ErrorState")
   );
-  assert.match(videosPageSource, /第 \{page\} \/ \{totalPages\} 页/);
+  const paginationCalls = Array.from(
+    videosPageSource.matchAll(
+      /<Pagination\s+page=\{displayedPage \?\? page\}[\s\S]{0,240}?pending=\{listQueryPending\}[\s\S]{0,120}?onPage=\{setPage\}\s*\/>/g
+    )
+  );
+  assert.match(paginationSource, /第 \{page\} \/ \{totalPages\} 页 · 共 \{total\} 个视频/);
+  assert.match(paginationSource, /admin-table-pagination admin-videos-pagination/);
+  assert.equal(Array.from(paginationSource.matchAll(/上一页|下一页/g)).length, 2);
+  assert.doesNotMatch(paginationSource, /首页|末页/);
+  assert.match(paginationSource, /disabled=\{pending \|\| page <= 1\}/);
+  assert.match(paginationSource, /disabled=\{pending \|\| page >= totalPages\}/);
   assert.doesNotMatch(videosPageSource, /每页 \{pageSize\} 个/);
   assert.doesNotMatch(videosPageSource, /<Pagination[^>]*pageSize=\{pageSize\}/);
   assert.equal(paginationCalls.length, 2);
-  assert.equal(
-    Array.from(videosPageSource.matchAll(/\{showPagination && <Pagination page=\{page\} totalPages=\{totalPages\} onPage=\{setPage\} \/>\}/g)).length,
-    2
-  );
+  assert.match(adminCss, /\.admin-table-pagination\.admin-videos-pagination\s*\{[^}]*gap:\s*14px;[^}]*margin-top:\s*0;[^}]*margin-bottom:\s*var\(--space-3\);/s);
+  assert.match(adminCss, /\.admin-videos-pagination__button\s*\{[^}]*padding:\s*8px 10px;[^}]*box-shadow:\s*none;/s);
+  assert.match(adminCss, /\.admin-videos-pagination__info\s*\{[^}]*font-family:\s*ui-monospace[^}]*font-size:\s*12px;[^}]*font-variant-numeric:\s*tabular-nums;[^}]*letter-spacing:\s*0\.02em;[^}]*white-space:\s*nowrap;/s);
 });
 
 test("admin video pagination stores the active page in the URL", () => {
   assert.match(videosPageSource, /const page = readAdminVideosPage\(searchParams\);/);
   assert.match(videosPageSource, /return withAdminVideosPage\(prev, resolvedPage\);/);
-  assert.match(videosPageSource, /if \(key !== activeTab\) next\.delete\("page"\);/);
+  assert.match(videosPageSource, /function selectSource[\s\S]*?next\.delete\("tab"\);[\s\S]*?next\.delete\("page"\);/);
+  assert.match(videosPageSource, /function openBlacklist[\s\S]*?if \(activeView !== "blacklist"\) next\.delete\("page"\);/);
   assert.doesNotMatch(videosPageSource, /const \[page, setPage\] = useState\(1\);/);
 });
 
@@ -184,11 +213,15 @@ test("admin video pagination clamps stale deep links after totals load", () => {
     videosPageSource.indexOf("// ---------- 拉黑视频 ----------")
   );
   const blacklistSource = videosPageSource.slice(videosPageSource.indexOf("function BlacklistTab"));
-  // Both tabs must wait for the load to settle before clamping, otherwise the
-  // initial total of 0 would discard the page restored from the URL.
-  const clamp = /!loading\s*&&\s*page\s*>\s*totalPages[\s\S]{0,40}setPage\(totalPages\)/;
+  // Both tabs must wait for the active query, not just any previous request,
+  // to settle before clamping a page restored from the URL.
+  const clamp = /listQuerySettled\s*&&\s*page\s*>\s*totalPages[\s\S]{0,40}setPage\(totalPages\)/;
   assert.match(currentSource, clamp);
   assert.match(blacklistSource, clamp);
+  assert.equal(
+    Array.from(videosPageSource.matchAll(/const listQuerySettled = !loading && resolvedListQueryKey === activeListQueryKey;/g)).length,
+    2
+  );
 });
 
 test("video pagination does not create invisible rows on a short final page", () => {
@@ -210,11 +243,14 @@ test("empty video tabs use the correct visual and distinguish search misses", ()
     videosPageSource.indexOf("// ---------- 拉黑视频 ----------")
   );
   const blacklistSource = videosPageSource.slice(videosPageSource.indexOf("function BlacklistTab"));
-  assert.match(currentSource, /const hasActiveSearch = searchKeyword\.trim\(\)\.length > 0 \|\| activeAdvancedFilterCount > 0;/);
+  assert.match(
+    currentSource,
+    /const hasActiveSearch =\s*searchKeyword\.trim\(\)\.length > 0 \|\|\s*!!sourceDriveId \|\|\s*!!sourceCrawlerId \|\|\s*activeAdvancedFilterCount > 0;/
+  );
   assert.match(blacklistSource, /const hasActiveSearch = searchKeyword\.trim\(\)\.length > 0;/);
-  assert.match(currentSource, /const hasVideoActions = listItems\.length > 0;/);
+  assert.doesNotMatch(currentSource, /hasVideoActions|批量选择/);
   assert.match(blacklistSource, /const hasBlacklistActions = list\.length > 0;/);
-  assert.match(currentSource, /\{hasVideoActions && \(\s*<button[\s\S]*?批量选择/);
+  assert.match(currentSource, /\{selectedIds\.size > 0 && \(\s*<div className="admin-videos-list-toolbar"/);
   assert.match(
     blacklistSource,
     /\{hasBlacklistActions && \(\s*<div[\s\S]*?className="admin-videos-filter__actions admin-blacklist-source-delete"[\s\S]*?data-admin-floating-actions[\s\S]*?删除全部[\s\S]*?批量选择/
@@ -246,16 +282,50 @@ test("empty video tabs use the correct visual and distinguish search misses", ()
   assert.doesNotMatch(adminCss, /translateY\(-48px\)/);
 });
 
-test("video tabs show a loading state while fetching data", () => {
+test("current video cards use the CPA authentication-card loading state", () => {
   const currentSource = videosPageSource.slice(
     videosPageSource.indexOf("function CurrentVideosTab"),
     videosPageSource.indexOf("// ---------- 拉黑视频 ----------")
   );
   const blacklistSource = videosPageSource.slice(videosPageSource.indexOf("function BlacklistTab"));
-  assert.match(currentSource, /loading \? \(\s*<LoadingState \/>/);
-  assert.match(blacklistSource, /loading \? \(\s*<LoadingState \/>/);
+  assert.match(currentSource, /showInitialLoading \? \(\s*<VideoCardGridLoadingState \/>/);
+  assert.match(blacklistSource, /showInitialLoading \? \(\s*<LoadingState \/>/);
+  assert.equal(
+    Array.from(videosPageSource.matchAll(/const showInitialLoading = displayedPage === null && !loadError && listQueryPending;/g)).length,
+    2
+  );
+  assert.match(videosPageSource, /const CURRENT_VIDEO_SKELETON_CARD_COUNT = 6;/);
+  assert.match(
+    videosPageSource,
+    /function VideoCardGridLoadingState\(\)[\s\S]*?className="admin-video-card-grid admin-video-card-grid--skeleton"[\s\S]*?role="status"[\s\S]*?aria-busy="true"[\s\S]*?Array\.from\(\{ length: CURRENT_VIDEO_SKELETON_CARD_COUNT \}[\s\S]*?className="admin-video-card-skeleton admin-card-skeleton-surface"/
+  );
+  assert.match(
+    adminCss,
+    /\.admin-video-card-skeleton\s*\{[^}]*height:\s*206px;[^}]*border-radius:\s*14px;/s
+  );
+  assert.match(
+    adminCss,
+    /\.admin-card-skeleton-surface\s*\{[^}]*linear-gradient\([^}]*animation:\s*admin-card-skeleton-shimmer 1\.5s ease-in-out infinite;/s
+  );
   assert.match(videosPageSource, /function LoadingState\(\)/);
   assert.match(videosPageSource, /function LoadingState\(\)[\s\S]*?<AdminLoading \/>/);
+});
+
+test("video pagination keeps settled results visible while the next page loads", () => {
+  assert.equal(
+    Array.from(videosPageSource.matchAll(/className=\{`admin-videos-results\$\{listQueryPending \? " is-page-loading" : ""\}`\}/g)).length,
+    2
+  );
+  assert.equal(
+    Array.from(videosPageSource.matchAll(/aria-busy=\{listQueryPending \|\| undefined\}/g)).length,
+    2
+  );
+  assert.equal(
+    Array.from(videosPageSource.matchAll(/setDisplayedPage\(page\);\s*setResolvedListQueryKey\(queryKey\);/g)).length,
+    2
+  );
+  assert.match(adminCss, /\.admin-videos-results\s*\{[^}]*display:\s*flex;[^}]*flex-direction:\s*column;[^}]*gap:\s*14px;/s);
+  assert.match(adminCss, /\.admin-videos-results\.is-page-loading \.admin-videos-results__content\s*\{[^}]*opacity:\s*0\.62;[^}]*pointer-events:\s*none;/s);
 });
 
 test("admin videos batch delete runs deletions sequentially", () => {

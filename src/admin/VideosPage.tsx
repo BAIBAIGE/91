@@ -2,23 +2,20 @@ import {
   useCallback,
   useEffect,
   useId,
-  useLayoutEffect,
   useRef,
   useState,
   type Dispatch,
-  type ReactNode,
   type SetStateAction,
 } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import {
+  Ban,
   Check,
-  ChevronDown,
   Edit,
   RefreshCw,
-  Search,
   Image,
+  SlidersHorizontal,
   Trash2,
-  Upload,
 } from "lucide-react";
 import * as api from "./api";
 import { useToast } from "./ToastContext";
@@ -27,22 +24,33 @@ import { ConfirmModal } from "./ConfirmModal";
 import { formatBytes } from "./storageFormat";
 import { AdminEmptyVisual } from "./AdminEmptyVisual";
 import { AdminLoading } from "./AdminLoading";
-import { driveKindAbbr, driveKindIconPath, kindLabel } from "./drive/constants";
+import { driveKindAbbr, driveKindIconPath } from "./drive/constants";
 import { SpiderIcon } from "./icons/SpiderIcon";
-import { readAdminVideosPage, withAdminVideosPage } from "./videosSearchParams";
+import {
+  adminVideosSourceFilter,
+  readAdminVideosPage,
+  readAdminVideosSourceKey,
+  withAdminVideosPage,
+  withAdminVideosSourceKey,
+  type AdminVideosSourceKey,
+} from "./videosSearchParams";
 import { useAdminFloatingActionSpace } from "./useAdminFloatingActionSpace";
 import { SearchPanel } from "@/components/SearchPanel";
+import { FilterAllIcon } from "@/components/icons/FilterAllIcon";
+import { UploadIcon } from "@/components/icons/UploadIcon";
 
-const DESKTOP_VIDEOS_PAGE_SIZE = 50;
-const MOBILE_VIDEOS_PAGE_SIZE = 20;
-const NORMAL_VIDEOS_PAGE_SIZE = 10;
+const DESKTOP_CURRENT_VIDEOS_PAGE_SIZE = 16;
+const MOBILE_CURRENT_VIDEOS_PAGE_SIZE = 10;
+const DESKTOP_BLACKLIST_PAGE_SIZE = 50;
+const MOBILE_BLACKLIST_PAGE_SIZE = 20;
+const CURRENT_VIDEO_SKELETON_CARD_COUNT = 6;
 const VIDEOS_MOBILE_QUERY = "(max-width: 640px)";
 const REGEN_PREVIEW_STATUS = "generating";
 const REGEN_PREVIEW_POLL_INTERVAL_MS = 2000;
 const REGEN_PREVIEW_TRACK_TIMEOUT_MS = 30 * 60 * 1000;
 const LOCAL_UPLOAD_SOURCE_ID = "local-upload";
 
-type TabKey = "current" | "blacklist";
+type VideoViewKey = "current" | "blacklist";
 type PageSetter = Dispatch<SetStateAction<number>>;
 
 type RegenPreviewState = {
@@ -51,8 +59,6 @@ type RegenPreviewState = {
 };
 
 type VideoAdvancedFilterValues = {
-  driveId: string;
-  crawlerId: string;
   createdFrom: string;
   createdTo: string;
   durationMinMinutes: string;
@@ -60,28 +66,28 @@ type VideoAdvancedFilterValues = {
 };
 
 const EMPTY_VIDEO_FILTERS: VideoAdvancedFilterValues = {
-  driveId: "",
-  crawlerId: "",
   createdFrom: "",
   createdTo: "",
   durationMinMinutes: "",
   durationMaxMinutes: "",
 };
 
-const TABS: { key: TabKey; label: string }[] = [
-  { key: "current", label: "正常视频" },
-  { key: "blacklist", label: "拉黑视频" },
-];
-
 /**
- * 视频管理容器：顶部分段标签在「当前 / 拉黑」两个视图间切换，
- * 激活标签和当前页同步到 URL 的 ?tab= / ?page=。
+ * 视频管理容器：顶部按来源筛选正常视频，黑名单作为独立管理视图；
+ * 当前来源、管理视图和页码同步到 URL。
  */
 export function VideosPage() {
   const floatingActionPageRef = useAdminFloatingActionSpace<HTMLElement>();
   const [searchParams, setSearchParams] = useSearchParams();
+  const [drives, setDrives] = useState<api.AdminDrive[]>([]);
+  const [crawlers, setCrawlers] = useState<api.AdminCrawler[]>([]);
+  const [hasLocalUploads, setHasLocalUploads] = useState(false);
+  const [sourceCatalogLoaded, setSourceCatalogLoaded] = useState(false);
+  const { show } = useToast();
   const rawTab = searchParams.get("tab");
-  const activeTab: TabKey = rawTab === "blacklist" ? "blacklist" : "current";
+  const activeView: VideoViewKey = rawTab === "blacklist" ? "blacklist" : "current";
+  const activeSourceKey = readAdminVideosSourceKey(searchParams);
+  const activeSourceFilter = adminVideosSourceFilter(activeSourceKey);
   const page = readAdminVideosPage(searchParams);
   const setPage = useCallback<PageSetter>((nextPage) => {
     setSearchParams(
@@ -94,13 +100,71 @@ export function VideosPage() {
     );
   }, [setSearchParams]);
 
-  function selectTab(key: TabKey) {
+  useEffect(() => {
+    let active = true;
+    void Promise.allSettled([
+      api.listDrives(),
+      api.listCrawlers(),
+      api.listVideos({ driveId: LOCAL_UPLOAD_SOURCE_ID, page: 1, size: 1 }),
+    ]).then(
+      ([driveResult, crawlerResult, localUploadResult]) => {
+        if (!active) return;
+        if (driveResult.status === "fulfilled") {
+          setDrives(driveResult.value ?? []);
+        } else {
+          show(
+            driveResult.reason instanceof Error
+              ? driveResult.reason.message
+              : "网盘来源加载失败",
+            "error"
+          );
+        }
+        if (crawlerResult.status === "fulfilled") {
+          setCrawlers(crawlerResult.value ?? []);
+        } else {
+          show(
+            crawlerResult.reason instanceof Error
+              ? crawlerResult.reason.message
+              : "爬虫来源加载失败",
+            "error"
+          );
+        }
+        if (localUploadResult.status === "fulfilled") {
+          setHasLocalUploads(localUploadResult.value.total > 0);
+        } else {
+          show(
+            localUploadResult.reason instanceof Error
+              ? localUploadResult.reason.message
+              : "本地上传来源加载失败",
+            "error"
+          );
+        }
+        setSourceCatalogLoaded(true);
+      }
+    );
+    return () => {
+      active = false;
+    };
+  }, [show]);
+
+  function selectSource(sourceKey: AdminVideosSourceKey) {
+    setSearchParams(
+      (prev) => {
+        const next = withAdminVideosSourceKey(prev, sourceKey);
+        next.delete("tab");
+        next.delete("page");
+        return next;
+      },
+      { replace: true }
+    );
+  }
+
+  function openBlacklist() {
     setSearchParams(
       (prev) => {
         const next = new URLSearchParams(prev);
-        if (key !== activeTab) next.delete("page");
-        if (key === "current") next.delete("tab");
-        else next.set("tab", key);
+        next.set("tab", "blacklist");
+        if (activeView !== "blacklist") next.delete("page");
         return next;
       },
       { replace: true }
@@ -112,16 +176,28 @@ export function VideosPage() {
       ref={floatingActionPageRef}
       className="admin-page admin-page--with-floating-actions admin-videos-page"
     >
-      {activeTab === "current" && (
+      <VideoSourceNavigation
+        drives={drives}
+        crawlers={crawlers}
+        hasLocalUploads={hasLocalUploads}
+        sourceCatalogLoaded={sourceCatalogLoaded}
+        activeSourceKey={activeSourceKey}
+        blacklistActive={activeView === "blacklist"}
+        onSelectSource={selectSource}
+        onOpenBlacklist={openBlacklist}
+      />
+      {activeView === "current" && (
         <CurrentVideosTab
-          tabSelector={<VideoTabSelector activeTab={activeTab} onSelect={selectTab} />}
+          drives={drives}
+          sourceDriveId={activeSourceFilter.driveId}
+          sourceCrawlerId={activeSourceFilter.crawlerId}
           page={page}
           setPage={setPage}
         />
       )}
-      {activeTab === "blacklist" && (
+      {activeView === "blacklist" && (
         <BlacklistTab
-          tabSelector={<VideoTabSelector activeTab={activeTab} onSelect={selectTab} />}
+          drives={drives}
           page={page}
           setPage={setPage}
         />
@@ -130,45 +206,149 @@ export function VideosPage() {
   );
 }
 
-function VideoTabSelector({
-  activeTab,
-  onSelect,
+function VideoSourceNavigation({
+  drives,
+  crawlers,
+  hasLocalUploads,
+  sourceCatalogLoaded,
+  activeSourceKey,
+  blacklistActive,
+  onSelectSource,
+  onOpenBlacklist,
 }: {
-  activeTab: TabKey;
-  onSelect: (key: TabKey) => void;
+  drives: api.AdminDrive[];
+  crawlers: api.AdminCrawler[];
+  hasLocalUploads: boolean;
+  sourceCatalogLoaded: boolean;
+  activeSourceKey: AdminVideosSourceKey;
+  blacklistActive: boolean;
+  onSelectSource: (sourceKey: AdminVideosSourceKey) => void;
+  onOpenBlacklist: () => void;
 }) {
+  const sourceItems: Array<{
+    key: AdminVideosSourceKey;
+    label: string;
+    drive?: api.AdminDrive;
+    crawler?: api.AdminCrawler;
+    upload?: boolean;
+    all?: boolean;
+  }> = [{ key: "all", label: "全部", all: true }];
+
+  if (sourceCatalogLoaded) {
+    sourceItems.push(
+      ...drives
+      .filter((drive) => drive.id !== LOCAL_UPLOAD_SOURCE_ID)
+      .map((drive) => ({
+        key: `drive:${drive.id}` as AdminVideosSourceKey,
+        label: drive.name || drive.id,
+        drive,
+      })),
+      ...(hasLocalUploads
+        ? [
+            {
+              key: `drive:${LOCAL_UPLOAD_SOURCE_ID}` as AdminVideosSourceKey,
+              label: "本地上传",
+              upload: true,
+            },
+          ]
+        : []),
+      ...crawlers.map((crawler) => ({
+        key: `crawler:${crawler.id}` as AdminVideosSourceKey,
+        label: crawler.name || crawler.id,
+        crawler,
+      }))
+    );
+  }
+
   return (
-    <div className="admin-video-tabs" role="tablist" aria-label="视频管理标签页">
-      {TABS.map((t) => (
-        <button
-          key={t.key}
-          type="button"
-          role="tab"
-          aria-selected={activeTab === t.key}
-          className={`admin-video-tab ${activeTab === t.key ? "is-active" : ""}`}
-          onClick={() => onSelect(t.key)}
-        >
-          <span>{t.label}</span>
-        </button>
-      ))}
+    <div className="admin-video-source-nav">
+      <div className="admin-video-source-tabs" role="group" aria-label="视频来源筛选">
+        {sourceItems.map((source) => {
+          const selected = !blacklistActive && activeSourceKey === source.key;
+          return (
+            <button
+              key={source.key}
+              type="button"
+              aria-pressed={selected}
+              className={`admin-video-source-tab${selected ? " is-active" : ""}`}
+              title={source.label}
+              onClick={() => onSelectSource(source.key)}
+            >
+              <VideoSourceNavigationIcon
+                drive={source.drive}
+                crawler={source.crawler}
+                upload={source.upload}
+                all={source.all}
+              />
+              <span className="admin-video-source-tab__label">{source.label}</span>
+            </button>
+          );
+        })}
+      </div>
+      <button
+        type="button"
+        className={`admin-video-source-nav__blacklist${blacklistActive ? " is-active" : ""}`}
+        aria-pressed={blacklistActive}
+        onClick={onOpenBlacklist}
+      >
+        <Ban size={14} aria-hidden="true" />
+        <span>黑名单管理</span>
+      </button>
     </div>
   );
+}
+
+function VideoSourceNavigationIcon({
+  drive,
+  crawler,
+  upload,
+  all,
+}: {
+  drive?: api.AdminDrive;
+  crawler?: api.AdminCrawler;
+  upload?: boolean;
+  all?: boolean;
+}) {
+  if (all) {
+    return <FilterAllIcon size={15} className="admin-video-source-tab__glyph is-all" />;
+  }
+  if (upload) {
+    return <UploadIcon size={15} className="admin-video-source-tab__glyph is-upload" />;
+  }
+  if (drive) {
+    const iconSrc = driveKindIconPath(drive.kind);
+    return (
+      <span
+        className={`admin-video-source-tab__icon is-drive${iconSrc ? " has-image" : ""}`}
+        data-kind={drive.kind}
+        aria-hidden="true"
+      >
+        {iconSrc ? <img src={iconSrc} alt="" /> : driveKindAbbr(drive.kind)}
+      </span>
+    );
+  }
+  if (crawler) {
+    return <SpiderIcon size={16} className="admin-video-source-tab__glyph is-crawler" />;
+  }
+  return null;
 }
 
 // ---------- 当前视频 ----------
 
 function CurrentVideosTab({
-  tabSelector,
+  drives,
+  sourceDriveId,
+  sourceCrawlerId,
   page,
   setPage,
 }: {
-  tabSelector: ReactNode;
+  drives: api.AdminDrive[];
+  sourceDriveId: string;
+  sourceCrawlerId: string;
   page: number;
   setPage: PageSetter;
 }) {
   const [list, setList] = useState<api.AdminVideo[]>([]);
-  const [drives, setDrives] = useState<api.AdminDrive[]>([]);
-  const [crawlers, setCrawlers] = useState<api.AdminCrawler[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [searchKeyword, setSearchKeyword] = useState("");
@@ -178,7 +358,6 @@ function CurrentVideosTab({
   const [total, setTotal] = useState(0);
   const [editing, setEditing] = useState<api.AdminVideo | null>(null);
   const [availableTags, setAvailableTags] = useState<api.AdminTag[]>([]);
-  const [selectMode, setSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [batchDeleteOpen, setBatchDeleteOpen] = useState(false);
   const [batchDeleting, setBatchDeleting] = useState(false);
@@ -187,10 +366,23 @@ function CurrentVideosTab({
   const [deleting, setDeleting] = useState(false);
   const [deleteSource, setDeleteSource] = useState(false);
   const [regenPreviewById, setRegenPreviewById] = useState<Record<string, RegenPreviewState>>({});
+  const [displayedPage, setDisplayedPage] = useState<number | null>(null);
+  const [resolvedListQueryKey, setResolvedListQueryKey] = useState("");
   const listRequestIdRef = useRef(0);
-  const pageSize = NORMAL_VIDEOS_PAGE_SIZE;
+  const pageSize = useVideosPageSize(
+    DESKTOP_CURRENT_VIDEOS_PAGE_SIZE,
+    MOBILE_CURRENT_VIDEOS_PAGE_SIZE
+  );
+  const previousPageSizeRef = useRef(pageSize);
   const { show } = useToast();
-  const activeListQueryKey = JSON.stringify([page, searchKeyword, appliedFilters]);
+  const activeListQueryKey = JSON.stringify([
+    page,
+    pageSize,
+    searchKeyword,
+    sourceDriveId,
+    sourceCrawlerId,
+    appliedFilters,
+  ]);
   const activeListQueryKeyRef = useRef(activeListQueryKey);
   activeListQueryKeyRef.current = activeListQueryKey;
 
@@ -204,15 +396,20 @@ function CurrentVideosTab({
         page,
         size: pageSize,
         keyword: searchKeyword,
+        driveId: sourceDriveId,
+        crawlerId: sourceCrawlerId,
         ...appliedFilters,
       });
       if (requestId !== listRequestIdRef.current || queryKey !== activeListQueryKeyRef.current) return;
       setList(r.items ?? []);
       setTotal(r.total ?? 0);
+      setDisplayedPage(page);
+      setResolvedListQueryKey(queryKey);
     } catch (e) {
       if (requestId !== listRequestIdRef.current || queryKey !== activeListQueryKeyRef.current) return;
       const message = e instanceof Error ? e.message : "加载失败";
       setLoadError(message);
+      setResolvedListQueryKey(queryKey);
       show(message, "error");
     } finally {
       if (requestId === listRequestIdRef.current && queryKey === activeListQueryKeyRef.current) {
@@ -228,6 +425,8 @@ function CurrentVideosTab({
         page,
         size: pageSize,
         keyword: searchKeyword,
+        driveId: sourceDriveId,
+        crawlerId: sourceCrawlerId,
         ...appliedFilters,
       });
       if (queryKey !== activeListQueryKeyRef.current) return;
@@ -243,19 +442,16 @@ function CurrentVideosTab({
 
   useEffect(() => {
     refresh();
-  }, [page, searchKeyword, pageSize, appliedFilters]);
+  }, [page, searchKeyword, pageSize, sourceDriveId, sourceCrawlerId, appliedFilters]);
 
   useEffect(() => {
     let active = true;
-    void Promise.all([api.listTags(), api.listDrives(), api.listCrawlers()])
-      .then(([tagList, driveList, crawlerList]) => {
-        if (!active) return;
-        setAvailableTags(tagList ?? []);
-        setDrives(driveList ?? []);
-        setCrawlers(crawlerList ?? []);
+    void api.listTags()
+      .then((tagList) => {
+        if (active) setAvailableTags(tagList ?? []);
       })
       .catch((e) => {
-        if (active) show(e instanceof Error ? e.message : "筛选选项加载失败", "error");
+        if (active) show(e instanceof Error ? e.message : "标签加载失败", "error");
       });
     return () => {
       active = false;
@@ -264,7 +460,13 @@ function CurrentVideosTab({
 
   useEffect(() => {
     setSelectedIds(new Set());
-  }, [searchKeyword, appliedFilters]);
+  }, [searchKeyword, sourceDriveId, sourceCrawlerId, appliedFilters]);
+
+  useEffect(() => {
+    if (previousPageSizeRef.current === pageSize) return;
+    previousPageSizeRef.current = pageSize;
+    setPage(1);
+  }, [pageSize, setPage]);
 
   useEffect(() => {
     if (trackedRegenCount === 0 && !hasGeneratingPreview) return;
@@ -272,7 +474,16 @@ function CurrentVideosTab({
       refreshListOnly();
     }, REGEN_PREVIEW_POLL_INTERVAL_MS);
     return () => window.clearInterval(timer);
-  }, [trackedRegenCount, hasGeneratingPreview, page, pageSize, searchKeyword, appliedFilters]);
+  }, [
+    trackedRegenCount,
+    hasGeneratingPreview,
+    page,
+    pageSize,
+    searchKeyword,
+    sourceDriveId,
+    sourceCrawlerId,
+    appliedFilters,
+  ]);
 
   useEffect(() => {
     if (trackedRegenCount === 0) return;
@@ -299,13 +510,19 @@ function CurrentVideosTab({
   const listItems = list;
   const editingVideo = editing ? (listItems.find((v) => v.id === editing.id) ?? editing) : null;
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const listQueryPending = loading || resolvedListQueryKey !== activeListQueryKey;
+  const listQuerySettled = !loading && resolvedListQueryKey === activeListQueryKey;
+  const showInitialLoading = displayedPage === null && !loadError && listQueryPending;
   useEffect(() => {
-    if (!loading && page > totalPages) setPage(totalPages);
-  }, [loading, page, totalPages, setPage]);
+    if (listQuerySettled && page > totalPages) setPage(totalPages);
+  }, [listQuerySettled, page, totalPages, setPage]);
   const showPagination = totalPages > 1;
   const activeAdvancedFilterCount = countVideoAdvancedFilters(appliedFilters);
-  const hasActiveSearch = searchKeyword.trim().length > 0 || activeAdvancedFilterCount > 0;
-  const hasVideoActions = listItems.length > 0;
+  const hasActiveSearch =
+    searchKeyword.trim().length > 0 ||
+    !!sourceDriveId ||
+    !!sourceCrawlerId ||
+    activeAdvancedFilterCount > 0;
   const allPageSelected =
     listItems.length > 0 && listItems.every((video) => selectedIds.has(video.id));
 
@@ -401,7 +618,6 @@ function CurrentVideosTab({
       setSelectedIds(new Set());
       setBatchDeleteOpen(false);
       setBatchDeleteSource(false);
-      setSelectMode(false);
       const currentPageEmptied =
         listItems.length > 0 && listItems.every((video) => deletedIds.has(video.id));
       if (currentPageEmptied && page > 1) {
@@ -429,11 +645,6 @@ function CurrentVideosTab({
       listItems.forEach((video) => next.add(video.id));
       return next;
     });
-  };
-
-  const toggleSelectMode = () => {
-    setSelectMode((active) => !active);
-    setSelectedIds(new Set());
   };
 
   const handleSearch = useCallback((keyword: string) => {
@@ -474,7 +685,7 @@ function CurrentVideosTab({
   }
 
   return (
-    <div className={`admin-videos-current${selectMode ? " has-bulk-actions" : ""}`}>
+    <div className={`admin-videos-current${selectedIds.size > 0 ? " has-bulk-actions" : ""}`}>
       <div className="admin-page__actions admin-videos-filter admin-videos-filter--current">
         <SearchBox keyword={searchKeyword} onSearch={handleSearch} />
         <div className="admin-videos-filter__current-actions" data-admin-floating-actions>
@@ -484,26 +695,16 @@ function CurrentVideosTab({
             onClick={openAdvancedFilters}
             aria-haspopup="dialog"
           >
-            <span>高级筛选</span>
+            <SlidersHorizontal size={15} aria-hidden="true" />
+            <span>筛选</span>
             {activeAdvancedFilterCount > 0 && (
               <span className="admin-video-advanced-toggle__count" aria-label={`已启用 ${activeAdvancedFilterCount} 项筛选`}>
                 {activeAdvancedFilterCount}
               </span>
             )}
           </button>
-          {hasVideoActions && (
-            <button
-              type="button"
-              className={`admin-btn admin-videos-filter__batch admin-videos-filter__batch-select${selectMode ? " is-primary" : ""}`}
-              onClick={toggleSelectMode}
-              aria-pressed={selectMode}
-            >
-              <span>{selectMode ? "退出选择" : "批量选择"}</span>
-            </button>
-          )}
         </div>
       </div>
-      {tabSelector}
       <Modal
         open={advancedFiltersOpen}
         title="高级筛选"
@@ -527,14 +728,12 @@ function CurrentVideosTab({
       >
         <AdvancedVideoFilters
           value={draftFilters}
-          drives={drives}
-          crawlers={crawlers}
           onChange={setDraftFilters}
           onSubmit={applyAdvancedFilters}
         />
       </Modal>
 
-      {!loading && selectMode && (
+      {selectedIds.size > 0 && (
         <div className="admin-videos-list-toolbar" data-admin-floating-actions>
           <div className="admin-videos-bulk-actions">
             <span className="admin-videos-bulk-actions__count">已选择 {selectedIds.size} 项</span>
@@ -562,19 +761,12 @@ function CurrentVideosTab({
             >
               批量删除
             </button>
-            <button
-              type="button"
-              className="admin-btn admin-videos-bulk-actions__btn admin-videos-bulk-actions__mobile-exit"
-              onClick={toggleSelectMode}
-            >
-              退出选择
-            </button>
           </div>
         </div>
       )}
 
-      {loading ? (
-        <LoadingState />
+      {showInitialLoading ? (
+        <VideoCardGridLoadingState />
       ) : loadError ? (
         <ErrorState message={loadError} onRetry={refresh} />
       ) : listItems.length === 0 ? (
@@ -584,60 +776,41 @@ function CurrentVideosTab({
           className="admin-empty-state admin-empty-state--plain"
         />
       ) : (
-        <>
-          <table className={`admin-table is-selectable admin-videos-table${selectMode ? " is-row-select-mode" : ""}`}>
-            <tbody>
-              {listItems.map((v) => {
-                const isSelected = selectedIds.has(v.id);
-
-                return (
-                  <tr
-                    key={v.id}
-                    className={isSelected ? "is-selected" : ""}
-                    aria-selected={selectMode ? isSelected : undefined}
-                    tabIndex={selectMode ? 0 : undefined}
-                    onClick={(event) => {
-                      if (!selectMode || isInteractiveTarget(event.target)) return;
-                      toggleSelect(v.id);
-                    }}
-                    onKeyDown={(event) => {
-                      if (!selectMode || isInteractiveTarget(event.target)) return;
-                      if (event.key !== "Enter" && event.key !== " ") return;
-                      event.preventDefault();
-                      toggleSelect(v.id);
-                    }}
-                  >
-                    <td data-label="标题">
-                      <VideoTitleCell video={v} />
-                    </td>
-                    <td data-label="作者">{v.author || <span className="admin-text-faint">—</span>}</td>
-                    <td data-label="时长">{formatDur(v.durationSeconds)}</td>
-                    <td data-label="来源" className="admin-mono-cell">
-                      {driveNameMap.get(v.driveId) ?? v.driveId}
-                    </td>
-                    <td className="is-actions" data-label="操作">
-                      <button type="button" className="admin-btn" onClick={() => setEditing(v)} title="编辑视频">
-                        <Edit size={13} />
-                      </button>{" "}
-                      <button
-                        type="button"
-                        className="admin-btn is-danger"
-                        onClick={() => {
-                          setDeleteSource(false);
-                          setDeleteTarget(v);
-                        }}
-                        title="删除视频"
-                      >
-                        <Trash2 size={13} />
-                      </button>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-          {showPagination && <Pagination page={page} totalPages={totalPages} onPage={setPage} />}
-        </>
+        <section
+          className={`admin-videos-results${listQueryPending ? " is-page-loading" : ""}`}
+          aria-label="视频列表结果"
+          aria-busy={listQueryPending || undefined}
+        >
+          <div
+            className="admin-video-card-grid admin-videos-results__content"
+            role="list"
+            aria-label="视频列表"
+          >
+            {listItems.map((v) => (
+              <CurrentVideoCard
+                key={v.id}
+                video={v}
+                driveName={driveNameMap.get(v.driveId) ?? v.driveId}
+                selected={selectedIds.has(v.id)}
+                onToggleSelect={() => toggleSelect(v.id)}
+                onEdit={() => setEditing(v)}
+                onDelete={() => {
+                  setDeleteSource(false);
+                  setDeleteTarget(v);
+                }}
+              />
+            ))}
+          </div>
+          {showPagination && (
+            <Pagination
+              page={displayedPage ?? page}
+              totalPages={totalPages}
+              total={total}
+              pending={listQueryPending}
+              onPage={setPage}
+            />
+          )}
+        </section>
       )}
 
       {editingVideo && (
@@ -700,16 +873,15 @@ function CurrentVideosTab({
 // ---------- 拉黑视频 ----------
 
 function BlacklistTab({
-  tabSelector,
+  drives,
   page,
   setPage,
 }: {
-  tabSelector: ReactNode;
+  drives: api.AdminDrive[];
   page: number;
   setPage: PageSetter;
 }) {
   const [list, setList] = useState<api.AdminDeletedVideo[]>([]);
-  const [drives, setDrives] = useState<api.AdminDrive[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [searchKeyword, setSearchKeyword] = useState("");
@@ -723,28 +895,42 @@ function BlacklistTab({
   const [sourceDeleteTarget, setSourceDeleteTarget] = useState<api.AdminDeletedVideo | null>(null);
   const [batchSourceDeleteOpen, setBatchSourceDeleteOpen] = useState(false);
   const [sourceDeleteStarting, setSourceDeleteStarting] = useState(false);
-  const pageSize = useVideosPageSize();
+  const [displayedPage, setDisplayedPage] = useState<number | null>(null);
+  const [resolvedListQueryKey, setResolvedListQueryKey] = useState("");
+  const listRequestIdRef = useRef(0);
+  const pageSize = useVideosPageSize(
+    DESKTOP_BLACKLIST_PAGE_SIZE,
+    MOBILE_BLACKLIST_PAGE_SIZE
+  );
   const previousPageSizeRef = useRef(pageSize);
   const { show } = useToast();
+  const activeListQueryKey = JSON.stringify([page, pageSize, searchKeyword]);
+  const activeListQueryKeyRef = useRef(activeListQueryKey);
+  activeListQueryKeyRef.current = activeListQueryKey;
 
   async function refresh() {
+    const requestId = ++listRequestIdRef.current;
+    const queryKey = activeListQueryKey;
     setLoading(true);
     setLoadError("");
     try {
-      const [r, driveList] = await Promise.all([
-        api.listBlacklist({ page, size: pageSize, keyword: searchKeyword }),
-        api.listDrives(),
-      ]);
+      const r = await api.listBlacklist({ page, size: pageSize, keyword: searchKeyword });
+      if (requestId !== listRequestIdRef.current || queryKey !== activeListQueryKeyRef.current) return;
       setList(r.items ?? []);
       setTotal(r.total ?? 0);
-      setDrives(driveList ?? []);
+      setDisplayedPage(page);
+      setResolvedListQueryKey(queryKey);
       setSelectedIds(new Set());
     } catch (e) {
+      if (requestId !== listRequestIdRef.current || queryKey !== activeListQueryKeyRef.current) return;
       const message = e instanceof Error ? e.message : "加载失败";
       setLoadError(message);
+      setResolvedListQueryKey(queryKey);
       show(message, "error");
     } finally {
-      setLoading(false);
+      if (requestId === listRequestIdRef.current && queryKey === activeListQueryKeyRef.current) {
+        setLoading(false);
+      }
     }
   }
 
@@ -806,9 +992,12 @@ function BlacklistTab({
   const driveNameMap = new Map(drives.map((d) => [d.id, d.name || d.id]));
   driveNameMap.set(LOCAL_UPLOAD_SOURCE_ID, "上传来源");
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const listQueryPending = loading || resolvedListQueryKey !== activeListQueryKey;
+  const listQuerySettled = !loading && resolvedListQueryKey === activeListQueryKey;
+  const showInitialLoading = displayedPage === null && !loadError && listQueryPending;
   useEffect(() => {
-    if (!loading && page > totalPages) setPage(totalPages);
-  }, [loading, page, totalPages, setPage]);
+    if (listQuerySettled && page > totalPages) setPage(totalPages);
+  }, [listQuerySettled, page, totalPages, setPage]);
   const showPagination = totalPages > 1;
   const sourceDeleteRunning = !!sourceDeleteStatus?.running;
   const hasActiveSearch = searchKeyword.trim().length > 0;
@@ -951,7 +1140,6 @@ function BlacklistTab({
           </div>
         )}
       </div>
-      {tabSelector}
 
       {!loading && selectMode && (
         <div
@@ -987,7 +1175,7 @@ function BlacklistTab({
         </div>
       )}
 
-      {loading ? (
+      {showInitialLoading ? (
         <LoadingState />
       ) : loadError ? (
         <ErrorState message={loadError} onRetry={refresh} />
@@ -998,8 +1186,12 @@ function BlacklistTab({
           className="admin-empty-state admin-empty-state--plain"
         />
       ) : (
-        <>
-          <table className={`admin-table is-selectable admin-blacklist-table${selectMode ? " is-row-select-mode" : ""}`}>
+        <section
+          className={`admin-videos-results${listQueryPending ? " is-page-loading" : ""}`}
+          aria-label="拉黑视频列表结果"
+          aria-busy={listQueryPending || undefined}
+        >
+          <table className={`admin-table is-selectable admin-blacklist-table admin-videos-results__content${selectMode ? " is-row-select-mode" : ""}`}>
             <tbody>
               {list.map((v) => {
                 const sourceDeletable = canDeleteBlacklistSource(v);
@@ -1080,8 +1272,16 @@ function BlacklistTab({
               })}
             </tbody>
           </table>
-          {showPagination && <Pagination page={page} totalPages={totalPages} onPage={setPage} />}
-        </>
+          {showPagination && (
+            <Pagination
+              page={displayedPage ?? page}
+              totalPages={totalPages}
+              total={total}
+              pending={listQueryPending}
+              onPage={setPage}
+            />
+          )}
+        </section>
       )}
 
       <ConfirmModal
@@ -1156,424 +1356,12 @@ function BlacklistTab({
 
 // ---------- 共享小组件 ----------
 
-type VideoSourcePickerKind = "drive" | "crawler" | null;
-
-type VideoSourceMenuPosition = {
-  placement: "top" | "bottom";
-  left: number;
-  top?: number;
-  bottom?: number;
-  width: number;
-  maxHeight: number;
-};
-
-function VideoSourcePicker({
-  driveId,
-  crawlerId,
-  drives,
-  crawlers,
-  onChange,
-}: {
-  driveId: string;
-  crawlerId: string;
-  drives: api.AdminDrive[];
-  crawlers: api.AdminCrawler[];
-  onChange: (kind: VideoSourcePickerKind, id: string) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const [query, setQuery] = useState("");
-  const [menuPosition, setMenuPosition] = useState<VideoSourceMenuPosition | null>(null);
-  const rootRef = useRef<HTMLDivElement>(null);
-  const triggerRef = useRef<HTMLButtonElement>(null);
-  const searchRef = useRef<HTMLInputElement>(null);
-  const listRef = useRef<HTMLDivElement>(null);
-  const listboxId = useId();
-
-  const selectedIsUpload = driveId === LOCAL_UPLOAD_SOURCE_ID;
-  const selectedDrive = selectedIsUpload ? undefined : drives.find((drive) => drive.id === driveId);
-  const selectedCrawler = crawlers.find((crawler) => crawler.id === crawlerId);
-  const selectedKind: VideoSourcePickerKind = crawlerId ? "crawler" : driveId ? "drive" : null;
-  const selectedName = selectedIsUpload
-    ? "上传来源"
-    : selectedCrawler?.name || selectedDrive?.name || crawlerId || driveId || "全部来源";
-  const normalizedQuery = query.trim().toLocaleLowerCase();
-  const uploadMatchesQuery = ["上传来源", "上传", "本地文件", "视频直链"].some((text) =>
-    text.toLocaleLowerCase().includes(normalizedQuery)
-  );
-  const filteredDrives = drives
-    .filter((drive) => drive.id !== LOCAL_UPLOAD_SOURCE_ID)
-    .filter((drive) =>
-      [drive.name, drive.id, kindLabel[drive.kind]].some((text) =>
-        (text || "").toLocaleLowerCase().includes(normalizedQuery)
-      )
-    );
-  const filteredCrawlers = crawlers.filter((crawler) =>
-    [crawler.name, crawler.id, "脚本爬虫"].some((text) =>
-      text.toLocaleLowerCase().includes(normalizedQuery)
-    )
-  );
-  const hasMatches = uploadMatchesQuery || filteredDrives.length > 0 || filteredCrawlers.length > 0;
-
-  useEffect(() => {
-    if (!open) return;
-    function closeOnOutsidePointer(event: PointerEvent) {
-      const target = event.target;
-      if (target instanceof Node && !rootRef.current?.contains(target)) {
-        setOpen(false);
-        setMenuPosition(null);
-      }
-    }
-    document.addEventListener("pointerdown", closeOnOutsidePointer);
-    return () => document.removeEventListener("pointerdown", closeOnOutsidePointer);
-  }, [open]);
-
-  useLayoutEffect(() => {
-    if (!open) return;
-
-    const updateMenuPosition = () => {
-      const trigger = triggerRef.current;
-      if (!trigger) return;
-
-      const rect = trigger.getBoundingClientRect();
-      const viewportPadding = 12;
-      const menuGap = 8;
-      const preferredHeight = 356;
-      const spaceBelow = Math.max(0, window.innerHeight - rect.bottom - menuGap - viewportPadding);
-      const spaceAbove = Math.max(0, rect.top - menuGap - viewportPadding);
-      const placement = spaceBelow < 240 && spaceAbove > spaceBelow ? "top" : "bottom";
-      const availableHeight = placement === "top" ? spaceAbove : spaceBelow;
-      const width = Math.min(rect.width, window.innerWidth - viewportPadding * 2);
-      const left = Math.min(
-        Math.max(viewportPadding, rect.left),
-        Math.max(viewportPadding, window.innerWidth - viewportPadding - width)
-      );
-
-      setMenuPosition({
-        placement,
-        left: Math.round(left),
-        top: placement === "bottom" ? Math.round(rect.bottom + menuGap) : undefined,
-        bottom: placement === "top" ? Math.round(window.innerHeight - rect.top + menuGap) : undefined,
-        width: Math.round(width),
-        maxHeight: Math.max(96, Math.min(preferredHeight, Math.floor(availableHeight))),
-      });
-    };
-
-    updateMenuPosition();
-    window.addEventListener("resize", updateMenuPosition);
-    window.addEventListener("scroll", updateMenuPosition, true);
-    window.visualViewport?.addEventListener("resize", updateMenuPosition);
-    window.visualViewport?.addEventListener("scroll", updateMenuPosition);
-    const resizeObserver =
-      typeof ResizeObserver === "undefined" ? null : new ResizeObserver(updateMenuPosition);
-    if (triggerRef.current) resizeObserver?.observe(triggerRef.current);
-
-    return () => {
-      window.removeEventListener("resize", updateMenuPosition);
-      window.removeEventListener("scroll", updateMenuPosition, true);
-      window.visualViewport?.removeEventListener("resize", updateMenuPosition);
-      window.visualViewport?.removeEventListener("scroll", updateMenuPosition);
-      resizeObserver?.disconnect();
-    };
-  }, [open]);
-
-  function optionElements(): HTMLButtonElement[] {
-    return Array.from(listRef.current?.querySelectorAll<HTMLButtonElement>('[role="option"]') ?? []);
-  }
-
-  function openPicker(focusTarget?: "first" | "last") {
-    setQuery("");
-    setMenuPosition(null);
-    setOpen(true);
-    window.requestAnimationFrame(() => {
-      const options = optionElements();
-      listRef.current
-        ?.querySelector<HTMLElement>('[role="option"][aria-selected="true"]')
-        ?.scrollIntoView({ block: "nearest" });
-      if (!focusTarget) return;
-      (focusTarget === "first" ? options[0] : options[options.length - 1])?.focus();
-    });
-  }
-
-  function closePicker(restoreFocus = false) {
-    setOpen(false);
-    setMenuPosition(null);
-    if (restoreFocus) {
-      window.requestAnimationFrame(() => triggerRef.current?.focus());
-    }
-  }
-
-  function selectSource(kind: VideoSourcePickerKind, id: string) {
-    onChange(kind, id);
-    closePicker(true);
-  }
-
-  function handleKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
-    if (event.key === "Escape" && open) {
-      event.preventDefault();
-      event.stopPropagation();
-      closePicker(true);
-      return;
-    }
-
-    if (!open) {
-      if (event.target === triggerRef.current && event.key === "ArrowDown") {
-        event.preventDefault();
-        openPicker("first");
-      } else if (event.target === triggerRef.current && event.key === "ArrowUp") {
-        event.preventDefault();
-        openPicker("last");
-      }
-      return;
-    }
-
-    if (event.key === "Tab") {
-      const pickerRoot = event.currentTarget;
-      window.requestAnimationFrame(() => {
-        const activeElement = document.activeElement;
-        if (!(activeElement instanceof Node) || !pickerRoot.contains(activeElement)) {
-          setOpen(false);
-          setMenuPosition(null);
-        }
-      });
-      return;
-    }
-
-    const options = optionElements();
-    if (
-      event.key === "Enter" &&
-      event.target === searchRef.current &&
-      normalizedQuery &&
-      options.length > 0
-    ) {
-      event.preventDefault();
-      options[0].click();
-      return;
-    }
-    if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key) || options.length === 0) {
-      return;
-    }
-
-    event.preventDefault();
-    const currentIndex = options.indexOf(document.activeElement as HTMLButtonElement);
-    let nextIndex = currentIndex;
-    if (event.key === "Home") nextIndex = 0;
-    if (event.key === "End") nextIndex = options.length - 1;
-    if (event.key === "ArrowDown") nextIndex = currentIndex < 0 ? 0 : (currentIndex + 1) % options.length;
-    if (event.key === "ArrowUp") nextIndex = currentIndex <= 0 ? options.length - 1 : currentIndex - 1;
-    options[nextIndex]?.focus();
-  }
-
-  return (
-    <div
-      ref={rootRef}
-      className={`admin-video-source-picker${open ? " is-open" : ""}`}
-      onKeyDown={handleKeyDown}
-    >
-      <button
-        ref={triggerRef}
-        type="button"
-        role="combobox"
-        className="admin-video-source-picker__trigger"
-        aria-haspopup="listbox"
-        aria-expanded={open}
-        aria-controls={open ? listboxId : undefined}
-        aria-label={`来源，当前为${selectedName}`}
-        onClick={() => (open ? closePicker() : openPicker())}
-      >
-        <VideoSourcePickerIcon
-          drive={selectedDrive}
-          crawler={selectedCrawler}
-          upload={selectedIsUpload}
-        />
-        <span className="admin-video-source-picker__selection">
-          <strong>{selectedName}</strong>
-        </span>
-        <ChevronDown
-          size={16}
-          className={`admin-video-source-picker__chevron${open ? " is-open" : ""}`}
-          aria-hidden="true"
-        />
-      </button>
-
-      {open && (
-        <div
-          className="admin-video-source-picker__menu"
-          data-placement={menuPosition?.placement ?? "bottom"}
-          style={{
-            left: menuPosition?.left,
-            top: menuPosition?.top,
-            bottom: menuPosition?.bottom,
-            width: menuPosition?.width,
-            maxHeight: menuPosition?.maxHeight,
-            visibility: menuPosition ? "visible" : "hidden",
-          }}
-        >
-          <div className="admin-video-source-picker__search">
-            <Search size={14} aria-hidden="true" />
-            <input
-              ref={searchRef}
-              type="search"
-              value={query}
-              placeholder="搜索网盘或爬虫"
-              aria-label="搜索来源"
-              aria-controls={listboxId}
-              autoComplete="off"
-              onChange={(event) => setQuery(event.target.value)}
-            />
-          </div>
-          <div ref={listRef} id={listboxId} className="admin-video-source-picker__list" role="listbox" aria-label="来源">
-            {!normalizedQuery && (
-              <button
-                type="button"
-                role="option"
-                tabIndex={-1}
-                aria-selected={selectedKind === null}
-                className={`admin-video-source-picker__option is-all${selectedKind === null ? " is-selected" : ""}`}
-                onClick={() => selectSource(null, "")}
-              >
-                <VideoSourcePickerIcon />
-                <span className="admin-video-source-picker__option-copy">
-                  <strong>全部来源</strong>
-                </span>
-                {selectedKind === null && <Check size={16} aria-hidden="true" />}
-              </button>
-            )}
-
-            {filteredDrives.length > 0 && (
-              <div className="admin-video-source-picker__group" role="group" aria-label="网盘">
-                <div className="admin-video-source-picker__group-title" aria-hidden="true">
-                  <span>网盘</span>
-                </div>
-                {filteredDrives.map((drive) => {
-                  const selected = selectedKind === "drive" && drive.id === driveId;
-                  return (
-                    <button
-                      key={drive.id}
-                      type="button"
-                      role="option"
-                      tabIndex={-1}
-                      aria-selected={selected}
-                      className={`admin-video-source-picker__option${selected ? " is-selected" : ""}`}
-                      onClick={() => selectSource("drive", drive.id)}
-                    >
-                      <VideoSourcePickerIcon drive={drive} />
-                      <span className="admin-video-source-picker__option-copy">
-                        <strong>{drive.name || drive.id}</strong>
-                      </span>
-                      {selected && <Check size={16} aria-hidden="true" />}
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-
-            {filteredCrawlers.length > 0 && (
-              <div className="admin-video-source-picker__group" role="group" aria-label="爬虫">
-                <div className="admin-video-source-picker__group-title" aria-hidden="true">
-                  <span>爬虫</span>
-                </div>
-                {filteredCrawlers.map((crawler) => {
-                  const selected = selectedKind === "crawler" && crawler.id === crawlerId;
-                  return (
-                    <button
-                      key={crawler.id}
-                      type="button"
-                      role="option"
-                      tabIndex={-1}
-                      aria-selected={selected}
-                      className={`admin-video-source-picker__option${selected ? " is-selected" : ""}`}
-                      onClick={() => selectSource("crawler", crawler.id)}
-                    >
-                      <VideoSourcePickerIcon crawler={crawler} />
-                      <span className="admin-video-source-picker__option-copy">
-                        <strong>{crawler.name || crawler.id}</strong>
-                      </span>
-                      {selected && <Check size={16} aria-hidden="true" />}
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-
-            {uploadMatchesQuery && (
-              <button
-                type="button"
-                role="option"
-                tabIndex={-1}
-                aria-selected={selectedIsUpload}
-                className={`admin-video-source-picker__option is-upload${selectedIsUpload ? " is-selected" : ""}`}
-                onClick={() => selectSource("drive", LOCAL_UPLOAD_SOURCE_ID)}
-              >
-                <VideoSourcePickerIcon upload />
-                <span className="admin-video-source-picker__option-copy">
-                  <strong>上传来源</strong>
-                </span>
-                {selectedIsUpload && <Check size={16} aria-hidden="true" />}
-              </button>
-            )}
-
-            {normalizedQuery && !hasMatches && (
-              <div className="admin-video-source-picker__empty">没有匹配的来源</div>
-            )}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function VideoSourcePickerIcon({
-  drive,
-  crawler,
-  upload,
-}: {
-  drive?: api.AdminDrive;
-  crawler?: api.AdminCrawler;
-  upload?: boolean;
-}) {
-  if (upload) {
-    return (
-      <span className="admin-video-source-picker__icon is-upload" aria-hidden="true">
-        <Upload size={18} />
-      </span>
-    );
-  }
-  if (drive) {
-    const iconSrc = driveKindIconPath(drive.kind);
-    return (
-      <span
-        className={`admin-video-source-picker__icon is-drive${iconSrc ? " has-image" : ""}`}
-        data-kind={drive.kind}
-        aria-hidden="true"
-      >
-        {iconSrc ? <img src={iconSrc} alt="" /> : driveKindAbbr(drive.kind)}
-      </span>
-    );
-  }
-  if (crawler) {
-    return (
-      <span className="admin-video-source-picker__icon is-crawler" aria-hidden="true">
-        <SpiderIcon size={18} />
-      </span>
-    );
-  }
-  return (
-    <span className="admin-video-source-picker__icon is-all" aria-hidden="true">
-      全
-    </span>
-  );
-}
-
 function AdvancedVideoFilters({
   value,
-  drives,
-  crawlers,
   onChange,
   onSubmit,
 }: {
   value: VideoAdvancedFilterValues;
-  drives: api.AdminDrive[];
-  crawlers: api.AdminCrawler[];
   onChange: (value: VideoAdvancedFilterValues) => void;
   onSubmit: (event: React.FormEvent) => void;
 }) {
@@ -1591,23 +1379,6 @@ function AdvancedVideoFilters({
       onSubmit={onSubmit}
     >
       <div className="admin-video-advanced-filters__grid">
-        <div className="admin-video-advanced-field admin-video-advanced-field--source">
-          <span>来源</span>
-          <VideoSourcePicker
-            driveId={value.driveId}
-            crawlerId={value.crawlerId}
-            drives={drives}
-            crawlers={crawlers}
-            onChange={(kind, id) => {
-              onChange({
-                ...value,
-                driveId: kind === "drive" ? id : "",
-                crawlerId: kind === "crawler" ? id : "",
-              });
-            }}
-          />
-        </div>
-
         <fieldset className="admin-video-advanced-range">
           <legend>入库时间</legend>
           <div className="admin-video-advanced-range__inputs is-date-range">
@@ -1706,35 +1477,38 @@ function SearchBox({
 function Pagination({
   page,
   totalPages,
+  total,
+  pending,
   onPage,
 }: {
   page: number;
   totalPages: number;
+  total: number;
+  pending: boolean;
   onPage: React.Dispatch<React.SetStateAction<number>>;
 }) {
   return (
-    <div className="admin-table-pagination">
-      <button type="button" className="admin-btn" onClick={() => onPage(() => 1)} disabled={page <= 1}>
-        首页
-      </button>
-      <button type="button" className="admin-btn" onClick={() => onPage((p) => Math.max(1, p - 1))} disabled={page <= 1}>
+    <nav className="admin-table-pagination admin-videos-pagination" aria-label="视频列表分页">
+      <button
+        type="button"
+        className="admin-btn admin-videos-pagination__button"
+        onClick={() => onPage(Math.max(1, page - 1))}
+        disabled={pending || page <= 1}
+      >
         上一页
       </button>
-      <span className="admin-table-pagination__info">
-        第 {page} / {totalPages} 页
+      <span className="admin-videos-pagination__info" aria-live="polite">
+        第 {page} / {totalPages} 页 · 共 {total} 个视频
       </span>
       <button
         type="button"
-        className="admin-btn"
-        onClick={() => onPage((p) => Math.min(totalPages, p + 1))}
-        disabled={page >= totalPages}
+        className="admin-btn admin-videos-pagination__button"
+        onClick={() => onPage(Math.min(totalPages, page + 1))}
+        disabled={pending || page >= totalPages}
       >
         下一页
       </button>
-      <button type="button" className="admin-btn" onClick={() => onPage(() => totalPages)} disabled={page >= totalPages}>
-        末页
-      </button>
-    </div>
+    </nav>
   );
 }
 
@@ -1752,6 +1526,25 @@ function ErrorState({ message, onRetry }: { message: string; onRetry: () => void
 
 function LoadingState() {
   return <AdminLoading />;
+}
+
+function VideoCardGridLoadingState() {
+  return (
+    <div
+      className="admin-video-card-grid admin-video-card-grid--skeleton"
+      role="status"
+      aria-label="视频加载中"
+      aria-busy="true"
+    >
+      {Array.from({ length: CURRENT_VIDEO_SKELETON_CARD_COUNT }, (_, index) => (
+        <div
+          key={index}
+          className="admin-video-card-skeleton admin-card-skeleton-surface"
+          aria-hidden="true"
+        />
+      ))}
+    </div>
+  );
 }
 
 function canDeleteBlacklistSource(v: api.AdminDeletedVideo) {
@@ -1781,6 +1574,81 @@ function DeleteSourceOption({
         <strong>同时删除视频源文件</strong>
       </span>
     </label>
+  );
+}
+
+function CurrentVideoCard({
+  video,
+  driveName,
+  selected,
+  onToggleSelect,
+  onEdit,
+  onDelete,
+}: {
+  video: api.AdminVideo;
+  driveName: string;
+  selected: boolean;
+  onToggleSelect: () => void;
+  onEdit: () => void;
+  onDelete: () => void;
+}) {
+  return (
+    <article className="admin-video-card" role="listitem">
+      <div className="admin-video-card__content">
+        <VideoTitleCell video={video} />
+      </div>
+
+      <dl className="admin-video-card__meta">
+        <div className="admin-video-card__meta-item">
+          <dt>来源</dt>
+          <dd className="admin-video-card__source" title={driveName}>
+            {driveName}
+          </dd>
+        </div>
+        <div className="admin-video-card__meta-item is-duration">
+          <dt>时长</dt>
+          <dd>{formatDur(video.durationSeconds)}</dd>
+        </div>
+      </dl>
+
+      <footer className="admin-video-card__actions">
+        <div className="admin-video-card__utility-actions">
+          <button
+            type="button"
+            className="admin-btn admin-video-card__icon-button"
+            onClick={onEdit}
+            title="编辑视频"
+            aria-label="编辑视频"
+          >
+            <Edit size={15} />
+          </button>
+          <button
+            type="button"
+            className="admin-btn admin-video-card__icon-button is-danger"
+            onClick={onDelete}
+            title="删除视频"
+            aria-label="删除视频"
+          >
+            <Trash2 size={15} />
+          </button>
+        </div>
+        <label className="admin-video-card__select" title={selected ? "取消选择" : "选择视频"}>
+          <input
+            className="admin-video-card__select-input"
+            type="checkbox"
+            checked={selected}
+            onChange={onToggleSelect}
+            aria-label={selected ? `取消选择「${video.title}」` : `选择「${video.title}」`}
+          />
+          <span
+            className={`admin-video-card__select-box${selected ? " is-checked" : ""}`}
+            aria-hidden="true"
+          >
+            {selected && <Check size={12} />}
+          </span>
+        </label>
+      </footer>
+    </article>
   );
 }
 
@@ -1859,20 +1727,20 @@ function videoUpdatedAtMs(video?: api.AdminVideo): number {
   return Number.isFinite(value) ? value : 0;
 }
 
-function useVideosPageSize() {
+function useVideosPageSize(desktopPageSize: number, mobilePageSize: number) {
   const [pageSize, setPageSize] = useState(() =>
-    window.matchMedia(VIDEOS_MOBILE_QUERY).matches ? MOBILE_VIDEOS_PAGE_SIZE : DESKTOP_VIDEOS_PAGE_SIZE
+    window.matchMedia(VIDEOS_MOBILE_QUERY).matches ? mobilePageSize : desktopPageSize
   );
 
   useEffect(() => {
     const media = window.matchMedia(VIDEOS_MOBILE_QUERY);
     const update = () => {
-      setPageSize(media.matches ? MOBILE_VIDEOS_PAGE_SIZE : DESKTOP_VIDEOS_PAGE_SIZE);
+      setPageSize(media.matches ? mobilePageSize : desktopPageSize);
     };
     update();
     media.addEventListener("change", update);
     return () => media.removeEventListener("change", update);
-  }, []);
+  }, [desktopPageSize, mobilePageSize]);
 
   return pageSize;
 }
@@ -2048,7 +1916,6 @@ function normalizeExt(ext: string): string {
 
 function countVideoAdvancedFilters(value: VideoAdvancedFilterValues): number {
   let count = 0;
-  if (value.driveId || value.crawlerId) count++;
   if (value.createdFrom || value.createdTo) count++;
   if (value.durationMinMinutes || value.durationMaxMinutes) count++;
   return count;
