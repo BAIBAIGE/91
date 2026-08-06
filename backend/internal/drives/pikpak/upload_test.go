@@ -362,7 +362,7 @@ func TestUploadRejectsInvalidArguments(t *testing.T) {
 		{"nil reader", "parent", "f.mp4", 0, nil, "nil reader"},
 		{"negative size", "parent", "f.mp4", -1, bytes.NewReader(nil), "invalid size"},
 		{"empty name", "parent", "   ", 1, bytes.NewReader([]byte{0}), "empty file name"},
-		{"oversized", "parent", "f.mp4", 6 * 1024 * 1024 * 1024, bytes.NewReader([]byte{0}), "exceeds"},
+		{"oversized", "parent", "f.mp4", maxPikPakMultipartObjectSize + 1, bytes.NewReader([]byte{0}), "exceeds"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

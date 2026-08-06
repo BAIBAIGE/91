@@ -29,7 +29,8 @@ import (
 //      - 未命中：resumable.params 含 S3 兼容凭证（access_key / secret /
 //        bucket / endpoint / key / security_token）
 //
-//   3. 用 Aliyun OSS SDK PutObject 把字节传到 PikPak 返回的临时 OSS endpoint
+//   3. 用 Aliyun OSS SDK 把字节传到 PikPak 返回的临时 OSS endpoint：
+//      小文件用 PutObject，大文件用有界并发 multipart
 //
 //   4. PikPak 服务端轮询 OSS，发现完成后把 resp.File.ID 标记为可用；
 //      所以 Upload 完成后直接返回 resp.File.ID 即可（一开始就有，
@@ -38,9 +39,6 @@ import (
 const (
 	ossSecurityTokenHeaderName = "X-OSS-Security-Token"
 	ossUserAgent               = "aliyun-sdk-android/2.9.13(Linux/Android 14/M2004j7ac;UKQ1.231108.001)"
-	// 单次 PutObject 的硬上限（OSS 文档限制 5GiB；保守用 5GiB-1）。
-	// 超过该值需走 multipart；当前未实现，遇到会显式报错。
-	maxSinglePutSize = 5*1024*1024*1024 - 1
 	// 首次上传失败后最多再重试 3 次。每次重试都会重新申请 PikPak
 	// upload session，以避开偶发不可解析/不可达的临时上传 endpoint。
 	pikpakUploadMaxAttempts = 4
@@ -81,9 +79,10 @@ type UploadResult struct {
 }
 
 type preparedUploadBody struct {
-	reader  io.ReadSeeker
-	start   int64
-	cleanup func()
+	reader   io.ReadSeeker
+	readerAt io.ReaderAt
+	start    int64
+	cleanup  func()
 }
 
 func (b preparedUploadBody) rewind() error {
@@ -118,17 +117,15 @@ func (d *Driver) Upload(ctx context.Context, parentID, name string, r io.Reader,
 // 实现要点：
 //   - 必须先算 GCID 再申请上传会话（PikPak API 要求 hash 字段），
 //     所以这里先 io.Copy 到临时文件并同步算 GCID。
-//   - 命中秒传时不发任何字节；否则用 OSS PutObject 上传。
-//   - 单次 PutObject 上限保守用 5GiB-1，超出该值会报错（暂不实现 multipart）。
+//   - 命中秒传时不发任何字节。
+//   - 非秒传时，小文件用 PutObject，大文件用有界并发 multipart；
+//     分片失败只重试当前分片，整个 session 失败后仍由外层换新 session 重试。
 func (d *Driver) UploadAndReportHash(ctx context.Context, parentID, name string, r io.Reader, size int64) (UploadResult, error) {
 	if r == nil {
 		return UploadResult{}, errors.New("pikpak upload: nil reader")
 	}
-	if size < 0 {
-		return UploadResult{}, fmt.Errorf("pikpak upload: invalid size %d", size)
-	}
-	if size > maxSinglePutSize {
-		return UploadResult{}, fmt.Errorf("pikpak upload: file size %d exceeds %d (multipart not implemented)", size, maxSinglePutSize)
+	if err := validatePikPakUploadSize(size); err != nil {
+		return UploadResult{}, err
 	}
 	name = strings.TrimSpace(name)
 	if name == "" {
@@ -221,11 +218,8 @@ func (d *Driver) completeUploadAttempt(ctx context.Context, body preparedUploadB
 	}
 
 	// 未命中秒传：把字节传到 S3 兼容存储。
-	if err := body.rewind(); err != nil {
-		return UploadResult{}, fmt.Errorf("pikpak upload: rewind body: %w", err)
-	}
-	if err := d.uploadToOSS(ctx, &resp.Resumable.Params, body.reader); err != nil {
-		return UploadResult{}, fmt.Errorf("pikpak upload: oss put: %w", err)
+	if err := d.uploadToOSS(ctx, &resp.Resumable.Params, body, result.Size); err != nil {
+		return UploadResult{}, fmt.Errorf("pikpak upload: oss upload: %w", err)
 	}
 
 	// 拿到 fileID。优先走响应里的预分配 ID；为空就回查目录。
@@ -293,13 +287,18 @@ func isRetryablePikPakUploadError(err error) bool {
 		strings.Contains(text, "service unavailable")
 }
 
+type readSeekAt interface {
+	io.ReadSeeker
+	io.ReaderAt
+}
+
 func (d *Driver) prepareUploadBody(r io.Reader, size int64) (preparedUploadBody, string, int64, error) {
-	if rs, ok := r.(io.ReadSeeker); ok {
+	if rs, ok := r.(readSeekAt); ok {
 		gcidHex, actualSize, start, err := hashGCIDFromReadSeeker(rs, size)
 		if err != nil {
 			return preparedUploadBody{}, "", 0, err
 		}
-		return preparedUploadBody{reader: rs, start: start, cleanup: func() {}}, gcidHex, actualSize, nil
+		return preparedUploadBody{reader: rs, readerAt: rs, start: start, cleanup: func() {}}, gcidHex, actualSize, nil
 	}
 
 	tmp, gcidHex, actualSize, err := bufferAndHashGCID(d.uploadTempDir, r, size)
@@ -307,8 +306,9 @@ func (d *Driver) prepareUploadBody(r io.Reader, size int64) (preparedUploadBody,
 		return preparedUploadBody{}, "", 0, err
 	}
 	return preparedUploadBody{
-		reader: tmp,
-		start:  0,
+		reader:   tmp,
+		readerAt: tmp,
+		start:    0,
 		cleanup: func() {
 			_ = tmp.Close()
 			_ = os.Remove(tmp.Name())
@@ -370,15 +370,19 @@ func bufferAndHashGCID(tempDir string, r io.Reader, size int64) (*os.File, strin
 	return tmp, gcidHex, written, nil
 }
 
-// uploadToOSS 用 Aliyun OSS SDK 把 body 全量 PutObject 到 PikPak 提供的 S3 端点。
+// uploadToOSS 用 Aliyun OSS SDK 把 body 上传到 PikPak 提供的 S3 端点。
+// 小文件用单次 PutObject，大文件用有界并发 multipart。
 //
 // 参数复用 PikPak 的临时凭证；必须带 Security Token 头部 + UserAgent，与 OpenList 一致。
-func (d *Driver) uploadToOSS(ctx context.Context, p *s3Params, body io.Reader) error {
-	if d.uploadToOSSFunc != nil {
-		return d.uploadToOSSFunc(ctx, p, body)
-	}
+func (d *Driver) uploadToOSS(ctx context.Context, p *s3Params, body preparedUploadBody, size int64) error {
 	if p == nil {
 		return errors.New("pikpak upload: nil s3 params")
+	}
+	if d.uploadToOSSFunc != nil {
+		if err := body.rewind(); err != nil {
+			return fmt.Errorf("rewind body: %w", err)
+		}
+		return d.uploadToOSSFunc(ctx, p, body.reader)
 	}
 	client, err := newPikPakOSSClient(p)
 	if err != nil {
@@ -388,13 +392,9 @@ func (d *Driver) uploadToOSS(ctx context.Context, p *s3Params, body io.Reader) e
 	if err != nil {
 		return fmt.Errorf("oss bucket: %w", err)
 	}
-	// OSS SDK 不接受 context 取消；我们用 readerWithCtx 把 ctx 织入读链路，
-	// ctx 取消时下次 Read 会返回错误，OSS PutObject 会随之中断。
-	wrapped := &readerWithCtx{ctx: ctx, r: body}
-	return bucket.PutObject(p.Key, wrapped,
-		oss.SetHeader(ossSecurityTokenHeaderName, p.SecurityToken),
-		oss.UserAgentHeader(ossUserAgent),
-	)
+	// 单次和分片请求都通过 oss.WithContext 绑定取消，并用
+	// readerWithCtx 在读链路上再做一层保护。
+	return uploadPreparedBodyToOSS(ctx, bucket, p, body, size)
 }
 
 func newPikPakOSSClient(p *s3Params, options ...oss.ClientOption) (*oss.Client, error) {
