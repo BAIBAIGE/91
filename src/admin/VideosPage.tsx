@@ -23,7 +23,6 @@ import { Modal } from "./Modal";
 import { ConfirmModal } from "./ConfirmModal";
 import { formatBytes } from "./storageFormat";
 import { AdminEmptyVisual } from "./AdminEmptyVisual";
-import { AdminLoading } from "./AdminLoading";
 import { driveKindAbbr, driveKindIconPath } from "./drive/constants";
 import { SpiderIcon } from "./icons/SpiderIcon";
 import {
@@ -41,7 +40,7 @@ import { UploadIcon } from "@/components/icons/UploadIcon";
 
 const DESKTOP_CURRENT_VIDEOS_PAGE_SIZE = 16;
 const MOBILE_CURRENT_VIDEOS_PAGE_SIZE = 10;
-const DESKTOP_BLACKLIST_PAGE_SIZE = 50;
+const DESKTOP_BLACKLIST_PAGE_SIZE = 20;
 const MOBILE_BLACKLIST_PAGE_SIZE = 20;
 const CURRENT_VIDEO_SKELETON_CARD_COUNT = 6;
 const VIDEOS_MOBILE_QUERY = "(max-width: 640px)";
@@ -691,7 +690,7 @@ function CurrentVideosTab({
         <div className="admin-videos-filter__current-actions" data-admin-floating-actions>
           <button
             type="button"
-            className="admin-btn admin-video-advanced-toggle"
+            className="admin-btn admin-videos-filter__search-action admin-video-advanced-toggle"
             onClick={openAdvancedFilters}
             aria-haspopup="dialog"
           >
@@ -886,7 +885,6 @@ function BlacklistTab({
   const [loadError, setLoadError] = useState("");
   const [searchKeyword, setSearchKeyword] = useState("");
   const [total, setTotal] = useState(0);
-  const [selectMode, setSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [removeTarget, setRemoveTarget] = useState<api.AdminDeletedVideo | null>(null);
   const [removing, setRemoving] = useState(false);
@@ -920,7 +918,6 @@ function BlacklistTab({
       setTotal(r.total ?? 0);
       setDisplayedPage(page);
       setResolvedListQueryKey(queryKey);
-      setSelectedIds(new Set());
     } catch (e) {
       if (requestId !== listRequestIdRef.current || queryKey !== activeListQueryKeyRef.current) return;
       const message = e instanceof Error ? e.message : "加载失败";
@@ -935,7 +932,7 @@ function BlacklistTab({
   }
 
   useEffect(() => {
-    refresh();
+    void refresh();
   }, [page, searchKeyword, pageSize]);
 
   useEffect(() => {
@@ -970,6 +967,7 @@ function BlacklistTab({
             : `源文件删除完成：成功 ${status.deleted}`,
           status.failed > 0 ? "info" : "success"
         );
+        setSelectedIds(new Set());
         void refresh();
       } catch {
         if (active) timer = window.setTimeout(poll, 2000);
@@ -989,6 +987,10 @@ function BlacklistTab({
     setPage(1);
   }, [pageSize, setPage]);
 
+  useEffect(() => {
+    setSelectedIds(new Set());
+  }, [searchKeyword]);
+
   const driveNameMap = new Map(drives.map((d) => [d.id, d.name || d.id]));
   driveNameMap.set(LOCAL_UPLOAD_SOURCE_ID, "上传来源");
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
@@ -1002,6 +1004,9 @@ function BlacklistTab({
   const sourceDeleteRunning = !!sourceDeleteStatus?.running;
   const hasActiveSearch = searchKeyword.trim().length > 0;
   const hasBlacklistActions = list.length > 0;
+  const selectableItems = list.filter(canDeleteBlacklistSource);
+  const allPageSelected =
+    selectableItems.length > 0 && selectableItems.every((video) => selectedIds.has(video.id));
 
   async function confirmRemove() {
     if (!removeTarget) return;
@@ -1010,6 +1015,11 @@ function BlacklistTab({
     try {
       await api.removeBlacklist(target.id);
       setRemoveTarget(null);
+      setSelectedIds((ids) => {
+        const next = new Set(ids);
+        next.delete(target.id);
+        return next;
+      });
       show(
         target.restorePolicy === "crawler"
           ? "已取消拉黑，将在下次爬虫任务时生效"
@@ -1053,7 +1063,10 @@ function BlacklistTab({
   async function confirmSourceDeleteAll() {
     await startSourceDelete(
       { deleteAllSources: true },
-      () => setSourceDeleteOpen(false),
+      () => {
+        setSourceDeleteOpen(false);
+        setSelectedIds(new Set());
+      },
       "已开始后台顺序删除全部黑名单源文件"
     );
   }
@@ -1083,7 +1096,6 @@ function BlacklistTab({
       () => {
         setBatchSourceDeleteOpen(false);
         setSelectedIds(new Set());
-        setSelectMode(false);
       },
       `已开始后台顺序删除 ${ids.length} 个拉黑视频源文件`
     );
@@ -1091,15 +1103,20 @@ function BlacklistTab({
 
   const toggleSelect = (v: api.AdminDeletedVideo) => {
     if (!canDeleteBlacklistSource(v)) return;
-    const next = new Set(selectedIds);
-    if (next.has(v.id)) next.delete(v.id);
-    else next.add(v.id);
-    setSelectedIds(next);
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      if (next.has(v.id)) next.delete(v.id);
+      else next.add(v.id);
+      return next;
+    });
   };
 
-  const toggleSelectMode = () => {
-    setSelectMode((active) => !active);
-    setSelectedIds(new Set());
+  const selectPageBlacklist = () => {
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      selectableItems.forEach((video) => next.add(video.id));
+      return next;
+    });
   };
 
   const handleSearch = useCallback((keyword: string) => {
@@ -1108,7 +1125,7 @@ function BlacklistTab({
   }, [setPage]);
 
   return (
-    <div className={`admin-videos-blacklist${selectMode ? " has-bulk-actions" : ""}`}>
+    <div className={`admin-videos-blacklist${selectedIds.size > 0 ? " has-bulk-actions" : ""}`}>
       <div className="admin-page__actions admin-videos-filter admin-videos-filter--blacklist">
         <SearchBox keyword={searchKeyword} onSearch={handleSearch} />
         {hasBlacklistActions && (
@@ -1123,31 +1140,32 @@ function BlacklistTab({
             )}
             <button
               type="button"
-              className="admin-btn admin-videos-filter__batch admin-blacklist-source-delete__button"
+              className="admin-btn admin-videos-filter__batch admin-videos-filter__search-action admin-blacklist-source-delete__button"
               disabled={sourceDeleteStatus?.running || (sourceDeleteStatus?.pending ?? total) <= 0}
               onClick={() => setSourceDeleteOpen(true)}
             >
+              <Trash2 size={15} aria-hidden="true" />
               {sourceDeleteStatus?.running ? "删除中" : "删除全部"}
-            </button>
-            <button
-              type="button"
-              className={`admin-btn admin-videos-filter__batch admin-videos-filter__batch-select${selectMode ? " is-primary" : ""}`}
-              onClick={toggleSelectMode}
-              aria-pressed={selectMode}
-            >
-              <span>{selectMode ? "退出选择" : "批量选择"}</span>
             </button>
           </div>
         )}
       </div>
 
-      {!loading && selectMode && (
+      {selectedIds.size > 0 && (
         <div
-          className="admin-videos-list-toolbar admin-blacklist-bulk-toolbar"
+          className="admin-videos-list-toolbar"
           data-admin-floating-actions
         >
           <div className="admin-videos-bulk-actions">
             <span className="admin-videos-bulk-actions__count">已选择 {selectedIds.size} 项</span>
+            <button
+              type="button"
+              className="admin-btn admin-videos-bulk-actions__btn"
+              onClick={selectPageBlacklist}
+              disabled={sourceDeleteRunning || selectableItems.length === 0 || allPageSelected}
+            >
+              全选本页
+            </button>
             <button
               type="button"
               className="admin-btn admin-videos-bulk-actions__btn"
@@ -1164,20 +1182,11 @@ function BlacklistTab({
             >
               批量删除
             </button>
-            <button
-              type="button"
-              className="admin-btn admin-videos-bulk-actions__btn admin-videos-bulk-actions__mobile-exit"
-              onClick={toggleSelectMode}
-            >
-              退出选择
-            </button>
           </div>
         </div>
       )}
 
-      {showInitialLoading ? (
-        <LoadingState />
-      ) : loadError ? (
+      {showInitialLoading ? null : loadError ? (
         <ErrorState message={loadError} onRetry={refresh} />
       ) : list.length === 0 ? (
         <AdminEmptyVisual
@@ -1191,30 +1200,38 @@ function BlacklistTab({
           aria-label="拉黑视频列表结果"
           aria-busy={listQueryPending || undefined}
         >
-          <table className={`admin-table is-selectable admin-blacklist-table admin-videos-results__content${selectMode ? " is-row-select-mode" : ""}`}>
+          <table className="admin-table admin-table--static-rows admin-blacklist-table admin-videos-results__content">
             <tbody>
               {list.map((v) => {
                 const sourceDeletable = canDeleteBlacklistSource(v);
                 const isSelected = selectedIds.has(v.id);
-                const rowSelectable = selectMode && sourceDeletable && !sourceDeleteRunning;
+                const selectionDisabled = !sourceDeletable || sourceDeleteRunning;
+                const selectionLabel = v.fileName || v.id;
+                const sourceName = driveNameMap.get(v.driveId) ?? v.driveId;
 
                 return (
-                <tr
-                  key={v.id}
-                  className={`${isSelected ? "is-selected" : ""}${selectMode && !rowSelectable ? " is-disabled-select" : ""}`}
-                  aria-selected={selectMode ? isSelected : undefined}
-                  tabIndex={rowSelectable ? 0 : undefined}
-                  onClick={(event) => {
-                    if (!rowSelectable || isInteractiveTarget(event.target)) return;
-                    toggleSelect(v);
-                  }}
-                  onKeyDown={(event) => {
-                    if (!rowSelectable || isInteractiveTarget(event.target)) return;
-                    if (event.key !== "Enter" && event.key !== " ") return;
-                    event.preventDefault();
-                    toggleSelect(v);
-                  }}
-                >
+                <tr key={v.id}>
+                  <td className="admin-blacklist-select-cell">
+                    <label
+                      className={`admin-video-card__select admin-blacklist-row-select${selectionDisabled ? " is-disabled" : ""}`}
+                      title={selectionDisabled ? "当前不可选择" : isSelected ? "取消选择" : "选择视频"}
+                    >
+                      <input
+                        className="admin-video-card__select-input"
+                        type="checkbox"
+                        checked={isSelected}
+                        disabled={selectionDisabled}
+                        onChange={() => toggleSelect(v)}
+                        aria-label={isSelected ? `取消选择「${selectionLabel}」` : `选择「${selectionLabel}」`}
+                      />
+                      <span
+                        className={`admin-video-card__select-box${isSelected ? " is-checked" : ""}`}
+                        aria-hidden="true"
+                      >
+                        {isSelected && <Check size={12} />}
+                      </span>
+                    </label>
+                  </td>
                   <td data-label="文件名">
                     <div className="admin-blacklist-filecell">
                       <span className="admin-blacklist-filename" title={v.fileName || undefined}>{v.fileName || <span className="admin-text-faint">（无文件名）</span>}</span>
@@ -1224,8 +1241,8 @@ function BlacklistTab({
                       )}
                     </div>
                   </td>
-                  <td data-label="来源" className="admin-mono-cell">
-                    {driveNameMap.get(v.driveId) ?? v.driveId}
+                  <td data-label="来源" className="admin-mono-cell admin-blacklist-source-cell">
+                    <span className="admin-blacklist-source-name" title={sourceName}>{sourceName}</span>
                   </td>
                   <td className="is-actions" data-label="操作">
                     <div className="admin-blacklist-actions">
@@ -1319,7 +1336,7 @@ function BlacklistTab({
       <ConfirmModal
         open={batchSourceDeleteOpen}
         title="批量删除拉黑视频源文件"
-        message={`确定删除当前页选中的 ${selectedIds.size} 个拉黑视频源文件吗？`}
+        message={`确定删除已选中的 ${selectedIds.size} 个拉黑视频源文件吗？`}
         confirmText="确认"
         danger
         hideIcon
@@ -1524,10 +1541,6 @@ function ErrorState({ message, onRetry }: { message: string; onRetry: () => void
   );
 }
 
-function LoadingState() {
-  return <AdminLoading />;
-}
-
 function VideoCardGridLoadingState() {
   return (
     <div
@@ -1549,13 +1562,6 @@ function VideoCardGridLoadingState() {
 
 function canDeleteBlacklistSource(v: api.AdminDeletedVideo) {
   return !v.sourceDeleted;
-}
-
-function isInteractiveTarget(target: EventTarget | null) {
-  return (
-    target instanceof Element &&
-    target.closest("button, a, input, label, select, textarea, [role='button']") !== null
-  );
 }
 
 function DeleteSourceOption({

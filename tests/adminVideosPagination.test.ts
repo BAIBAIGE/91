@@ -19,10 +19,10 @@ test("admin empty visual places the requested image above its text", () => {
   assert.match(emptyVisualSource, /admin-empty-visual__media[\s\S]*?<img[\s\S]*?admin-empty-visual__text/);
 });
 
-test("normal videos use sixteen desktop cards while mobile and blacklist retain their capacities", () => {
+test("normal videos keep responsive capacities while blacklist pages contain twenty items", () => {
   assert.match(videosPageSource, /const DESKTOP_CURRENT_VIDEOS_PAGE_SIZE = 16;/);
   assert.match(videosPageSource, /const MOBILE_CURRENT_VIDEOS_PAGE_SIZE = 10;/);
-  assert.match(videosPageSource, /const DESKTOP_BLACKLIST_PAGE_SIZE = 50;/);
+  assert.match(videosPageSource, /const DESKTOP_BLACKLIST_PAGE_SIZE = 20;/);
   assert.match(videosPageSource, /const MOBILE_BLACKLIST_PAGE_SIZE = 20;/);
   assert.match(videosPageSource, /const VIDEOS_MOBILE_QUERY = "\(max-width: 640px\)";/);
   assert.match(videosPageSource, /window\.matchMedia\(VIDEOS_MOBILE_QUERY\)/);
@@ -203,8 +203,27 @@ test("admin video pagination stores the active page in the URL", () => {
   assert.match(videosPageSource, /const page = readAdminVideosPage\(searchParams\);/);
   assert.match(videosPageSource, /return withAdminVideosPage\(prev, resolvedPage\);/);
   assert.match(videosPageSource, /function selectSource[\s\S]*?next\.delete\("tab"\);[\s\S]*?next\.delete\("page"\);/);
-  assert.match(videosPageSource, /function openBlacklist[\s\S]*?if \(activeView !== "blacklist"\) next\.delete\("page"\);/);
+  assert.match(videosPageSource, /function openBlacklist[\s\S]*?next\.set\("tab", "blacklist"\);[\s\S]*?if \(activeView !== "blacklist"\) next\.delete\("page"\);/);
   assert.doesNotMatch(videosPageSource, /const \[page, setPage\] = useState\(1\);/);
+});
+
+test("blacklist navigation switches immediately while its initial list stays blank", () => {
+  const openBlacklistSource = videosPageSource.slice(
+    videosPageSource.indexOf("function openBlacklist"),
+    videosPageSource.indexOf("\n\n  return (", videosPageSource.indexOf("function openBlacklist"))
+  );
+  const blacklistSource = videosPageSource.slice(
+    videosPageSource.indexOf("function BlacklistTab"),
+    videosPageSource.indexOf("// ---------- 共享小组件 ----------")
+  );
+
+  assert.match(openBlacklistSource, /setSearchParams\([\s\S]*?next\.set\("tab", "blacklist"\);/);
+  assert.doesNotMatch(openBlacklistSource, /await|api\.listBlacklist|blacklistOpening/);
+  assert.match(videosPageSource, /onClick=\{onOpenBlacklist\}/);
+  assert.match(videosPageSource, /activeView === "blacklist"[\s\S]*?<BlacklistTab/);
+  assert.match(blacklistSource, /api\.listBlacklist\(\{ page, size: pageSize, keyword: searchKeyword \}\)/);
+  assert.match(blacklistSource, /\{showInitialLoading \? null : loadError \? \(/);
+  assert.doesNotMatch(blacklistSource, /AdminLoading|LoadingState/);
 });
 
 test("admin video pagination clamps stale deep links after totals load", () => {
@@ -233,7 +252,7 @@ test("video pagination does not create invisible rows on a short final page", ()
   assert.equal(Array.from(videosPageSource.matchAll(/const showPagination = totalPages > 1;/g)).length, 2);
   assert.doesNotMatch(currentSource, /placeholderRows|admin-video-placeholder-row/);
   assert.doesNotMatch(blacklistSource, /placeholderRows|admin-video-placeholder-row/);
-  assert.match(blacklistSource, /admin-table is-selectable admin-blacklist-table/);
+  assert.match(blacklistSource, /admin-table admin-table--static-rows admin-blacklist-table admin-videos-results__content/);
   assert.doesNotMatch(adminCss, /\.admin-video-placeholder-row/);
 });
 
@@ -253,8 +272,10 @@ test("empty video tabs use the correct visual and distinguish search misses", ()
   assert.match(currentSource, /\{selectedIds\.size > 0 && \(\s*<div className="admin-videos-list-toolbar"/);
   assert.match(
     blacklistSource,
-    /\{hasBlacklistActions && \(\s*<div[\s\S]*?className="admin-videos-filter__actions admin-blacklist-source-delete"[\s\S]*?data-admin-floating-actions[\s\S]*?删除全部[\s\S]*?批量选择/
+    /\{hasBlacklistActions && \(\s*<div[\s\S]*?className="admin-videos-filter__actions admin-blacklist-source-delete"[\s\S]*?data-admin-floating-actions[\s\S]*?删除全部/
   );
+  assert.match(blacklistSource, /\{selectedIds\.size > 0 && \(\s*<div[\s\S]*?className="admin-videos-list-toolbar"/);
+  assert.doesNotMatch(blacklistSource, /selectMode|批量选择|退出选择/);
   assert.match(currentSource, /admin-empty-state admin-empty-state--plain/);
   assert.match(blacklistSource, /admin-empty-state admin-empty-state--plain/);
   assert.match(currentSource, /variant=\{hasActiveSearch \? "no-results" : "empty"\}/);
@@ -282,14 +303,17 @@ test("empty video tabs use the correct visual and distinguish search misses", ()
   assert.doesNotMatch(adminCss, /translateY\(-48px\)/);
 });
 
-test("current video cards use the CPA authentication-card loading state", () => {
+test("current videos keep their skeleton while blacklist initial loading stays invisible", () => {
   const currentSource = videosPageSource.slice(
     videosPageSource.indexOf("function CurrentVideosTab"),
     videosPageSource.indexOf("// ---------- 拉黑视频 ----------")
   );
-  const blacklistSource = videosPageSource.slice(videosPageSource.indexOf("function BlacklistTab"));
+  const blacklistSource = videosPageSource.slice(
+    videosPageSource.indexOf("function BlacklistTab"),
+    videosPageSource.indexOf("// ---------- 共享小组件 ----------")
+  );
   assert.match(currentSource, /showInitialLoading \? \(\s*<VideoCardGridLoadingState \/>/);
-  assert.match(blacklistSource, /showInitialLoading \? \(\s*<LoadingState \/>/);
+  assert.match(blacklistSource, /\{showInitialLoading \? null : loadError \? \(/);
   assert.equal(
     Array.from(videosPageSource.matchAll(/const showInitialLoading = displayedPage === null && !loadError && listQueryPending;/g)).length,
     2
@@ -307,8 +331,7 @@ test("current video cards use the CPA authentication-card loading state", () => 
     adminCss,
     /\.admin-card-skeleton-surface\s*\{[^}]*linear-gradient\([^}]*animation:\s*admin-card-skeleton-shimmer 1\.5s ease-in-out infinite;/s
   );
-  assert.match(videosPageSource, /function LoadingState\(\)/);
-  assert.match(videosPageSource, /function LoadingState\(\)[\s\S]*?<AdminLoading \/>/);
+  assert.doesNotMatch(blacklistSource, /LoadingState|AdminLoading/);
 });
 
 test("video pagination keeps settled results visible while the next page loads", () => {

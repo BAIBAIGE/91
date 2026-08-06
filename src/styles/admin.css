@@ -1855,7 +1855,7 @@ body.admin-mobile-nav-open {
 }
 
 @media (hover: hover) and (pointer: fine) {
-  .admin-table tbody tr:hover td {
+  .admin-table:not(.admin-table--static-rows) tbody tr:hover td {
     background: rgba(255, 255, 255, 0.025);
   }
 }
@@ -3534,11 +3534,11 @@ body.admin-mobile-nav-open {
   }
 
   @media (hover: hover) and (pointer: fine) {
-    .admin-table:not(.admin-drives-table) tr:hover {
+    .admin-table:not(.admin-drives-table):not(.admin-table--static-rows) tr:hover {
       border-color: var(--border-strong);
     }
 
-    .admin-table:not(.admin-drives-table) tr:hover td {
+    .admin-table:not(.admin-drives-table):not(.admin-table--static-rows) tr:hover td {
       background: transparent;
     }
   }
@@ -4236,9 +4236,9 @@ body.admin-mobile-nav-open {
   flex: none;
   width: 22px;
   height: 22px;
-  border: 1px solid var(--admin-video-card-pill-border);
+  border: 1px solid var(--admin-video-card-pill-border, var(--border-subtle));
   border-radius: 7px;
-  background: var(--admin-video-card-pill-bg);
+  background: var(--admin-video-card-pill-bg, var(--bg-elevated));
   transition:
     transform var(--transition-fast),
     border-color var(--transition-fast),
@@ -4456,7 +4456,7 @@ body.admin-mobile-nav-open {
 }
 
 .admin-videos-filter--blacklist {
-  grid-template-columns: minmax(240px, 360px) minmax(0, 1fr) auto;
+  grid-template-columns: minmax(240px, 360px) auto minmax(0, 1fr);
 }
 
 .admin-videos-filter--current .admin-videos-filter__search,
@@ -4473,8 +4473,8 @@ body.admin-mobile-nav-open {
 }
 
 .admin-videos-filter__actions {
-  grid-column: 3;
-  justify-self: end;
+  grid-column: 2;
+  justify-self: start;
   display: inline-flex;
   align-items: center;
   justify-content: flex-end;
@@ -4494,22 +4494,30 @@ body.admin-mobile-nav-open {
   align-items: center;
 }
 
-.admin-blacklist-table.is-row-select-mode tbody tr {
-  cursor: pointer;
-}
-
-.admin-blacklist-table.is-row-select-mode tbody tr:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: -2px;
-}
-
-.admin-blacklist-table.is-row-select-mode tbody tr.is-disabled-select {
-  cursor: default;
-}
-
 .admin-blacklist-table {
-  width: min(100%, 860px);
+  width: 100%;
+}
+
+.admin-blacklist-table td.admin-blacklist-select-cell {
+  width: 52px;
+  padding-right: 0;
+}
+
+.admin-blacklist-row-select {
   margin-inline: auto;
+}
+
+.admin-blacklist-row-select.is-disabled {
+  cursor: not-allowed;
+}
+
+.admin-blacklist-row-select.is-disabled .admin-video-card__select-box {
+  opacity: 0.4;
+}
+
+.admin-blacklist-row-select.is-disabled:hover .admin-video-card__select-box {
+  border-color: var(--border-subtle);
+  box-shadow: none;
 }
 
 .admin-videos-filter__search {
@@ -4537,7 +4545,7 @@ body.admin-mobile-nav-open {
 }
 
 @media (min-width: 769px) {
-  .admin-videos-filter--current .admin-video-advanced-toggle {
+  .admin-videos-filter__search-action {
     min-height: 32px;
     height: 32px;
     padding: 0 12px;
@@ -4549,7 +4557,7 @@ body.admin-mobile-nav-open {
     font-size: var(--font-xs);
   }
 
-  .admin-videos-filter--current .admin-video-advanced-toggle:hover:not(:disabled) {
+  .admin-videos-filter__search-action:hover:not(:disabled) {
     border-color: var(--border-strong);
     background: transparent;
     box-shadow: none;
@@ -4883,7 +4891,11 @@ body.admin-mobile-nav-open {
 }
 
 @media (min-width: 769px) {
-  /* auto 表格布局会按内容宽度撑列，超长文件名会把表格撑破 860px；
+  .admin-blacklist-table {
+    background: color-mix(in srgb, var(--bg-surface) 72%, transparent);
+  }
+
+  /* auto 表格布局会按内容宽度撑列，超长文件名会把表格撑破可用区域；
      max-width: 0 让该列只吃表格分配的剩余宽度，从而触发单行省略号 */
   .admin-blacklist-table td[data-label="文件名"] {
     width: 100%;
@@ -4949,7 +4961,6 @@ body.admin-mobile-nav-open {
 
 .admin-blacklist-source-delete__button {
   flex: none;
-  white-space: nowrap;
 }
 
 .admin-videos-list-toolbar {
@@ -4960,7 +4971,8 @@ body.admin-mobile-nav-open {
   margin: var(--space-2) 0 var(--space-4);
 }
 
-.admin-videos-current .admin-videos-list-toolbar {
+.admin-videos-current .admin-videos-list-toolbar,
+.admin-videos-blacklist .admin-videos-list-toolbar {
   position: fixed;
   left: calc(50% + (var(--admin-sidebar-width) / 2));
   right: auto;
@@ -4977,22 +4989,6 @@ body.admin-mobile-nav-open {
   transform: translateX(-50%);
   -webkit-backdrop-filter: blur(14px);
   backdrop-filter: blur(14px);
-}
-
-.admin-blacklist-bulk-toolbar {
-  position: fixed;
-  left: auto;
-  right: var(--space-7);
-  bottom: var(--space-5);
-  z-index: calc(var(--z-nav) + 3);
-  width: max-content;
-  max-width: calc(100vw - var(--admin-sidebar-width) - (var(--space-7) * 2));
-  margin: 0;
-  padding: 10px 12px;
-  border: 1px solid var(--border-subtle);
-  border-radius: 12px;
-  background: var(--bg-surface);
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.34);
 }
 
 .admin-videos-bulk-actions {
@@ -5012,10 +5008,6 @@ body.admin-mobile-nav-open {
 
 .admin-videos-bulk-actions__btn {
   box-shadow: none;
-}
-
-.admin-videos-bulk-actions__mobile-exit {
-  display: none;
 }
 
 .admin-table-pagination {
@@ -5185,6 +5177,11 @@ body.admin-mobile-nav-open {
     box-shadow: none;
   }
 
+  .admin-videos-filter--current .admin-video-advanced-toggle > svg,
+  .admin-videos-filter--blacklist .admin-blacklist-source-delete__button > svg {
+    display: none;
+  }
+
   .admin-videos-filter--blacklist
     .admin-videos-filter__actions
     .admin-videos-filter__batch
@@ -5221,7 +5218,7 @@ body.admin-mobile-nav-open {
   }
 
   .admin-videos-current .admin-videos-list-toolbar,
-  .admin-blacklist-bulk-toolbar {
+  .admin-videos-blacklist .admin-videos-list-toolbar {
     align-items: stretch;
     flex-direction: column;
     position: fixed;
@@ -5253,59 +5250,65 @@ body.admin-mobile-nav-open {
     min-width: 0;
   }
 
-  .admin-videos-current .admin-videos-bulk-actions__btn:last-child {
+  .admin-videos-current .admin-videos-bulk-actions__btn:last-child,
+  .admin-videos-blacklist .admin-videos-bulk-actions__btn:last-child {
     grid-column: 1 / -1;
-  }
-
-  .admin-blacklist-bulk-toolbar .admin-videos-bulk-actions__btn {
-    grid-column: auto;
-  }
-
-  .admin-blacklist-bulk-toolbar .admin-videos-bulk-actions__mobile-exit {
-    grid-column: 1 / -1;
-  }
-
-  .admin-videos-bulk-actions__mobile-exit {
-    display: inline-flex;
   }
 
   .admin-blacklist-table:not(.admin-drives-table) tr {
-    --admin-video-card-bg: var(--bg-surface);
-    --admin-video-card-selected-shadow: 0 0 0 1px var(--border-accent), var(--shadow-md);
+    position: relative;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    gap: var(--space-3) 8px;
   }
 
-  :root:not([data-theme="pink"]) .admin-blacklist-table:not(.admin-drives-table) tr {
-    --admin-video-card-bg: #1e1e1e;
-    --admin-video-card-selected-shadow:
-      0 0 0 1px rgba(255, 138, 60, 0.28),
-      0 8px 20px rgba(0, 0, 0, 0.24);
+  .admin-blacklist-table:not(.admin-drives-table) td.admin-blacklist-select-cell {
+    position: static;
+    grid-column: 3;
+    grid-row: 2;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    transform: none;
   }
 
-  .admin-blacklist-table:not(.admin-drives-table) tr.is-selected {
-    background: var(--admin-video-card-bg);
-    border-color: var(--border-accent);
-    box-shadow: var(--admin-video-card-selected-shadow);
-  }
-
-  .admin-blacklist-table:not(.admin-drives-table).is-row-select-mode
-    tr.is-selected {
-    background: color-mix(in srgb, var(--admin-video-card-bg) 88%, var(--accent) 12%);
-    border-color: var(--accent);
-    box-shadow:
-      0 0 0 1px var(--accent),
-      var(--shadow-md);
+  .admin-blacklist-table:not(.admin-drives-table) td.admin-blacklist-select-cell::before {
+    content: none;
+    display: none;
   }
 
   .admin-blacklist-table:not(.admin-drives-table) td[data-label="文件名"] {
     grid-column: 1 / -1;
+    grid-row: 1;
   }
 
-  /* 卡片视图空间有限，文件名与操作按钮沿用换行布局，仅桌面表格要求单行 */
+  .admin-blacklist-table:not(.admin-drives-table) .admin-blacklist-source-cell {
+    grid-column: 1;
+    grid-row: 2;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+  }
+
+  .admin-blacklist-source-cell::before {
+    flex: none;
+  }
+
+  .admin-blacklist-source-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* 内联文本流让原因胶囊跟随文件名末尾，底部来源和功能操作保持单行 */
   .admin-blacklist-filecell {
-    flex-wrap: wrap;
+    display: block;
   }
 
   .admin-blacklist-filename {
+    display: inline;
     white-space: normal;
     overflow: visible;
     text-overflow: clip;
@@ -5313,8 +5316,14 @@ body.admin-mobile-nav-open {
     overflow-wrap: anywhere;
   }
 
+  .admin-blacklist-filecell .admin-blacklist-reason-pill {
+    margin-inline-start: 6px;
+    vertical-align: middle;
+  }
+
   .admin-blacklist-table:not(.admin-drives-table) td.is-actions {
     grid-column: 2;
+    grid-row: 2;
     align-content: center;
     align-items: center;
     justify-content: flex-end;
@@ -5323,7 +5332,7 @@ body.admin-mobile-nav-open {
 
   .admin-blacklist-actions {
     justify-content: flex-end;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
   }
 
   .admin-blacklist-table:not(.admin-drives-table) td.is-actions::before {
@@ -5333,12 +5342,12 @@ body.admin-mobile-nav-open {
 
   .admin-blacklist-table:not(.admin-drives-table) td.is-actions .admin-btn {
     justify-content: center;
-    flex: 0 1 auto;
+    flex: 0 0 auto;
     min-width: 0;
-    max-width: 100%;
+    max-width: none;
     min-height: 32px;
     padding: 6px 10px;
-    white-space: normal;
+    white-space: nowrap;
   }
 
   .admin-blacklist-table:not(.admin-drives-table) td.is-actions .admin-blacklist-delete-source-btn {
@@ -8498,7 +8507,7 @@ body.admin-mobile-nav-open {
 .admin-table { overflow: visible !important; border-collapse: separate !important; border-spacing: 0 !important; }
 .admin-table th { position: sticky; top: 0; background: var(--bg-elevated) !important; z-index: 10; }
 @media (hover: hover) and (pointer: fine) {
-  .admin-table tbody tr:hover td { background: var(--bg-elevated) !important; }
+  .admin-table:not(.admin-table--static-rows) tbody tr:hover td { background: var(--bg-elevated) !important; }
 }
 @media (min-width: 769px) {
   .admin-table tr.is-selected td { background: var(--accent-softer) !important; }
