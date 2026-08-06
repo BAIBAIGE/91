@@ -25,6 +25,7 @@ import {
   LOG_REFRESH_INTERVAL_MS,
   logRefreshRetryDelay,
   mergeRuntimeLogEntries,
+  mergeRuntimeLogSnapshot,
 } from "../src/admin/useRuntimeLogs.ts";
 
 const appSource = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
@@ -69,8 +70,9 @@ test("admin log viewer is reachable from the authenticated admin layout", () => 
   assert.match(runtimeLogsSource, /limit: LOG_BUFFER_LIMIT/);
   assert.match(
     runtimeLogsSource,
-    /if \(next\.reset\) \{[\s\S]*?const replacement = await api\.listLogs\(\s*\{ limit: LOG_BUFFER_LIMIT \}/
+    /if \(next\.reset\) \{[\s\S]*?cursor = next\.nextCursor;[\s\S]*?break;/
   );
+  assert.doesNotMatch(runtimeLogsSource, /const replacement = await api\.listLogs/);
   assert.match(
     logsPageSource,
     /filterRuntimeLogEntries\(bufferedEntries[\s\S]*?useLogScroller\(\{[\s\S]*?entries: matchingEntries/
@@ -271,6 +273,27 @@ test("admin log polling bounds its cache and progressively reveals entries", () 
     ),
     [2, 3, 4]
   );
+  const resetSnapshot = mergeRuntimeLogSnapshot(
+    {
+      entries: [entry(1), entry(2)],
+      matched: 2,
+      storageBytes: 200,
+      maxStorageBytes: 1000,
+      nextCursor: "stale-cursor",
+    },
+    {
+      entries: [entry(9)],
+      matched: 1,
+      storageBytes: 100,
+      maxStorageBytes: 1000,
+      nextCursor: "fresh-cursor",
+      reset: true,
+    },
+    []
+  );
+  assert.deepEqual(resetSnapshot.entries.map((item) => item.id), [9]);
+  assert.equal(resetSnapshot.nextCursor, "fresh-cursor");
+  assert.equal(resetSnapshot.reset, true);
 });
 
 test("admin log filters run locally across the loaded buffer", () => {

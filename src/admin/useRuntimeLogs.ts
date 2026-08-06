@@ -71,7 +71,7 @@ function snapshotWithBoundedEntries(snapshot: api.AdminLogSnapshot) {
   };
 }
 
-function mergeRuntimeLogSnapshot(
+export function mergeRuntimeLogSnapshot(
   current: api.AdminLogSnapshot | null,
   latest: api.AdminLogSnapshot,
   incoming: api.AdminLogEntry[]
@@ -180,7 +180,8 @@ export function useRuntimeLogs({ autoRefresh }: { autoRefresh: boolean }) {
   );
 
   const pollLogs = useCallback(async (): Promise<RefreshOutcome> => {
-    if (!readyRef.current || !cursorRef.current) {
+    const initialCursor = cursorRef.current;
+    if (!readyRef.current || !initialCursor) {
       readyRef.current = false;
       return { status: "cancelled" };
     }
@@ -188,13 +189,14 @@ export function useRuntimeLogs({ autoRefresh }: { autoRefresh: boolean }) {
     const request = beginRequest(false);
     if (!request) return { status: "busy" };
 
-    let cursor = cursorRef.current;
+    let cursor: string | undefined = initialCursor;
     let latest: api.AdminLogSnapshot | null = null;
     let incoming: api.AdminLogEntry[] = [];
     let catchUp = false;
 
     try {
       for (let batch = 0; batch < LOG_MAX_CATCH_UP_BATCHES; batch += 1) {
+        if (!cursor) break;
         const next = await api.listLogs(
           {
             limit: LOG_FETCH_BATCH_LIMIT,
@@ -206,14 +208,9 @@ export function useRuntimeLogs({ autoRefresh }: { autoRefresh: boolean }) {
 
         latest = next;
         if (next.reset) {
-          const replacement = await api.listLogs(
-            { limit: LOG_BUFFER_LIMIT },
-            request.controller.signal
-          );
-          if (!requestIsCurrent(request)) return { status: "cancelled" };
-          latest = replacement;
-          incoming = boundedEntries(replacement.entries);
-          cursor = replacement.nextCursor ?? cursor;
+          // The reset response already carries a bounded tail and a fresh cursor.
+          // Keep its reset marker so stale buffered entries are replaced atomically.
+          cursor = next.nextCursor;
           catchUp = false;
           break;
         }

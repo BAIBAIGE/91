@@ -1,14 +1,17 @@
 package api
 
 import (
+	"compress/gzip"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/andybalholm/brotli"
 	"github.com/go-chi/chi/v5"
 
 	"github.com/video-site/backend/internal/applog"
@@ -48,6 +51,77 @@ func TestHandleLogsReturnsFilteredBoundedSnapshot(t *testing.T) {
 	}
 	if len(got.Entries) != 1 || got.Entries[0].Message != "worker failed: latest" {
 		t.Fatalf("entries = %#v", got.Entries)
+	}
+}
+
+func TestHandleLogsNegotiatesResponseCompression(t *testing.T) {
+	store := newAdminLogsTestStore(t)
+	for range 40 {
+		appendAdminLog(t, store, applog.Entry{
+			Source:  applog.SourceApplication,
+			Message: strings.Repeat("repeated log payload ", 20),
+		})
+	}
+
+	tests := []struct {
+		name           string
+		acceptEncoding string
+		wantEncoding   string
+	}{
+		{name: "identity"},
+		{name: "gzip", acceptEncoding: "gzip", wantEncoding: "gzip"},
+		{name: "brotli preferred", acceptEncoding: "gzip, br", wantEncoding: "br"},
+		{name: "quality honored", acceptEncoding: "br;q=0.2, gzip;q=0.8", wantEncoding: "gzip"},
+		{name: "disabled", acceptEncoding: "br;q=0, gzip;q=0"},
+		{name: "wildcard", acceptEncoding: "*;q=0.5", wantEncoding: "br"},
+	}
+	bodySizes := make(map[string]int, len(tests))
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/admin/api/logs?limit=100", nil)
+			if test.acceptEncoding != "" {
+				req.Header.Set("Accept-Encoding", test.acceptEncoding)
+			}
+			rr := httptest.NewRecorder()
+			(&AdminServer{Logs: store}).handleLogs(rr, req)
+
+			if rr.Code != http.StatusOK {
+				t.Fatalf("status = %d", rr.Code)
+			}
+			if got := rr.Header().Get("Content-Encoding"); got != test.wantEncoding {
+				t.Fatalf("Content-Encoding = %q, want %q", got, test.wantEncoding)
+			}
+			if got := strings.Join(rr.Header().Values("Vary"), ","); !strings.Contains(got, "Accept-Encoding") {
+				t.Fatalf("Vary = %q, want Accept-Encoding", got)
+			}
+			bodySizes[test.name] = rr.Body.Len()
+
+			var reader io.Reader = rr.Body
+			switch test.wantEncoding {
+			case "br":
+				reader = brotli.NewReader(reader)
+			case "gzip":
+				gzipReader, err := gzip.NewReader(reader)
+				if err != nil {
+					t.Fatalf("open gzip response: %v", err)
+				}
+				defer func() { _ = gzipReader.Close() }()
+				reader = gzipReader
+			}
+			var snapshot applog.Snapshot
+			if err := json.NewDecoder(reader).Decode(&snapshot); err != nil {
+				t.Fatalf("decode response: %v", err)
+			}
+			if len(snapshot.Entries) != 40 {
+				t.Fatalf("entries = %d, want 40", len(snapshot.Entries))
+			}
+		})
+	}
+	if bodySizes["gzip"] >= bodySizes["identity"] {
+		t.Fatalf("gzip response = %d bytes, identity = %d", bodySizes["gzip"], bodySizes["identity"])
+	}
+	if bodySizes["brotli preferred"] >= bodySizes["identity"] {
+		t.Fatalf("brotli response = %d bytes, identity = %d", bodySizes["brotli preferred"], bodySizes["identity"])
 	}
 }
 

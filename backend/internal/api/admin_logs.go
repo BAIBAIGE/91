@@ -34,7 +34,9 @@ func (a *AdminServer) handleLogs(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, fmt.Errorf("read runtime logs: %w", err))
 		return
 	}
-	writeJSON(w, http.StatusOK, snapshot)
+	responseWriter, closeCompression := compressLogResponse(w, r)
+	defer closeCompression()
+	writeJSON(responseWriter, http.StatusOK, snapshot)
 }
 
 func (a *AdminServer) handleClearLogs(w http.ResponseWriter, _ *http.Request) {
