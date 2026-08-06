@@ -143,11 +143,11 @@ test("admin log viewer is reachable from the authenticated admin layout", () => 
   );
   assert.match(
     adminCss,
-    /\.admin-log-filter-chip\s*\{[^}]*min-height:\s*24px[^}]*padding:\s*2px 8px[^}]*font-size:\s*11px/s
+    /\.admin-log-filter-chip\s*\{[^}]*min-height:\s*24px[^}]*padding:\s*2px 8px[^}]*background:\s*transparent[^}]*font-size:\s*11px/s
   );
   assert.match(
     adminCss,
-    /\.admin-log-filter-chip\.is-active\s*\{[^}]*border-color:\s*color-mix\(in srgb, var\(--text-strong\) 45%, transparent\)[^}]*background:\s*color-mix\(in srgb, var\(--text-strong\) 10%, transparent\)[^}]*color:\s*var\(--text-strong\)/s
+    /\.admin-log-filter-chip\.is-active\s*\{[^}]*border-color:\s*color-mix\(in srgb, var\(--text-strong\) 45%, transparent\)[^}]*background:\s*transparent[^}]*color:\s*var\(--text-strong\)/s
   );
   assert.match(logsPageSource, /下载日志/);
   assert.match(
@@ -223,6 +223,21 @@ test("admin log viewer is reachable from the authenticated admin layout", () => 
     /@media \(max-width: 768px\)[\s\S]*?\.admin-log-card\.is-fullscreen \.admin-log-panel\s*\{[^}]*flex:\s*1 1 auto[^}]*min-height:\s*0[^}]*height:\s*auto/s
   );
   assert.match(adminCss, /@media \(max-width: 768px\)[\s\S]*?\.admin-log-row\s*\{/);
+});
+
+test("mobile fullscreen logs keep only the exit fullscreen action", () => {
+  assert.match(
+    logsPageSource,
+    /className="admin-btn admin-log-fullscreen-toggle"[\s\S]*?fullscreen \? "退出全屏" : "全屏查看"/
+  );
+  assert.match(
+    adminCss,
+    /@media \(max-width: 768px\)[\s\S]*?\.admin-log-card\.is-fullscreen \.admin-log-toggles,\s*\.admin-log-card\.is-fullscreen\s+\.admin-log-actions\s+> \.admin-btn:not\(\.admin-log-fullscreen-toggle\),\s*\.admin-log-card\.is-fullscreen \.admin-log-jump-latest\s*\{[^}]*display:\s*none;/s
+  );
+  assert.match(
+    adminCss,
+    /@media \(max-width: 768px\)[\s\S]*?\.admin-log-card\.is-fullscreen \.admin-log-actions\s*\{[^}]*display:\s*flex;[^}]*width:\s*auto;[^}]*margin-left:\s*auto;/s
+  );
 });
 
 test("admin log polling bounds its cache and progressively reveals entries", () => {

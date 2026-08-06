@@ -593,7 +593,7 @@ export function LogsPage() {
               <button
                 ref={fullscreenButtonRef}
                 type="button"
-                className="admin-btn"
+                className="admin-btn admin-log-fullscreen-toggle"
                 aria-pressed={fullscreen}
                 onClick={toggleFullscreen}
               >

@@ -9412,7 +9412,7 @@ body.admin-logs-fullscreen-active {
   padding: 2px 8px;
   border: 1px solid var(--border-default);
   border-radius: var(--radius-pill);
-  background: var(--bg-surface);
+  background: transparent;
   color: var(--text-muted);
   font-size: 11px;
   font-weight: var(--weight-medium);
@@ -9429,7 +9429,7 @@ body.admin-logs-fullscreen-active {
 
 .admin-log-filter-chip.is-active {
   border-color: color-mix(in srgb, var(--text-strong) 45%, transparent);
-  background: color-mix(in srgb, var(--text-strong) 10%, transparent);
+  background: transparent;
   color: var(--text-strong);
 }
 
@@ -9888,6 +9888,24 @@ body.admin-logs-fullscreen-active {
   .admin-log-actions .admin-btn {
     min-width: 0;
     padding-inline: 8px;
+  }
+
+  .admin-log-card.is-fullscreen .admin-log-toggles,
+  .admin-log-card.is-fullscreen
+    .admin-log-actions
+    > .admin-btn:not(.admin-log-fullscreen-toggle),
+  .admin-log-card.is-fullscreen .admin-log-jump-latest {
+    display: none;
+  }
+
+  .admin-log-card.is-fullscreen .admin-log-control-row {
+    align-items: flex-end;
+  }
+
+  .admin-log-card.is-fullscreen .admin-log-actions {
+    display: flex;
+    width: auto;
+    margin-left: auto;
   }
 
   .admin-log-panel {
