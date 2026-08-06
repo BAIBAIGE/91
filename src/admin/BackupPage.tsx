@@ -17,7 +17,6 @@ import { useAuth } from "./AuthContext";
 import { ConfirmModal } from "./ConfirmModal";
 import { Modal } from "./Modal";
 import { useToast } from "./ToastContext";
-import { AdminLoading } from "./AdminLoading";
 
 const RESUME_KEY = "video-site-91-backup-upload-v1";
 
@@ -549,14 +548,6 @@ export function BackupPage() {
     setRestoreText("");
   }
 
-  if (loading && !data) {
-    return (
-      <div className="admin-page backup-page">
-        <AdminLoading />
-      </div>
-    );
-  }
-
   const estimate = data?.estimate;
   const receivedBytes =
     upload?.received.reduce((sum, chunk) => sum + chunk.size, 0) ?? 0;
@@ -617,19 +608,22 @@ export function BackupPage() {
   ];
 
   return (
-    <div className="admin-page backup-page">
+    <div
+      className="admin-page backup-page"
+      aria-busy={loading || undefined}
+    >
       <section className="backup-overview" aria-label="备份空间概览">
         <div className="backup-stat">
           <span>预计数据量</span>
-          <strong>{formatBytes(estimate?.totalBytes)}</strong>
+          <strong>{data ? formatBytes(estimate?.totalBytes) : null}</strong>
         </div>
         <div className="backup-stat">
           <span>服务器可用空间</span>
-          <strong>{formatBytes(estimate?.availableBytes)}</strong>
+          <strong>{data ? formatBytes(estimate?.availableBytes) : null}</strong>
         </div>
         <div className="backup-stat">
           <span>备份数量</span>
-          <strong>{data?.backups.length ?? 0}</strong>
+          <strong>{data ? data.backups.length : null}</strong>
         </div>
       </section>
 
@@ -686,16 +680,16 @@ export function BackupPage() {
                 type="file"
                 accept=".zip,application/zip"
                 onChange={chooseFile}
-                disabled={uploading || finalizing}
+                disabled={!data || uploading || finalizing}
               />
             </label>
             <div className="backup-upload-actions">
               {finalizing ? null : !uploading ? (
                 <button
                   type="button"
-                  className="admin-btn is-primary"
+                  className="admin-btn backup-upload-submit"
                   onClick={handleUpload}
-                  disabled={!file || finalizing}
+                  disabled={!data || !file || finalizing}
                 >
                   {upload?.received.length ? "继续上传" : "开始上传"}
                 </button>
@@ -742,9 +736,9 @@ export function BackupPage() {
             <h2>备份列表</h2>
             <button
               type="button"
-              className="admin-btn is-primary"
+              className="admin-btn is-transparent"
               onClick={handleCreate}
-              disabled={creating || taskActive(current) || data?.pendingRestore}
+              disabled={!data || creating || taskActive(current) || data.pendingRestore}
             >
               {creating ? <Loader2 size={15} className="admin-spin" /> : null}
               创建备份
@@ -802,12 +796,12 @@ export function BackupPage() {
                 </article>
               ))}
             </div>
-          ) : (
+          ) : data ? (
             <div className="backup-empty">
               <Archive size={28} />
               <span>当前没有备份包</span>
             </div>
-          )}
+          ) : null}
         </section>
       </div>
 

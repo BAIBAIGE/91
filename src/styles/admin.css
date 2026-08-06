@@ -1662,6 +1662,11 @@ body.admin-mobile-nav-open {
   box-shadow: none;
 }
 
+.admin-btn.is-transparent,
+.admin-btn.is-transparent:hover:not(:disabled) {
+  background: transparent;
+}
+
 .admin-btn.is-danger {
   color: var(--danger);
   border-color: rgba(241, 85, 108, 0.4);
@@ -8641,18 +8646,26 @@ body.admin-mobile-nav-open {
 .backup-overview {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: var(--space-3);
+  width: 100%;
+  overflow: hidden;
   margin-bottom: var(--space-5);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
 }
 
 .backup-stat {
   display: grid;
+  align-content: center;
+  justify-items: center;
   gap: 9px;
   min-width: 0;
   padding: var(--space-4) var(--space-5);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
-  background: var(--bg-surface);
+  text-align: center;
+}
+
+.backup-stat + .backup-stat {
+  border-left: 1px solid var(--border-subtle);
 }
 
 .backup-stat > span {
@@ -8664,10 +8677,12 @@ body.admin-mobile-nav-open {
 }
 
 .backup-stat strong {
+  min-height: 1.2em;
   overflow-wrap: anywhere;
   color: var(--text-strong);
   font-size: var(--font-2xl);
   font-weight: var(--weight-bold);
+  line-height: 1.2;
   letter-spacing: -0.01em;
   font-variant-numeric: tabular-nums;
 }
@@ -8799,6 +8814,8 @@ body.admin-mobile-nav-open {
 
 .backup-upload-controls {
   display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: stretch;
   gap: var(--space-2);
 }
 
@@ -8808,9 +8825,9 @@ body.admin-mobile-nav-open {
   justify-content: center;
   gap: 8px;
   min-width: 0;
-  width: 100%;
+  width: auto;
   min-height: 40px;
-  padding: 9px 13px;
+  padding: 8px 12px;
   border: 1px dashed var(--border-default);
   border-radius: var(--radius-sm);
   background: var(--bg-elevated);
@@ -8842,11 +8859,14 @@ body.admin-mobile-nav-open {
 
 .backup-upload-actions {
   display: flex;
+  align-items: stretch;
   gap: var(--space-2);
 }
 
 .backup-upload-actions .admin-btn {
-  flex: 1 1 0;
+  flex: 0 0 auto;
+  min-height: 40px;
+  padding-inline: 14px;
 }
 
 .backup-upload-progress {
@@ -10012,10 +10032,6 @@ body.admin-logs-fullscreen-active {
 }
 
 @media (max-width: 840px) {
-  .backup-overview {
-    grid-template-columns: 1fr;
-  }
-
   .backup-record {
     grid-template-columns: auto minmax(0, 1fr);
     align-items: start;
@@ -10032,6 +10048,24 @@ body.admin-logs-fullscreen-active {
 }
 
 @media (max-width: 600px) {
+  .backup-stat {
+    gap: 6px;
+    padding: var(--space-3) var(--space-2);
+  }
+
+  .backup-stat > span {
+    font-size: 11px;
+    letter-spacing: 0.03em;
+  }
+
+  .backup-stat strong {
+    font-size: var(--font-lg);
+  }
+
+  .backup-upload-controls {
+    grid-template-columns: 1fr;
+  }
+
   .backup-upload-actions {
     flex-direction: column;
     align-items: stretch;

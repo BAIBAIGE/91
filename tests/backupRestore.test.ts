@@ -59,10 +59,74 @@ test("restore confirmation input uses the shared theme-aware field palette", () 
 });
 
 test("backup creation uses credential-neutral backup wording", () => {
+  assert.match(
+    page,
+    /className="admin-btn is-transparent"\s+onClick=\{handleCreate\}[\s\S]*?创建备份/
+  );
   assert.match(page, /创建备份\n\s*<\/button>/);
   assert.match(page, /show\("备份任务已开始", "success"\)/);
   assert.match(page, /<span>当前没有备份包<\/span>/);
+  assert.doesNotMatch(
+    page,
+    /className="admin-btn is-primary"[\s\S]{0,240}?创建备份/
+  );
+  assert.match(
+    css,
+    /\.admin-btn\.is-transparent,\s*\.admin-btn\.is-transparent:hover:not\(:disabled\)\s*\{[^}]*background:\s*transparent;/s
+  );
   assert.doesNotMatch(page, /创建完整备份|完整备份任务已开始|还没有完整备份/);
+});
+
+test("backup overview uses one full-width card with three evenly distributed metrics", () => {
+  const overview = page.slice(
+    page.indexOf('<section className="backup-overview"'),
+    page.indexOf("{current && taskActive(current)")
+  );
+
+  assert.equal(overview.match(/className="backup-stat"/g)?.length, 3);
+  assert.match(overview, /预计数据量[\s\S]*服务器可用空间[\s\S]*备份数量/);
+  assert.match(
+    css,
+    /\.backup-overview\s*\{[^}]*grid-template-columns:\s*repeat\(3,\s*minmax\(0,\s*1fr\)\);[^}]*width:\s*100%;[^}]*border:\s*1px solid var\(--border-subtle\);[^}]*border-radius:\s*var\(--radius-md\);[^}]*background:\s*var\(--bg-surface\);/s
+  );
+  assert.match(
+    css,
+    /\.backup-stat\s*\{[^}]*justify-items:\s*center;[^}]*text-align:\s*center;/s
+  );
+  assert.match(
+    css,
+    /\.backup-stat \+ \.backup-stat\s*\{[^}]*border-left:\s*1px solid var\(--border-subtle\);/s
+  );
+  assert.doesNotMatch(
+    css,
+    /@media \(max-width: 840px\)\s*\{[\s\S]*?\.backup-overview\s*\{[^}]*grid-template-columns:\s*1fr;/
+  );
+});
+
+test("backup loading keeps the fixed page shell and leaves backend data blank", () => {
+  assert.doesNotMatch(page, /AdminLoading|lds-ellipsis/);
+  assert.doesNotMatch(page, /if \(loading && !data\)/);
+  assert.match(
+    page,
+    /className="admin-page backup-page"\s+aria-busy=\{loading \|\| undefined\}/
+  );
+  assert.match(
+    page,
+    /<section className="backup-overview"[\s\S]*?data \? formatBytes\(estimate\?\.totalBytes\) : null[\s\S]*?data \? formatBytes\(estimate\?\.availableBytes\) : null[\s\S]*?data \? data\.backups\.length : null/
+  );
+  assert.match(
+    page,
+    /<section className="admin-card backup-upload-card">[\s\S]*?<section className="backup-list-section">/
+  );
+  assert.match(
+    page,
+    /\{data\?\.backups\.length \? \([\s\S]*?className="backup-list"[\s\S]*?\) : data \? \([\s\S]*?className="backup-empty"[\s\S]*?\) : null\}/
+  );
+  assert.match(page, /disabled=\{!data \|\| creating \|\| taskActive\(current\)/);
+  assert.match(
+    css,
+    /\.backup-stat strong\s*\{[^}]*min-height:\s*1\.2em;[^}]*line-height:\s*1\.2;/s
+  );
 });
 
 test("migration upload uses resumable 16 MiB server chunks with hashes", () => {
@@ -74,6 +138,37 @@ test("migration upload uses resumable 16 MiB server chunks with hashes", () => {
   assert.match(page, /handlePause/);
   assert.match(page, /校验并入库/);
   assert.doesNotMatch(page, /正在合并并完整校验/);
+});
+
+test("backup upload aligns its picker with an ordinary compact upload button", () => {
+  assert.match(
+    page,
+    /className="backup-file-picker"[\s\S]*?<div className="backup-upload-actions">[\s\S]*?className="admin-btn backup-upload-submit"[\s\S]*?开始上传/
+  );
+  assert.doesNotMatch(
+    page,
+    /className="admin-btn is-primary"[\s\S]{0,180}?\{upload\?\.received\.length \? "继续上传" : "开始上传"\}/
+  );
+  assert.match(
+    css,
+    /\.backup-upload-controls\s*\{[^}]*display:\s*grid;[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\) auto;[^}]*align-items:\s*stretch;/s
+  );
+  assert.match(
+    css,
+    /\.backup-file-picker\s*\{[^}]*width:\s*auto;[^}]*min-height:\s*40px;[^}]*padding:\s*8px 12px;/s
+  );
+  assert.match(
+    css,
+    /\.backup-upload-actions \.admin-btn\s*\{[^}]*flex:\s*0 0 auto;[^}]*min-height:\s*40px;[^}]*padding-inline:\s*14px;/s
+  );
+  assert.doesNotMatch(
+    css,
+    /\.backup-upload-submit\s*\{[^}]*min-width:/s
+  );
+  assert.match(
+    css,
+    /@media \(max-width: 600px\)[\s\S]*?\.backup-upload-controls\s*\{[^}]*grid-template-columns:\s*1fr;/s
+  );
 });
 
 test("backup long operations render phase-driven task checklists", () => {
@@ -95,7 +190,7 @@ test("backup long operations render phase-driven task checklists", () => {
 });
 
 test("backup layout collapses safely on narrow screens", () => {
-  assert.match(css, /@media \(max-width: 840px\)[\s\S]*?\.backup-overview/);
+  assert.match(css, /@media \(max-width: 600px\)[\s\S]*?\.backup-stat/);
   assert.match(css, /@media \(max-width: 600px\)[\s\S]*?\.backup-file-picker/);
   assert.match(css, /\.backup-record__actions \.admin-btn[\s\S]*?flex: 1 1 110px/);
   assert.match(css, /\.admin-modal\.admin-modal--backup-restore[\s\S]*?width: min\(620px, 100%\)/);
