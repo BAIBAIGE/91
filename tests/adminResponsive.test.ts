@@ -166,7 +166,6 @@ test("mobile user management cards keep identity, metadata, and actions separate
   const passwordResetModal = ruleBody(adminCss, ".admin-modal.admin-modal--password-reset");
   const passwordResetChrome = ruleBodyByContains(adminCss, ".admin-modal--password-reset .admin-modal__header");
   const passwordResetClose = ruleBody(adminCss, ".admin-modal--password-reset .admin-modal__header .admin-btn");
-  const pageLoading = ruleBody(adminCss, ".admin-page-loading");
   const userToolbarActions = ruleBody(css, ".admin-users-toolbar-actions");
   const createUserFab = ruleBody(css, ".admin-users-create-fab");
   const ipIdentity = ruleBody(css, ".admin-banned-ips-table:not(.admin-drives-table) .admin-banned-ips-table__ip");
@@ -180,12 +179,6 @@ test("mobile user management cards keep identity, metadata, and actions separate
   assert.doesNotMatch(usersPageSource, /<th>ID<\/th>/);
   assert.doesNotMatch(usersPageSource, /admin-users-table__id/);
   assert.match(usersPageSource, /title="创建用户"[\s\S]*?className="admin-modal--user-create"/);
-  assert.match(usersPageSource, /import \{ AdminLoading \} from "\.\/AdminLoading";/);
-  assert.match(usersPageSource, /<AdminLoading \/>/);
-  assert.doesNotMatch(usersPageSource, /<span>加载中\.\.\.<\/span>/);
-  assert.doesNotMatch(usersPageSource, /加载中\.\.\./);
-  assert.match(pageLoading, /flex\s*:\s*1 1 auto/);
-  assert.match(pageLoading, /min-height\s*:\s*0/);
   assert.match(createUserModal, /width\s*:\s*min\(380px,\s*100%\)/);
   assert.match(createUserModal, /border\s*:\s*0/);
   assert.match(createUserModal, /box-shadow\s*:\s*none/);
@@ -282,6 +275,60 @@ test("mobile user management cards keep identity, metadata, and actions separate
   assert.doesNotMatch(
     ruleBody(css, ".admin-banned-ips-table:not(.admin-drives-table) .admin-banned-ips-table__actions .admin-btn"),
     /width\s*:\s*100%/
+  );
+});
+
+test("user management loading keeps fixed controls and leaves both tables blank", () => {
+  assert.doesNotMatch(usersPageSource, /AdminLoading|加载中\.\.\./);
+  assert.match(
+    usersPageSource,
+    /className="admin-page admin-page--with-floating-actions"\s+aria-busy=\{loading \|\| undefined\}/
+  );
+  assert.match(
+    usersPageSource,
+    /className="admin-users-toolbar"[\s\S]*?\{!loading && tab === "users" && \(\s*<div className="admin-table-wrap admin-users-table-wrap">\s*<table className="admin-table admin-users-table">/
+  );
+  assert.match(
+    usersPageSource,
+    /\{!loading && tab === "ips" && \(\s*<div className="admin-table-wrap admin-users-table-wrap">\s*<table className="admin-table admin-banned-ips-table">/
+  );
+});
+
+test("user create action matches the desktop create fab and preserves its mobile design", () => {
+  const sharedFab = ruleBody(adminCss, ".admin-create-fab");
+  const sharedFabSurface = ruleBody(adminCss, ".admin-btn.admin-create-fab");
+  const desktopUserFab = ruleBody(adminCss, ".admin-users-create-fab");
+  const mobileUserFab = ruleBody(mobileCss(), ".admin-users-create-fab");
+
+  assert.match(
+    usersPageSource,
+    /<button\s+data-admin-floating-actions\s+type="button"\s+className="admin-btn admin-users-create-fab"\s+onClick=\{\(\) => setShowCreate\(true\)\}\s*>\s*<Plus size="1em" className="admin-users-create-fab__icon" aria-hidden="true" \/>\s*新建用户/
+  );
+  assert.match(
+    adminCss,
+    /@media \(min-width: 769px\)\s*\{\s*\.admin-users-create-fab\s*\{/
+  );
+
+  for (const declaration of [
+    /position\s*:\s*fixed/,
+    /right\s*:\s*var\(--space-7\)/,
+    /bottom\s*:\s*var\(--space-5\)/,
+    /min-height\s*:\s*44px/,
+    /border-radius\s*:\s*12px/,
+    /box-shadow\s*:\s*0 12px 32px/,
+  ]) {
+    assert.match(sharedFab, declaration);
+    assert.match(desktopUserFab, declaration);
+  }
+
+  assert.match(sharedFabSurface, /background\s*:\s*transparent/);
+  assert.match(desktopUserFab, /background\s*:\s*transparent/);
+  assert.doesNotMatch(mobileUserFab, /position\s*:/);
+  assert.match(mobileUserFab, /min-width\s*:\s*96px/);
+  assert.match(mobileUserFab, /background\s*:\s*var\(--bg-surface\)/);
+  assert.match(
+    ruleBody(mobileCss(), ".admin-users-create-fab__icon"),
+    /display\s*:\s*none/
   );
 });
 
@@ -1122,7 +1169,7 @@ test("admin loading spinner rotates around icon center", () => {
   assert.match(spinner, /will-change\s*:\s*transform/);
   assert.match(pageLoading, /flex\s*:\s*1 1 auto/);
   assert.match(pageLoading, /min-height\s*:\s*0/);
-  assert.match(usersPageSource, /<AdminLoading \/>/);
+  assert.doesNotMatch(usersPageSource, /AdminLoading/);
   assert.doesNotMatch(tagsPageSource, /AdminLoading/);
   assert.doesNotMatch(crawlersPageSource, /AdminLoading/);
   assert.match(crawlersPageSource, /<CrawlerListSkeleton \/>/);

@@ -3,6 +3,7 @@ import {
   Ban,
   ChevronDown,
   Key,
+  Plus,
   ShieldOff,
   Trash2,
 } from "lucide-react";
@@ -11,7 +12,6 @@ import { useToast } from "./ToastContext";
 import { Modal } from "./Modal";
 import { ConfirmModal } from "./ConfirmModal";
 import { PasswordInput } from "./PasswordInput";
-import { AdminLoading } from "./AdminLoading";
 import { useAdminFloatingActionSpace } from "./useAdminFloatingActionSpace";
 
 type Tab = "users" | "ips";
@@ -162,6 +162,7 @@ export function UsersPage() {
     <div
       ref={floatingActionPageRef}
       className="admin-page admin-page--with-floating-actions"
+      aria-busy={loading || undefined}
     >
       <div className="admin-users-toolbar">
         <div className="admin-users-tabs admin-tags-filter-tabs" role="tablist" aria-label="用户分组">
@@ -186,16 +187,20 @@ export function UsersPage() {
         </div>
         <div className="admin-users-toolbar-actions" data-admin-floating-actions>
           {tab === "users" && (
-            <button className="admin-btn admin-users-create-fab" onClick={() => setShowCreate(true)}>
+            <button
+              data-admin-floating-actions
+              type="button"
+              className="admin-btn admin-users-create-fab"
+              onClick={() => setShowCreate(true)}
+            >
+              <Plus size="1em" className="admin-users-create-fab__icon" aria-hidden="true" />
               新建用户
             </button>
           )}
         </div>
       </div>
 
-      {loading ? (
-        <AdminLoading />
-      ) : tab === "users" ? (
+      {!loading && tab === "users" && (
         <div className="admin-table-wrap admin-users-table-wrap">
           <table className="admin-table admin-users-table">
             <thead>
@@ -267,7 +272,9 @@ export function UsersPage() {
             </tbody>
           </table>
         </div>
-      ) : (
+      )}
+
+      {!loading && tab === "ips" && (
         <div className="admin-table-wrap admin-users-table-wrap">
           <table className="admin-table admin-banned-ips-table">
             <thead>
