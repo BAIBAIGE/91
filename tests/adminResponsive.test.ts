@@ -166,8 +166,6 @@ test("mobile user management cards keep identity, metadata, and actions separate
   const passwordResetModal = ruleBody(adminCss, ".admin-modal.admin-modal--password-reset");
   const passwordResetChrome = ruleBodyByContains(adminCss, ".admin-modal--password-reset .admin-modal__header");
   const passwordResetClose = ruleBody(adminCss, ".admin-modal--password-reset .admin-modal__header .admin-btn");
-  const userToolbarActions = ruleBody(css, ".admin-users-toolbar-actions");
-  const createUserFab = ruleBody(css, ".admin-users-create-fab");
   const ipIdentity = ruleBody(css, ".admin-banned-ips-table:not(.admin-drives-table) .admin-banned-ips-table__ip");
   const ipReason = ruleBodyByContains(css, ".admin-banned-ips-table:not(.admin-drives-table) .admin-banned-ips-table__reason");
   const ipActions = ruleBody(css, ".admin-banned-ips-table:not(.admin-drives-table) .admin-banned-ips-table__actions");
@@ -228,24 +226,12 @@ test("mobile user management cards keep identity, metadata, and actions separate
   assert.match(usersPageSource, /className="admin-btn admin-btn--small"[\s\S]*?title="解除封禁"[\s\S]*?>\s*解除封禁\s*<\/button>/);
   assert.doesNotMatch(usersPageSource, /className="admin-btn admin-btn--small is-primary"[\s\S]*?解除封禁/);
   assert.doesNotMatch(usersPageSource, /<CheckCircle size=\{14\} \/> 解除封禁/);
-  assert.match(userToolbarActions, /position\s*:\s*fixed/);
-  assert.match(userToolbarActions, /right\s*:\s*var\(--space-3\)/);
-  assert.match(userToolbarActions, /bottom\s*:\s*calc\(var\(--space-3\)\s*\+\s*env\(safe-area-inset-bottom\)\)/);
-  assert.match(userToolbarActions, /z-index\s*:\s*calc\(var\(--z-nav\)\s*\+\s*2\)/);
-  assert.match(createUserFab, /min-height\s*:\s*44px/);
-  assert.match(createUserFab, /background\s*:\s*var\(--bg-surface\)/);
-  assert.match(createUserFab, /box-shadow\s*:\s*0\s+12px\s+32px/);
-  assert.match(
-    usersPageSource,
-    /className="admin-users-toolbar"[\s\S]*?className="admin-users-tabs[\s\S]*?className="admin-users-toolbar-actions"[\s\S]*?tab === "users" && \(/
-  );
   assert.match(ruleBody(adminCss, ".admin-users-toolbar"), /display\s*:\s*flex/);
   assert.match(ruleBody(adminCss, ".admin-users-toolbar"), /justify-content\s*:\s*flex-end/);
   assert.match(ruleBody(adminCss, ".admin-users-toolbar"), /position\s*:\s*relative/);
   assert.match(ruleBody(adminCss, ".admin-users-tabs"), /position\s*:\s*absolute/);
   assert.match(ruleBody(adminCss, ".admin-users-tabs"), /left\s*:\s*50%/);
   assert.match(ruleBody(adminCss, ".admin-users-tabs"), /transform\s*:\s*translateX\(-50%\)/);
-  assert.match(ruleBody(adminCss, ".admin-users-toolbar-actions"), /justify-content\s*:\s*flex-end/);
   assert.match(userCard, /grid-template-columns\s*:\s*repeat\(12,\s*minmax\(0,\s*1fr\)\)/);
   assert.match(userCard, /border-radius\s*:\s*var\(--radius-sm\)/);
   assert.match(ipCard, /grid-template-columns\s*:\s*repeat\(12,\s*minmax\(0,\s*1fr\)\)/);
@@ -294,19 +280,18 @@ test("user management loading keeps fixed controls and leaves both tables blank"
   );
 });
 
-test("user create action matches the desktop create fab and preserves its mobile design", () => {
+test("user create action reuses the crawler-style floating button", () => {
   const sharedFab = ruleBody(adminCss, ".admin-create-fab");
   const sharedFabSurface = ruleBody(adminCss, ".admin-btn.admin-create-fab");
-  const desktopUserFab = ruleBody(adminCss, ".admin-users-create-fab");
-  const mobileUserFab = ruleBody(mobileCss(), ".admin-users-create-fab");
+  const mobileSharedFab = lastRuleBody(adminCss, ".admin-create-fab");
 
   assert.match(
     usersPageSource,
-    /<button\s+data-admin-floating-actions\s+type="button"\s+className="admin-btn admin-users-create-fab"\s+onClick=\{\(\) => setShowCreate\(true\)\}\s*>\s*<Plus size="1em" className="admin-users-create-fab__icon" aria-hidden="true" \/>\s*新建用户/
+    /\{tab === "users" && \(\s*<button\s+data-admin-floating-actions\s+type="button"\s+className="admin-btn admin-create-fab"\s+onClick=\{\(\) => setShowCreate\(true\)\}\s*>\s*<Plus size="1em" aria-hidden="true" \/>\s*新建用户/
   );
   assert.match(
-    adminCss,
-    /@media \(min-width: 769px\)\s*\{\s*\.admin-users-create-fab\s*\{/
+    crawlersPageSource,
+    /className="admin-btn admin-create-fab"[\s\S]*?<Plus size="1em" aria-hidden="true" \/>[\s\S]*?添加爬虫/
   );
 
   for (const declaration of [
@@ -318,18 +303,15 @@ test("user create action matches the desktop create fab and preserves its mobile
     /box-shadow\s*:\s*0 12px 32px/,
   ]) {
     assert.match(sharedFab, declaration);
-    assert.match(desktopUserFab, declaration);
   }
 
+  assert.match(sharedFab, /width\s*:\s*fit-content/);
+  assert.match(sharedFab, /min-width\s*:\s*0/);
   assert.match(sharedFabSurface, /background\s*:\s*transparent/);
-  assert.match(desktopUserFab, /background\s*:\s*transparent/);
-  assert.doesNotMatch(mobileUserFab, /position\s*:/);
-  assert.match(mobileUserFab, /min-width\s*:\s*96px/);
-  assert.match(mobileUserFab, /background\s*:\s*var\(--bg-surface\)/);
-  assert.match(
-    ruleBody(mobileCss(), ".admin-users-create-fab__icon"),
-    /display\s*:\s*none/
-  );
+  assert.match(mobileSharedFab, /right\s*:\s*var\(--space-3\)/);
+  assert.match(mobileSharedFab, /bottom\s*:\s*calc\(var\(--space-3\) \+ env\(safe-area-inset-bottom\)\)/);
+  assert.doesNotMatch(usersPageSource, /admin-users-create-fab|admin-users-toolbar-actions/);
+  assert.doesNotMatch(adminCss, /admin-users-create-fab|admin-users-toolbar-actions/);
 });
 
 test("admin video management separates source navigation from the modal advanced filter", () => {
@@ -367,7 +349,7 @@ test("admin video management separates source navigation from the modal advanced
     currentTabSource,
     /className="admin-btn admin-videos-filter__search-action admin-video-advanced-toggle"[\s\S]*?<SlidersHorizontal size=\{15\} aria-hidden="true" \/>[\s\S]*?<span>筛选<\/span>/
   );
-  assert.match(videosPageSource, /<Modal[\s\S]*?open=\{advancedFiltersOpen\}[\s\S]*?title="高级筛选"[\s\S]*?className="admin-modal--video-filters"/);
+  assert.match(videosPageSource, /<Modal[\s\S]*?open=\{advancedFiltersOpen\}[\s\S]*?title="筛选"[\s\S]*?className="admin-modal--video-filters"/);
   assert.match(videosPageSource, /function AdvancedVideoFilters/);
   assert.match(videosPageSource, /function VideoSourceNavigation/);
   assert.match(videosPageSource, /aria-label="视频来源筛选"/);
@@ -1070,7 +1052,9 @@ test("admin video management controls wrap instead of covering text on mobile", 
   assert.match(currentFilterActions, /overflow\s*:\s*hidden/);
   assert.match(currentFilterActionButton, /position\s*:\s*relative/);
   assert.match(currentFilterActionButton, /min-height\s*:\s*44px/);
-  assert.match(currentFilterActionButton, /min-width\s*:\s*76px/);
+  assert.match(currentFilterActionButton, /width\s*:\s*auto/);
+  assert.match(currentFilterActionButton, /min-width\s*:\s*0/);
+  assert.match(currentFilterActionButton, /padding\s*:\s*0 14px/);
   assert.match(currentFilterActionButton, /border\s*:\s*0/);
   assert.match(currentFilterActionButton, /border-radius\s*:\s*0/);
   assert.match(currentFilterActionButton, /background\s*:\s*transparent/);

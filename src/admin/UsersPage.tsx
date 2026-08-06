@@ -185,20 +185,19 @@ export function UsersPage() {
             <span className="admin-tags-filter-tab__text">封禁IP</span>
           </button>
         </div>
-        <div className="admin-users-toolbar-actions" data-admin-floating-actions>
-          {tab === "users" && (
-            <button
-              data-admin-floating-actions
-              type="button"
-              className="admin-btn admin-users-create-fab"
-              onClick={() => setShowCreate(true)}
-            >
-              <Plus size="1em" className="admin-users-create-fab__icon" aria-hidden="true" />
-              新建用户
-            </button>
-          )}
-        </div>
       </div>
+
+      {tab === "users" && (
+        <button
+          data-admin-floating-actions
+          type="button"
+          className="admin-btn admin-create-fab"
+          onClick={() => setShowCreate(true)}
+        >
+          <Plus size="1em" aria-hidden="true" />
+          新建用户
+        </button>
+      )}
 
       {!loading && tab === "users" && (
         <div className="admin-table-wrap admin-users-table-wrap">

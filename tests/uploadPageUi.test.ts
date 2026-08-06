@@ -44,12 +44,22 @@ test("upload page supports local files and persistent remote-link jobs", () => {
   assert.match(uploadActions, /justify-content\s*:\s*flex-end/);
   assert.match(uploadSubmit, /height\s*:\s*36px/);
   assert.match(uploadSubmit, /padding\s*:\s*0 var\(--space-4\)/);
+  assert.match(uploadSubmit, /border\s*:\s*1px solid var\(--border-default\)/);
+  assert.match(uploadSubmit, /background\s*:\s*var\(--bg-elevated\)/);
+  assert.match(uploadSubmit, /color\s*:\s*var\(--text-default\)/);
+  assert.doesNotMatch(uploadSubmit, /accent|glow|text-on-accent/);
   assert.doesNotMatch(uploadSubmit, /min-width/);
   assert.doesNotMatch(uploadSubmit, /gap\s*:/);
   assert.doesNotMatch(
     layoutCss,
     /\.upload-submit\s*\{[^}]*width\s*:\s*100%/s
   );
+
+  const uploadSubmitHover = ruleBody(layoutCss, ".upload-submit:hover:not(:disabled)");
+  assert.match(uploadSubmitHover, /border-color\s*:\s*var\(--border-strong\)/);
+  assert.match(uploadSubmitHover, /background\s*:\s*var\(--bg-surface\)/);
+  assert.match(uploadSubmitHover, /color\s*:\s*var\(--text-strong\)/);
+  assert.doesNotMatch(uploadSubmitHover, /accent|glow|filter/);
 });
 
 test("remote upload task list has progress, cancellation, and mobile layout", () => {

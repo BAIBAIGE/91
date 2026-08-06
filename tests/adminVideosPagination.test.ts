@@ -64,7 +64,7 @@ test("normal videos keep source navigation separate from composable advanced fil
   );
   assert.match(videosPageSource, /className="admin-video-advanced-filters"/);
   assert.match(videosPageSource, /aria-haspopup="dialog"/);
-  assert.match(videosPageSource, /<Modal[\s\S]*?open=\{advancedFiltersOpen\}[\s\S]*?title="高级筛选"/);
+  assert.match(videosPageSource, /<Modal[\s\S]*?open=\{advancedFiltersOpen\}[\s\S]*?title="筛选"/);
   assert.doesNotMatch(advancedFilterSource, /来源|driveId|crawlerId|VideoSourcePicker/);
   assert.doesNotMatch(videosPageSource, /function VideoSourcePicker|admin-video-source-picker/);
   assert.match(sourceNavigationSource, /role="group" aria-label="视频来源筛选"/);

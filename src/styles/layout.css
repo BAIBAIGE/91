@@ -22,11 +22,11 @@
 .container {
   max-width: var(--container-max);
   margin: 0 auto;
-  padding: 0 var(--container-pad-x);
+  padding-inline: var(--container-pad-x);
 }
 
 .page-section {
-  padding: var(--space-6) 0;
+  padding-block: var(--space-6);
 }
 
 .page-section + .page-section {
@@ -482,24 +482,23 @@
   justify-content: center;
   height: 36px;
   padding: 0 var(--space-4);
+  border: 1px solid var(--border-default);
   border-radius: var(--radius-sm);
-  background: var(--accent-gradient);
-  color: var(--text-on-accent);
+  background: var(--bg-elevated);
+  color: var(--text-default);
   font-weight: var(--weight-semibold);
   font-size: var(--font-md);
-  box-shadow: 0 6px 16px var(--accent-glow), var(--shadow-inset);
 }
 
 .upload-submit:hover:not(:disabled) {
-  filter: brightness(1.05);
-  box-shadow: 0 10px 22px var(--accent-glow), var(--shadow-inset);
+  border-color: var(--border-strong);
+  background: var(--bg-surface);
+  color: var(--text-strong);
 }
 
 .upload-submit:disabled {
   opacity: 0.55;
   cursor: not-allowed;
-  filter: grayscale(0.3);
-  box-shadow: none;
 }
 
 .remote-upload-section {
@@ -678,11 +677,11 @@
  * ========================================================= */
 @media (max-width: 640px) {
   .container {
-    padding: 0 14px;
+    padding-inline: 14px;
   }
 
   .page-section {
-    padding: var(--space-4) 0;
+    padding-block: var(--space-4);
   }
 
   .promo-strip {

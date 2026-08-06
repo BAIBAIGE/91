@@ -707,7 +707,7 @@ function CurrentVideosTab({
       </div>
       <Modal
         open={advancedFiltersOpen}
-        title="高级筛选"
+        title="筛选"
         onClose={() => setAdvancedFiltersOpen(false)}
         className="admin-modal--video-filters"
         footer={
