@@ -171,8 +171,12 @@ Optional fields:
 - `tags`
 - `duration_seconds`
 - `description`
-- `published_at`
 - `quality`
+
+Import timestamps are owned by the backend. Scripts must not emit
+`published_at`; the backend always sets both `published_at` and `created_at` to
+the time the video is imported. For rolling compatibility, a legacy
+`published_at` field is ignored rather than rejected.
 
 ### Request headers
 

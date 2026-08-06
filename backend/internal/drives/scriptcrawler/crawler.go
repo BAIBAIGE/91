@@ -19,7 +19,6 @@ import (
 	"path"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -241,7 +240,6 @@ type Event struct {
 	Quality            string            `json:"quality,omitempty"`
 	DurationSeconds    int               `json:"duration_seconds,omitempty"`
 	Description        string            `json:"description,omitempty"`
-	PublishedAt        string            `json:"published_at,omitempty"`
 	Headers            map[string]string `json:"headers,omitempty"`
 	MediaHeaders       map[string]string `json:"media_headers,omitempty"`
 	ThumbnailHeaders   map[string]string `json:"thumbnail_headers,omitempty"`
@@ -264,7 +262,6 @@ type Item struct {
 	Quality            string            `json:"quality,omitempty"`
 	DurationSeconds    int               `json:"duration_seconds,omitempty"`
 	Description        string            `json:"description,omitempty"`
-	PublishedAt        string            `json:"published_at,omitempty"`
 	Headers            map[string]string `json:"headers,omitempty"`
 	MediaHeaders       map[string]string `json:"media_headers,omitempty"`
 	ThumbnailHeaders   map[string]string `json:"thumbnail_headers,omitempty"`
@@ -315,9 +312,6 @@ func (e Event) normalizedItem() Item {
 	}
 	if strings.TrimSpace(item.Description) == "" {
 		item.Description = e.Description
-	}
-	if strings.TrimSpace(item.PublishedAt) == "" {
-		item.PublishedAt = e.PublishedAt
 	}
 	if len(item.Headers) == 0 && len(e.Headers) > 0 {
 		item.Headers = e.Headers
@@ -747,10 +741,6 @@ func (c *Crawler) processItem(ctx context.Context, item Item) (added bool, retEr
 		}
 	}
 	crawlerTagLabel = c.crawlerTagName()
-	publishedAt := now
-	if parsed := parsePublishedAt(item.PublishedAt); !parsed.IsZero() {
-		publishedAt = parsed
-	}
 	quality := strings.TrimSpace(item.Quality)
 	if quality == "" {
 		quality = "HD"
@@ -772,7 +762,7 @@ func (c *Crawler) processItem(ctx context.Context, item Item) (added bool, retEr
 		Quality:         quality,
 		Description:     strings.TrimSpace(item.Description),
 		PreviewStatus:   previewStatus,
-		PublishedAt:     publishedAt,
+		PublishedAt:     now,
 		CreatedAt:       now,
 		UpdatedAt:       now,
 	}
@@ -996,12 +986,12 @@ func (c *Crawler) RestoreRequestedVideos(ctx context.Context) (int, error) {
 		video.TranscodeError = ""
 		video.TranscodedFileID = ""
 		video.TranscodedSize = 0
-		if video.PublishedAt.IsZero() {
-			video.PublishedAt = file.modTime
-		}
 		if video.CreatedAt.IsZero() {
 			video.CreatedAt = file.modTime
 		}
+		// Crawler timestamps are backend-owned. Restoring an older crawler
+		// tombstone must not reintroduce a source-supplied publication date.
+		video.PublishedAt = video.CreatedAt
 		if c.restoreCrawlerThumbnail(video, fileID) {
 			video.ThumbnailURL = "/p/thumb/" + video.ID
 		}
@@ -1415,7 +1405,6 @@ func normalizeItemForImport(item Item) (Item, string, error) {
 	item.Author = strings.TrimSpace(item.Author)
 	item.Quality = strings.TrimSpace(item.Quality)
 	item.Description = strings.TrimSpace(item.Description)
-	item.PublishedAt = strings.TrimSpace(item.PublishedAt)
 	item.MediaURL = strings.TrimSpace(item.MediaURL)
 	item.MediaLocalFile = strings.TrimSpace(item.MediaLocalFile)
 	item.ThumbnailURL = strings.TrimSpace(item.ThumbnailURL)
@@ -1592,25 +1581,6 @@ func mediaExt(raw string, video bool) string {
 		return ext
 	}
 	return ""
-}
-
-func parsePublishedAt(raw string) time.Time {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return time.Time{}
-	}
-	if ms, err := strconv.ParseInt(raw, 10, 64); err == nil {
-		if ms > 100000000000 {
-			return time.UnixMilli(ms)
-		}
-		return time.Unix(ms, 0)
-	}
-	for _, layout := range []string{time.RFC3339, "2006-01-02", "2006-01-02 15:04:05"} {
-		if t, err := time.Parse(layout, raw); err == nil {
-			return t
-		}
-	}
-	return time.Time{}
 }
 
 func cleanStringList(in []string) []string {

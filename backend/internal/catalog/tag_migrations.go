@@ -243,6 +243,9 @@ CREATE TABLE IF NOT EXISTS deleted_videos (
 	if _, err := c.clearSyntheticCrawlerAuthorsOnce(ctx); err != nil {
 		return err
 	}
+	if _, err := c.alignCrawlerPublishedAtWithCreatedAtOnce(ctx); err != nil {
+		return err
+	}
 	// admin_sessions.user_id：关联到 users 表，用于区分管理员/普通用户 session
 	if err := c.addColumnIfMissing(ctx, "admin_sessions", "user_id", "INTEGER DEFAULT 0"); err != nil {
 		return err

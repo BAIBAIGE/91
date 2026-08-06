@@ -152,6 +152,9 @@ func TestCrawlerRunOnceImportsLocalFileAndSkipsExisting(t *testing.T) {
 	if v.Title != "Imported From Helper" || v.FileID != "abc-123.mp4" || v.Size == 0 {
 		t.Fatalf("video = title:%q file:%q size:%d", v.Title, v.FileID, v.Size)
 	}
+	if !v.PublishedAt.Equal(v.CreatedAt) {
+		t.Fatalf("crawler timestamps = published %s created %s, want identical backend import time", v.PublishedAt, v.CreatedAt)
+	}
 	if !hasString(v.Tags, "Demo Crawler") {
 		t.Fatalf("video tags = %#v, want crawler name tag", v.Tags)
 	}
@@ -576,6 +579,12 @@ func TestCrawlerRunOnceSkipsThenRestoresRetainedLocalVideo(t *testing.T) {
 		t.Fatalf("local data = %q", data)
 	}
 
+	// Simulate a tombstone written by an older backend that accepted a source
+	// publication date. Restore must re-establish the backend-owned timestamp.
+	v.PublishedAt = v.CreatedAt.Add(-365 * 24 * time.Hour)
+	if err := cat.UpsertVideo(ctx, v); err != nil {
+		t.Fatalf("seed legacy crawler timestamp: %v", err)
+	}
 	if err := cat.DeleteVideoWithTombstone(ctx, v.ID); err != nil {
 		t.Fatalf("delete with tombstone: %v", err)
 	}
@@ -615,6 +624,9 @@ func TestCrawlerRunOnceSkipsThenRestoresRetainedLocalVideo(t *testing.T) {
 	}
 	if restored.Title != v.Title || restored.PreviewStatus != "pending" {
 		t.Fatalf("restored metadata = title:%q preview:%q, want %q/pending", restored.Title, restored.PreviewStatus, v.Title)
+	}
+	if !restored.PublishedAt.Equal(restored.CreatedAt) {
+		t.Fatalf("restored timestamps = published %s created %s, want identical import time", restored.PublishedAt, restored.CreatedAt)
 	}
 	if deleted, err := cat.IsVideoDeleted(ctx, v.ID); err != nil || deleted {
 		t.Fatalf("restored video tombstone remains: deleted=%v err=%v", deleted, err)
@@ -1322,14 +1334,16 @@ func TestScriptCrawlerHelperProcess(t *testing.T) {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(2)
 	}
-	event := Event{
-		Type: "item",
-		Item: Item{
-			SourceID: "abc-123",
-			Title:    "Imported From Helper",
-			Author:   "helper",
-			Media:    MediaRef{LocalFile: localFile},
-		},
+	// Include the retired field to verify rolling compatibility with scripts
+	// deployed before crawler timestamps became backend-owned. It must decode
+	// successfully but cannot affect the stored timestamp.
+	event := map[string]any{
+		"type":             "item",
+		"source_id":        "abc-123",
+		"title":            "Imported From Helper",
+		"author":           "helper",
+		"media_local_file": localFile,
+		"published_at":     "2021-11-05",
 	}
 	_ = json.NewEncoder(os.Stdout).Encode(event)
 	os.Exit(0)
