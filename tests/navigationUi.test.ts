@@ -22,6 +22,16 @@ const mainNavSource = readFileSync(
   "utf8"
 );
 
+const adminLayoutSource = readFileSync(
+  new URL("../src/admin/AdminLayout.tsx", import.meta.url),
+  "utf8"
+);
+
+const videoIconSource = readFileSync(
+  new URL("../src/components/icons/VideoIcon.tsx", import.meta.url),
+  "utf8"
+);
+
 const uploadIconSource = readFileSync(
   new URL("../src/components/icons/UploadIcon.tsx", import.meta.url),
   "utf8"
@@ -52,12 +62,16 @@ test("short video navigation uses the supplied Font Awesome icon", () => {
   assert.match(mainNavSource, /\{ to: "\/shorts", label: "短视频", icon: ShortVideoIcon \}/);
 });
 
-test("video navigation uses the supplied Font Awesome icon", () => {
+test("public and admin video navigation share the supplied Font Awesome icon", () => {
   assert.doesNotMatch(mainNavSource, /\bFilm\b/);
-  assert.match(mainNavSource, /function VideoIcon/);
-  assert.match(mainNavSource, /viewBox="0 0 576 512"/);
-  assert.match(mainNavSource, /M549\.7 124\.1C543\.5 100\.4 524\.9 81\.8 501\.4 75\.5/);
+  assert.doesNotMatch(adminLayoutSource, /\bFilm\b/);
+  assert.match(mainNavSource, /import \{ VideoIcon \} from "@\/components\/icons\/VideoIcon";/);
+  assert.match(adminLayoutSource, /import \{ VideoIcon \} from "@\/components\/icons\/VideoIcon";/);
+  assert.match(videoIconSource, /export function VideoIcon/);
+  assert.match(videoIconSource, /viewBox="0 0 576 512"/);
+  assert.match(videoIconSource, /M549\.7 124\.1C543\.5 100\.4 524\.9 81\.8 501\.4 75\.5/);
   assert.match(mainNavSource, /\{ to: "\/list", label: "视频", icon: VideoIcon \}/);
+  assert.match(adminLayoutSource, /<VideoIcon size=\{15\} \/>/);
 });
 
 test("admin navigation uses the supplied Font Awesome icon", () => {

@@ -2,7 +2,6 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import {
   ArchiveRestore,
-  Film,
   HardDrive,
   Menu,
   ScrollText,
@@ -11,6 +10,7 @@ import {
   Users,
   X,
 } from "lucide-react";
+import { VideoIcon } from "@/components/icons/VideoIcon";
 import * as api from "./api";
 import { AdminGlobalActions } from "./AdminGlobalActions";
 import { AdminPageActionsProvider } from "./AdminPageActions";
@@ -413,7 +413,7 @@ export function AdminLayout() {
               }
             >
               <span className="admin-nav__icon" aria-hidden="true">
-                <Film size={15} />
+                <VideoIcon size={15} />
               </span>
               <span className="admin-nav__text">
                 <span className="admin-nav__title">视频管理</span>
