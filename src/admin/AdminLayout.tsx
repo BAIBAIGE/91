@@ -55,6 +55,7 @@ export function AdminLayout() {
   const navigate = useNavigate();
   const { show } = useToast();
   const isLogsPage = location.pathname.startsWith("/admin/logs");
+  const isSettingsPage = location.pathname.startsWith("/admin/settings");
   const currentPageTitle = getAdminPageTitle(location.pathname);
   const showCurrentPageHeader = shouldShowAdminPageHeader(
     location.pathname,
@@ -498,7 +499,9 @@ export function AdminLayout() {
       />
       <main
         ref={mainScrollRef}
-        className={`admin-main${isLogsPage ? " admin-main--logs" : ""}`}
+        className={`admin-main${isLogsPage ? " admin-main--logs" : ""}${
+          isSettingsPage ? " admin-main--settings" : ""
+        }`}
       >
         {showCurrentPageHeader && (
           <header className="admin-current-page-header">
@@ -520,7 +523,10 @@ export function AdminLayout() {
             ref={pageContentRef}
             className={`admin-page-content${isLogsPage ? " admin-page-content--logs" : ""}`}
           >
-            <Outlet />
+            {/* A pathname owns one complete page lifecycle. Without the key,
+                Suspense may retain the previous page while the next lazy chunk
+                loads, leaving out-of-tree portals such as header actions visible. */}
+            <Outlet key={location.pathname} />
           </div>
         </AdminPageActionsProvider>
       </main>

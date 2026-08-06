@@ -3,7 +3,10 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { SettingsSection } from "../src/admin/settings/SettingsSection";
+import {
+  SettingsRow,
+  SettingsSection,
+} from "../src/admin/settings/SettingsSection";
 
 const appSource = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
 const layoutSource = readFileSync(
@@ -30,6 +33,10 @@ const sourceEditorSource = readFileSync(
   new URL("../src/admin/settings/ConfigSourceEditor.tsx", import.meta.url),
   "utf8"
 );
+const sourceWorkspaceSource = readFileSync(
+  new URL("../src/admin/settings/ConfigSourceWorkspace.tsx", import.meta.url),
+  "utf8"
+);
 const diffModalSource = readFileSync(
   new URL("../src/admin/settings/ConfigDiffModal.tsx", import.meta.url),
   "utf8"
@@ -52,7 +59,14 @@ test("configuration panel is a dedicated protected admin route", () => {
 });
 
 test("configuration panel groups typed fields from the real YAML document", () => {
-  assert.match(pageSource, /title="自动任务"/);
+  assert.match(pageSource, /title="定时任务"/);
+  assert.match(pageSource, /description="控制每日扫盘和库内视频维护时间"/);
+  assert.match(pageSource, /label="启动时间"/);
+  assert.doesNotMatch(pageSource, /24 小时制 · HH:mm/);
+  assert.doesNotMatch(
+    pageSource,
+    /按服务器本地时区执行，每天最多自动触发一次；保存后无需重启。/
+  );
   assert.match(pageSource, /<SettingsSection/);
   assert.match(pageSource, /<SettingsRow/);
   assert.match(pageSource, /type="time"/);
@@ -68,6 +82,59 @@ test("configuration panel groups typed fields from the real YAML document", () =
   assert.match(apiSource, /ConfigConflictError/);
 });
 
+test("configuration panel can remove and restore the built-in tag pack", () => {
+  assert.match(pageSource, /id: "config-tags"/);
+  assert.match(pageSource, /title="内置标签"/);
+  assert.match(pageSource, /description="管理系统内置标签"/);
+  assert.match(pageSource, /label="内置标签开关"/);
+  assert.doesNotMatch(pageSource, /自定义标签不受影响/);
+  assert.doesNotMatch(pageSource, /builtin-tags-description/);
+  assert.match(pageSource, /api\.getSettings\(\)/);
+  assert.match(pageSource, /invalidateTagsCache\(\)/);
+  assert.match(
+    pageSource,
+    /api\.updateSettings\(\{ builtinTagsEnabled: enabled \}\)/
+  );
+  assert.match(pageSource, /role="switch"/);
+  assert.match(pageSource, /aria-checked=\{builtinTagsEnabled === true\}/);
+  assert.match(pageSource, /setRemoveBuiltinTagsConfirmOpen\(true\)/);
+  assert.match(
+    pageSource,
+    /<ConfirmModal[\s\S]*?title="移除内置标签"[\s\S]*?confirmText="确认移除"[\s\S]*?danger/
+  );
+  assert.match(apiSource, /builtinTagsEnabled: boolean/);
+  assert.match(adminCss, /\.admin-config-control--switch\s*\{[^}]*display:\s*flex/s);
+});
+
+test("configuration panel keeps the CPA workspace mounted while loading", () => {
+  assert.doesNotMatch(pageSource, /AdminLoading/);
+  assert.doesNotMatch(pageSource, /if \(loading\) return\s*</);
+  assert.match(pageSource, /if \(!loading && \(loadError \|\| !loaded\)\)/);
+  assert.match(pageSource, /aria-busy=\{loading\}/);
+  assert.match(pageSource, /const controlsDisabled = loading \|\| saving \|\| loaded === null/);
+  assert.match(pageSource, /loading\s*\? "加载配置中"/);
+  assert.match(sourceWorkspaceSource, /<Suspense fallback=\{null\}>/);
+  assert.doesNotMatch(
+    `${pageSource}\n${sourceWorkspaceSource}`,
+    /admin-config-source__loading|正在加载源码编辑器/
+  );
+  assert.doesNotMatch(adminCss, /\.admin-config-source__loading/);
+});
+
+test("configuration source workspace stays visible while CodeMirror loads", () => {
+  assert.match(pageSource, /<ConfigSourceWorkspace[\s\S]*?value=\{workingYAML\}/);
+  assert.match(
+    sourceWorkspaceSource,
+    /<div className="admin-config-source">[\s\S]*?<div className="admin-config-source__toolbar">[\s\S]*?<div className=\{`admin-config-source__editor[\s\S]*?<Suspense fallback=\{null\}>[\s\S]*?<LazyConfigSourceEditor/
+  );
+  assert.doesNotMatch(
+    sourceEditorSource,
+    /admin-config-source__toolbar|admin-config-source__editor/
+  );
+  assert.match(pageSource, /window\.requestIdleCallback\(preload, \{ timeout: 1_500 \}\)/);
+  assert.match(pageSource, /preloadConfigSourceEditor\(\)\.catch/);
+});
+
 test("configuration panel follows the CLIProxy configuration workspace UI", () => {
   assert.match(pageTitleSource, /title: "配置管理"/);
   assert.match(pageSource, /可视化编辑/);
@@ -75,8 +142,12 @@ test("configuration panel follows the CLIProxy configuration workspace UI", () =
   assert.doesNotMatch(pageSource, /placeholder="搜索配置项\.\.\."/);
   assert.doesNotMatch(pageSource, /admin-config-search/);
   assert.match(pageSource, /admin-config-section-nav/);
-  assert.match(pageSource, /lazy\(\(\) => import\("\.\/settings\/ConfigSourceEditor"\)\)/);
-  assert.match(sourceEditorSource, /placeholder="搜索配置内容\.\.\."/);
+  assert.match(
+    sourceWorkspaceSource,
+    /const loadConfigSourceEditor = \(\) => import\("\.\/ConfigSourceEditor"\)/
+  );
+  assert.match(sourceWorkspaceSource, /const LazyConfigSourceEditor = lazy\(loadConfigSourceEditor\)/);
+  assert.match(sourceWorkspaceSource, /placeholder="搜索配置内容\.\.\."/);
   assert.match(sourceEditorSource, /<CodeMirror/);
   assert.match(sourceEditorSource, /yaml\(\)/);
   assert.match(pageSource, /ConfigDiffModal/);
@@ -88,13 +159,42 @@ test("configuration panel follows the CLIProxy configuration workspace UI", () =
   assert.match(diffModalSource, /is-deletion/);
   assert.match(adminCss, /\.admin-config-tabs\s*\{[^}]*display:\s*grid/s);
   assert.match(
+    pageSource,
+    /aria-selected=\{activeTab === "visual"\}[\s\S]*?disabled=\{loading \|\| saving\}/
+  );
+  assert.match(
+    pageSource,
+    /aria-selected=\{activeTab === "source"\}[\s\S]*?disabled=\{loading \|\| saving\}/
+  );
+  assert.match(layoutSource, /isSettingsPage \? " admin-main--settings"/);
+  assert.match(
     adminCss,
-    /\.admin-config-section-nav\s*\{[^}]*position:\s*sticky[^}]*grid-template-columns:/s
+    /\.admin-main--settings\s*\{[^}]*--admin-config-content-width:\s*1480px;/s
+  );
+  assert.match(
+    adminCss,
+    /\.admin-config-page\s*\{[^}]*width:\s*min\(100%, var\(--admin-config-content-width, 1480px\)\);[^}]*margin:\s*0 auto;/s
+  );
+  assert.match(
+    adminCss,
+    /\.admin-main--settings \.admin-current-page-header\s*\{[^}]*width:\s*min\(100%, var\(--admin-config-content-width\)\);[^}]*margin:\s*0 auto 10px;/s
+  );
+  assert.match(
+    adminCss,
+    /\.admin-config-section-nav\s*\{[^}]*position:\s*sticky[^}]*grid-template-columns:\s*repeat\(3, minmax\(0, 1fr\)\)/s
+  );
+  assert.match(
+    adminCss,
+    /@media \(min-width: 769px\) and \(max-width: 1024px\)[\s\S]*?\.admin-config-section-nav\s*\{[^}]*grid-template-columns:\s*repeat\(2, minmax\(0, 1fr\)\)/s
   );
   assert.match(adminCss, /\.admin-config-sections\s*\{[^}]*display:\s*block/s);
   assert.match(
     adminCss,
-    /\.admin-config-section\s*\{[^}]*border-radius:\s*8px/s
+    /\.admin-config-section\s*\{[^}]*border-radius:\s*8px;[^}]*background:\s*color-mix\(in srgb, var\(--bg-surface\) 50%, transparent\);/s
+  );
+  assert.match(
+    adminCss,
+    /\.admin-config-section__header\s*\{[^}]*background:\s*transparent;/s
   );
   assert.doesNotMatch(adminCss, /scroll-snap-type:\s*x mandatory/);
   assert.match(adminCss, /\.admin-config-diff-hunk__header/);
@@ -110,13 +210,33 @@ test("configuration panel follows the CLIProxy configuration workspace UI", () =
   );
   assert.match(
     adminCss,
+    /\.admin-config-control--switch\s*\{[^}]*display:\s*flex;[^}]*flex-direction:\s*column;[^}]*align-items:\s*center;[^}]*gap:\s*4px;[^}]*min-width:\s*48px;/s
+  );
+  assert.match(
+    adminCss,
+    /\.admin-config-time-field\s*\{[^}]*width:\s*72px;[^}]*min-height:\s*38px;[^}]*padding:\s*0 9px;/s
+  );
+  assert.match(
+    adminCss,
+    /\.admin-config-time-field input\s*\{[^}]*position:\s*absolute;[^}]*inset:\s*0;[^}]*opacity:\s*0;/s
+  );
+  assert.match(
+    pageSource,
+    /className="admin-config-time-field__value"[\s\S]*?draft\.nightlyStartTime \|\| "--:--"[\s\S]*?event\.currentTarget\.showPicker\(\)/
+  );
+  assert.doesNotMatch(adminCss, /calendar-picker-indicator/);
+  assert.match(
+    adminCss,
     /@media \(max-width: 768px\)[\s\S]*?\.admin-config-section\s*\{[^}]*height:\s*clamp\(420px,\s*calc\(100dvh - var\(--admin-header-height\) - 260px\),\s*680px\)/s
   );
   assert.match(pageSource, /data-admin-floating-actions/);
 });
 
 test("configuration source editor uses one scrollable CodeMirror viewport", () => {
-  assert.doesNotMatch(pageSource, /<textarea|sourceGutterRef|admin-config-source__gutter/);
+  assert.doesNotMatch(
+    `${pageSource}\n${sourceWorkspaceSource}`,
+    /<textarea|sourceGutterRef|admin-config-source__gutter/
+  );
   assert.match(sourceEditorSource, /height="100%"/);
   assert.match(sourceEditorSource, /lineNumbers:\s*true/);
   assert.match(sourceEditorSource, /foldGutter:\s*true/);
@@ -128,6 +248,14 @@ test("configuration source editor uses one scrollable CodeMirror viewport", () =
     adminCss,
     /\.admin-config-source__editor\s*\{[^}]*height:\s*clamp\(500px, 70vh, 1040px\);[^}]*overflow:\s*hidden;/s
   );
+  assert.match(
+    adminCss,
+    /\.admin-config-source\s*\{[^}]*padding-bottom:\s*var\(--space-8\);/s
+  );
+  assert.match(
+    adminCss,
+    /@media \(max-width: 768px\)[\s\S]*?\.admin-config-source\s*\{[^}]*padding-bottom:\s*var\(--space-6\);/s
+  );
 });
 
 test("configuration section navigation directly renders the selected panel", () => {
@@ -138,7 +266,7 @@ test("configuration section navigation directly renders the selected panel", () 
         id: "config-automation",
         index: "01",
         icon: null,
-        title: "自动任务",
+        title: "定时任务",
         description: "维护任务设置",
       },
       createElement("span", null, "setting")
@@ -153,7 +281,37 @@ test("configuration section navigation directly renders the selected panel", () 
   assert.match(pageSource, /aria-selected=\{activeSection === section\.id\}/);
   assert.match(pageSource, /onClick=\{\(\) => setActiveSection\(section\.id\)\}/);
   assert.match(pageSource, /activeSection === "config-automation"/);
+  assert.match(pageSource, /activeSection === "config-tags"/);
   assert.doesNotMatch(pageSource, /activeSection === "config-dedupe"/);
   assert.doesNotMatch(pageSource, /scrollTo\(/);
   assert.doesNotMatch(pageSource, /handleSectionsScroll/);
+});
+
+test("compact configuration rows stay inline on mobile", () => {
+  const markup = renderToStaticMarkup(
+    createElement(
+      SettingsRow,
+      {
+        label: "启动时间",
+        layout: "inline",
+      },
+      createElement("span", null, "03:00")
+    )
+  );
+
+  assert.match(markup, /class="admin-config-row admin-config-row--inline"/);
+  assert.match(pageSource, /label="启动时间"[\s\S]*?layout="inline"/);
+  assert.match(pageSource, /label="内置标签开关"[\s\S]*?layout="inline"/);
+  assert.match(
+    adminCss,
+    /@media \(max-width: 768px\)[\s\S]*?\.admin-config-row--inline\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\) auto;[^}]*align-items:\s*center;/s
+  );
+  assert.match(
+    adminCss,
+    /\.admin-config-row--inline \.admin-config-control--time\s*\{[^}]*justify-items:\s*end;/s
+  );
+  assert.match(
+    adminCss,
+    /\.admin-config-control--switch\s*\{[^}]*flex-direction:\s*column;[^}]*justify-content:\s*center;/s
+  );
 });

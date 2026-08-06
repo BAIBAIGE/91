@@ -471,6 +471,23 @@ ORDER BY cnt DESC, t.label ASC`)
 	return out, nil
 }
 
+// ListUserSelectableTags returns the part of the managed tag catalog intended
+// for explicit user assignment. Keeping this policy beside lookup validation
+// makes the picker and upload write path use the same source of truth.
+func (c *Catalog) ListUserSelectableTags(ctx context.Context) ([]Tag, error) {
+	tags, err := c.ListTags(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Tag, 0, len(tags))
+	for _, tag := range tags {
+		if isUserSelectableTag(tag) {
+			out = append(out, tag)
+		}
+	}
+	return out, nil
+}
+
 func videoMatchesTagLabelSQL(videoAlias string) string {
 	return fmt.Sprintf(`%s.id IN (
 			WITH tagged_videos AS (

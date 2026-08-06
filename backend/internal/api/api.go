@@ -44,16 +44,6 @@ var allowedUploadExtensions = map[string]struct{}{
 	".webm": {},
 }
 
-var allowedUploadTags = map[string]struct{}{
-	"奶子": {},
-	"女大": {},
-	"人妻": {},
-	"后入": {},
-	"制服": {},
-	"美臀": {},
-	"口交": {},
-}
-
 const maxSubtitleBytes = 20 << 20
 
 type Server struct {
@@ -69,9 +59,10 @@ type Server struct {
 	// （扫盘不再入库）。未注入时回退为旧的 hidden 标记。
 	OnHideVideo func(ctx context.Context, videoID string) error
 
-	tagCacheMu    sync.Mutex
-	tagCacheUntil time.Time
-	tagCache      []TagDTO
+	tagCacheMu      sync.Mutex
+	tagCacheUntil   time.Time
+	tagCache        []TagDTO
+	tagCacheVersion uint64
 
 	shortsFeedMu  sync.Mutex
 	shortsFeeds   map[string]*shortsFeedSession
@@ -92,6 +83,19 @@ type Server struct {
 	subtitleCacheMu  sync.Mutex
 	subtitleCache    map[string]subtitleCacheEntry
 	subtitleCacheNow func() time.Time
+}
+
+// InvalidateTagCache makes catalog mutations visible to the public tag list
+// immediately instead of waiting for the short response cache to expire.
+func (s *Server) InvalidateTagCache() {
+	if s == nil {
+		return
+	}
+	s.tagCacheMu.Lock()
+	s.tagCacheVersion++
+	s.tagCache = nil
+	s.tagCacheUntil = time.Time{}
+	s.tagCacheMu.Unlock()
 }
 
 type subtitleCacheEntry struct {
@@ -216,6 +220,7 @@ func (s *Server) RegisterRoutes(r chi.Router, a *auth.Authenticator) {
 		r.Use(a.AdminRequired)
 		r.Put("/api/video/{id}/tags", s.handleUpdateVideoTags)
 		r.Post("/api/video/{id}/hide", s.handleHideVideo)
+		r.Get("/api/upload/tags", s.handleUploadTags)
 		r.Post("/api/upload", s.handleUploadVideo)
 		r.Post("/api/upload/remote", s.handleCreateRemoteUpload)
 		r.Get("/api/upload/remote", s.handleListRemoteUploads)
@@ -488,6 +493,7 @@ func appendRandomRelated(picked []*catalog.Video, pool []*catalog.Video, targetL
 func (s *Server) handleTags(w http.ResponseWriter, r *http.Request) {
 	now := time.Now()
 	s.tagCacheMu.Lock()
+	cacheVersion := s.tagCacheVersion
 	if s.tagCache != nil && now.Before(s.tagCacheUntil) {
 		out := append([]TagDTO(nil), s.tagCache...)
 		s.tagCacheMu.Unlock()
@@ -507,11 +513,27 @@ func (s *Server) handleTags(w http.ResponseWriter, r *http.Request) {
 		out = append(out, TagDTO{ID: stat.Label, Label: stat.Label, Count: stat.Count})
 	}
 	s.tagCacheMu.Lock()
-	s.tagCache = append([]TagDTO(nil), out...)
-	s.tagCacheUntil = now.Add(30 * time.Second)
+	if cacheVersion == s.tagCacheVersion {
+		s.tagCache = append([]TagDTO(nil), out...)
+		s.tagCacheUntil = now.Add(30 * time.Second)
+	}
 	s.tagCacheMu.Unlock()
 
 	w.Header().Set("Cache-Control", "private, max-age=15")
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) handleUploadTags(w http.ResponseWriter, r *http.Request) {
+	tags, err := s.Catalog.ListUserSelectableTags(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	out := make([]TagDTO, 0, len(tags))
+	for _, tag := range tags {
+		out = append(out, TagDTO{ID: tag.Label, Label: tag.Label, Count: tag.Count})
+	}
+	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, out)
 }
 
@@ -1404,14 +1426,11 @@ func uploadTitleFromFileName(fileName string) string {
 	return "upload-" + time.Now().Format("20060102150405")
 }
 
-func parseUploadTags(values []string) ([]string, error) {
+func parseUploadTags(values []string) []string {
 	seen := make(map[string]struct{})
 	out := make([]string, 0, len(values))
 	for _, value := range values {
 		for _, label := range splitUploadTags(value) {
-			if _, ok := allowedUploadTags[label]; !ok {
-				return nil, fmt.Errorf("unsupported upload tag: %s", label)
-			}
 			if _, ok := seen[label]; ok {
 				continue
 			}
@@ -1419,14 +1438,11 @@ func parseUploadTags(values []string) ([]string, error) {
 			out = append(out, label)
 		}
 	}
-	return out, nil
+	return out
 }
 
 func (s *Server) canonicalUploadTags(ctx context.Context, values []string) ([]string, error) {
-	tags, err := parseUploadTags(values)
-	if err != nil {
-		return nil, uploadTagValidationError{err}
-	}
+	tags := parseUploadTags(values)
 	if len(tags) == 0 {
 		return tags, nil
 	}
@@ -1435,7 +1451,7 @@ func (s *Server) canonicalUploadTags(ctx context.Context, values []string) ([]st
 	}
 	canonicalTags := make([]string, 0, len(tags))
 	for _, tag := range tags {
-		label, ok, err := s.Catalog.LookupTagLabel(ctx, tag)
+		label, ok, err := s.Catalog.LookupUserSelectableTagLabel(ctx, tag)
 		if err != nil {
 			return nil, err
 		}

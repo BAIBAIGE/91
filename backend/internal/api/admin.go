@@ -65,9 +65,11 @@ type AdminServer struct {
 	OnStartBlacklistSourceDelete   func(BlacklistSourceDeleteRequest) bool
 	GetBlacklistSourceDeleteStatus func() BlacklistSourceDeleteStatus
 	OnStartTagRetag                func() bool
-	GetTagJobStatus                func() TagJobStatus
-	GetDriveGenerationStatuses     func() map[string]DriveGenerationStatuses
-	GetPreviewGenerationVideoIDs   func() map[string]bool
+	// OnTagsChanged invalidates read-side tag caches after a catalog mutation.
+	OnTagsChanged                func()
+	GetTagJobStatus              func() TagJobStatus
+	GetDriveGenerationStatuses   func() map[string]DriveGenerationStatuses
+	GetPreviewGenerationVideoIDs func() map[string]bool
 	// OnTeaserEnabledChanged 在 per-drive 预览视频开关被切换后调用。
 	// enabled=true 时上层应该重新把 pending 预览视频入队（类似旧的全局开关从关到开）；
 	// enabled=false 时通常不用做事 —— worker 入队前会再次查 catalog，自然停止。

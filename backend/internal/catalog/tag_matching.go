@@ -59,24 +59,31 @@ func (c *Catalog) Matcher(ctx context.Context) (*tagging.Matcher, error) {
 }
 
 func (c *Catalog) buildMatcher(ctx context.Context) (*tagging.Matcher, error) {
+	builtinTagsEnabled, err := c.BuiltinTagsEnabled(ctx)
+	if err != nil {
+		return nil, err
+	}
 	avEnabled, err := c.avCodeMatchingEnabled(ctx)
 	if err != nil {
 		return nil, err
 	}
 	rows, err := c.db.QueryContext(ctx,
-		`SELECT label, aliases, COALESCE(match_rules, '{}'), COALESCE(origin, '') FROM tags ORDER BY id ASC`)
+		`SELECT label, aliases, COALESCE(match_rules, '{}'), source, COALESCE(origin, '') FROM tags ORDER BY id ASC`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	var tagRules []tagging.TagRule
 	for rows.Next() {
-		var label, aliasesJSON, rulesJSON, origin string
-		if err := rows.Scan(&label, &aliasesJSON, &rulesJSON, &origin); err != nil {
+		var label, aliasesJSON, rulesJSON, source, origin string
+		if err := rows.Scan(&label, &aliasesJSON, &rulesJSON, &source, &origin); err != nil {
 			return nil, err
 		}
 		origin = strings.ToLower(strings.TrimSpace(origin))
 		if origin == avSeriesOrigin {
+			continue
+		}
+		if !builtinTagsEnabled && normalizeTagSource(source) == fixedtags.SourceBuiltin {
 			continue
 		}
 		if !avEnabled && strings.EqualFold(label, avTagLabel) {
@@ -134,6 +141,15 @@ ON CONFLICT(key) DO UPDATE SET
 	return err
 }
 
+func bumpTagRulesVersionTx(ctx context.Context, tx *sql.Tx) error {
+	_, err := tx.ExecContext(ctx, `
+INSERT INTO settings (key, value, updated_at) VALUES (?, '1', ?)
+ON CONFLICT(key) DO UPDATE SET
+  value = CAST(CAST(settings.value AS INTEGER) + 1 AS TEXT),
+  updated_at = excluded.updated_at`, settingTagRulesVersion, time.Now().UnixMilli())
+	return err
+}
+
 // LookupTagLabel 查询某个标签是否已存在（大小写不敏感），返回库中的规范写法。
 func (c *Catalog) LookupTagLabel(ctx context.Context, label string) (string, bool, error) {
 	label = cleanTagLabel(label)
@@ -148,6 +164,39 @@ func (c *Catalog) LookupTagLabel(ctx context.Context, label string) (string, boo
 		return "", false, err
 	}
 	return tag.Label, true, nil
+}
+
+// LookupUserSelectableTagLabel resolves a label that may be assigned explicitly
+// by a user. Generated tags describe crawler provenance or derived AV series and
+// are maintained by their respective pipelines; the AV umbrella is inferred
+// from a code and is therefore not an upload choice either.
+func (c *Catalog) LookupUserSelectableTagLabel(ctx context.Context, label string) (string, bool, error) {
+	label = cleanTagLabel(label)
+	if label == "" {
+		return "", false, nil
+	}
+	tag, err := c.getTagByLabel(ctx, label)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	if !isUserSelectableTag(tag) {
+		return "", false, nil
+	}
+	return tag.Label, true, nil
+}
+
+func isUserSelectableTag(tag Tag) bool {
+	switch normalizeTagSource(tag.Source) {
+	case "user":
+		return true
+	case "builtin":
+		return !strings.EqualFold(tag.Label, avTagLabel)
+	default:
+		return false
+	}
 }
 
 // MatchTags 对一段文本运行标签匹配，返回命中的标签名。
@@ -322,6 +371,15 @@ func (c *Catalog) ensureTagWithRulesInternal(ctx context.Context, label string, 
 	if source == "builtin" && !fixedtags.IsBuiltinLabel(label) {
 		source = "generated"
 	}
+	if source == fixedtags.SourceBuiltin {
+		enabled, err := c.BuiltinTagsEnabled(ctx)
+		if err != nil {
+			return Tag{}, err
+		}
+		if !enabled {
+			return Tag{}, ErrBuiltinTagsDisabled
+		}
+	}
 	if source == "generated" {
 		tag, err := c.getTagByLabel(ctx, label)
 		if err == nil {
@@ -449,6 +507,10 @@ func (c *Catalog) ensureAVSeriesTag(ctx context.Context, series string) (Tag, er
 }
 
 func (c *Catalog) avCodeMatchingEnabled(ctx context.Context) (bool, error) {
+	builtinTagsEnabled, err := c.BuiltinTagsEnabled(ctx)
+	if err != nil || !builtinTagsEnabled {
+		return false, err
+	}
 	disabled, err := c.avCodeMatchingDisabled(ctx)
 	if err != nil || disabled {
 		return false, err

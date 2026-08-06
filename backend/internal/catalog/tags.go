@@ -8,6 +8,7 @@ import (
 
 var ErrUnknownTag = errors.New("unknown tag")
 var ErrAutoTagGenerationDisabled = errors.New("auto tag generation is disabled")
+var ErrBuiltinTagsDisabled = errors.New("built-in tags are disabled")
 
 const avTagLabel = "AV"
 
@@ -34,6 +35,7 @@ const (
 	settingAutoGenerateTagsEnabled = "tags.auto_generate_enabled"
 	settingAVCodeMatchingDisabled  = "tags.av_code_matching_disabled"
 	settingBuiltinTagPackInit      = "tags.builtin_pack_initialized_v1"
+	settingBuiltinTagsEnabled      = "tags.builtin_pack_enabled"
 )
 
 const avSeriesOrigin = "av_series"

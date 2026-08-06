@@ -14,6 +14,7 @@ import {
   cancelRemoteUpload,
   createRemoteUpload,
   fetchRemoteUploads,
+  fetchUploadTags,
   uploadVideo,
   type RemoteUploadJob,
   type RemoteUploadState,
@@ -21,7 +22,6 @@ import {
 import { defaultUploadTitleFromFileName } from "@/lib/uploadTitle";
 import type { VideoItem } from "@/types";
 
-const UPLOAD_TAGS = ["奶子", "女大", "人妻", "后入", "制服", "美臀", "口交"];
 const ACTIVE_REMOTE_STATES = new Set<RemoteUploadState>([
   "queued",
   "downloading",
@@ -46,6 +46,7 @@ export default function UploadPage() {
   const [remoteURL, setRemoteURL] = useState("");
   const [title, setTitle] = useState("");
   const [tags, setTags] = useState<string[]>([]);
+  const [uploadTagOptions, setUploadTagOptions] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [uploaded, setUploaded] = useState<VideoItem | null>(null);
@@ -60,6 +61,26 @@ export default function UploadPage() {
 
   useEffect(() => {
     document.title = "上传视频";
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    fetchUploadTags()
+      .then((availableTags) => {
+        if (!active) return;
+        const options = availableTags.map((tag) => tag.label);
+        const availableLabels = new Set(options);
+        setUploadTagOptions(options);
+        setTags((current) => current.filter((tag) => availableLabels.has(tag)));
+      })
+      .catch(() => {
+        if (!active) return;
+        setUploadTagOptions([]);
+        setTags([]);
+      });
+    return () => {
+      active = false;
+    };
   }, []);
 
   const refreshJobs = useCallback(async () => {
@@ -229,7 +250,7 @@ export default function UploadPage() {
           </div>
 
           {mode === "local" ? (
-            <label className="upload-drop">
+            <label key="local-upload-file" className="upload-drop">
               <input
                 type="file"
                 accept="video/*,.avi,.mkv,.mov,.mp4,.webm"
@@ -243,7 +264,7 @@ export default function UploadPage() {
               </span>
             </label>
           ) : (
-            <label className="upload-field upload-remote-url">
+            <label key="remote-upload-url" className="upload-field upload-remote-url">
               <span>视频直链</span>
               <div className="upload-input-with-icon">
                 <Link2 size={18} aria-hidden="true" />
@@ -278,26 +299,28 @@ export default function UploadPage() {
             />
           </label>
 
-          <div className="upload-field">
-            <span>标签</span>
-            <div className="upload-tags">
-              {UPLOAD_TAGS.map((tag) => {
-                const active = tags.includes(tag);
-                return (
-                  <button
-                    key={tag}
-                    type="button"
-                    className={`upload-tag ${active ? "is-active" : ""}`}
-                    onClick={() => toggleTag(tag)}
-                    aria-pressed={active}
-                  >
-                    {active ? <Check size={14} /> : null}
-                    {tag}
-                  </button>
-                );
-              })}
+          {uploadTagOptions.length > 0 ? (
+            <div className="upload-field">
+              <span>标签</span>
+              <div className="upload-tags">
+                {uploadTagOptions.map((tag) => {
+                  const active = tags.includes(tag);
+                  return (
+                    <button
+                      key={tag}
+                      type="button"
+                      className={`upload-tag ${active ? "is-active" : ""}`}
+                      onClick={() => toggleTag(tag)}
+                      aria-pressed={active}
+                    >
+                      {active ? <Check size={14} /> : null}
+                      {tag}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
-          </div>
+          ) : null}
 
           {error ? <div className="upload-message is-error">{error}</div> : null}
           {uploaded ? (

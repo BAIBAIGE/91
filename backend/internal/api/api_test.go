@@ -1125,6 +1125,9 @@ func TestHandleUploadVideoSavesFileVideoTagsAndQueuesPreview(t *testing.T) {
 			t.Fatalf("close catalog: %v", err)
 		}
 	})
+	if _, err := cat.CreateTagAndClassify(ctx, "自定义上传", nil, "user"); err != nil {
+		t.Fatalf("create managed upload tag: %v", err)
+	}
 
 	var queued *catalog.Video
 	server := &Server{
@@ -1136,7 +1139,7 @@ func TestHandleUploadVideoSavesFileVideoTagsAndQueuesPreview(t *testing.T) {
 	}
 	req := multipartUploadRequest(t, map[string]string{
 		"title": "用户上传标题",
-		"tags":  "奶子,女大,人妻,后入,制服,美臀,口交",
+		"tags":  "奶子,女大,人妻,后入,制服,美臀,口交,自定义上传",
 	}, "clip.mp4", "video-bytes")
 	rr := httptest.NewRecorder()
 
@@ -1165,7 +1168,7 @@ func TestHandleUploadVideoSavesFileVideoTagsAndQueuesPreview(t *testing.T) {
 	if got.FileID != "用户上传标题.mp4" || got.FileName != got.FileID {
 		t.Fatalf("file identity = id %q name %q, want title-based physical name", got.FileID, got.FileName)
 	}
-	if !sameStringSet(got.Tags, []string{"奶子", "女大", "人妻", "后入", "制服", "美臀", "口交"}) {
+	if !sameStringSet(got.Tags, []string{"奶子", "女大", "人妻", "后入", "制服", "美臀", "口交", "自定义上传"}) {
 		t.Fatalf("tags = %#v, want selected tags", got.Tags)
 	}
 	if got.PreviewStatus != "pending" {
@@ -1283,6 +1286,26 @@ func TestHandleUploadVideoRejectsUnsupportedTag(t *testing.T) {
 	req := multipartUploadRequest(t, map[string]string{"tags": "奶子,不存在"}, "clip.mp4", "video-bytes")
 	rr := httptest.NewRecorder()
 
+	server.handleUploadVideo(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body = %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestHandleUploadVideoRejectsGeneratedTag(t *testing.T) {
+	cat, err := catalog.Open(t.TempDir() + "/catalog.db")
+	if err != nil {
+		t.Fatalf("open catalog: %v", err)
+	}
+	t.Cleanup(func() { _ = cat.Close() })
+	if _, err := cat.EnsureCrawlerTag(context.Background(), "爬虫来源"); err != nil {
+		t.Fatalf("create crawler tag: %v", err)
+	}
+
+	server := &Server{Catalog: cat, LocalDir: t.TempDir()}
+	req := multipartUploadRequest(t, map[string]string{"tags": "爬虫来源"}, "clip.mp4", "video-bytes")
+	rr := httptest.NewRecorder()
 	server.handleUploadVideo(rr, req)
 
 	if rr.Code != http.StatusBadRequest {
@@ -1598,6 +1621,78 @@ func TestHandleTagsReturnsUnifiedTagPool(t *testing.T) {
 	}
 	if qingchunCount != 1 {
 		t.Fatalf("清纯 count = %d, want 1; tags = %#v", qingchunCount, got)
+	}
+}
+
+func TestHandleUploadTagsReturnsManagedUserChoices(t *testing.T) {
+	ctx := context.Background()
+	cat, err := catalog.Open(t.TempDir() + "/catalog.db")
+	if err != nil {
+		t.Fatalf("open catalog: %v", err)
+	}
+	t.Cleanup(func() { _ = cat.Close() })
+	if _, err := cat.CreateTagAndClassify(ctx, "自定义上传", nil, "user"); err != nil {
+		t.Fatalf("create user tag: %v", err)
+	}
+	if _, err := cat.EnsureCrawlerTag(ctx, "爬虫来源"); err != nil {
+		t.Fatalf("create crawler tag: %v", err)
+	}
+
+	rr := httptest.NewRecorder()
+	(&Server{Catalog: cat}).handleUploadTags(
+		rr,
+		httptest.NewRequest(http.MethodGet, "/api/upload/tags", nil),
+	)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rr.Code, rr.Body.String())
+	}
+	if rr.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("Cache-Control = %q, want no-store", rr.Header().Get("Cache-Control"))
+	}
+	var got []TagDTO
+	if err := json.NewDecoder(rr.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	labels := make([]string, 0, len(got))
+	for _, tag := range got {
+		labels = append(labels, tag.Label)
+	}
+	if !containsString(labels, "奶子") || !containsString(labels, "自定义上传") {
+		t.Fatalf("labels = %#v, want builtin and user tags", labels)
+	}
+	if containsString(labels, "AV") || containsString(labels, "爬虫来源") {
+		t.Fatalf("labels = %#v, want no inferred or crawler tags", labels)
+	}
+}
+
+func TestInvalidateTagCachePublishesCatalogChangesImmediately(t *testing.T) {
+	ctx := context.Background()
+	cat, err := catalog.Open(t.TempDir() + "/catalog.db")
+	if err != nil {
+		t.Fatalf("open catalog: %v", err)
+	}
+	t.Cleanup(func() { _ = cat.Close() })
+	server := &Server{Catalog: cat}
+
+	request := httptest.NewRequest(http.MethodGet, "/api/tags", nil)
+	recorder := httptest.NewRecorder()
+	server.handleTags(recorder, request)
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"label":"美臀"`) {
+		t.Fatalf("initial tags status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+	if _, err := cat.SetBuiltinTagsEnabled(ctx, false); err != nil {
+		t.Fatalf("disable builtin tags: %v", err)
+	}
+
+	server.InvalidateTagCache()
+	recorder = httptest.NewRecorder()
+	server.handleTags(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("refreshed tags status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+	if strings.Contains(recorder.Body.String(), `"label":"美臀"`) {
+		t.Fatalf("refreshed tags still contain builtins: %s", recorder.Body.String())
 	}
 }
 

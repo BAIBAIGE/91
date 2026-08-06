@@ -4,6 +4,8 @@ import {
   fetchHomeVideos,
   fetchListing,
   fetchTags,
+  fetchUploadTags,
+  invalidateTagsCache,
   readCachedTags,
 } from "../src/data/videos";
 
@@ -148,6 +150,7 @@ test("listing request failures are not converted to an empty library", async (t)
 });
 
 test("tags stay cached for the current browser session", async (t) => {
+  invalidateTagsCache();
   const originalFetch = globalThis.fetch;
   let calls = 0;
   const responseTags = [{ id: "tag-1", label: "标签一", count: 3 }];
@@ -161,6 +164,7 @@ test("tags stay cached for the current browser session", async (t) => {
   }) as typeof fetch;
   t.after(() => {
     globalThis.fetch = originalFetch;
+    invalidateTagsCache();
   });
 
   const firstResult = await fetchTags();
@@ -170,4 +174,57 @@ test("tags stay cached for the current browser session", async (t) => {
   assert.deepEqual(firstResult, responseTags);
   assert.strictEqual(secondResult, firstResult);
   assert.strictEqual(readCachedTags(), firstResult);
+});
+
+test("tag cache can be invalidated after an admin catalog change", async (t) => {
+  invalidateTagsCache();
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = (async () => {
+    calls += 1;
+    const tags = [{ id: `tag-${calls}`, label: `标签${calls}`, count: calls }];
+    return new Response(JSON.stringify(tags), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  }) as typeof fetch;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+    invalidateTagsCache();
+  });
+
+  const before = await fetchTags();
+  invalidateTagsCache();
+  assert.equal(readCachedTags(), null);
+  const after = await fetchTags();
+
+  assert.equal(calls, 2);
+  assert.notDeepEqual(after, before);
+  assert.strictEqual(readCachedTags(), after);
+});
+
+test("upload tag choices always read the managed upload catalog", async (t) => {
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = (async (input) => {
+    calls += 1;
+    assert.equal(String(input), "/api/upload/tags");
+    return new Response(
+      JSON.stringify([{ id: `tag-${calls}`, label: `可选标签${calls}`, count: 0 }]),
+      {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }
+    );
+  }) as typeof fetch;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  const first = await fetchUploadTags();
+  const second = await fetchUploadTags();
+
+  assert.equal(calls, 2);
+  assert.equal(first[0]?.label, "可选标签1");
+  assert.equal(second[0]?.label, "可选标签2");
 });

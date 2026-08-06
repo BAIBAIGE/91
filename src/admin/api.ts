@@ -1099,6 +1099,7 @@ export type Theme = "dark" | "pink" | "sky";
 
 export type Settings = {
   theme: Theme;
+  builtinTagsEnabled: boolean;
 };
 
 export function getSettings() {

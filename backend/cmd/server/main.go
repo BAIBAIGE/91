@@ -407,6 +407,7 @@ func main() {
 		OnStartTagRetag: func() bool {
 			return app.startTagRetag(ctx)
 		},
+		OnTagsChanged: apiServer.InvalidateTagCache,
 		GetTagJobStatus: func() api.TagJobStatus {
 			return app.tagJobStatus()
 		},

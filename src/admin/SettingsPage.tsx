@@ -1,6 +1,4 @@
 import {
-  lazy,
-  Suspense,
   useEffect,
   useMemo,
   useState,
@@ -12,11 +10,18 @@ import {
   Loader2,
   RefreshCw,
   SlidersHorizontal,
+  Tags,
+  type LucideIcon,
 } from "lucide-react";
+import { invalidateTagsCache } from "@/data/videos";
 import * as api from "./api";
-import { AdminLoading } from "./AdminLoading";
+import { ConfirmModal } from "./ConfirmModal";
 import { useToast } from "./ToastContext";
 import { ConfigDiffModal } from "./settings/ConfigDiffModal";
+import {
+  ConfigSourceWorkspace,
+  preloadConfigSourceEditor,
+} from "./settings/ConfigSourceWorkspace";
 import { useAdminFloatingActionSpace } from "./useAdminFloatingActionSpace";
 import { SettingsRow, SettingsSection } from "./settings/SettingsSection";
 import {
@@ -42,19 +47,25 @@ type PendingSave = {
 };
 
 type EditorTab = "visual" | "source";
-type SectionID = "config-automation";
-
-const ConfigSourceEditor = lazy(() => import("./settings/ConfigSourceEditor"));
+type SectionID = "config-automation" | "config-tags";
 
 const SECTION_META: Array<{
   id: SectionID;
   index: string;
   title: string;
+  icon: LucideIcon;
 }> = [
   {
     id: "config-automation",
     index: "01",
-    title: "自动任务",
+    title: "定时任务",
+    icon: Clock3,
+  },
+  {
+    id: "config-tags",
+    index: "02",
+    title: "内置标签",
+    icon: Tags,
   },
 ];
 
@@ -72,6 +83,11 @@ export function SettingsPage() {
   const [loadError, setLoadError] = useState("");
   const [saving, setSaving] = useState(false);
   const [pendingSave, setPendingSave] = useState<PendingSave | null>(null);
+  const [builtinTagsEnabled, setBuiltinTagsEnabled] = useState<boolean | null>(null);
+  const [builtinTagsLoading, setBuiltinTagsLoading] = useState(true);
+  const [builtinTagsLoadError, setBuiltinTagsLoadError] = useState("");
+  const [builtinTagsSaving, setBuiltinTagsSaving] = useState(false);
+  const [removeBuiltinTagsConfirmOpen, setRemoveBuiltinTagsConfirmOpen] = useState(false);
 
   const visualDirtyFields = useMemo(
     () => (loaded ? changedVisualFields(loaded.visual, draft) : new Set<VisualField>()),
@@ -81,6 +97,23 @@ export function SettingsPage() {
     loaded !== null &&
     (sourceTouched ? workingYAML !== loaded.content : visualDirtyFields.size > 0);
   const timeValid = isValidStartTime(draft.nightlyStartTime);
+  const controlsDisabled = loading || saving || loaded === null;
+  const statusClass = loading
+    ? ""
+    : sourceError
+      ? "is-error"
+      : dirty
+        ? "is-dirty"
+        : "is-saved";
+  const statusText = loading
+    ? "加载配置中"
+    : sourceError
+      ? "配置有误"
+      : saving
+        ? "处理中"
+        : dirty
+          ? "有未保存更改"
+          : "配置已加载";
 
   async function load() {
     setLoading(true);
@@ -119,9 +152,40 @@ export function SettingsPage() {
     }
   }
 
+  async function loadBuiltinTagsSetting() {
+    setBuiltinTagsLoading(true);
+    setBuiltinTagsLoadError("");
+    try {
+      const settings = await api.getSettings();
+      setBuiltinTagsEnabled(settings.builtinTagsEnabled !== false);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "读取内置标签设置失败";
+      setBuiltinTagsLoadError(message);
+      show(message, "error");
+    } finally {
+      setBuiltinTagsLoading(false);
+    }
+  }
+
   useEffect(() => {
     void load();
+    void loadBuiltinTagsSetting();
   }, []);
+
+  useEffect(() => {
+    if (loading) return;
+
+    const preload = () => {
+      void preloadConfigSourceEditor().catch(() => undefined);
+    };
+    if (typeof window.requestIdleCallback === "function") {
+      const idleID = window.requestIdleCallback(preload, { timeout: 1_500 });
+      return () => window.cancelIdleCallback(idleID);
+    }
+
+    const timeoutID = window.setTimeout(preload, 250);
+    return () => window.clearTimeout(timeoutID);
+  }, [loading]);
 
   useEffect(() => {
     if (!dirty) return;
@@ -287,9 +351,30 @@ export function SettingsPage() {
     }
   }
 
-  if (loading) return <AdminLoading />;
+  async function updateBuiltinTags(enabled: boolean) {
+    if (builtinTagsSaving) return;
+    setBuiltinTagsSaving(true);
+    try {
+      const settings = await api.updateSettings({ builtinTagsEnabled: enabled });
+      const savedEnabled = settings.builtinTagsEnabled !== false;
+      setBuiltinTagsEnabled(savedEnabled);
+      setBuiltinTagsLoadError("");
+      setRemoveBuiltinTagsConfirmOpen(false);
+      invalidateTagsCache();
+      show(
+        savedEnabled
+          ? "内置标签已恢复"
+          : "内置标签及其已有视频关联已移除",
+        "success"
+      );
+    } catch (error) {
+      show(error instanceof Error ? error.message : "更新内置标签设置失败", "error");
+    } finally {
+      setBuiltinTagsSaving(false);
+    }
+  }
 
-  if (loadError || !loaded) {
+  if (!loading && (loadError || !loaded)) {
     return (
       <div className="admin-page admin-config-page admin-config-page--error">
         <SlidersHorizontal size={26} aria-hidden="true" />
@@ -307,6 +392,7 @@ export function SettingsPage() {
       <form
         ref={floatingActionPageRef}
         className="admin-page admin-page--with-floating-actions admin-config-page"
+        aria-busy={loading}
         onSubmit={prepareSave}
       >
         <header className="admin-config-header">
@@ -316,6 +402,7 @@ export function SettingsPage() {
               role="tab"
               aria-selected={activeTab === "visual"}
               className={activeTab === "visual" ? "is-active" : ""}
+              disabled={loading || saving}
               onClick={() => handleTabChange("visual")}
             >
               可视化编辑
@@ -325,6 +412,7 @@ export function SettingsPage() {
               role="tab"
               aria-selected={activeTab === "source"}
               className={activeTab === "source" ? "is-active" : ""}
+              disabled={loading || saving}
               onClick={() => handleTabChange("source")}
             >
               源码编辑
@@ -340,7 +428,7 @@ export function SettingsPage() {
               aria-label="配置分组"
             >
               {SECTION_META.map((section) => {
-                const Icon = Clock3;
+                const Icon = section.icon;
                 return (
                   <button
                     key={section.id}
@@ -368,32 +456,109 @@ export function SettingsPage() {
                   id="config-automation"
                   index="01"
                   icon={<Clock3 size={16} />}
-                  title="自动任务"
-                  description="控制每日维护流水线的自动执行时间。"
+                  title="定时任务"
+                  description="控制每日扫盘和库内视频维护时间"
                 >
                   <SettingsRow
-                    label="每日启动时间"
+                    label="启动时间"
                     htmlFor="nightly-start-time"
-                    description="按服务器本地时区执行，每天最多自动触发一次；保存后无需重启。"
+                    layout="inline"
                   >
                     <div className="admin-config-control admin-config-control--time">
-                      <input
-                        id="nightly-start-time"
-                        type="time"
-                        step={60}
-                        value={draft.nightlyStartTime}
-                        aria-invalid={!timeValid}
-                        aria-describedby="nightly-start-time-hint"
-                        onChange={(event) =>
-                          updateVisualField("nightlyStartTime", event.target.value)
-                        }
-                      />
-                      <span
-                        id="nightly-start-time-hint"
-                        className={!timeValid ? "is-error" : undefined}
+                      <div
+                        className={`admin-config-time-field${
+                          !timeValid ? " is-invalid" : ""
+                        }${controlsDisabled ? " is-disabled" : ""}`}
                       >
-                        {timeValid ? "24 小时制 · HH:mm" : "请选择有效时间"}
-                      </span>
+                        <span className="admin-config-time-field__value" aria-hidden="true">
+                          {draft.nightlyStartTime || "--:--"}
+                        </span>
+                        <input
+                          id="nightly-start-time"
+                          type="time"
+                          step={60}
+                          value={draft.nightlyStartTime}
+                          disabled={controlsDisabled}
+                          aria-invalid={!timeValid}
+                          aria-describedby={!timeValid ? "nightly-start-time-hint" : undefined}
+                          onClick={(event) => {
+                            try {
+                              event.currentTarget.showPicker();
+                            } catch {
+                              // The input's native click behavior remains the fallback.
+                            }
+                          }}
+                          onChange={(event) =>
+                            updateVisualField("nightlyStartTime", event.target.value)
+                          }
+                        />
+                      </div>
+                      {!timeValid && (
+                        <span id="nightly-start-time-hint" className="is-error">
+                          请选择有效时间
+                        </span>
+                      )}
+                    </div>
+                  </SettingsRow>
+                </SettingsSection>
+              )}
+              {activeSection === "config-tags" && (
+                <SettingsSection
+                  id="config-tags"
+                  index="02"
+                  icon={<Tags size={16} />}
+                  title="内置标签"
+                  description="管理系统内置标签"
+                >
+                  <SettingsRow
+                    label="内置标签开关"
+                    labelID="builtin-tags-label"
+                    layout="inline"
+                  >
+                    <div className="admin-config-control admin-config-control--switch">
+                      {builtinTagsLoadError ? (
+                        <button
+                          type="button"
+                          className="admin-config-control__retry"
+                          onClick={() => void loadBuiltinTagsSetting()}
+                          disabled={controlsDisabled || builtinTagsLoading || builtinTagsSaving}
+                        >
+                          重新读取
+                        </button>
+                      ) : (
+                        <span className="admin-config-control__status">
+                          {builtinTagsLoading
+                            ? "读取中"
+                            : builtinTagsEnabled
+                              ? "已启用"
+                              : "已移除"}
+                        </span>
+                      )}
+                      <button
+                        id="builtin-tags-toggle"
+                        type="button"
+                        className={`toggle-switch ${builtinTagsEnabled ? "is-on" : ""} ${
+                          builtinTagsSaving ? "is-saving" : ""
+                        }`}
+                        role="switch"
+                        aria-checked={builtinTagsEnabled === true}
+                        aria-labelledby="builtin-tags-label"
+                        disabled={
+                          controlsDisabled ||
+                          builtinTagsLoading ||
+                          builtinTagsSaving ||
+                          builtinTagsEnabled === null
+                        }
+                        onClick={() => {
+                          if (builtinTagsEnabled) {
+                            setRemoveBuiltinTagsConfirmOpen(true);
+                          } else {
+                            void updateBuiltinTags(true);
+                          }
+                        }}
+                      >
+                        <span className="toggle-switch__dot" />
+                      </button>
                     </div>
                   </SettingsRow>
                 </SettingsSection>
@@ -402,21 +567,12 @@ export function SettingsPage() {
           </div>
         ) : (
           <div role="tabpanel">
-            <Suspense
-              fallback={
-                <div className="admin-config-source__loading" role="status">
-                  <Loader2 size={18} className="admin-spin" aria-hidden="true" />
-                  <span>正在加载源码编辑器</span>
-                </div>
-              }
-            >
-              <ConfigSourceEditor
-                value={workingYAML}
-                error={sourceError}
-                disabled={saving}
-                onChange={handleSourceChange}
-              />
-            </Suspense>
+            <ConfigSourceWorkspace
+              value={workingYAML}
+              error={sourceError}
+              disabled={controlsDisabled}
+              onChange={handleSourceChange}
+            />
           </div>
         )}
 
@@ -426,18 +582,12 @@ export function SettingsPage() {
           role="status"
           aria-live="polite"
         >
-          <span
-            className={`admin-config-actions__status ${
-              sourceError ? "is-error" : dirty ? "is-dirty" : "is-saved"
-            }`}
-          >
-            {sourceError ? "配置有误" : saving ? "处理中" : dirty ? "有未保存更改" : "配置已加载"}
-          </span>
+          <span className={`admin-config-actions__status ${statusClass}`}>{statusText}</span>
           <button
             type="button"
             className="admin-config-actions__button"
             onClick={resetDraft}
-            disabled={saving || !dirty}
+            disabled={controlsDisabled || !dirty}
             title="还原更改"
             aria-label="还原更改"
           >
@@ -446,7 +596,7 @@ export function SettingsPage() {
           <button
             type="submit"
             className="admin-config-actions__button"
-            disabled={saving || !dirty || !timeValid || Boolean(sourceError)}
+            disabled={controlsDisabled || !dirty || !timeValid || Boolean(sourceError)}
             title="预览并保存配置"
             aria-label="预览并保存配置"
           >
@@ -467,6 +617,20 @@ export function SettingsPage() {
         saving={saving}
         onClose={() => setPendingSave(null)}
         onConfirm={() => void confirmSave()}
+      />
+      <ConfirmModal
+        open={removeBuiltinTagsConfirmOpen}
+        title="移除内置标签"
+        message="确定移除全部内置标签及其已有视频关联吗？自定义标签不会被删除。"
+        confirmText="确认移除"
+        danger
+        hideIcon
+        centerMessage
+        loading={builtinTagsSaving}
+        onCancel={() => {
+          if (!builtinTagsSaving) setRemoveBuiltinTagsConfirmOpen(false);
+        }}
+        onConfirm={() => void updateBuiltinTags(false)}
       />
     </>
   );

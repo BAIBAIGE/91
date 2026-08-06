@@ -187,7 +187,7 @@ func TestListAndCancelRemoteUploads(t *testing.T) {
 	}
 }
 
-func TestRemoteUploadRoutesRequireAdminAuthentication(t *testing.T) {
+func TestUploadRoutesRequireAdminAuthentication(t *testing.T) {
 	cat := openRemoteUploadAPICatalog(t)
 	service := &fakeRemoteUploadService{}
 	authenticator := &auth.Authenticator{Catalog: cat}
@@ -195,6 +195,7 @@ func TestRemoteUploadRoutesRequireAdminAuthentication(t *testing.T) {
 	(&Server{Catalog: cat, RemoteUploads: service}).RegisterRoutes(router, authenticator)
 
 	for _, request := range []*http.Request{
+		httptest.NewRequest(http.MethodGet, "/api/upload/tags", nil),
 		httptest.NewRequest(http.MethodPost, "/api/upload/remote", strings.NewReader(`{"url":"https://example.com/video.mp4"}`)),
 		httptest.NewRequest(http.MethodGet, "/api/upload/remote", nil),
 		httptest.NewRequest(http.MethodPost, "/api/upload/remote/remote-1/cancel", nil),
@@ -223,12 +224,14 @@ func TestRemoteUploadRoutesRequireAdminAuthentication(t *testing.T) {
 	); err != nil {
 		t.Fatal(err)
 	}
-	userRequest := httptest.NewRequest(http.MethodGet, "/api/upload/remote", nil)
-	userRequest.AddCookie(&http.Cookie{Name: "vs_admin", Value: token})
-	userRR := httptest.NewRecorder()
-	router.ServeHTTP(userRR, userRequest)
-	if userRR.Code != http.StatusForbidden {
-		t.Fatalf("ordinary user status = %d, want 403", userRR.Code)
+	for _, path := range []string{"/api/upload/tags", "/api/upload/remote"} {
+		userRequest := httptest.NewRequest(http.MethodGet, path, nil)
+		userRequest.AddCookie(&http.Cookie{Name: "vs_admin", Value: token})
+		userRR := httptest.NewRecorder()
+		router.ServeHTTP(userRR, userRequest)
+		if userRR.Code != http.StatusForbidden {
+			t.Fatalf("ordinary user %s status = %d, want 403", path, userRR.Code)
+		}
 	}
 }
 

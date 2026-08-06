@@ -5736,13 +5736,24 @@ body.admin-mobile-nav-open {
  * horizontally paged sections, and a small floating action bar.
  * ========================================================= */
 
+.admin-main--settings {
+  --admin-config-content-width: 1480px;
+}
+
 .admin-config-page {
   --admin-config-primary: #8b8680;
   display: flex;
   flex-direction: column;
   gap: clamp(18px, 2.4vw, 28px);
-  width: min(100%, 1480px);
+  width: min(100%, var(--admin-config-content-width, 1480px));
   margin: 0 auto;
+}
+
+.admin-main--settings .admin-current-page-header {
+  align-items: flex-start;
+  justify-content: flex-start;
+  width: min(100%, var(--admin-config-content-width));
+  margin: 0 auto 10px;
 }
 
 .admin-config-header {
@@ -5774,9 +5785,14 @@ body.admin-mobile-nav-open {
   font-weight: 650;
   line-height: 1.25;
   white-space: nowrap;
+  transition:
+    color var(--transition-fast),
+    background var(--transition-fast),
+    border-color var(--transition-fast),
+    opacity var(--transition-fast);
 }
 
-.admin-config-tabs button:hover {
+.admin-config-tabs button:hover:not(:disabled) {
   color: var(--text-strong);
   background: color-mix(in srgb, var(--text-strong) 5%, transparent);
 }
@@ -5785,6 +5801,11 @@ body.admin-mobile-nav-open {
   border-color: var(--text-strong);
   background: var(--text-strong);
   color: var(--bg-page);
+}
+
+.admin-config-tabs button:disabled {
+  opacity: 0.58;
+  cursor: not-allowed;
 }
 
 .admin-config-visual,
@@ -5800,7 +5821,7 @@ body.admin-mobile-nav-open {
   top: 12px;
   z-index: 10;
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
   min-width: 0;
   padding: 0 0 12px;
@@ -5881,7 +5902,7 @@ body.admin-mobile-nav-open {
   padding: clamp(20px, 2.4vw, 28px);
   border: 1px solid var(--border-default);
   border-radius: 8px;
-  background: color-mix(in srgb, var(--bg-surface) 82%, transparent);
+  background: color-mix(in srgb, var(--bg-surface) 50%, transparent);
   box-shadow: none;
   scrollbar-width: thin;
 }
@@ -5893,7 +5914,7 @@ body.admin-mobile-nav-open {
   gap: 10px;
   padding: 0 0 14px;
   border-bottom: 1px solid var(--border-default);
-  background: color-mix(in srgb, var(--bg-surface) 88%, transparent);
+  background: transparent;
 }
 
 .admin-config-section__title-row {
@@ -6004,55 +6025,115 @@ body.admin-mobile-nav-open {
   flex: 0 0 auto;
 }
 
+.admin-config-control--switch {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-width: 48px;
+}
+
+.admin-config-control__status,
+.admin-config-control__retry {
+  color: var(--text-muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.admin-config-control__retry {
+  padding: 3px 0;
+  border: 0;
+  background: transparent;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.admin-config-control__retry:hover:not(:disabled) {
+  color: var(--text-strong);
+}
+
 .admin-config-control--time {
   display: grid;
   justify-items: end;
   gap: 7px;
 }
 
-.admin-config-control--time input {
-  width: 144px;
-  min-height: 42px;
-  padding: 0 11px;
+.admin-config-time-field {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 72px;
+  min-height: 38px;
+  padding: 0 9px;
   border: 1px solid var(--border-default);
-  border-radius: 8px;
-  outline: none;
-  background: var(--bg-elevated);
-  color: var(--text-strong);
-  font: inherit;
-  font-size: 13px;
-  font-variant-numeric: tabular-nums;
-  color-scheme: dark;
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--bg-elevated) 84%, transparent);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, white 4%, transparent);
+  cursor: pointer;
+  transition:
+    border-color 150ms ease,
+    background-color 150ms ease,
+    box-shadow 150ms ease;
 }
 
-[data-theme="pink"] .admin-config-control--time input,
-[data-theme="sky"] .admin-config-control--time input {
-  color-scheme: light;
+.admin-config-time-field:not(.is-disabled):hover {
+  border-color: color-mix(in srgb, var(--text-strong) 38%, var(--border-default));
+  background: var(--bg-surface);
 }
 
-.admin-config-control--time input:focus {
+.admin-config-time-field:focus-within {
   border-color: var(--text-strong);
   background: var(--bg-surface);
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--text-strong) 12%, transparent);
 }
 
-.admin-config-control--time input[aria-invalid="true"] {
+.admin-config-time-field.is-invalid {
   border-color: var(--danger);
 }
 
-.admin-config-control--time span {
-  color: var(--text-faint);
-  font-size: 11px;
+.admin-config-time-field.is-disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
 }
 
-.admin-config-control--time span.is-error {
+.admin-config-time-field__value {
+  color: var(--text-strong);
+  font-size: 13px;
+  font-weight: var(--weight-semibold);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+  line-height: 1;
+  pointer-events: none;
+}
+
+.admin-config-time-field input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  cursor: pointer;
+  opacity: 0;
+}
+
+.admin-config-time-field input:disabled {
+  cursor: not-allowed;
+}
+
+.admin-config-control--time > span.is-error {
   color: var(--danger);
+  font-size: 11px;
 }
 
 .admin-config-source {
   gap: 12px;
   min-width: 0;
   min-height: 0;
+  padding-bottom: var(--space-8);
 }
 
 .admin-config-source__toolbar {
@@ -6253,19 +6334,6 @@ body.admin-mobile-nav-open {
 
 .admin-config-source__hint.is-error {
   color: var(--danger);
-}
-
-.admin-config-source__loading {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  height: clamp(500px, 70dvh, 1040px);
-  border: 1px solid var(--border-default);
-  border-radius: 8px;
-  background: var(--bg-surface);
-  color: var(--text-muted);
-  font-size: 12px;
 }
 
 .admin-config-actions {
@@ -6582,6 +6650,12 @@ body.admin-mobile-nav-open {
   color: var(--success);
 }
 
+@media (min-width: 769px) and (max-width: 1024px) {
+  .admin-config-section-nav {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 @media (max-width: 768px) {
   .admin-config-page {
     gap: 18px;
@@ -6617,16 +6691,25 @@ body.admin-mobile-nav-open {
     grid-template-columns: minmax(0, 1fr);
   }
 
+  .admin-config-row--inline {
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+  }
+
   .admin-config-control--time {
     justify-items: start;
   }
 
-  .admin-config-control--time input {
-    width: min(100%, 180px);
+  .admin-config-row--inline .admin-config-control--time {
+    justify-items: end;
   }
 
   .admin-config-source__toolbar {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .admin-config-source {
+    padding-bottom: var(--space-6);
   }
 
   .admin-config-source__editor {
@@ -6696,12 +6779,8 @@ body.admin-mobile-nav-open {
     display: none;
   }
 
-  .admin-config-row {
+  .admin-config-row:not(.admin-config-row--inline) {
     align-items: stretch;
-  }
-
-  .admin-config-control--time input {
-    width: 100%;
   }
 
   .admin-config-actions__status {

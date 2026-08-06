@@ -493,8 +493,8 @@ func (c *Catalog) insertVideoTag(ctx context.Context, videoID string, tagID int6
 }
 
 func (c *Catalog) collapseAVCodeTags(ctx context.Context) error {
-	disabled, err := c.avCodeMatchingDisabled(ctx)
-	if err != nil || disabled {
+	enabled, err := c.avCodeMatchingEnabled(ctx)
+	if err != nil || !enabled {
 		return err
 	}
 	if _, err := c.ensureTagWithRules(ctx, avTagLabel, fixedtags.AliasesFor(avTagLabel), avTagRule, fixedtags.SourceBuiltin); err != nil {

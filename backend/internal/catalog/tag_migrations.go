@@ -962,6 +962,7 @@ UPDATE videos
 // keep administrator-created tags, drop non-user tags, then add the current
 // builtin pack. After the marker is written, deleted builtin tags are treated
 // as deliberate user edits and are not restored by startup or nightly work.
+// A persisted disabled pack is intentionally left empty during initialization.
 func (c *Catalog) initializeBuiltinTagPackOnce(ctx context.Context) error {
 	marker, err := c.GetSetting(ctx, settingBuiltinTagPackInit, "")
 	if err != nil {
@@ -973,8 +974,14 @@ func (c *Catalog) initializeBuiltinTagPackOnce(ctx context.Context) error {
 	if err := c.resetNonUserTagsForBuiltinInit(ctx); err != nil {
 		return err
 	}
-	if err := c.seedBuiltinTagPack(ctx); err != nil {
+	enabled, err := c.BuiltinTagsEnabled(ctx)
+	if err != nil {
 		return err
+	}
+	if enabled {
+		if err := c.seedBuiltinTagPack(ctx); err != nil {
+			return err
+		}
 	}
 	return c.SetSetting(ctx, settingBuiltinTagPackInit, "1")
 }
@@ -1051,26 +1058,4 @@ func placeholders(n int) string {
 		return ""
 	}
 	return strings.TrimRight(strings.Repeat("?,", n), ",")
-}
-
-// seedBuiltinTagPack writes the current builtin tag pack. Existing user tags
-// with the same label are kept as user tags; existing non-empty rules are not
-// overwritten.
-func (c *Catalog) seedBuiltinTagPack(ctx context.Context) error {
-	for _, t := range fixedtags.All() {
-		isAVTag := strings.EqualFold(t.Label, avTagLabel)
-		rule := t.Rule
-		if isAVTag {
-			rule = avTagRule
-		}
-		if _, err := c.ensureTagWithRules(ctx, t.Label, t.Aliases, rule, t.Source); err != nil {
-			return err
-		}
-		if isAVTag {
-			if err := c.removeAVLegacyAliases(ctx); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
 }

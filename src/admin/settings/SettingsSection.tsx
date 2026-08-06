@@ -43,10 +43,11 @@ export function SettingsSection({
 
 type SettingsRowProps = {
   label: string;
-  description: ReactNode;
+  description?: ReactNode;
   labelID?: string;
   descriptionID?: string;
   htmlFor?: string;
+  layout?: "responsive" | "inline";
   children: ReactNode;
 };
 
@@ -56,10 +57,13 @@ export function SettingsRow({
   labelID,
   descriptionID,
   htmlFor,
+  layout = "responsive",
   children,
 }: SettingsRowProps) {
   return (
-    <div className="admin-config-row">
+    <div
+      className={`admin-config-row${layout === "inline" ? " admin-config-row--inline" : ""}`}
+    >
       <div className="admin-config-row__copy">
         {htmlFor ? (
           <label id={labelID} htmlFor={htmlFor}>
@@ -68,7 +72,7 @@ export function SettingsRow({
         ) : (
           <span id={labelID}>{label}</span>
         )}
-        <p id={descriptionID}>{description}</p>
+        {description != null && <p id={descriptionID}>{description}</p>}
       </div>
       {children}
     </div>

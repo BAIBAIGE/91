@@ -40,6 +40,9 @@ func (a *AdminServer) handleCreateTag(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
+	if a.OnTagsChanged != nil {
+		a.OnTagsChanged()
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"label":      body.Label,
 		"classified": classified,
@@ -69,6 +72,9 @@ func (a *AdminServer) handleUpdateTag(w http.ResponseWriter, r *http.Request) {
 	if err := a.Catalog.RunPostStartupTagMaintenance(r.Context()); err != nil {
 		writeErr(w, http.StatusBadRequest, err)
 		return
+	}
+	if a.OnTagsChanged != nil {
+		a.OnTagsChanged()
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"tag": tag})
 }
@@ -108,6 +114,9 @@ func (a *AdminServer) handleDeleteTag(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusInternalServerError, err)
 		}
 		return
+	}
+	if a.OnTagsChanged != nil {
+		a.OnTagsChanged()
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "removedVideos": removedVideos})
 }

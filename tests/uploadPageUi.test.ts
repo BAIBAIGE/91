@@ -29,6 +29,15 @@ test("upload page supports local files and persistent remote-link jobs", () => {
   assert.match(uploadPageSource, /document\.visibilityState !== "hidden"/);
   assert.match(uploadPageSource, /disabled=\{submitDisabled\}/);
   assert.match(uploadPageSource, /任务已加入后台队列，关闭页面不会中断下载/);
+  assert.match(uploadPageSource, /fetchUploadTags\(\)/);
+  assert.match(uploadPageSource, /availableTags\.map\(\(tag\) => tag\.label\)/);
+  assert.doesNotMatch(uploadPageSource, /UPLOAD_TAGS/);
+  assert.match(uploadPageSource, /uploadTagOptions\.length > 0/);
+  assert.match(uploadPageSource, /<label key="local-upload-file" className="upload-drop">/);
+  assert.match(
+    uploadPageSource,
+    /<label key="remote-upload-url" className="upload-field upload-remote-url">/
+  );
 
   const uploadActions = ruleBody(layoutCss, ".upload-actions");
   const uploadSubmit = ruleBody(layoutCss, ".upload-submit");
