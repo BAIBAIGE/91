@@ -97,9 +97,13 @@ type App struct {
 }
 
 type driveScanProgress struct {
-	Scanned       int
-	Added         int
-	CooldownUntil time.Time
+	Scanned        int
+	Added          int
+	CooldownUntil  time.Time
+	Phase          string
+	CurrentTitle   string
+	CurrentBytes   int64
+	ElapsedSeconds int64
 }
 
 type driveUploadProgress struct {

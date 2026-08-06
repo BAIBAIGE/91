@@ -120,14 +120,17 @@ type DriveDirEntry struct {
 }
 
 type GenerationStatus struct {
-	State         string `json:"state"`
-	CurrentTitle  string `json:"currentTitle,omitempty"`
-	QueueLength   int    `json:"queueLength"`
-	CooldownUntil string `json:"cooldownUntil,omitempty"`
-	ScannedCount  int    `json:"scannedCount"`
-	AddedCount    int    `json:"addedCount"`
-	DoneCount     int    `json:"doneCount"`
-	TotalCount    int    `json:"totalCount"`
+	State          string `json:"state"`
+	Phase          string `json:"phase,omitempty"`
+	CurrentTitle   string `json:"currentTitle,omitempty"`
+	CurrentBytes   int64  `json:"currentBytes,omitempty"`
+	ElapsedSeconds int64  `json:"elapsedSeconds,omitempty"`
+	QueueLength    int    `json:"queueLength"`
+	CooldownUntil  string `json:"cooldownUntil,omitempty"`
+	ScannedCount   int    `json:"scannedCount"`
+	AddedCount     int    `json:"addedCount"`
+	DoneCount      int    `json:"doneCount"`
+	TotalCount     int    `json:"totalCount"`
 }
 
 type DriveGenerationStatuses struct {

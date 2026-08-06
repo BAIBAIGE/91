@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 )
@@ -148,9 +149,11 @@ func TestEnsureDirCreatesMissingFolder(t *testing.T) {
 				t.Fatalf("decode create folder body: %v", err)
 			}
 			writePikPakJSON(t, w, map[string]any{
-				"id":   "new-folder-id",
-				"kind": "drive#folder",
-				"name": "Crawler Uploads",
+				"file": map[string]any{
+					"id":   "new-folder-id",
+					"kind": "drive#folder",
+					"name": "Crawler Uploads",
+				},
 			})
 		default:
 			t.Fatalf("unexpected method %s", r.Method)
@@ -169,6 +172,136 @@ func TestEnsureDirCreatesMissingFolder(t *testing.T) {
 	}
 	if got.Kind != "drive#folder" || got.ParentID != "root-id" || got.Name != "Crawler Uploads" {
 		t.Fatalf("create folder body = %#v", got)
+	}
+}
+
+func TestEnsureDirVerifiesFolderWhenCreateResponseOmitsFileID(t *testing.T) {
+	created := false
+	getCalls := 0
+	postCalls := 0
+	mux := http.NewServeMux()
+	mux.HandleFunc("/drive/v1/files", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			getCalls++
+			files := []map[string]any{}
+			if created {
+				files = append(files, map[string]any{
+					"id":   "verified-folder-id",
+					"kind": "drive#folder",
+					"name": "Crawler Uploads",
+				})
+			}
+			writePikPakJSON(t, w, map[string]any{"files": files})
+		case http.MethodPost:
+			postCalls++
+			created = true
+			writePikPakJSON(t, w, map[string]any{"file": map[string]any{}})
+		default:
+			t.Fatalf("unexpected method %s", r.Method)
+		}
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	d := newTestDriver(t, srv)
+	d.listInterval = 0
+	id, err := d.EnsureDir(context.Background(), "Crawler Uploads")
+	if err != nil {
+		t.Fatalf("ensure dir: %v", err)
+	}
+	if id != "verified-folder-id" {
+		t.Fatalf("dir id = %q, want verified-folder-id", id)
+	}
+	if getCalls != 2 || postCalls != 1 {
+		t.Fatalf("requests = GET %d POST %d, want GET 2 POST 1", getCalls, postCalls)
+	}
+}
+
+func TestEnsureDirSerializesConcurrentCreation(t *testing.T) {
+	var stateMu sync.Mutex
+	created := false
+	postCalls := 0
+	missingLists := make(chan struct{}, 2)
+	releaseFirstList := make(chan struct{})
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/drive/v1/files", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			stateMu.Lock()
+			exists := created
+			stateMu.Unlock()
+			if !exists {
+				missingLists <- struct{}{}
+				<-releaseFirstList
+				writePikPakJSON(t, w, map[string]any{"files": []map[string]any{}})
+				return
+			}
+			writePikPakJSON(t, w, map[string]any{
+				"files": []map[string]any{{
+					"id":   "shared-folder-id",
+					"kind": "drive#folder",
+					"name": "Crawler Uploads",
+				}},
+			})
+		case http.MethodPost:
+			stateMu.Lock()
+			created = true
+			postCalls++
+			stateMu.Unlock()
+			writePikPakJSON(t, w, map[string]any{
+				"file": map[string]any{
+					"id":   "shared-folder-id",
+					"kind": "drive#folder",
+					"name": "Crawler Uploads",
+				},
+			})
+		default:
+			t.Errorf("unexpected method %s", r.Method)
+		}
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	d := newTestDriver(t, srv)
+	d.listInterval = 0
+	results := make(chan struct {
+		id  string
+		err error
+	}, 2)
+	ensure := func() {
+		id, err := d.EnsureDir(context.Background(), "Crawler Uploads")
+		results <- struct {
+			id  string
+			err error
+		}{id: id, err: err}
+	}
+
+	go ensure()
+	<-missingLists
+	go ensure()
+	select {
+	case <-missingLists:
+		close(releaseFirstList)
+		t.Fatal("concurrent EnsureDir calls both listed the missing folder")
+	case <-time.After(50 * time.Millisecond):
+		close(releaseFirstList)
+	}
+
+	for range 2 {
+		result := <-results
+		if result.err != nil {
+			t.Fatalf("ensure dir: %v", result.err)
+		}
+		if result.id != "shared-folder-id" {
+			t.Fatalf("dir id = %q, want shared-folder-id", result.id)
+		}
+	}
+	stateMu.Lock()
+	defer stateMu.Unlock()
+	if postCalls != 1 {
+		t.Fatalf("POST calls = %d, want 1", postCalls)
 	}
 }
 

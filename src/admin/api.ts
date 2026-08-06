@@ -406,7 +406,10 @@ export type AdminDrive = {
 
 export type DriveGenerationStatus = {
   state: string;
+  phase?: string;
   currentTitle?: string;
+  currentBytes?: number;
+  elapsedSeconds?: number;
   queueLength: number;
   cooldownUntil?: string;
   scannedCount: number;

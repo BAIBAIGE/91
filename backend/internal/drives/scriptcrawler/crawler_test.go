@@ -1005,6 +1005,7 @@ func TestCrawlerRunOnceDownloadsHLSMediaURL(t *testing.T) {
 	t.Setenv("GO_WANT_SCRIPTCRAWLER_HLS", "1")
 	ffmpegArgsFile := filepath.Join(tmp, "ffmpeg-args.txt")
 	t.Setenv("GO_SCRIPTCRAWLER_FFMPEG_ARGS_FILE", ffmpegArgsFile)
+	var activities []CrawlActivity
 	c := NewCrawler(CrawlerConfig{
 		Driver:              drv,
 		Catalog:             cat,
@@ -1014,6 +1015,9 @@ func TestCrawlerRunOnceDownloadsHLSMediaURL(t *testing.T) {
 		FFprobePath:         writeScriptCrawlerFFprobeStub(t, tmp, true),
 		ScriptPath:          dummyScript,
 		SkipProtocolRefresh: true,
+		OnActivity: func(activity CrawlActivity) {
+			activities = append(activities, activity)
+		},
 	})
 	res, err := c.RunOnce(ctx, 1)
 	if err != nil {
@@ -1035,6 +1039,25 @@ func TestCrawlerRunOnceDownloadsHLSMediaURL(t *testing.T) {
 	}
 	if string(data) != "hls-video-bytes" {
 		t.Fatalf("hls output = %q", string(data))
+	}
+	for _, phase := range []CrawlPhase{
+		CrawlPhaseDiscovering,
+		CrawlPhaseDownloading,
+		CrawlPhaseValidating,
+		CrawlPhaseFingerprinting,
+		CrawlPhaseDeduplicating,
+		CrawlPhaseCataloging,
+	} {
+		found := false
+		for _, activity := range activities {
+			if activity.Phase == phase {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("activities = %+v, missing phase %q", activities, phase)
+		}
 	}
 	argsData, err := os.ReadFile(ffmpegArgsFile)
 	if err != nil {

@@ -24,7 +24,7 @@ import (
 //      body: {kind, name, size, hash(GCID), upload_type=UPLOAD_TYPE_RESUMABLE,
 //             objProvider, parent_id, folder_type}
 //
-//   2. 服务端响应 uploadTaskData：
+//   2. 服务端响应 newFileResponse：
 //      - 命中秒传：resumable=null，file.id 就是新文件 ID（无需上传字节）
 //      - 未命中：resumable.params 含 S3 兼容凭证（access_key / secret /
 //        bucket / endpoint / key / security_token）
@@ -46,8 +46,10 @@ const (
 	pikpakUploadMaxAttempts = 4
 )
 
-// uploadTaskData 是 POST /drive/v1/files 的响应结构。
-type uploadTaskData struct {
+// newFileResponse 是 POST /drive/v1/files 的通用响应结构。
+// PikPak 无论创建目录还是申请文件上传会话，都把新建对象
+// 放在 file 字段中，而不是放在响应顶层。
+type newFileResponse struct {
 	UploadType string         `json:"upload_type"`
 	Resumable  *resumableData `json:"resumable"`
 	File       file           `json:"file"`
@@ -183,8 +185,8 @@ func (d *Driver) UploadAndReportHash(ctx context.Context, parentID, name string,
 	return UploadResult{}, lastErr
 }
 
-func (d *Driver) requestUploadSession(ctx context.Context, parentID, name string, size int64, gcidHex string) (uploadTaskData, error) {
-	var resp uploadTaskData
+func (d *Driver) requestUploadSession(ctx context.Context, parentID, name string, size int64, gcidHex string) (newFileResponse, error) {
+	var resp newFileResponse
 	if err := d.request(ctx, filesURL, http.MethodPost, func(req *resty.Request) {
 		req.SetBody(map[string]any{
 			"kind":        "drive#file",
@@ -197,12 +199,12 @@ func (d *Driver) requestUploadSession(ctx context.Context, parentID, name string
 			"folder_type": "NORMAL",
 		})
 	}, &resp); err != nil {
-		return uploadTaskData{}, err
+		return newFileResponse{}, err
 	}
 	return resp, nil
 }
 
-func (d *Driver) completeUploadAttempt(ctx context.Context, body preparedUploadBody, parentID, name string, result UploadResult, resp uploadTaskData) (UploadResult, error) {
+func (d *Driver) completeUploadAttempt(ctx context.Context, body preparedUploadBody, parentID, name string, result UploadResult, resp newFileResponse) (UploadResult, error) {
 	// 命中秒传：服务端已经知道这个 hash，直接返回新文件 ID。
 	if resp.Resumable == nil {
 		if resp.File.ID != "" {

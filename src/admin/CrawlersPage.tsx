@@ -21,6 +21,7 @@ import { Modal } from "./Modal";
 import { ConfirmModal } from "./ConfirmModal";
 import { useToast } from "./ToastContext";
 import { generationStateClass, generationStateLabel } from "./drive/constants";
+import { crawlerScanDetail, crawlerScanStateText } from "./crawlerProgress";
 import { CrawlerUploadTargetField } from "./drive/CrawlerUploadTargetField";
 import { SpiderIcon } from "./icons/SpiderIcon";
 import { AdminEmptyVisual } from "./AdminEmptyVisual";
@@ -425,7 +426,8 @@ function CrawlerDetail({
         <GenStageCard
           label="抓取"
           status={scan}
-          stateText={scan?.state === "scanning" ? "抓取中" : generationStateLabel(scan?.state || "idle")}
+          stateText={crawlerScanStateText(scan) || generationStateLabel(scan?.state || "idle")}
+          detail={crawlerScanDetail(scan)}
           counts={[
             { label: "累计爬取", value: crawler.totalCrawledCount ?? 0 },
             { label: "本轮检查", value: scan?.scannedCount ?? 0 },
@@ -526,14 +528,17 @@ function GenStageCard({
   label,
   status,
   stateText,
+  detail,
   counts,
 }: {
   label: string;
   status?: api.DriveGenerationStatus;
   stateText?: string;
+  detail?: string;
   counts: Array<{ label: string; value: number; tone?: "danger" }>;
 }) {
   const state = status?.state || "idle";
+  const displayedDetail = detail ?? status?.currentTitle;
   return (
     <div className="admin-gen-col">
       <div className="admin-gen-col__head">
@@ -542,7 +547,7 @@ function GenStageCard({
           {stateText ?? generationStateLabel(state)}
         </span>
       </div>
-      {status?.currentTitle && <div className="admin-gen-col__detail">{status.currentTitle}</div>}
+      {displayedDetail && <div className="admin-gen-col__detail">{displayedDetail}</div>}
       <div className="admin-gen-col__counts">
         {counts.map((count) => (
           <div className="admin-gen-col__count" key={count.label}>

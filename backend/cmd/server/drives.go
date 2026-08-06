@@ -431,6 +431,9 @@ func (a *App) attachScriptCrawler(d *catalog.Drive, drv *scriptcrawler.Driver) {
 			}
 			a.updateDriveScanProgress(driveID, scanned, added)
 		},
+		OnActivity: func(activity scriptcrawler.CrawlActivity) {
+			a.updateDriveScanActivity(driveID, activity)
+		},
 	})
 
 	a.mu.Lock()
@@ -655,6 +658,26 @@ func (a *App) updateDriveScanProgress(driveID string, scanned, added int) {
 		progress := a.scanProgress[driveID]
 		progress.Scanned = scanned
 		progress.Added = added
+		a.scanProgress[driveID] = progress
+	}
+	a.scanQueueMu.Unlock()
+}
+
+func (a *App) updateDriveScanActivity(driveID string, activity scriptcrawler.CrawlActivity) {
+	driveID = strings.TrimSpace(driveID)
+	if driveID == "" {
+		return
+	}
+	a.scanQueueMu.Lock()
+	if a.scanQueued[driveID] {
+		if a.scanProgress == nil {
+			a.scanProgress = make(map[string]driveScanProgress)
+		}
+		progress := a.scanProgress[driveID]
+		progress.Phase = string(activity.Phase)
+		progress.CurrentTitle = strings.TrimSpace(activity.Title)
+		progress.CurrentBytes = activity.Bytes
+		progress.ElapsedSeconds = int64(activity.Elapsed / time.Second)
 		a.scanProgress[driveID] = progress
 	}
 	a.scanQueueMu.Unlock()

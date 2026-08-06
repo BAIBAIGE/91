@@ -1352,28 +1352,46 @@ func TestHandleListCrawlersOnlyIncludesCrawlerPageScripts(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/admin/api/crawlers", nil)
 	rr := httptest.NewRecorder()
-	srv := &AdminServer{Catalog: cat}
+	srv := &AdminServer{
+		Catalog: cat,
+		GetDriveGenerationStatuses: func() map[string]DriveGenerationStatuses {
+			return map[string]DriveGenerationStatuses{
+				"crawler-main": {
+					Scan: GenerationStatus{
+						State:          "scanning",
+						Phase:          "downloading",
+						CurrentTitle:   "Current video",
+						CurrentBytes:   4096,
+						ElapsedSeconds: 30,
+						ScannedCount:   12,
+						AddedCount:     3,
+					},
+				},
+			}
+		},
+	}
 	srv.handleListCrawlers(rr, req)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", rr.Code, rr.Body.String())
 	}
 
 	var got []struct {
-		ID               string `json:"id"`
-		Name             string `json:"name"`
-		Protocol         string `json:"protocol"`
-		Kind             string `json:"kind"`
-		Proxy            string `json:"proxy"`
-		UploadDriveID    string `json:"uploadDriveId"`
-		Paused           bool   `json:"paused"`
-		TeaserEnabled    bool   `json:"teaserEnabled"`
-		LastCrawlAt      int64  `json:"lastCrawlAt"`
-		TotalCrawled     int    `json:"totalCrawledCount"`
-		LocalVideos      int    `json:"localVideoCount"`
-		MigratedVideo    int    `json:"migratedVideoCount"`
-		ThumbnailReady   int    `json:"thumbnailReadyCount"`
-		TeaserReady      int    `json:"teaserReadyCount"`
-		FingerprintReady int    `json:"fingerprintReadyCount"`
+		ID               string           `json:"id"`
+		Name             string           `json:"name"`
+		Protocol         string           `json:"protocol"`
+		Kind             string           `json:"kind"`
+		Proxy            string           `json:"proxy"`
+		UploadDriveID    string           `json:"uploadDriveId"`
+		Paused           bool             `json:"paused"`
+		TeaserEnabled    bool             `json:"teaserEnabled"`
+		LastCrawlAt      int64            `json:"lastCrawlAt"`
+		TotalCrawled     int              `json:"totalCrawledCount"`
+		LocalVideos      int              `json:"localVideoCount"`
+		MigratedVideo    int              `json:"migratedVideoCount"`
+		ThumbnailReady   int              `json:"thumbnailReadyCount"`
+		TeaserReady      int              `json:"teaserReadyCount"`
+		FingerprintReady int              `json:"fingerprintReadyCount"`
+		ScanStatus       GenerationStatus `json:"scanGenerationStatus"`
 	}
 	if err := json.NewDecoder(rr.Body).Decode(&got); err != nil {
 		t.Fatalf("decode: %v", err)
@@ -1393,6 +1411,7 @@ func TestHandleListCrawlersOnlyIncludesCrawlerPageScripts(t *testing.T) {
 		ThumbnailReady   int
 		TeaserReady      int
 		FingerprintReady int
+		ScanStatus       GenerationStatus
 	}
 	byID := map[string]crawlerListRow{}
 	for _, d := range got {
@@ -1411,6 +1430,7 @@ func TestHandleListCrawlersOnlyIncludesCrawlerPageScripts(t *testing.T) {
 			ThumbnailReady:   d.ThumbnailReady,
 			TeaserReady:      d.TeaserReady,
 			FingerprintReady: d.FingerprintReady,
+			ScanStatus:       d.ScanStatus,
 		}
 	}
 	if _, ok := byID["crawler-script-deleted"]; ok {
@@ -1445,6 +1465,9 @@ func TestHandleListCrawlersOnlyIncludesCrawlerPageScripts(t *testing.T) {
 	}
 	if byID["crawler-main"].ThumbnailReady != 2 || byID["crawler-main"].TeaserReady != 2 || byID["crawler-main"].FingerprintReady != 2 {
 		t.Fatalf("asset ready counts = thumb %d teaser %d fingerprint %d, want 2/2/2", byID["crawler-main"].ThumbnailReady, byID["crawler-main"].TeaserReady, byID["crawler-main"].FingerprintReady)
+	}
+	if status := byID["crawler-main"].ScanStatus; status.State != "scanning" || status.Phase != "downloading" || status.CurrentTitle != "Current video" || status.CurrentBytes != 4096 || status.ElapsedSeconds != 30 {
+		t.Fatalf("crawler scan status = %#v, want live download activity", status)
 	}
 	if _, ok := byID["onedrive-main"]; ok {
 		t.Fatal("onedrive should not be returned by crawler list")

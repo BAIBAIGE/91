@@ -85,9 +85,14 @@ echo '{"type":"done","stats":{"checked":0,"emitted":0}}'
 }
 
 func TestCrawlerV2WritesLimitsAndAcceptsDone(t *testing.T) {
+	var activities []CrawlActivity
 	crawler := newRuntimeTestCrawler(t, `
 echo '{"type":"done","stats":{"checked":12,"emitted":0}}'
-`, ProtocolV2, nil)
+`, ProtocolV2, func(cfg *CrawlerConfig) {
+		cfg.OnActivity = func(activity CrawlActivity) {
+			activities = append(activities, activity)
+		}
+	})
 	result, err := crawler.RunOnce(context.Background(), 1)
 	if err != nil {
 		t.Fatalf("run once: %v", err)
@@ -105,6 +110,9 @@ echo '{"type":"done","stats":{"checked":12,"emitted":0}}'
 	}
 	if job.Limits.MaxRuntimeSeconds != 2 || job.Limits.IdleTimeoutSeconds != 1 || job.Limits.CandidateIdleTimeoutSeconds != 1 {
 		t.Fatalf("limits = %+v", job.Limits)
+	}
+	if len(activities) < 2 || activities[0].Phase != CrawlPhaseDiscovering || activities[len(activities)-1].Phase != "" {
+		t.Fatalf("activities = %+v, want discovering followed by cleared activity", activities)
 	}
 	if _, err := time.Parse(time.RFC3339, job.Limits.DeadlineAt); err != nil {
 		t.Fatalf("deadline_at = %q: %v", job.Limits.DeadlineAt, err)
