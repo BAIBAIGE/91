@@ -2,8 +2,6 @@ package p115
 
 import (
 	"context"
-	"crypto/sha1"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -11,7 +9,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"os"
 	"path"
 	"strconv"
 	"strings"
@@ -53,6 +50,11 @@ type Driver struct {
 	client        *sdk.Pan115Client
 	ua            string
 	uploadTempDir string
+	uploadGate    chan struct{}
+	// uploadAppVersion is resolved lazily from 115's public version endpoint.
+	// Uploads are serialized by uploadGate, so these fields need no second lock.
+	uploadAppVersion         string
+	uploadAppVersionResolved bool
 
 	listGate     chan struct{}
 	lastListAt   time.Time
@@ -90,6 +92,8 @@ func New(c Config) *Driver {
 		rootID:             rootID,
 		ua:                 ua,
 		uploadTempDir:      strings.TrimSpace(c.UploadTempDir),
+		uploadGate:         make(chan struct{}, 1),
+		uploadAppVersion:   p115UploadFallbackAppVersion,
 		listGate:           make(chan struct{}, 1),
 		listInterval:       2 * time.Second,
 		listTimeout:        p115ListRequestTimeout,
@@ -764,140 +768,6 @@ func wrap115StreamTransientError(op string, err error) error {
 	}
 }
 
-func (d *Driver) Upload(ctx context.Context, parentID, name string, r io.Reader, size int64) (string, error) {
-	res, err := d.UploadAndReportSha1(ctx, parentID, name, r, size)
-	if err != nil {
-		return "", err
-	}
-	return res.FileID, nil
-}
-
-// UploadResult 是 UploadAndReportSha1 的返回值。
-//
-// FileID: 上传后 115 给该文件分配的 ID（在父目录里能查到）。
-// Sha1:   文件的 SHA1（HEX 大写，与 115 的 sha1 格式一致），可直接写入 catalog.content_hash。
-// Size:   实际上传的字节数（如调用时 size>0 应当与传入一致）。
-type UploadResult struct {
-	FileID string
-	Sha1   string
-	Size   int64
-}
-
-// UploadAndReportSha1 把 r 上传到 parentID 目录下的指定文件名，返回新文件元数据。
-//
-// 实现要点（参考 OpenList drivers/115）：
-//
-//  1. 把 r 全量缓冲到本地临时文件并同时算 SHA1，避免在内存里堆 100MB 视频；
-//     拿到 *os.File 后才能进 SDK 的 RapidUploadOrByMultipart 分片上传通道。
-//  2. SDK 的 RapidUploadOrByMultipart 内部会：
-//     a. 调 /upload/init 走 ECDH 加密的秒传协议，命中即结束；
-//     b. 对 status=7 自动做范围 SHA1 二次校验后重试；
-//     c. 未命中且 size<=1KB 走 OSS PutObject；否则按 fileSize<i*GB → i*1000 片切分调 OSS multipart。
-//  3. SDK 不返回 fileID。我们在上传完成后用 GetFiles 列父目录，按 SHA1 + 文件名匹配新文件。
-//     列父目录时按时间倒序拉前 500 条，刚上传的文件会在最前面，几乎不会漏。
-//
-// 该方法不会按 SHA1 跨目录复用 fileID —— 同一文件如果父目录里已经有同名同 sha1 文件，
-// 115 服务端会直接秒传成功并把已有文件视为本次结果，列目录时也仍然能找到，行为一致。
-func (d *Driver) UploadAndReportSha1(ctx context.Context, parentID, name string, r io.Reader, size int64) (UploadResult, error) {
-	if d.client == nil {
-		return UploadResult{}, errors.New("p115 upload: driver not initialized")
-	}
-	if r == nil {
-		return UploadResult{}, errors.New("p115 upload: nil reader")
-	}
-	if size < 0 {
-		return UploadResult{}, fmt.Errorf("p115 upload: invalid size %d", size)
-	}
-	name = strings.TrimSpace(name)
-	if name == "" {
-		return UploadResult{}, errors.New("p115 upload: empty file name")
-	}
-	parentID = strings.TrimSpace(parentID)
-	if parentID == "" {
-		parentID = d.rootID
-	}
-
-	tmp, sha1Hex, written, err := bufferAndHashSha1(d.uploadTempDir, r, size)
-	if err != nil {
-		return UploadResult{}, err
-	}
-	defer func() {
-		_ = tmp.Close()
-		_ = os.Remove(tmp.Name())
-	}()
-
-	// 把流位置回到开头交给 SDK；SDK 会自己 Digest 一次（重复算一次 SHA1，
-	// 但代码上可以避免侵入 SDK 内部状态机）。
-	if _, err := tmp.Seek(0, io.SeekStart); err != nil {
-		return UploadResult{}, fmt.Errorf("p115 upload: seek tmp: %w", err)
-	}
-
-	if err := ctx.Err(); err != nil {
-		return UploadResult{}, err
-	}
-
-	if err := d.client.RapidUploadOrByMultipart(parentID, name, written, tmp); err != nil {
-		return UploadResult{}, fmt.Errorf("p115 upload: %w", err)
-	}
-
-	fileID, err := d.findUploadedFileID(ctx, parentID, name, sha1Hex)
-	if err != nil {
-		return UploadResult{}, err
-	}
-
-	return UploadResult{FileID: fileID, Sha1: sha1Hex, Size: written}, nil
-}
-
-// findUploadedFileID 列出 parentID 目录，按 (sha1, name) 找到新上传的文件并返回 fileID。
-// 列目录用时间倒序 + Limit=500，新上传的文件几乎一定在前 500 条里。
-//
-// 失败时返回包装好的错误，由上层决定是否重试。
-//
-// 注：sdk.GetFiles 返回的 FileInfo 是 115 API 的原始结构，里面没有显式的 IsDirectory 字段；
-// 文件的 FileID 非空、目录的 FileID 为空（目录是 CategoryID 自身）。
-func (d *Driver) findUploadedFileID(ctx context.Context, parentID, name, sha1Hex string) (string, error) {
-	req := d.client.NewRequest().ForceContentType("application/json;charset=UTF-8")
-	resp, err := sdk.GetFiles(req, parentID,
-		sdk.WithOrder(sdk.FileOrderByTime),
-		sdk.WithShowDirEnable(false),
-		sdk.WithAsc(false),
-		sdk.WithLimit(500),
-	)
-	if err != nil {
-		return "", fmt.Errorf("p115 upload verify: %w", err)
-	}
-	if resp == nil {
-		return "", fmt.Errorf("p115 upload: empty list response for parent %q", parentID)
-	}
-	// 优先按 sha1 + name 双匹配；少数情况下名字含特殊字符被 115 服务端二次处理（比如折叠空白），
-	// 仍然以 sha1 命中即认可。
-	var sha1Hit string
-	for _, f := range resp.Files {
-		if f.FileID == "" {
-			continue // 目录
-		}
-		if !strings.EqualFold(f.Sha1, sha1Hex) {
-			continue
-		}
-		if f.Name == name {
-			return f.FileID, nil
-		}
-		if sha1Hit == "" {
-			sha1Hit = f.FileID
-		}
-	}
-	if sha1Hit != "" {
-		return sha1Hit, nil
-	}
-	// 兜底：仅按 name 找
-	for _, f := range resp.Files {
-		if f.FileID != "" && f.Name == name {
-			return f.FileID, nil
-		}
-	}
-	return "", fmt.Errorf("p115 upload: uploaded file %q not found in parent %q", name, parentID)
-}
-
 // Rename 调用 115 SDK 把指定 fileID 重命名为 newName。
 // 包装错误信息，方便日志定位是 115 端的失败。
 func (d *Driver) Rename(ctx context.Context, fileID, newName string) error {
@@ -936,39 +806,6 @@ func (d *Driver) Remove(ctx context.Context, fileID string) error {
 		return fmt.Errorf("p115 remove: %w", err)
 	}
 	return nil
-}
-
-// bufferAndHashSha1 把 r 全量复制到一个临时文件，同时计算 SHA1。
-// 返回临时文件（位置在末尾，需调用方 Seek 回 0）、SHA1 hex 大写、实际字节数。
-//
-// 调用方负责 Close + Remove 临时文件。
-func bufferAndHashSha1(tempDir string, r io.Reader, declaredSize int64) (*os.File, string, int64, error) {
-	tempDir = strings.TrimSpace(tempDir)
-	if tempDir != "" {
-		if err := os.MkdirAll(tempDir, 0o755); err != nil {
-			return nil, "", 0, fmt.Errorf("p115 upload: create tmp dir: %w", err)
-		}
-	}
-	tmp, err := os.CreateTemp(tempDir, "p115-upload-*.bin")
-	if err != nil {
-		return nil, "", 0, fmt.Errorf("p115 upload: create tmp: %w", err)
-	}
-
-	h := sha1.New()
-	mw := io.MultiWriter(tmp, h)
-	written, err := io.Copy(mw, r)
-	if err != nil {
-		_ = tmp.Close()
-		_ = os.Remove(tmp.Name())
-		return nil, "", 0, fmt.Errorf("p115 upload: buffer body: %w", err)
-	}
-	if declaredSize > 0 && written != declaredSize {
-		_ = tmp.Close()
-		_ = os.Remove(tmp.Name())
-		return nil, "", 0, fmt.Errorf("p115 upload: size mismatch: declared %d, copied %d", declaredSize, written)
-	}
-	sha1Hex := strings.ToUpper(hex.EncodeToString(h.Sum(nil)))
-	return tmp, sha1Hex, written, nil
 }
 
 func (d *Driver) EnsureDir(ctx context.Context, pathFromRoot string) (string, error) {

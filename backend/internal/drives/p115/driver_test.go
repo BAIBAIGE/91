@@ -529,74 +529,127 @@ func TestRememberPickCodeStaysBounded(t *testing.T) {
 	}
 }
 
-// TestBufferAndHashSha1 验证 bufferAndHashSha1：
-//
-//   - 把 reader 的全部字节落到 tmp 文件
-//   - SHA1 与标准库一致（HEX 大写）
-//   - declaredSize=0 时不校验，>0 时严格校验
-//   - 调用方拿到的 *os.File 可以 Seek 回 0 重新读出原文（OSS SDK 上传需要）
-func TestBufferAndHashSha1(t *testing.T) {
+func TestPrepareP115UploadBodyReusesSeekableReader(t *testing.T) {
+	body := bytes.Repeat([]byte("115-upload-body-"), 10000)
+	driver := New(Config{ID: "p115-test", UploadTempDir: filepath.Join(t.TempDir(), "unused")})
+	reader := bytes.NewReader(body)
+
+	prepared, digest, err := driver.prepareP115UploadBody(context.Background(), reader, int64(len(body)))
+	if err != nil {
+		t.Fatalf("prepare upload body: %v", err)
+	}
+	if prepared.cleanup != nil {
+		t.Fatal("seekable reader was copied to a temporary file")
+	}
+	if prepared.reader != reader || prepared.readerAt != reader {
+		t.Fatal("prepared body did not reuse the original reader")
+	}
+	assertP115UploadDigest(t, digest, body)
+	if err := prepared.rewind(); err != nil {
+		t.Fatalf("rewind: %v", err)
+	}
+	got, err := io.ReadAll(prepared.reader)
+	if err != nil {
+		t.Fatalf("read prepared body: %v", err)
+	}
+	if !bytes.Equal(got, body) {
+		t.Fatal("prepared body differs from source")
+	}
+}
+
+func TestPrepareP115UploadBodyBuffersReaderOnlyOnce(t *testing.T) {
 	body := []byte("hello-115-upload-test")
-	want := sha1.Sum(body)
-	wantHex := strings.ToUpper(hex.EncodeToString(want[:]))
+	tempDir := filepath.Join(t.TempDir(), "upload-tmp")
+	driver := New(Config{ID: "p115-test", UploadTempDir: tempDir})
+	// Wrapping the bytes.Reader behind io.Reader deliberately hides Seek and
+	// ReaderAt, matching a network response body.
+	var source io.Reader = struct{ io.Reader }{Reader: bytes.NewReader(body)}
 
-	t.Run("declared size matches", func(t *testing.T) {
-		tmp, gotHex, n, err := bufferAndHashSha1("", bytes.NewReader(body), int64(len(body)))
-		if err != nil {
-			t.Fatalf("bufferAndHashSha1 returned error: %v", err)
-		}
-		defer cleanup(tmp)
-		if gotHex != wantHex {
-			t.Errorf("sha1 = %s, want %s", gotHex, wantHex)
-		}
-		if n != int64(len(body)) {
-			t.Errorf("written = %d, want %d", n, len(body))
-		}
-		// Seek 回 0，应能读出原文
-		if _, err := tmp.Seek(0, io.SeekStart); err != nil {
-			t.Fatalf("seek: %v", err)
-		}
-		got, err := io.ReadAll(tmp)
-		if err != nil {
-			t.Fatalf("read tmp: %v", err)
-		}
-		if !bytes.Equal(got, body) {
-			t.Errorf("tmp content mismatch: got %q want %q", string(got), string(body))
-		}
-	})
+	prepared, digest, err := driver.prepareP115UploadBody(context.Background(), source, int64(len(body)))
+	if err != nil {
+		t.Fatalf("prepare upload body: %v", err)
+	}
+	if prepared.cleanup == nil {
+		t.Fatal("non-seekable reader was not buffered")
+	}
+	tmp, ok := prepared.reader.(*os.File)
+	if !ok {
+		prepared.cleanup()
+		t.Fatalf("prepared reader type = %T, want *os.File", prepared.reader)
+	}
+	tmpPath := tmp.Name()
+	if gotDir := filepath.Dir(tmpPath); gotDir != tempDir {
+		prepared.cleanup()
+		t.Fatalf("tmp dir = %q, want %q", gotDir, tempDir)
+	}
+	assertP115UploadDigest(t, digest, body)
+	got, readErr := io.ReadAll(prepared.reader)
+	prepared.cleanup()
+	if readErr != nil {
+		t.Fatalf("read prepared body: %v", readErr)
+	}
+	if !bytes.Equal(got, body) {
+		t.Fatal("temporary body differs from source")
+	}
+	if _, statErr := os.Stat(tmpPath); !os.IsNotExist(statErr) {
+		t.Fatalf("temporary file remains after cleanup: %v", statErr)
+	}
+}
 
-	t.Run("declared size mismatch returns error", func(t *testing.T) {
-		_, _, _, err := bufferAndHashSha1("", bytes.NewReader(body), int64(len(body))+1)
-		if err == nil {
-			t.Fatal("expected size mismatch error, got nil")
-		}
-	})
+func TestPrepareP115UploadBodyRejectsSizeMismatchAndRewinds(t *testing.T) {
+	body := []byte("hello-115-upload-test")
+	reader := bytes.NewReader(body)
+	driver := New(Config{ID: "p115-test"})
 
-	t.Run("declared size zero is unchecked", func(t *testing.T) {
-		tmp, gotHex, n, err := bufferAndHashSha1("", bytes.NewReader(body), 0)
-		if err != nil {
-			t.Fatalf("bufferAndHashSha1 returned error: %v", err)
-		}
-		defer cleanup(tmp)
-		if gotHex != wantHex {
-			t.Errorf("sha1 = %s, want %s", gotHex, wantHex)
-		}
-		if n != int64(len(body)) {
-			t.Errorf("written = %d, want %d", n, len(body))
-		}
-	})
+	_, _, err := driver.prepareP115UploadBody(context.Background(), reader, int64(len(body))+1)
+	if err == nil || !strings.Contains(err.Error(), "size mismatch") {
+		t.Fatalf("error = %v, want size mismatch", err)
+	}
+	position, seekErr := reader.Seek(0, io.SeekCurrent)
+	if seekErr != nil {
+		t.Fatalf("get reader position: %v", seekErr)
+	}
+	if position != 0 {
+		t.Fatalf("reader position = %d, want 0 after failed preparation", position)
+	}
+}
 
-	t.Run("uses configured temp dir", func(t *testing.T) {
-		tempDir := filepath.Join(t.TempDir(), "upload-tmp")
-		tmp, _, _, err := bufferAndHashSha1(tempDir, bytes.NewReader(body), int64(len(body)))
-		if err != nil {
-			t.Fatalf("bufferAndHashSha1 returned error: %v", err)
-		}
-		defer cleanup(tmp)
-		if gotDir := filepath.Dir(tmp.Name()); gotDir != tempDir {
-			t.Fatalf("tmp dir = %q, want %q", gotDir, tempDir)
-		}
-	})
+func TestHashAndCopyP115UploadAllowsTransientEmptyRead(t *testing.T) {
+	body := []byte("body-after-empty-read")
+	source := &p115OneEmptyReader{reader: bytes.NewReader(body)}
+	digest, err := hashAndCopyP115Upload(context.Background(), source, nil, int64(len(body)))
+	if err != nil {
+		t.Fatalf("hash upload body: %v", err)
+	}
+	assertP115UploadDigest(t, digest, body)
+}
+
+type p115OneEmptyReader struct {
+	empty  bool
+	reader io.Reader
+}
+
+func (r *p115OneEmptyReader) Read(p []byte) (int, error) {
+	if !r.empty {
+		r.empty = true
+		return 0, nil
+	}
+	return r.reader.Read(p)
+}
+
+func assertP115UploadDigest(t *testing.T, got p115UploadDigest, body []byte) {
+	t.Helper()
+	full := sha1.Sum(body)
+	preBody := body
+	if int64(len(preBody)) > p115UploadPreHashSize {
+		preBody = preBody[:p115UploadPreHashSize]
+	}
+	pre := sha1.Sum(preBody)
+	wantFull := strings.ToUpper(hex.EncodeToString(full[:]))
+	wantPre := strings.ToUpper(hex.EncodeToString(pre[:]))
+	if got.SHA1 != wantFull || got.PreID != wantPre || got.Size != int64(len(body)) {
+		t.Fatalf("digest = %#v, want SHA1=%s PreID=%s Size=%d", got, wantFull, wantPre, len(body))
+	}
 }
 
 // TestUploadAndReportSha1RejectsInvalidArgs 检查空 reader / 空 name / 负 size 在
@@ -626,12 +679,4 @@ func TestUploadAndReportSha1RejectsInvalidArgs(t *testing.T) {
 			}
 		})
 	}
-}
-
-func cleanup(f *os.File) {
-	if f == nil {
-		return
-	}
-	_ = f.Close()
-	_ = os.Remove(f.Name())
 }
