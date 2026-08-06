@@ -23,6 +23,7 @@ import { Modal } from "./Modal";
 import { ConfirmModal } from "./ConfirmModal";
 import { formatBytes } from "./storageFormat";
 import { AdminEmptyVisual } from "./AdminEmptyVisual";
+import { AdminPagination } from "./AdminPagination";
 import { driveKindAbbr, driveKindIconPath } from "./drive/constants";
 import { SpiderIcon } from "./icons/SpiderIcon";
 import {
@@ -801,10 +802,11 @@ function CurrentVideosTab({
             ))}
           </div>
           {showPagination && (
-            <Pagination
+            <AdminPagination
               page={displayedPage ?? page}
               totalPages={totalPages}
               total={total}
+              itemLabel="视频"
               pending={listQueryPending}
               onPage={setPage}
             />
@@ -1290,10 +1292,11 @@ function BlacklistTab({
             </tbody>
           </table>
           {showPagination && (
-            <Pagination
+            <AdminPagination
               page={displayedPage ?? page}
               totalPages={totalPages}
               total={total}
+              itemLabel="视频"
               pending={listQueryPending}
               onPage={setPage}
             />
@@ -1488,44 +1491,6 @@ function SearchBox({
       variant="uiverse"
       placeholder=""
     />
-  );
-}
-
-function Pagination({
-  page,
-  totalPages,
-  total,
-  pending,
-  onPage,
-}: {
-  page: number;
-  totalPages: number;
-  total: number;
-  pending: boolean;
-  onPage: React.Dispatch<React.SetStateAction<number>>;
-}) {
-  return (
-    <nav className="admin-table-pagination admin-videos-pagination" aria-label="视频列表分页">
-      <button
-        type="button"
-        className="admin-btn admin-videos-pagination__button"
-        onClick={() => onPage(Math.max(1, page - 1))}
-        disabled={pending || page <= 1}
-      >
-        上一页
-      </button>
-      <span className="admin-videos-pagination__info" aria-live="polite">
-        第 {page} / {totalPages} 页 · 共 {total} 个视频
-      </span>
-      <button
-        type="button"
-        className="admin-btn admin-videos-pagination__button"
-        onClick={() => onPage(Math.min(totalPages, page + 1))}
-        disabled={pending || page >= totalPages}
-      >
-        下一页
-      </button>
-    </nav>
   );
 }
 

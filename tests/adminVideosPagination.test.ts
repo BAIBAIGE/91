@@ -3,6 +3,10 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
 const videosPageSource = readFileSync(new URL("../src/admin/VideosPage.tsx", import.meta.url), "utf8");
+const adminPaginationSource = readFileSync(
+  new URL("../src/admin/AdminPagination.tsx", import.meta.url),
+  "utf8"
+);
 const searchPanelSource = readFileSync(new URL("../src/components/SearchPanel.tsx", import.meta.url), "utf8");
 const apiSource = readFileSync(new URL("../src/admin/api.ts", import.meta.url), "utf8");
 const emptyVisualSource = readFileSync(new URL("../src/admin/AdminEmptyVisual.tsx", import.meta.url), "utf8");
@@ -159,7 +163,7 @@ test("normal videos keep source navigation separate from composable advanced fil
 test("admin video searches reuse the debounced home search component", () => {
   const searchBoxSource = videosPageSource.slice(
     videosPageSource.indexOf("function SearchBox"),
-    videosPageSource.indexOf("function Pagination")
+    videosPageSource.indexOf("function ErrorState")
   );
 
   assert.match(videosPageSource, /import \{ SearchPanel \} from "@\/components\/SearchPanel";/);
@@ -176,27 +180,23 @@ test("admin video searches reuse the debounced home search component", () => {
 });
 
 test("admin video pagination follows the compact CPA previous and next layout", () => {
-  const paginationSource = videosPageSource.slice(
-    videosPageSource.indexOf("function Pagination"),
-    videosPageSource.indexOf("function ErrorState")
-  );
   const paginationCalls = Array.from(
     videosPageSource.matchAll(
-      /<Pagination\s+page=\{displayedPage \?\? page\}[\s\S]{0,240}?pending=\{listQueryPending\}[\s\S]{0,120}?onPage=\{setPage\}\s*\/>/g
+      /<AdminPagination\s+page=\{displayedPage \?\? page\}[\s\S]{0,240}?itemLabel="视频"[\s\S]{0,120}?pending=\{listQueryPending\}[\s\S]{0,120}?onPage=\{setPage\}\s*\/>/g
     )
   );
-  assert.match(paginationSource, /第 \{page\} \/ \{totalPages\} 页 · 共 \{total\} 个视频/);
-  assert.match(paginationSource, /admin-table-pagination admin-videos-pagination/);
-  assert.equal(Array.from(paginationSource.matchAll(/上一页|下一页/g)).length, 2);
-  assert.doesNotMatch(paginationSource, /首页|末页/);
-  assert.match(paginationSource, /disabled=\{pending \|\| page <= 1\}/);
-  assert.match(paginationSource, /disabled=\{pending \|\| page >= totalPages\}/);
+  assert.match(adminPaginationSource, /第 \{page\} \/ \{totalPages\} 页 · 共 \{total\} 个\{itemLabel\}/);
+  assert.match(adminPaginationSource, /admin-table-pagination admin-list-pagination/);
+  assert.equal(Array.from(adminPaginationSource.matchAll(/上一页|下一页/g)).length, 2);
+  assert.doesNotMatch(adminPaginationSource, /首页|末页/);
+  assert.match(adminPaginationSource, /disabled=\{pending \|\| page <= 1\}/);
+  assert.match(adminPaginationSource, /disabled=\{pending \|\| page >= totalPages\}/);
   assert.doesNotMatch(videosPageSource, /每页 \{pageSize\} 个/);
-  assert.doesNotMatch(videosPageSource, /<Pagination[^>]*pageSize=\{pageSize\}/);
+  assert.doesNotMatch(videosPageSource, /<AdminPagination[^>]*pageSize=\{pageSize\}/);
   assert.equal(paginationCalls.length, 2);
-  assert.match(adminCss, /\.admin-table-pagination\.admin-videos-pagination\s*\{[^}]*gap:\s*14px;[^}]*margin-top:\s*0;[^}]*margin-bottom:\s*var\(--space-3\);/s);
-  assert.match(adminCss, /\.admin-videos-pagination__button\s*\{[^}]*padding:\s*8px 10px;[^}]*box-shadow:\s*none;/s);
-  assert.match(adminCss, /\.admin-videos-pagination__info\s*\{[^}]*font-family:\s*ui-monospace[^}]*font-size:\s*12px;[^}]*font-variant-numeric:\s*tabular-nums;[^}]*letter-spacing:\s*0\.02em;[^}]*white-space:\s*nowrap;/s);
+  assert.match(adminCss, /\.admin-table-pagination\.admin-list-pagination\s*\{[^}]*gap:\s*14px;[^}]*margin-top:\s*0;[^}]*margin-bottom:\s*var\(--space-3\);/s);
+  assert.match(adminCss, /\.admin-list-pagination__button\s*\{[^}]*padding:\s*8px 10px;[^}]*box-shadow:\s*none;/s);
+  assert.match(adminCss, /\.admin-list-pagination__info\s*\{[^}]*font-family:\s*ui-monospace[^}]*font-size:\s*12px;[^}]*font-variant-numeric:\s*tabular-nums;[^}]*letter-spacing:\s*0\.02em;[^}]*white-space:\s*nowrap;/s);
 });
 
 test("admin video pagination stores the active page in the URL", () => {

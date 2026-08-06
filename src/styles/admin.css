@@ -4972,7 +4972,8 @@ body.admin-mobile-nav-open {
 }
 
 .admin-videos-current .admin-videos-list-toolbar,
-.admin-videos-blacklist .admin-videos-list-toolbar {
+.admin-videos-blacklist .admin-videos-list-toolbar,
+.admin-tags-bulk-toolbar {
   position: fixed;
   left: calc(50% + (var(--admin-sidebar-width) / 2));
   right: auto;
@@ -5019,33 +5020,25 @@ body.admin-mobile-nav-open {
   margin-top: var(--space-3);
 }
 
-.admin-table-pagination__info {
-  min-width: 0;
-  font-size: var(--font-xs);
-  color: var(--text-faint);
-  margin: 0 var(--space-2);
-  text-align: center;
-}
-
-.admin-table-pagination.admin-videos-pagination {
+.admin-table-pagination.admin-list-pagination {
   gap: 14px;
   margin-top: 0;
   margin-bottom: var(--space-3);
 }
 
-.admin-videos-pagination__button {
+.admin-list-pagination__button {
   padding: 8px 10px;
   background: var(--bg-elevated);
   box-shadow: none;
 }
 
-.admin-videos-pagination__button:hover:not(:disabled) {
+.admin-list-pagination__button:hover:not(:disabled) {
   background: var(--bg-surface);
   border-color: var(--border-strong);
   box-shadow: none;
 }
 
-.admin-videos-pagination__info {
+.admin-list-pagination__info {
   color: var(--text-faint);
   font-family: ui-monospace, SFMono-Regular, "JetBrains Mono", monospace;
   font-size: 12px;
@@ -5209,12 +5202,6 @@ body.admin-mobile-nav-open {
 
   .admin-table-pagination {
     justify-content: center;
-  }
-
-  .admin-table-pagination__info {
-    order: -1;
-    flex: 1 0 100%;
-    margin: 0 0 2px;
   }
 
   .admin-videos-current .admin-videos-list-toolbar,
@@ -7689,7 +7676,7 @@ body.admin-mobile-nav-open {
 
 .admin-tags-filter-panel {
   grid-column: 2;
-  grid-row: 2;
+  grid-row: 1;
   justify-self: center;
   display: flex;
   justify-content: center;
@@ -7708,6 +7695,9 @@ body.admin-mobile-nav-open {
 }
 
 .admin-tags-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
   min-width: 0;
 }
 
@@ -7731,13 +7721,14 @@ body.admin-mobile-nav-open {
   grid-template-columns: minmax(0, 1fr) minmax(240px, 360px) minmax(0, 1fr);
   align-items: center;
   gap: var(--space-3);
-  margin-bottom: var(--space-4);
+  width: min(100%, var(--tags-cards-width));
+  margin: 0 auto var(--space-4);
   min-width: 0;
 }
 
 .admin-tags-toolbar-actions {
   grid-column: 3;
-  grid-row: 1;
+  grid-row: 2;
   justify-self: end;
   display: flex;
   align-items: center;
@@ -7747,9 +7738,14 @@ body.admin-mobile-nav-open {
   min-width: 0;
 }
 
+.admin-btn.admin-tags-toolbar-actions__toggle,
+.admin-btn.admin-tags-toolbar-actions__toggle:hover:not(:disabled) {
+  background: transparent;
+}
+
 .admin-tags-search {
   grid-column: 2;
-  grid-row: 1;
+  grid-row: 2;
   justify-self: center;
   min-width: 0;
   margin-top: 0;
@@ -7809,32 +7805,6 @@ body.admin-mobile-nav-open {
   box-shadow: var(--shadow-sm);
 }
 
-@media (max-width: 1180px) {
-  .admin-tags-toolbar {
-    grid-template-columns: 1fr;
-    justify-items: center;
-  }
-
-  .admin-tags-search,
-  .admin-tags-filter-panel,
-  .admin-tags-toolbar-actions {
-    grid-column: 1;
-  }
-
-  .admin-tags-filter-panel {
-    grid-row: 2;
-  }
-
-  .admin-tags-search {
-    grid-row: 1;
-  }
-
-  .admin-tags-toolbar-actions {
-    grid-row: 3;
-    justify-self: end;
-  }
-}
-
 @media (max-width: 900px) {
   .admin-tags-board {
     grid-template-columns: 1fr;
@@ -7850,22 +7820,6 @@ body.admin-mobile-nav-open {
   gap: var(--space-3);
   align-items: stretch;
   min-width: 0;
-}
-
-.admin-tags-bulk-toolbar {
-  position: fixed;
-  left: auto;
-  right: var(--space-7);
-  bottom: var(--space-5);
-  z-index: calc(var(--z-nav) + 3);
-  width: max-content;
-  max-width: calc(100vw - var(--admin-sidebar-width) - (var(--space-7) * 2));
-  margin: 0;
-  padding: 10px 12px;
-  border: 1px solid var(--border-subtle);
-  border-radius: 12px;
-  background: var(--bg-surface);
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.34);
 }
 
 .admin-tags-bulk-actions {
@@ -7884,10 +7838,6 @@ body.admin-mobile-nav-open {
 
 .admin-tags-bulk-actions__btn {
   box-shadow: none;
-}
-
-.admin-tags-bulk-actions__mobile-exit {
-  display: none;
 }
 
 .admin-tag-card.is-selectable {
@@ -7945,24 +7895,8 @@ body.admin-mobile-nav-open {
 
   .admin-tags-search {
     grid-column: 1;
-    grid-row: 1;
-    min-width: 0;
-  }
-
-  .admin-tags-filter-panel {
-    grid-column: 1;
     grid-row: 2;
-    justify-self: center;
-    width: max-content;
-    max-width: 100%;
-  }
-
-  .admin-tags-filter-tabs {
-    flex-direction: row;
-    width: max-content;
     min-width: 0;
-    max-width: 100%;
-    overflow-x: auto;
   }
 
   .admin-tags-toolbar-actions {
@@ -7970,6 +7904,9 @@ body.admin-mobile-nav-open {
     right: var(--space-3);
     bottom: calc(var(--space-3) + env(safe-area-inset-bottom));
     z-index: calc(var(--z-nav) + 2);
+    grid-column: 1;
+    grid-row: 3;
+    justify-self: end;
     width: max-content;
     max-width: calc(100vw - (var(--space-3) * 2));
     padding: 0;
@@ -7984,6 +7921,11 @@ body.admin-mobile-nav-open {
 
   .admin-tags-toolbar-actions .admin-btn {
     position: relative;
+    right: auto;
+    bottom: auto;
+    z-index: auto;
+    width: auto;
+    min-width: 0;
     min-height: 44px;
     border: 0;
     border-radius: 0;
@@ -7991,7 +7933,9 @@ body.admin-mobile-nav-open {
     box-shadow: none;
   }
 
-  .admin-tags-toolbar-actions .admin-btn:hover:not(:disabled) {
+  .admin-tags-toolbar-actions .admin-btn:hover:not(:disabled),
+  .admin-tags-toolbar-actions
+    .admin-btn.admin-tags-toolbar-actions__toggle:hover:not(:disabled) {
     border-color: transparent;
     background: var(--bg-elevated);
     box-shadow: none;
@@ -8008,18 +7952,24 @@ body.admin-mobile-nav-open {
     background: var(--border-subtle);
   }
 
-  .admin-tags-page.has-bulk-actions .admin-tags-toolbar-actions {
+  .admin-tags-toolbar-actions__create > svg {
     display: none;
   }
 
-  .admin-tags-pagination {
-    width: 100%;
-    min-width: 0;
+  .admin-tags-filter-panel {
+    grid-column: 1;
+    grid-row: 1;
+    justify-self: center;
+    width: max-content;
     max-width: 100%;
   }
 
-  .admin-tags-pagination .admin-table-pagination__info {
-    overflow-wrap: anywhere;
+  .admin-tags-filter-tabs {
+    flex-direction: row;
+    width: max-content;
+    min-width: 0;
+    max-width: 100%;
+    overflow-x: auto;
   }
 
   .admin-tags-grid {
@@ -8038,6 +7988,13 @@ body.admin-mobile-nav-open {
     max-width: none;
     margin: 0;
     padding: 10px;
+    border: 1px solid var(--border-subtle);
+    border-radius: 12px;
+    background: var(--bg-surface);
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.34);
+    transform: none;
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
   }
 
   .admin-tags-bulk-actions {
@@ -8057,10 +8014,6 @@ body.admin-mobile-nav-open {
     width: 100%;
     min-height: 40px;
     min-width: 0;
-  }
-
-  .admin-tags-bulk-actions__mobile-exit {
-    display: inline-flex;
   }
 
   .admin-tag-card {

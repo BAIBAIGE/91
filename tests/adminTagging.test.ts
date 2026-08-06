@@ -51,13 +51,13 @@ test("admin tags keep builtin, user, and auto-generated tag management", () => {
   assert.doesNotMatch(apiSource, /llmEnabled|llmPending/);
   assert.doesNotMatch(tagsPageSource, /编辑标签：/);
   assert.doesNotMatch(tagsPageSource, /<h1 className="admin-page__title">标签管理<\/h1>/);
-  assert.match(tagsPageSource, /<div className="admin-tags-board">/);
+  assert.match(tagsPageSource, /<div className="admin-tags-board" aria-busy=\{loading \|\| undefined\}>/);
   assert.match(tagsPageSource, /<aside className="admin-tags-filter-panel" aria-label="标签分类">/);
   assert.match(tagsPageSource, /<div className="admin-tags-main">/);
   assert.ok(
-    tagsPageSource.indexOf('className="admin-tags-search search-panel--transparent"') <
-      tagsPageSource.indexOf('className="admin-tags-filter-panel"'),
-    "tag search should appear before source filter"
+    tagsPageSource.indexOf('className="admin-tags-filter-panel"') <
+      tagsPageSource.indexOf('className="admin-tags-search search-panel--transparent"'),
+    "tag source filter should appear before search"
   );
   assert.match(tagsPageSource, /<SearchPanel[\s\S]*?className="admin-tags-search search-panel--transparent"[\s\S]*?value=\{searchQuery\}[\s\S]*?onSearch=\{setSearchQuery\}[\s\S]*?variant="uiverse"[\s\S]*?placeholder=""/);
   assert.doesNotMatch(tagsPageSource, /搜索标签名或包含词|搜索标签名或规则词/);
@@ -67,7 +67,9 @@ test("admin tags keep builtin, user, and auto-generated tag management", () => {
   assert.doesNotMatch(tagsPageSource, /aria-label=\{`全部 \(\$\{stats\.total\}\)`\}/);
   assert.match(tagsPageSource, /添加标签/);
   assert.match(tagsPageSource, /onClick=\{openCreateModal\}/);
-  assert.match(tagsPageSource, /className="admin-btn"\s+onClick=\{openCreateModal\}/);
+  assert.match(tagsPageSource, /className="admin-btn admin-create-fab admin-tags-toolbar-actions__create"\s+onClick=\{openCreateModal\}/);
+  assert.match(tagsPageSource, /<Plus size="1em" aria-hidden="true" \/>\s*新增标签/);
+  assert.match(tagsPageSource, /\{!selectMode && \(\s*<div className="admin-tags-toolbar-actions" data-admin-floating-actions>[\s\S]*?<button[\s\S]*?data-admin-floating-actions[\s\S]*?admin-create-fab/);
   assert.match(tagsPageSource, /const createLabelExists = useMemo/);
   assert.match(tagsPageSource, /tag\.label\.trim\(\)\.toLowerCase\(\) === cleanLabel/);
   assert.match(tagsPageSource, /if \(createLabelExists\) return;/);
@@ -127,6 +129,11 @@ test("admin tags keep builtin, user, and auto-generated tag management", () => {
   assert.match(searchPanelSource, /const SEARCH_DEBOUNCE_MS = 500;/);
   assert.match(searchPanelSource, /window\.setTimeout\(\(\) => \{\s*commitSearch\(keyword\);/);
   assert.doesNotMatch(tagsPageSource, /ADMIN_SEARCH_DEBOUNCE_MS|searchInput|setSearchInput/);
+  assert.match(
+    tagsPageSource,
+    /<AdminPagination\s+page=\{currentPage\}[\s\S]*?totalPages=\{totalPages\}[\s\S]*?total=\{filteredTags\.length\}[\s\S]*?itemLabel="标签"[\s\S]*?onPage=\{setPage\}\s*\/>/
+  );
+  assert.doesNotMatch(tagsPageSource, /首页|末页|admin-tags-pagination|admin-table-pagination__info/);
   assert.doesNotMatch(tagsPageSource, /admin-tag-card__keywords|admin-tag-card__keyword-pill|tagKeywordTerms/);
   assert.doesNotMatch(tagsPageSource, /function uniqueDisplayAliases/);
   assert.doesNotMatch(tagsPageSource, /系统内置车牌已自动参与匹配/);

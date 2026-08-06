@@ -6,6 +6,10 @@ const tagsPageSource = readFileSync(
   new URL("../src/admin/TagsPage.tsx", import.meta.url),
   "utf8"
 );
+const adminPaginationSource = readFileSync(
+  new URL("../src/admin/AdminPagination.tsx", import.meta.url),
+  "utf8"
+);
 const adminCss = readFileSync(new URL("../src/styles/admin.css", import.meta.url), "utf8");
 
 test("admin tags page limits visible tags by viewport", () => {
@@ -23,10 +27,16 @@ test("admin tags page renders only the current page", () => {
   assert.match(tagsPageSource, /全选本页/);
 });
 
-test("admin tag pagination only shows page count and hides for a single page", () => {
+test("admin tag pagination matches the compact video pagination and hides for a single page", () => {
   assert.match(tagsPageSource, /const showPagination = filteredTags\.length > pageSize;/);
   assert.match(tagsPageSource, /\{showPagination && \(/);
-  assert.match(tagsPageSource, /第 \{currentPage\} \/ \{totalPages\} 页/);
+  assert.match(
+    tagsPageSource,
+    /<AdminPagination\s+page=\{currentPage\}[\s\S]*?totalPages=\{totalPages\}[\s\S]*?total=\{filteredTags\.length\}[\s\S]*?itemLabel="标签"[\s\S]*?onPage=\{setPage\}\s*\/>/
+  );
+  assert.match(adminPaginationSource, /第 \{page\} \/ \{totalPages\} 页 · 共 \{total\} 个\{itemLabel\}/);
+  assert.equal(Array.from(adminPaginationSource.matchAll(/上一页|下一页/g)).length, 2);
+  assert.doesNotMatch(adminPaginationSource, /首页|末页/);
   assert.doesNotMatch(tagsPageSource, /显示 \{pageStart\}-\{pageEnd\}/);
   assert.doesNotMatch(tagsPageSource, /每页 \{pageSize\} 个/);
 });
@@ -36,17 +46,29 @@ test("admin tag pagination does not create invisible rows on a short final page"
   assert.doesNotMatch(adminCss, /\.admin-tag-card--placeholder/);
 });
 
+test("admin tags loading keeps the fixed controls and leaves the card area blank", () => {
+  assert.doesNotMatch(tagsPageSource, /AdminLoading|lds-ellipsis|admin-card-skeleton-surface/);
+  assert.match(
+    tagsPageSource,
+    /<div className="admin-tags-toolbar">[\s\S]*?\{searchEmpty \? \(/
+  );
+  assert.match(
+    tagsPageSource,
+    /<div className="admin-tags-board" aria-busy=\{loading \|\| undefined\}>\s*<div className="admin-tags-cards">\s*\{loading \? null : loadError \? \(/
+  );
+});
+
 test("admin tag search miss uses the shared no-results visual", () => {
   assert.match(tagsPageSource, /const hasActiveSearch = searchQuery\.trim\(\)\.length > 0;/);
   assert.match(tagsPageSource, /const searchEmpty = hasActiveSearch && !loading && !loadError && filteredTags\.length === 0;/);
   assert.match(tagsPageSource, /searchEmpty \? " is-search-empty" : ""/);
   assert.match(
     tagsPageSource,
-    /searchEmpty \? \(\s*<AdminEmptyVisual[\s\S]*?variant="no-results"[\s\S]*?text="未查询到"[\s\S]*?admin-tags-empty-search[\s\S]*?\) : \(\s*<div className="admin-tags-board">/
+    /searchEmpty \? \(\s*<AdminEmptyVisual[\s\S]*?variant="no-results"[\s\S]*?text="未查询到"[\s\S]*?admin-tags-empty-search[\s\S]*?\) : \(\s*<div className="admin-tags-board" aria-busy=\{loading \|\| undefined\}>/
   );
   assert.match(
     tagsPageSource,
-    /className=\{`admin-page admin-page--with-floating-actions admin-tags-page\$\{selectMode \? " has-bulk-actions" : ""\}\$\{searchEmpty \? " is-search-empty" : ""\}`\}/
+    /className=\{`admin-page admin-page--with-floating-actions admin-tags-page\$\{searchEmpty \? " is-search-empty" : ""\}`\}/
   );
   assert.match(
     adminCss,
