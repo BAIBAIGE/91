@@ -585,15 +585,8 @@ func TestScheduleScanRunsDifferentDrivesConcurrently(t *testing.T) {
 
 func TestDriveGenerationStatusIncludesScanState(t *testing.T) {
 	app := &App{
-		scanQueued: map[string]bool{"drive-id": true},
-		scanProgress: map[string]driveScanProgress{"drive-id": {
-			Scanned:        12,
-			Added:          3,
-			Phase:          string(scriptcrawler.CrawlPhaseDownloading),
-			CurrentTitle:   "Current video",
-			CurrentBytes:   4096,
-			ElapsedSeconds: 30,
-		}},
+		scanQueued:   map[string]bool{"drive-id": true},
+		scanProgress: map[string]driveScanProgress{"drive-id": {Scanned: 12, Added: 3}},
 	}
 
 	status := app.driveGenerationStatuses()["drive-id"].Scan
@@ -602,33 +595,6 @@ func TestDriveGenerationStatusIncludesScanState(t *testing.T) {
 	}
 	if status.ScannedCount != 12 || status.AddedCount != 3 {
 		t.Fatalf("scan counts = scanned %d added %d, want 12 and 3", status.ScannedCount, status.AddedCount)
-	}
-	if status.Phase != string(scriptcrawler.CrawlPhaseDownloading) || status.CurrentTitle != "Current video" {
-		t.Fatalf("scan activity = %#v, want current download", status)
-	}
-	if status.CurrentBytes != 4096 || status.ElapsedSeconds != 30 {
-		t.Fatalf("scan transfer = %#v, want 4096 bytes at 30 seconds", status)
-	}
-}
-
-func TestUpdateDriveScanActivityPreservesRunCounters(t *testing.T) {
-	app := &App{
-		scanQueued:   map[string]bool{"drive-id": true},
-		scanProgress: map[string]driveScanProgress{"drive-id": {Scanned: 12, Added: 3}},
-	}
-	app.updateDriveScanActivity("drive-id", scriptcrawler.CrawlActivity{
-		Phase:   scriptcrawler.CrawlPhaseDownloading,
-		Title:   "Current video",
-		Bytes:   8192,
-		Elapsed: 45 * time.Second,
-	})
-
-	status := app.driveGenerationStatuses()["drive-id"].Scan
-	if status.ScannedCount != 12 || status.AddedCount != 3 {
-		t.Fatalf("scan counters = %#v, want preserved counters", status)
-	}
-	if status.Phase != "downloading" || status.CurrentTitle != "Current video" || status.CurrentBytes != 8192 || status.ElapsedSeconds != 45 {
-		t.Fatalf("scan activity = %#v, want live download activity", status)
 	}
 }
 

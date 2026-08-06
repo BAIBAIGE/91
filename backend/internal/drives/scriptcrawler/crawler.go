@@ -80,9 +80,7 @@ type CrawlerConfig struct {
 	DoneGrace            time.Duration
 	MaxStdoutBytes       int64
 	MaxStderrBytes       int64
-	ActivityLogInterval  time.Duration
 	OnProgress           func(CrawlProgress)
-	OnActivity           func(CrawlActivity)
 }
 
 type Crawler struct {
@@ -134,9 +132,6 @@ func NewCrawler(cfg CrawlerConfig) *Crawler {
 	}
 	if cfg.MaxStderrBytes <= 0 {
 		cfg.MaxStderrBytes = defaultMaxStderrBytes
-	}
-	if cfg.ActivityLogInterval <= 0 {
-		cfg.ActivityLogInterval = defaultActivityLogInterval
 	}
 	if cfg.HTTPClient == nil {
 		transport := &http.Transport{
@@ -374,11 +369,6 @@ func (c *Crawler) RunOnce(ctx context.Context, targetNew int) (*CrawlResult, err
 
 	result := &CrawlResult{TargetNew: targetNew, CandidateBudget: candidateBudget, StartedAt: time.Now()}
 	defer func() { result.FinishedAt = time.Now() }()
-	c.publishActivity(CrawlActivity{
-		Event: CrawlActivityStarted,
-		Phase: CrawlPhaseDiscovering,
-	})
-	defer c.publishActivity(CrawlActivity{})
 	emit := func(p CrawlProgress) {
 		if c.cfg.OnProgress == nil {
 			return
@@ -673,7 +663,7 @@ func durationSeconds(value time.Duration) int {
 	return seconds
 }
 
-func (c *Crawler) processItem(ctx context.Context, item Item) (added bool, retErr error) {
+func (c *Crawler) processItem(ctx context.Context, item Item) (bool, error) {
 	item, sourceID, err := normalizeItemForImport(item)
 	if err != nil {
 		return false, err
@@ -693,15 +683,10 @@ func (c *Crawler) processItem(ctx context.Context, item Item) (added bool, retEr
 	if err != nil {
 		return false, err
 	}
-	activity := c.startItemActivity(sourceID, item, videoPath)
-	defer func() {
-		activity.Finish(retErr == nil)
-	}()
 	size, err := c.materializeMedia(ctx, item.Media, videoPath, item.DetailURL, true)
 	if err != nil {
 		return false, fmt.Errorf("video: %w", err)
 	}
-	activity.Transition(CrawlPhaseValidating, videoPath, size)
 	if err := c.validateDownloadedVideo(ctx, videoPath); err != nil {
 		_ = os.Remove(videoPath)
 		return false, fmt.Errorf("video invalid: %w", err)
@@ -766,7 +751,6 @@ func (c *Crawler) processItem(ctx context.Context, item Item) (added bool, retEr
 		CreatedAt:       now,
 		UpdatedAt:       now,
 	}
-	activity.Transition(CrawlPhaseFingerprinting, videoPath, size)
 	sampled, err := fingerprint.Compute(ctx, c.cfg.Driver, v, fingerprint.Config{}, c.cfg.HTTPClient)
 	if err != nil {
 		_ = os.Remove(videoPath)
@@ -774,7 +758,6 @@ func (c *Crawler) processItem(ctx context.Context, item Item) (added bool, retEr
 	}
 	v.SampledSHA256 = sampled
 	v.FingerprintStatus = "ready"
-	activity.Transition(CrawlPhaseDeduplicating, videoPath, size)
 	if duplicate, err := c.cfg.Catalog.FindVideoBySampledFingerprint(ctx, v); err == nil && duplicate != nil {
 		_ = os.Remove(videoPath)
 		if markErr := c.cfg.Catalog.MarkCrawlerSourceSeen(ctx, Kind, c.cfg.Driver.ID(), sourceID, "duplicate", duplicate.ID, sampled, size); markErr != nil {
@@ -790,23 +773,18 @@ func (c *Crawler) processItem(ctx context.Context, item Item) (added bool, retEr
 	thumbReady := false
 	thumbPath := ""
 	commonThumbPath := ""
-	thumbnailActivityFailed := false
 	if item.Thumbnail.URL != "" || item.Thumbnail.LocalFile != "" {
 		thumbFile := sourceID + detectThumbExt(item.Thumbnail.URL, item.Thumbnail.LocalFile)
 		thumbPath, err = c.cfg.Driver.ThumbPath(thumbFile)
 		if err == nil {
-			activity.Transition(CrawlPhaseThumbnail, thumbPath, 0)
 			if _, err := c.materializeMedia(ctx, item.Thumbnail, thumbPath, item.DetailURL, false); err != nil {
-				thumbnailActivityFailed = true
 				log.Printf("[scriptcrawler] drive=%s source_id=%s thumbnail failed: %v", c.cfg.Driver.ID(), sourceID, err)
 			} else if c.cfg.CommonThumbDir != "" {
 				if err := os.MkdirAll(c.cfg.CommonThumbDir, 0o755); err != nil {
-					thumbnailActivityFailed = true
 					log.Printf("[scriptcrawler] drive=%s common thumbs mkdir: %v", c.cfg.Driver.ID(), err)
 				} else {
 					dst := mediaasset.ThumbnailPathInDir(c.cfg.CommonThumbDir, videoID)
 					if err := mediaasset.NormalizeThumbnailJPEG(thumbPath, dst); err != nil {
-						thumbnailActivityFailed = true
 						log.Printf("[scriptcrawler] drive=%s source_id=%s normalize thumbnail: %v", c.cfg.Driver.ID(), sourceID, err)
 					} else {
 						commonThumbPath = dst
@@ -818,11 +796,6 @@ func (c *Crawler) processItem(ctx context.Context, item Item) (added bool, retEr
 	}
 	if thumbReady {
 		v.ThumbnailURL = "/p/thumb/" + v.ID
-	}
-	if thumbnailActivityFailed {
-		activity.TransitionAfterFailure(CrawlPhaseDeduplicating, videoPath, size)
-	} else {
-		activity.Transition(CrawlPhaseDeduplicating, videoPath, size)
 	}
 	duplicate, err := c.findNearDuplicateVideo(ctx, v, commonThumbPath, videoPath)
 	if err != nil {
@@ -870,7 +843,6 @@ func (c *Crawler) processItem(ctx context.Context, item Item) (added bool, retEr
 			return false, nil
 		}
 	}
-	activity.Transition(CrawlPhaseCataloging, videoPath, size)
 	if err := c.cfg.Catalog.UpsertVideo(ctx, v); err != nil {
 		_ = os.Remove(videoPath)
 		return false, err
