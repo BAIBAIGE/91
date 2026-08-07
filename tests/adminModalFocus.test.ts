@@ -12,8 +12,8 @@ test("admin modal does not reset focus when close handler identity changes", () 
   assert.match(modalSource, /onCloseRef\.current = onClose;/);
   assert.match(modalSource, /onCloseRef\.current\(\);/);
   assert.match(modalSource, /window\.clearTimeout\(focusTimer\);/);
-  assert.match(modalSource, /\}, \[open\]\);/);
-  assert.doesNotMatch(modalSource, /\}, \[open, onClose\]\);/);
+  assert.match(modalSource, /\}, \[visible\]\);/);
+  assert.doesNotMatch(modalSource, /\}, \[visible, onClose\]\);/);
 });
 
 test("admin modal can skip restoring focus to the opener", () => {

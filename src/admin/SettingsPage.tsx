@@ -1,6 +1,7 @@
 import {
   useEffect,
   useMemo,
+  useRef,
   useState,
   type FormEvent,
 } from "react";
@@ -23,6 +24,7 @@ import {
   preloadConfigSourceEditor,
 } from "./settings/ConfigSourceWorkspace";
 import { useAdminFloatingActionSpace } from "./useAdminFloatingActionSpace";
+import { useAdminRouteRevalidation } from "./AdminRouteCache";
 import { SettingsRow, SettingsSection } from "./settings/SettingsSection";
 import {
   DEFAULT_DRAFT,
@@ -96,6 +98,8 @@ export function SettingsPage() {
   const dirty =
     loaded !== null &&
     (sourceTouched ? workingYAML !== loaded.content : visualDirtyFields.size > 0);
+  const dirtyRef = useRef(dirty);
+  dirtyRef.current = dirty;
   const timeValid = isValidStartTime(draft.nightlyStartTime);
   const controlsDisabled = loading || saving || loaded === null;
   const statusClass = loading
@@ -115,11 +119,14 @@ export function SettingsPage() {
           ? "有未保存更改"
           : "配置已加载";
 
-  async function load() {
-    setLoading(true);
-    setLoadError("");
+  async function load(silent = false) {
+    if (!silent) {
+      setLoading(true);
+      setLoadError("");
+    }
     try {
       const next = await api.getConfigYAML();
+      if (silent && dirtyRef.current) return;
       try {
         const parsed = parseConfig(next.content);
         const snapshot = { ...next, visual: parsed.draft };
@@ -143,27 +150,35 @@ export function SettingsPage() {
         show("config.yaml 当前无效，请在源码模式修正后保存", "error");
       }
       setPendingSave(null);
+      setLoadError("");
     } catch (error) {
       const message = error instanceof Error ? error.message : "加载配置失败";
-      setLoadError(message);
-      show(message, "error");
+      if (!silent) {
+        setLoadError(message);
+        show(message, "error");
+      }
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }
 
-  async function loadBuiltinTagsSetting() {
-    setBuiltinTagsLoading(true);
-    setBuiltinTagsLoadError("");
+  async function loadBuiltinTagsSetting(silent = false) {
+    if (!silent) {
+      setBuiltinTagsLoading(true);
+      setBuiltinTagsLoadError("");
+    }
     try {
       const settings = await api.getSettings();
       setBuiltinTagsEnabled(settings.builtinTagsEnabled !== false);
+      setBuiltinTagsLoadError("");
     } catch (error) {
       const message = error instanceof Error ? error.message : "读取内置标签设置失败";
-      setBuiltinTagsLoadError(message);
-      show(message, "error");
+      if (!silent) {
+        setBuiltinTagsLoadError(message);
+        show(message, "error");
+      }
     } finally {
-      setBuiltinTagsLoading(false);
+      if (!silent) setBuiltinTagsLoading(false);
     }
   }
 
@@ -171,6 +186,11 @@ export function SettingsPage() {
     void load();
     void loadBuiltinTagsSetting();
   }, []);
+
+  useAdminRouteRevalidation(() => {
+    if (!dirty) void load(true);
+    void loadBuiltinTagsSetting(true);
+  });
 
   useEffect(() => {
     if (loading) return;

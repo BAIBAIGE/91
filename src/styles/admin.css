@@ -362,6 +362,18 @@ body.admin-mobile-nav-open {
   flex-direction: column;
 }
 
+.admin-route-cache-entry {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+}
+
+.admin-route-cache-entry[hidden] {
+  display: none;
+}
+
 .admin-page-content--logs {
   overflow: hidden;
 }

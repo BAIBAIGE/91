@@ -7,6 +7,7 @@ import {
   getAdminPageTitle,
   shouldShowAdminPageHeader,
 } from "../src/admin/adminPageTitle.ts";
+import { getAdminRouteCacheKey } from "../src/admin/AdminRouteCache.tsx";
 
 const pages = {
   home: readFileSync(new URL("../src/pages/HomePage.tsx", import.meta.url), "utf8"),
@@ -21,6 +22,10 @@ const adminLayout = readFileSync(
 );
 const adminPageActions = readFileSync(
   new URL("../src/admin/AdminPageActions.tsx", import.meta.url),
+  "utf8"
+);
+const adminRouteCache = readFileSync(
+  new URL("../src/admin/AdminRouteCache.tsx", import.meta.url),
   "utf8"
 );
 
@@ -54,18 +59,36 @@ test("admin layout displays and applies the current route title", () => {
   assert.match(adminLayout, /ref=\{setPageActionsTarget\}[\s\S]*className="admin-current-page-actions"/);
   assert.match(
     adminLayout,
-    /<AdminPageActionsProvider[\s\S]*?activePathname=\{location\.pathname\}[\s\S]*?target=\{pageActionsTarget\}\s*>[\s\S]*?<Outlet key=\{location\.pathname\} \/>[\s\S]*?<\/AdminPageActionsProvider>/
+    /<AdminPageActionsProvider target=\{pageActionsTarget\}>[\s\S]*?<AdminRouteCache \/>[\s\S]*?<\/AdminPageActionsProvider>/
   );
-  assert.match(adminPageActions, /const ownerPathnameRef = useRef\(context\?\.activePathname\)/);
-  assert.match(
-    adminPageActions,
-    /ownerPathnameRef\.current !== context\.activePathname[\s\S]*?return null/
-  );
+  assert.match(adminPageActions, /const routeActive = useAdminRouteActive\(\)/);
+  assert.match(adminPageActions, /if \(!context\?\.target \|\| !routeActive\)/);
   assert.match(adminPageActions, /createPortal\(children, context\.target\)/);
 });
 
-test("admin route changes end the previous suspense page lifecycle", () => {
-  assert.match(adminLayout, /<Outlet key=\{location\.pathname\} \/>/);
+test("admin route changes retain bounded page lifecycles", () => {
+  assert.match(adminLayout, /<AdminRouteCache \/>/);
+  assert.match(
+    adminRouteCache,
+    /cachedRoutesRef = useRef\(new Map<string, CachedAdminRoute>\(\)\)/
+  );
+  assert.match(adminRouteCache, /cachedRoutesRef\.current\.set\(cacheKey/);
+  assert.match(adminRouteCache, /hidden=\{!active\}/);
+  assert.match(adminRouteCache, /containerRef\.current\.inert = !active/);
+  assert.match(
+    adminRouteCache,
+    /<UNSAFE_LocationContext\.Provider key=\{key\} value=\{route\.locationContext\}>/
+  );
+  assert.doesNotMatch(adminLayout, /<Outlet key=\{location\.pathname\} \/>/);
+});
+
+test("admin route cache is limited to known top-level pages", () => {
+  assert.equal(getAdminRouteCacheKey("/admin/drives"), "/admin/drives");
+  assert.equal(getAdminRouteCacheKey("/admin/drives/"), "/admin/drives");
+  assert.equal(getAdminRouteCacheKey("/admin/drives/detail"), "/admin/drives");
+  assert.equal(getAdminRouteCacheKey("/admin/logs"), "/admin/logs");
+  assert.equal(getAdminRouteCacheKey("/admin"), null);
+  assert.equal(getAdminRouteCacheKey("/admin/unknown"), null);
 });
 
 test("every admin page has a centralized title", () => {

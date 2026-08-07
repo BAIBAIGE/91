@@ -27,6 +27,10 @@ import { ConfirmModal } from "./ConfirmModal";
 import { useToast } from "./ToastContext";
 import { useLogScroller } from "./useLogScroller";
 import { useRuntimeLogs } from "./useRuntimeLogs";
+import {
+  useAdminRouteActive,
+  useAdminRouteRevalidation,
+} from "./AdminRouteCache";
 import { copyTextToClipboard } from "../lib/clipboard";
 
 const AUTO_REFRESH_STORAGE_KEY = "admin.logs.autoRefresh";
@@ -236,6 +240,7 @@ function LogToggle({
 
 export function LogsPage() {
   const { show } = useToast();
+  const routeActive = useAdminRouteActive();
   const [source, setSource] = useState<api.AdminLogSource | "">("");
   const [level, setLevel] = useState<api.AdminLogLevel | "">("");
   const [method, setMethod] = useState<api.AdminLogMethod | "">("");
@@ -245,6 +250,7 @@ export function LogsPage() {
   const [showRawLogs, setShowRawLogs] = useState(false);
   const [autoRefresh, setAutoRefresh] = useState(initialAutoRefreshPreference);
   const [fullscreen, setFullscreen] = useState(false);
+  const fullscreenActive = fullscreen && routeActive;
   const [clearConfirmOpen, setClearConfirmOpen] = useState(false);
   const [clearing, setClearing] = useState(false);
   const fullscreenButtonRef = useRef<HTMLButtonElement>(null);
@@ -262,7 +268,10 @@ export function LogsPage() {
     error,
     reload,
     resetAfterClear,
-  } = useRuntimeLogs({ autoRefresh });
+  } = useRuntimeLogs({ autoRefresh: autoRefresh && routeActive });
+  useAdminRouteRevalidation(() => {
+    void reload();
+  });
   const bufferedEntries = snapshot?.entries ?? EMPTY_LOG_ENTRIES;
   const matchingEntries = useMemo(
     () =>
@@ -277,7 +286,7 @@ export function LogsPage() {
   const filterViewKey = `${source}\u0000${level}\u0000${method}\u0000${deferredSearch}`;
 
   useLayoutEffect(() => {
-    if (!fullscreen) return;
+    if (!fullscreenActive) return;
     const html = document.documentElement;
     const body = document.body;
     const shell = document.querySelector<HTMLElement>(".admin-shell");
@@ -290,15 +299,15 @@ export function LogsPage() {
       body.classList.remove("admin-logs-fullscreen-active");
       if (shell) shell.inert = shellWasInert;
     };
-  }, [fullscreen]);
+  }, [fullscreenActive]);
 
   useLayoutEffect(() => {
     if (!logViewerHost) return;
-    const target = fullscreen ? document.body : inlineLogViewerSlotRef.current;
+    const target = fullscreenActive ? document.body : inlineLogViewerSlotRef.current;
     if (target && logViewerHost.parentNode !== target) {
       target.appendChild(logViewerHost);
     }
-  }, [fullscreen, logViewerHost]);
+  }, [fullscreenActive, logViewerHost]);
 
   useEffect(
     () => () => {
@@ -321,7 +330,7 @@ export function LogsPage() {
     loading,
     viewKey: filterViewKey,
     showRawLogs,
-    fullscreen,
+    fullscreen: fullscreenActive,
   });
 
   useEffect(() => {
@@ -333,7 +342,7 @@ export function LogsPage() {
   }, [autoRefresh]);
 
   useEffect(() => {
-    if (!fullscreen) return;
+    if (!fullscreenActive) return;
     const focusFrame = window.requestAnimationFrame(() => {
       fullscreenButtonRef.current?.focus();
     });
@@ -351,7 +360,7 @@ export function LogsPage() {
       window.cancelAnimationFrame(focusFrame);
       document.removeEventListener("keydown", handleEscape);
     };
-  }, [fullscreen, prepareViewportTransition]);
+  }, [fullscreenActive, prepareViewportTransition]);
 
   function toggleFullscreen() {
     prepareViewportTransition();
@@ -411,9 +420,9 @@ export function LogsPage() {
 
   const logViewer = (
     <section
-      className={`admin-card admin-log-card ${fullscreen ? "is-fullscreen" : ""}`}
-      role={fullscreen ? "dialog" : undefined}
-      aria-modal={fullscreen ? true : undefined}
+      className={`admin-card admin-log-card ${fullscreenActive ? "is-fullscreen" : ""}`}
+      role={fullscreenActive ? "dialog" : undefined}
+      aria-modal={fullscreenActive ? true : undefined}
       aria-label="运行日志"
     >
         {error && (
@@ -424,7 +433,7 @@ export function LogsPage() {
         )}
 
         <div className="admin-log-controls">
-          {!fullscreen && (
+          {!fullscreenActive && (
             <>
               <label className="admin-log-search">
                 <span className="sr-only">搜索日志</span>
@@ -472,7 +481,7 @@ export function LogsPage() {
             </>
           )}
 
-          {!fullscreen && (
+          {!fullscreenActive && (
             <div
               id="admin-log-structured-filters"
               className={`admin-log-filter-panel${filtersExpanded ? " is-expanded" : ""}`}
@@ -594,11 +603,11 @@ export function LogsPage() {
                 ref={fullscreenButtonRef}
                 type="button"
                 className="admin-btn admin-log-fullscreen-toggle"
-                aria-pressed={fullscreen}
+                aria-pressed={fullscreenActive}
                 onClick={toggleFullscreen}
               >
-                {fullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
-                {fullscreen ? "退出全屏" : "全屏查看"}
+                {fullscreenActive ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+                {fullscreenActive ? "退出全屏" : "全屏查看"}
               </button>
             </div>
           </div>

@@ -390,7 +390,10 @@ test("admin videos track preview regeneration after it is accepted", () => {
 
 test("admin videos keep generating status after page refresh", () => {
   assert.match(videosPageSource, /const hasGeneratingPreview = list\.some\(\(v\) => v\.previewStatus === REGEN_PREVIEW_STATUS\);/);
-  assert.match(videosPageSource, /if \(trackedRegenCount === 0 && !hasGeneratingPreview\) return;/);
+  assert.match(
+    videosPageSource,
+    /if \(!routeActive \|\| \(trackedRegenCount === 0 && !hasGeneratingPreview\)\) return;/
+  );
   assert.match(videosPageSource, /function isPreviewGenerating\(v: api\.AdminVideo\)/);
   assert.match(videosPageSource, /return !!regenPreviewById\[v\.id\] \|\| v\.previewStatus === REGEN_PREVIEW_STATUS;/);
   assert.match(videosPageSource, /previewGenerating=\{isPreviewGenerating\(editingVideo\)\}/);

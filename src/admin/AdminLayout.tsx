@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
+import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import {
   ArchiveRestore,
   HardDrive,
@@ -14,6 +14,7 @@ import { VideoIcon } from "@/components/icons/VideoIcon";
 import * as api from "./api";
 import { AdminGlobalActions } from "./AdminGlobalActions";
 import { AdminPageActionsProvider } from "./AdminPageActions";
+import { AdminRouteCache } from "./AdminRouteCache";
 import { useAuth } from "./AuthContext";
 import { useToast } from "./ToastContext";
 import { Modal } from "./Modal";
@@ -515,18 +516,12 @@ export function AdminLayout() {
             />
           </header>
         )}
-        <AdminPageActionsProvider
-          activePathname={location.pathname}
-          target={pageActionsTarget}
-        >
+        <AdminPageActionsProvider target={pageActionsTarget}>
           <div
             ref={pageContentRef}
             className={`admin-page-content${isLogsPage ? " admin-page-content--logs" : ""}`}
           >
-            {/* A pathname owns one complete page lifecycle. Without the key,
-                Suspense may retain the previous page while the next lazy chunk
-                loads, leaving out-of-tree portals such as header actions visible. */}
-            <Outlet key={location.pathname} />
+            <AdminRouteCache />
           </div>
         </AdminPageActionsProvider>
       </main>

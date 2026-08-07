@@ -35,6 +35,10 @@ import {
   type AdminVideosSourceKey,
 } from "./videosSearchParams";
 import { useAdminFloatingActionSpace } from "./useAdminFloatingActionSpace";
+import {
+  useAdminRouteActive,
+  useAdminRouteRevalidation,
+} from "./AdminRouteCache";
 import { SearchPanel } from "@/components/SearchPanel";
 import { FilterAllIcon } from "@/components/icons/FilterAllIcon";
 import { UploadIcon } from "@/components/icons/UploadIcon";
@@ -49,6 +53,14 @@ const REGEN_PREVIEW_STATUS = "generating";
 const REGEN_PREVIEW_POLL_INTERVAL_MS = 2000;
 const REGEN_PREVIEW_TRACK_TIMEOUT_MS = 30 * 60 * 1000;
 const LOCAL_UPLOAD_SOURCE_ID = "local-upload";
+
+function requestVideoSourceCatalog() {
+  return Promise.allSettled([
+    api.listDrives(),
+    api.listCrawlers(),
+    api.listVideos({ driveId: LOCAL_UPLOAD_SOURCE_ID, page: 1, size: 1 }),
+  ]);
+}
 
 type VideoViewKey = "current" | "blacklist";
 type PageSetter = Dispatch<SetStateAction<number>>;
@@ -83,6 +95,7 @@ export function VideosPage() {
   const [crawlers, setCrawlers] = useState<api.AdminCrawler[]>([]);
   const [hasLocalUploads, setHasLocalUploads] = useState(false);
   const [sourceCatalogLoaded, setSourceCatalogLoaded] = useState(false);
+  const sourceCatalogRequestRef = useRef(0);
   const { show } = useToast();
   const rawTab = searchParams.get("tab");
   const activeView: VideoViewKey = rawTab === "blacklist" ? "blacklist" : "current";
@@ -100,52 +113,58 @@ export function VideosPage() {
     );
   }, [setSearchParams]);
 
-  useEffect(() => {
-    let active = true;
-    void Promise.allSettled([
-      api.listDrives(),
-      api.listCrawlers(),
-      api.listVideos({ driveId: LOCAL_UPLOAD_SOURCE_ID, page: 1, size: 1 }),
-    ]).then(
-      ([driveResult, crawlerResult, localUploadResult]) => {
-        if (!active) return;
-        if (driveResult.status === "fulfilled") {
-          setDrives(driveResult.value ?? []);
-        } else {
-          show(
-            driveResult.reason instanceof Error
-              ? driveResult.reason.message
-              : "网盘来源加载失败",
-            "error"
-          );
-        }
-        if (crawlerResult.status === "fulfilled") {
-          setCrawlers(crawlerResult.value ?? []);
-        } else {
-          show(
-            crawlerResult.reason instanceof Error
-              ? crawlerResult.reason.message
-              : "爬虫来源加载失败",
-            "error"
-          );
-        }
-        if (localUploadResult.status === "fulfilled") {
-          setHasLocalUploads(localUploadResult.value.total > 0);
-        } else {
-          show(
-            localUploadResult.reason instanceof Error
-              ? localUploadResult.reason.message
-              : "本地上传来源加载失败",
-            "error"
-          );
-        }
-        setSourceCatalogLoaded(true);
+  const refreshSourceCatalog = useCallback(
+    async (reportErrors = true) => {
+      const requestID = ++sourceCatalogRequestRef.current;
+      const results = await requestVideoSourceCatalog();
+      if (requestID !== sourceCatalogRequestRef.current) return;
+      const [driveResult, crawlerResult, localUploadResult] = results;
+
+      if (driveResult.status === "fulfilled") {
+        setDrives(driveResult.value ?? []);
+      } else if (reportErrors) {
+        show(
+          driveResult.reason instanceof Error
+            ? driveResult.reason.message
+            : "网盘来源加载失败",
+          "error"
+        );
       }
-    );
+      if (crawlerResult.status === "fulfilled") {
+        setCrawlers(crawlerResult.value ?? []);
+      } else if (reportErrors) {
+        show(
+          crawlerResult.reason instanceof Error
+            ? crawlerResult.reason.message
+            : "爬虫来源加载失败",
+          "error"
+        );
+      }
+      if (localUploadResult.status === "fulfilled") {
+        setHasLocalUploads(localUploadResult.value.total > 0);
+      } else if (reportErrors) {
+        show(
+          localUploadResult.reason instanceof Error
+            ? localUploadResult.reason.message
+            : "本地上传来源加载失败",
+          "error"
+        );
+      }
+      setSourceCatalogLoaded(true);
+    },
+    [show]
+  );
+
+  useEffect(() => {
+    void refreshSourceCatalog();
     return () => {
-      active = false;
+      sourceCatalogRequestRef.current += 1;
     };
-  }, [show]);
+  }, [refreshSourceCatalog]);
+
+  useAdminRouteRevalidation(() => {
+    void refreshSourceCatalog(false);
+  });
 
   function selectSource(sourceKey: AdminVideosSourceKey) {
     setSearchParams(
@@ -348,6 +367,7 @@ function CurrentVideosTab({
   page: number;
   setPage: PageSetter;
 }) {
+  const routeActive = useAdminRouteActive();
   const [list, setList] = useState<api.AdminVideo[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
@@ -440,6 +460,11 @@ function CurrentVideosTab({
   const trackedRegenCount = Object.keys(regenPreviewById).length;
   const hasGeneratingPreview = list.some((v) => v.previewStatus === REGEN_PREVIEW_STATUS);
 
+  useAdminRouteRevalidation(() => {
+    void refreshListOnly();
+    void api.listTags().then((tagList) => setAvailableTags(tagList ?? [])).catch(() => undefined);
+  });
+
   useEffect(() => {
     refresh();
   }, [page, searchKeyword, pageSize, sourceDriveId, sourceCrawlerId, appliedFilters]);
@@ -469,7 +494,7 @@ function CurrentVideosTab({
   }, [pageSize, setPage]);
 
   useEffect(() => {
-    if (trackedRegenCount === 0 && !hasGeneratingPreview) return;
+    if (!routeActive || (trackedRegenCount === 0 && !hasGeneratingPreview)) return;
     const timer = window.setInterval(() => {
       refreshListOnly();
     }, REGEN_PREVIEW_POLL_INTERVAL_MS);
@@ -483,6 +508,7 @@ function CurrentVideosTab({
     sourceDriveId,
     sourceCrawlerId,
     appliedFilters,
+    routeActive,
   ]);
 
   useEffect(() => {
@@ -908,11 +934,13 @@ function BlacklistTab({
   const activeListQueryKeyRef = useRef(activeListQueryKey);
   activeListQueryKeyRef.current = activeListQueryKey;
 
-  async function refresh() {
+  async function refresh(silent = false) {
     const requestId = ++listRequestIdRef.current;
     const queryKey = activeListQueryKey;
-    setLoading(true);
-    setLoadError("");
+    if (!silent) {
+      setLoading(true);
+      setLoadError("");
+    }
     try {
       const r = await api.listBlacklist({ page, size: pageSize, keyword: searchKeyword });
       if (requestId !== listRequestIdRef.current || queryKey !== activeListQueryKeyRef.current) return;
@@ -920,18 +948,29 @@ function BlacklistTab({
       setTotal(r.total ?? 0);
       setDisplayedPage(page);
       setResolvedListQueryKey(queryKey);
+      setLoadError("");
     } catch (e) {
       if (requestId !== listRequestIdRef.current || queryKey !== activeListQueryKeyRef.current) return;
-      const message = e instanceof Error ? e.message : "加载失败";
-      setLoadError(message);
-      setResolvedListQueryKey(queryKey);
-      show(message, "error");
+      if (!silent) {
+        const message = e instanceof Error ? e.message : "加载失败";
+        setLoadError(message);
+        setResolvedListQueryKey(queryKey);
+        show(message, "error");
+      }
     } finally {
-      if (requestId === listRequestIdRef.current && queryKey === activeListQueryKeyRef.current) {
+      if (
+        !silent &&
+        requestId === listRequestIdRef.current &&
+        queryKey === activeListQueryKeyRef.current
+      ) {
         setLoading(false);
       }
     }
   }
+
+  useAdminRouteRevalidation(() => {
+    void refresh(true);
+  });
 
   useEffect(() => {
     void refresh();

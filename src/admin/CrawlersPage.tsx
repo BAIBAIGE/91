@@ -26,6 +26,10 @@ import { SpiderIcon } from "./icons/SpiderIcon";
 import { AdminEmptyVisual } from "./AdminEmptyVisual";
 import { CrawlerListSkeleton } from "./CrawlersPageLoading";
 import { useAdminFloatingActionSpace } from "./useAdminFloatingActionSpace";
+import {
+  useAdminRouteActive,
+  useAdminRouteRevalidation,
+} from "./AdminRouteCache";
 
 const BUSY_STATES = new Set(["scanning", "generating", "uploading", "queued"]);
 const POLL_INTERVAL_MS = 5000;
@@ -47,6 +51,7 @@ function crawlerBusy(crawler: api.AdminCrawler) {
 
 export function CrawlersPage() {
   const floatingActionPageRef = useAdminFloatingActionSpace<HTMLElement>();
+  const routeActive = useAdminRouteActive();
   const [list, setList] = useState<api.AdminCrawler[]>([]);
   const [uploadTargets, setUploadTargets] = useState<api.AdminDrive[]>([]);
   const [loading, setLoading] = useState(true);
@@ -86,15 +91,19 @@ export function CrawlersPage() {
     refresh();
   }, [refresh]);
 
+  useAdminRouteRevalidation(() => {
+    void refresh(true);
+  });
+
   // 有任务进行中时自动轮询，页面切到后台时暂停
   const anyBusy = useMemo(() => list.some(crawlerBusy), [list]);
   useEffect(() => {
-    if (!anyBusy) return;
+    if (!routeActive || !anyBusy) return;
     const timer = window.setInterval(() => {
       if (!document.hidden) refresh(true);
     }, POLL_INTERVAL_MS);
     return () => window.clearInterval(timer);
-  }, [anyBusy, refresh]);
+  }, [anyBusy, refresh, routeActive]);
 
   async function run(crawler: api.AdminCrawler) {
     setRunningId(crawler.id);

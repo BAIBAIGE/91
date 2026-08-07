@@ -8,6 +8,7 @@ import { Modal } from "./Modal";
 import { AdminEmptyVisual } from "./AdminEmptyVisual";
 import { AdminPagination } from "./AdminPagination";
 import { useAdminFloatingActionSpace } from "./useAdminFloatingActionSpace";
+import { useAdminRouteRevalidation } from "./AdminRouteCache";
 
 const DESKTOP_TAGS_PAGE_SIZE = 24;
 const MOBILE_TAGS_PAGE_SIZE = 8;
@@ -46,23 +47,32 @@ export function TagsPage() {
   const [page, setPage] = useState(1);
   const { show } = useToast();
 
-  async function refresh() {
-    setLoading(true);
-    setLoadError("");
+  async function refresh(silent = false) {
+    if (!silent) {
+      setLoading(true);
+      setLoadError("");
+    }
     try {
       setTags(await api.listTags());
+      setLoadError("");
     } catch (e) {
       const message = e instanceof Error ? e.message : "加载标签失败";
-      setLoadError(message);
-      show(message, "error");
+      if (!silent) {
+        setLoadError(message);
+        show(message, "error");
+      }
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }
 
   useEffect(() => {
     refresh();
   }, []);
+
+  useAdminRouteRevalidation(() => {
+    void refresh(true);
+  });
 
   async function handleCreate() {
     const cleanLabel = label.trim();
@@ -325,7 +335,7 @@ export function TagsPage() {
                   <div className="admin-error-state">
                     <strong>标签加载失败</strong>
                     <span>{loadError}</span>
-                    <button type="button" className="admin-btn" onClick={refresh}>
+                    <button type="button" className="admin-btn" onClick={() => void refresh()}>
                       <RefreshCw size={13} /> 重试
                     </button>
                   </div>

@@ -17,6 +17,7 @@ import { useAuth } from "./AuthContext";
 import { ConfirmModal } from "./ConfirmModal";
 import { Modal } from "./Modal";
 import { useToast } from "./ToastContext";
+import { useAdminRouteActive } from "./AdminRouteCache";
 
 const RESUME_KEY = "video-site-91-backup-upload-v1";
 
@@ -199,6 +200,7 @@ function readResumeState(): ResumeState | null {
 
 export function BackupPage() {
   const navigate = useNavigate();
+  const routeActive = useAdminRouteActive();
   const { invalidateSession } = useAuth();
   const { show } = useToast();
   const [data, setData] = useState<api.BackupList | null>(null);
@@ -233,10 +235,11 @@ export function BackupPage() {
   };
 
   useEffect(() => {
+    if (!routeActive) return;
     void refresh();
     const timer = window.setInterval(() => void refresh(true), 2000);
     return () => window.clearInterval(timer);
-  }, []);
+  }, [routeActive]);
 
   useEffect(() => {
     if (!resumeHint) return;

@@ -13,6 +13,7 @@ import { Modal } from "./Modal";
 import { ConfirmModal } from "./ConfirmModal";
 import { PasswordInput } from "./PasswordInput";
 import { useAdminFloatingActionSpace } from "./useAdminFloatingActionSpace";
+import { useAdminRouteRevalidation } from "./AdminRouteCache";
 
 type Tab = "users" | "ips";
 const MIN_PASSWORD_LENGTH = 6;
@@ -44,31 +45,35 @@ export function UsersPage() {
       ? `密码至少 ${MIN_PASSWORD_LENGTH} 位`
       : "";
 
-  async function refreshUsers() {
+  async function refreshUsers(silent = false) {
     try {
       setUsers(await api.listUsers());
     } catch (e) {
-      show(e instanceof Error ? e.message : "加载用户失败", "error");
+      if (!silent) show(e instanceof Error ? e.message : "加载用户失败", "error");
     }
   }
 
-  async function refreshIPs() {
+  async function refreshIPs(silent = false) {
     try {
       setIps(await api.listBannedIPs());
     } catch (e) {
-      show(e instanceof Error ? e.message : "加载封禁IP失败", "error");
+      if (!silent) show(e instanceof Error ? e.message : "加载封禁IP失败", "error");
     }
   }
 
-  async function refresh() {
-    setLoading(true);
-    await Promise.all([refreshUsers(), refreshIPs()]);
-    setLoading(false);
+  async function refresh(silent = false) {
+    if (!silent) setLoading(true);
+    await Promise.all([refreshUsers(silent), refreshIPs(silent)]);
+    if (!silent) setLoading(false);
   }
 
   useEffect(() => {
     refresh();
   }, []);
+
+  useAdminRouteRevalidation(() => {
+    void refresh(true);
+  });
 
   async function handleCreate() {
     if (!createUsername.trim() || !createPassword || createPasswordError) return;

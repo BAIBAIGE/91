@@ -53,7 +53,10 @@ const adminCss = readFileSync(
 test("admin log viewer is reachable from the authenticated admin layout", () => {
   assert.match(appSource, /path="logs"[\s\S]*?<LogsPage \/>/);
   assert.match(layoutSource, /to="\/admin\/logs"[\s\S]*?<ScrollText size=\{15\} \/>[\s\S]*?日志查看/);
-  assert.match(logsPageSource, /useRuntimeLogs\(\{ autoRefresh \}\)/);
+  assert.match(
+    logsPageSource,
+    /useRuntimeLogs\(\{ autoRefresh: autoRefresh && routeActive \}\)/
+  );
   assert.match(runtimeLogsSource, /LOG_REFRESH_INTERVAL_MS = 3000/);
   assert.doesNotMatch(runtimeLogsSource, /source: source \|\| undefined/);
   assert.doesNotMatch(runtimeLogsSource, /level: level \|\| undefined/);
@@ -106,10 +109,10 @@ test("admin log viewer is reachable from the authenticated admin layout", () => 
     logsPageSource,
     /const \[filtersExpanded, setFiltersExpanded\] = useState\(false\)/
   );
-  assert.doesNotMatch(logsPageSource, /!fullscreen && filtersExpanded &&/);
+  assert.doesNotMatch(logsPageSource, /!fullscreenActive && filtersExpanded &&/);
   assert.match(
     logsPageSource,
-    /!fullscreen && \(\s*<div\s+id="admin-log-structured-filters"\s+className=\{`admin-log-filter-panel\$\{filtersExpanded \? " is-expanded" : ""\}`\}/
+    /!fullscreenActive && \(\s*<div\s+id="admin-log-structured-filters"\s+className=\{`admin-log-filter-panel\$\{filtersExpanded \? " is-expanded" : ""\}`\}/
   );
   assert.match(logsPageSource, /admin\.logs\.autoRefresh/);
   assert.match(logsPageSource, /role="log"/);
@@ -167,12 +170,12 @@ test("admin log viewer is reachable from the authenticated admin layout", () => 
   assert.match(logsPageSource, /createPortal\(logViewer, logViewerHost\)/);
   assert.match(
     logsPageSource,
-    /const target = fullscreen \? document\.body : inlineLogViewerSlotRef\.current;[\s\S]*?target\.appendChild\(logViewerHost\)/
+    /const target = fullscreenActive \? document\.body : inlineLogViewerSlotRef\.current;[\s\S]*?target\.appendChild\(logViewerHost\)/
   );
   assert.match(logsPageSource, /data-log-entry-id=\{entry\.id\}/);
   assert.match(logsPageSource, /if \(shell\) shell\.inert = true/);
   assert.match(logsPageSource, /!document\.querySelector\("\.admin-modal-backdrop"\)/);
-  assert.match(logsPageSource, /role=\{fullscreen \? "dialog" : undefined\}/);
+  assert.match(logsPageSource, /role=\{fullscreenActive \? "dialog" : undefined\}/);
   assert.match(logsPageSource, /parseHTTPAccessLog\(entry\.message\)/);
   assert.match(
     logsPageSource,
@@ -230,7 +233,7 @@ test("admin log viewer is reachable from the authenticated admin layout", () => 
 test("mobile fullscreen logs keep only the exit fullscreen action", () => {
   assert.match(
     logsPageSource,
-    /className="admin-btn admin-log-fullscreen-toggle"[\s\S]*?fullscreen \? "退出全屏" : "全屏查看"/
+    /className="admin-btn admin-log-fullscreen-toggle"[\s\S]*?fullscreenActive \? "退出全屏" : "全屏查看"/
   );
   assert.match(
     adminCss,

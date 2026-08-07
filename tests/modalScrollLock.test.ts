@@ -20,7 +20,8 @@ const videoDetailSource = readFileSync(
 );
 
 test("modal surfaces share a reference-counted document scroll lock", () => {
-  assert.match(adminModalSource, /useDocumentScrollLock\(open\)/);
+  assert.match(adminModalSource, /const visible = open && routeActive/);
+  assert.match(adminModalSource, /useDocumentScrollLock\(visible\)/);
   assert.match(videoInfoSource, /useDocumentScrollLock\(editingTags\)/);
   assert.match(videoDetailSource, /useDocumentScrollLock\(deleteOpen && isAdmin\)/);
   assert.match(scrollLockSource, /let activeScrollLocks = 0/);

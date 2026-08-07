@@ -2,6 +2,7 @@ import { useEffect, useId, useRef, ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { X } from "lucide-react";
 import { useDocumentScrollLock } from "@/lib/useDocumentScrollLock";
+import { useAdminRouteActive } from "./AdminRouteCache";
 
 type Props = {
   open: boolean;
@@ -28,8 +29,10 @@ export function Modal({
   const onCloseRef = useRef(onClose);
   const restoreFocusRef = useRef(restoreFocus);
   const titleId = useId();
+  const routeActive = useAdminRouteActive();
+  const visible = open && routeActive;
 
-  useDocumentScrollLock(open);
+  useDocumentScrollLock(visible);
 
   useEffect(() => {
     onCloseRef.current = onClose;
@@ -37,7 +40,7 @@ export function Modal({
   }, [onClose, restoreFocus]);
 
   useEffect(() => {
-    if (!open) return;
+    if (!visible) return;
     const previousFocus =
       document.activeElement instanceof HTMLElement ? document.activeElement : null;
 
@@ -88,9 +91,9 @@ export function Modal({
         previousFocus.focus();
       }
     };
-  }, [open]);
+  }, [visible]);
 
-  if (!open) return null;
+  if (!visible) return null;
   return createPortal(
     <div className="admin-modal-backdrop">
       <div

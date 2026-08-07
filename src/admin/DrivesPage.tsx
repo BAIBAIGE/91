@@ -43,6 +43,10 @@ import { DeleteDriveModal } from "./drive/DeleteDriveModal";
 import { SkipDirsPanel } from "./drive/SkipDirsPanel";
 import { AdminEmptyVisual } from "./AdminEmptyVisual";
 import { useAdminFloatingActionSpace } from "./useAdminFloatingActionSpace";
+import {
+  useAdminRouteActive,
+  useAdminRouteRevalidation,
+} from "./AdminRouteCache";
 
 const DRIVE_BUSY_MESSAGE = "当前存储有正在进行的任务，请稍后重试";
 const MAINTENANCE_BUSY_MESSAGE = "当前有全量扫描任务正在进行，请稍后重试";
@@ -62,6 +66,7 @@ function isDriveBusy(d: api.AdminDrive) {
 
 export function DrivesPage() {
   const floatingActionPageRef = useAdminFloatingActionSpace<HTMLElement>();
+  const routeActive = useAdminRouteActive();
   const [list, setList] = useState<api.AdminDrive[]>([]);
   const [storage, setStorage] = useState<api.AdminDriveStorage | null>(null);
   const [maintenanceStatus, setMaintenanceStatus] =
@@ -158,17 +163,22 @@ export function DrivesPage() {
     refresh();
   }, []);
 
+  useAdminRouteRevalidation(() => {
+    void refreshDriveList();
+  });
+
   useEffect(() => {
+    if (!routeActive) return;
     const timer = window.setInterval(() => {
       if (!document.hidden && !modalOpen) {
         refreshDriveList();
       }
     }, 5000);
     return () => window.clearInterval(timer);
-  }, [modalOpen]);
+  }, [modalOpen, routeActive]);
 
   useEffect(() => {
-    if (!trackingScanAll) return;
+    if (!routeActive || !trackingScanAll) return;
     const timer = window.setInterval(async () => {
       try {
         const status = await api.getScanAllJobStatus();
@@ -181,7 +191,7 @@ export function DrivesPage() {
       }
     }, 2000);
     return () => window.clearInterval(timer);
-  }, [trackingScanAll]);
+  }, [routeActive, trackingScanAll]);
 
   function openCreate() {
     const nextForm = { ...emptyForm };
