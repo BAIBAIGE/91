@@ -7766,7 +7766,7 @@ body.admin-mobile-nav-open {
   min-width: 0;
 }
 
-.admin-tags-empty-search {
+.admin-tags-empty-state {
   box-sizing: border-box;
   flex: 1 1 auto;
   width: 100%;

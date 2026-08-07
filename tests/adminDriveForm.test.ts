@@ -647,11 +647,11 @@ test("crawler management is a separate admin section", () => {
   assert.match(crawlerPageSource, /toggleCrawlerTeasers/);
   assert.match(crawlerPageSource, /className="admin-crawler-global-teaser"/);
   assert.equal(crawlerPageSource.match(/className="admin-crawler-global-teaser"/g)?.length, 1);
-  assert.match(crawlerPageSource, /const allCrawlerTeasersEnabled = !hasCrawlers \|\| list\.every/);
-  assert.match(crawlerPageSource, /暂无爬虫，新增后默认开启预览视频生成/);
+  assert.match(crawlerPageSource, /const allCrawlerTeasersEnabled = list\.every/);
+  assert.doesNotMatch(crawlerPageSource, /暂无爬虫，新增后默认开启预览视频生成/);
   assert.match(
     crawlerPageSource,
-    /<div\s+className="admin-card admin-crawler-list"\s+aria-busy=\{loading \|\| undefined\}\s*>\s*<div className="admin-crawler-list__controls">\s*<div className="admin-crawler-global-teaser">/
+    /\{hasCrawlers && \(\s*<div className="admin-crawler-list__controls">\s*<div className="admin-crawler-global-teaser">/
   );
   assert.doesNotMatch(crawlerPageSource, /admin-crawler-row__preview-toggle|onToggleTeaser/);
   assert.match(crawlerPageSource, /className=\{`toggle-switch \$\{allCrawlerTeasersEnabled \? "is-on" : ""\}/);
@@ -914,6 +914,10 @@ test("empty crawler list renders the shared empty visual", () => {
   assert.match(
     crawlerPageSource,
     /<AdminEmptyVisual[\s\S]*?variant="empty"[\s\S]*?text="暂无爬虫"[\s\S]*?className="admin-crawler-empty"/
+  );
+  assert.match(
+    crawlerPageSource,
+    /\{hasCrawlers && \([\s\S]*?className="admin-crawler-list__controls"[\s\S]*?\)\}\s*\{loading \? \(/
   );
   assert.doesNotMatch(crawlerPageSource, /<SpiderIcon size=\{28\} \/>/);
   assert.match(

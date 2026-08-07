@@ -206,7 +206,9 @@ export function TagsPage() {
       .map(({ tag }) => tag);
   }, [tags, searchQuery, filterSource]);
   const hasActiveSearch = searchQuery.trim().length > 0;
-  const searchEmpty = hasActiveSearch && !loading && !loadError && filteredTags.length === 0;
+  const tagsEmpty = !loading && !loadError && stats.total === 0;
+  const resultsEmpty = !tagsEmpty && !loading && !loadError && filteredTags.length === 0;
+  const searchEmpty = hasActiveSearch && resultsEmpty;
 
   const totalPages = Math.max(1, Math.ceil(filteredTags.length / pageSize));
   const currentPage = Math.min(page, totalPages);
@@ -311,22 +313,30 @@ export function TagsPage() {
                   <Plus size="1em" aria-hidden="true" />
                   新增标签
                 </button>
-                <button
-                  type="button"
-                  className="admin-btn admin-tags-toolbar-actions__toggle"
-                  onClick={toggleSelectMode}
-                >
-                  批量删除
-                </button>
+                {stats.total > 0 && (
+                  <button
+                    type="button"
+                    className="admin-btn admin-tags-toolbar-actions__toggle"
+                    onClick={toggleSelectMode}
+                  >
+                    批量删除
+                  </button>
+                )}
               </div>
             )}
           </div>
 
-          {searchEmpty ? (
+          {tagsEmpty ? (
+            <AdminEmptyVisual
+              variant="empty"
+              text="当前没有标签"
+              className="admin-empty-state admin-empty-state--plain admin-tags-empty-state"
+            />
+          ) : resultsEmpty ? (
             <AdminEmptyVisual
               variant="no-results"
               text="未查询到"
-              className="admin-empty-state admin-empty-state--plain admin-tags-empty-search"
+              className="admin-empty-state admin-empty-state--plain admin-tags-empty-state"
             />
           ) : (
             <div className="admin-tags-board" aria-busy={loading || undefined}>
@@ -338,10 +348,6 @@ export function TagsPage() {
                     <button type="button" className="admin-btn" onClick={() => void refresh()}>
                       <RefreshCw size={13} /> 重试
                     </button>
-                  </div>
-                ) : filteredTags.length === 0 ? (
-                  <div className="admin-card admin-empty">
-                    没有找到匹配的标签。
                   </div>
                 ) : (
                   <>

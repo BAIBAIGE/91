@@ -50,7 +50,7 @@ test("admin tags loading keeps the fixed controls and leaves the card area blank
   assert.doesNotMatch(tagsPageSource, /AdminLoading|lds-ellipsis|admin-card-skeleton-surface/);
   assert.match(
     tagsPageSource,
-    /<div className="admin-tags-toolbar">[\s\S]*?\{searchEmpty \? \(/
+    /<div className="admin-tags-toolbar">[\s\S]*?\{tagsEmpty \? \(/
   );
   assert.match(
     tagsPageSource,
@@ -58,14 +58,17 @@ test("admin tags loading keeps the fixed controls and leaves the card area blank
   );
 });
 
-test("admin tag search miss uses the shared no-results visual", () => {
+test("admin tag empty states distinguish an empty catalog from no results", () => {
   assert.match(tagsPageSource, /const hasActiveSearch = searchQuery\.trim\(\)\.length > 0;/);
-  assert.match(tagsPageSource, /const searchEmpty = hasActiveSearch && !loading && !loadError && filteredTags\.length === 0;/);
+  assert.match(tagsPageSource, /const tagsEmpty = !loading && !loadError && stats\.total === 0;/);
+  assert.match(tagsPageSource, /const resultsEmpty = !tagsEmpty && !loading && !loadError && filteredTags\.length === 0;/);
+  assert.match(tagsPageSource, /const searchEmpty = hasActiveSearch && resultsEmpty;/);
   assert.match(tagsPageSource, /searchEmpty \? " is-search-empty" : ""/);
   assert.match(
     tagsPageSource,
-    /searchEmpty \? \(\s*<AdminEmptyVisual[\s\S]*?variant="no-results"[\s\S]*?text="未查询到"[\s\S]*?admin-tags-empty-search[\s\S]*?\) : \(\s*<div className="admin-tags-board" aria-busy=\{loading \|\| undefined\}>/
+    /tagsEmpty \? \(\s*<AdminEmptyVisual[\s\S]*?variant="empty"[\s\S]*?text="当前没有标签"[\s\S]*?admin-tags-empty-state[\s\S]*?\) : resultsEmpty \? \(\s*<AdminEmptyVisual[\s\S]*?variant="no-results"[\s\S]*?text="未查询到"[\s\S]*?admin-tags-empty-state[\s\S]*?\) : \(\s*<div className="admin-tags-board" aria-busy=\{loading \|\| undefined\}>/
   );
+  assert.doesNotMatch(tagsPageSource, /没有找到匹配的标签。|className="admin-card admin-empty"/);
   assert.match(
     tagsPageSource,
     /className=\{`admin-page admin-page--with-floating-actions admin-tags-page\$\{searchEmpty \? " is-search-empty" : ""\}`\}/
@@ -80,8 +83,15 @@ test("admin tag search miss uses the shared no-results visual", () => {
   );
   assert.match(
     adminCss,
-    /\.admin-tags-empty-search\s*\{[^}]*box-sizing\s*:\s*border-box;[^}]*flex\s*:\s*1 1 auto;[^}]*min-height\s*:\s*0;[^}]*padding\s*:\s*0 16px 96px/s
+    /\.admin-tags-empty-state\s*\{[^}]*box-sizing\s*:\s*border-box;[^}]*flex\s*:\s*1 1 auto;[^}]*min-height\s*:\s*0;[^}]*padding\s*:\s*0 16px 96px/s
   );
   assert.doesNotMatch(adminCss, /\.admin-tags-page\.is-search-empty\s*\{[^}]*100(?:d)?vh/s);
   assert.doesNotMatch(adminCss, /\.admin-tags-page\.is-search-empty \.admin-tags-board[\s\S]*?display\s*:\s*flex/);
+});
+
+test("admin tags hide bulk delete when the catalog is empty", () => {
+  assert.match(
+    tagsPageSource,
+    /\{stats\.total > 0 && \(\s*<button[\s\S]*?admin-tags-toolbar-actions__toggle[\s\S]*?>\s*批量删除\s*<\/button>\s*\)\}/
+  );
 });

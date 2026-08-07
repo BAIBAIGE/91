@@ -33,20 +33,6 @@ export function CrawlersPageLoading() {
     >
       <div className="admin-crawler-console">
         <div className="admin-card admin-crawler-list" aria-busy="true">
-          <div className="admin-crawler-list__controls" aria-hidden="true">
-            <div className="admin-crawler-global-teaser">
-              <span>预览视频</span>
-              <button
-                type="button"
-                className="toggle-switch is-on"
-                role="switch"
-                aria-checked="true"
-                disabled
-              >
-                <span className="toggle-switch__dot" />
-              </button>
-            </div>
-          </div>
           <CrawlerListSkeleton />
         </div>
       </div>

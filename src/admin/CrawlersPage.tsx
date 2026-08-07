@@ -212,7 +212,7 @@ export function CrawlersPage() {
   }
 
   const hasCrawlers = list.length > 0;
-  const allCrawlerTeasersEnabled = !hasCrawlers || list.every((item) => item.teaserEnabled);
+  const allCrawlerTeasersEnabled = list.every((item) => item.teaserEnabled);
   const partialCrawlerTeasersEnabled = !allCrawlerTeasersEnabled && list.some((item) => item.teaserEnabled);
 
   return (
@@ -225,35 +225,35 @@ export function CrawlersPage() {
           className="admin-card admin-crawler-list"
           aria-busy={loading || undefined}
         >
-          <div className="admin-crawler-list__controls">
-            <div className="admin-crawler-global-teaser">
-              <span>预览视频</span>
-              <button
-                type="button"
-                className={`toggle-switch ${allCrawlerTeasersEnabled ? "is-on" : ""} ${
-                  togglingTeasers ? "is-saving" : ""
-                }`}
-                role="switch"
-                aria-checked={allCrawlerTeasersEnabled}
-                aria-label="切换全部爬虫预览视频生成"
-                disabled={loading || !hasCrawlers || togglingTeasers}
-                onClick={toggleCrawlerTeasers}
-                title={
-                  loading
-                    ? "正在加载爬虫列表"
-                    : !hasCrawlers
-                      ? "暂无爬虫，新增后默认开启预览视频生成"
+          {hasCrawlers && (
+            <div className="admin-crawler-list__controls">
+              <div className="admin-crawler-global-teaser">
+                <span>预览视频</span>
+                <button
+                  type="button"
+                  className={`toggle-switch ${allCrawlerTeasersEnabled ? "is-on" : ""} ${
+                    togglingTeasers ? "is-saving" : ""
+                  }`}
+                  role="switch"
+                  aria-checked={allCrawlerTeasersEnabled}
+                  aria-label="切换全部爬虫预览视频生成"
+                  disabled={loading || togglingTeasers}
+                  onClick={toggleCrawlerTeasers}
+                  title={
+                    loading
+                      ? "正在加载爬虫列表"
                       : partialCrawlerTeasersEnabled
                         ? "部分爬虫已开启，点击开启全部"
                         : allCrawlerTeasersEnabled
                           ? "关闭所有爬虫预览视频生成"
                           : "开启所有爬虫预览视频生成"
-                }
-              >
-                <span className="toggle-switch__dot" />
-              </button>
+                  }
+                >
+                  <span className="toggle-switch__dot" />
+                </button>
+              </div>
             </div>
-          </div>
+          )}
           {loading ? (
             <CrawlerListSkeleton />
           ) : list.length === 0 ? (

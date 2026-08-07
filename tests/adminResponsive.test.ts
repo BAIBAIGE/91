@@ -1198,8 +1198,9 @@ test("crawler loading keeps the real page structure and skeletonizes only crawle
   assert.match(crawlersPageLoadingSource, /const CRAWLER_LIST_SKELETON_COUNT = 3/);
   assert.match(
     crawlersPageLoadingSource,
-    /className="admin-page admin-page--with-floating-actions admin-crawlers-page"[\s\S]*?className="admin-card admin-crawler-list" aria-busy="true"[\s\S]*?className="admin-crawler-list__controls"[\s\S]*?<CrawlerListSkeleton \/>/
+    /className="admin-page admin-page--with-floating-actions admin-crawlers-page"[\s\S]*?className="admin-card admin-crawler-list" aria-busy="true">\s*<CrawlerListSkeleton \/>/
   );
+  assert.doesNotMatch(crawlersPageLoadingSource, /admin-crawler-list__controls|预览视频|toggle-switch/);
   assert.match(
     crawlersPageLoadingSource,
     /className="admin-crawler-table admin-crawler-table--skeleton"[\s\S]*?role="status"[\s\S]*?aria-busy="true"[\s\S]*?admin-crawler-card-skeleton admin-card-skeleton-surface/
@@ -1208,7 +1209,7 @@ test("crawler loading keeps the real page structure and skeletonizes only crawle
     crawlersPageSource,
     /className="admin-card admin-crawler-list"[\s\S]*?aria-busy=\{loading \|\| undefined\}[\s\S]*?\{loading \? \(\s*<CrawlerListSkeleton \/>/
   );
-  assert.match(crawlersPageSource, /disabled=\{loading \|\| !hasCrawlers \|\| togglingTeasers\}/);
+  assert.match(crawlersPageSource, /disabled=\{loading \|\| togglingTeasers\}/);
   assert.doesNotMatch(crawlersPageSource, /AdminLoading/);
   assert.match(skeleton, /height\s*:\s*64px/);
   assert.match(skeleton, /border\s*:\s*1px solid var\(--border-subtle\)/);
@@ -1653,7 +1654,7 @@ test("crawler card keeps the single global preview toggle at the upper left", ()
 
   assert.match(
     crawlersPageSource,
-    /<div\s+className="admin-card admin-crawler-list"\s+aria-busy=\{loading \|\| undefined\}\s*>\s*<div className="admin-crawler-list__controls">\s*<div className="admin-crawler-global-teaser">/
+    /\{hasCrawlers && \(\s*<div className="admin-crawler-list__controls">\s*<div className="admin-crawler-global-teaser">/
   );
   assert.equal(crawlersPageSource.match(/className="admin-crawler-global-teaser"/g)?.length, 1);
   assert.doesNotMatch(crawlersPageSource, /admin-crawler-row__preview-toggle|onToggleTeaser/);
