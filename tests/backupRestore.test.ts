@@ -206,6 +206,11 @@ test("supported deployments restart on the dedicated restore exit code", () => {
   assert.match(compose, /restart: unless-stopped/);
 });
 
+test("deploy keeps systemd environment lines separate from LimitNOFILE", () => {
+  assert.match(deploy, /\$\{env_lines\}\nLimitNOFILE=65536/);
+  assert.doesNotMatch(deploy, /\$\{env_lines\}LimitNOFILE=65536/);
+});
+
 test("restore polling distinguishes success from an automatic rollback", () => {
   assert.match(page, /!backupState\.pendingRestore/);
   assert.match(page, /旧数据已自动回滚/);

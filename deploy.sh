@@ -289,7 +289,8 @@ TimeoutStopSec=20
 Environment=HOME=${DEPLOY_HOME}
 Environment=PATH=/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
 Environment=VIDEO_RESTART_MANAGED=true
-${env_lines}LimitNOFILE=65536
+${env_lines}
+LimitNOFILE=65536
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=${BACKEND_SERVICE}
