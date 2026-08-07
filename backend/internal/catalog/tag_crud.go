@@ -454,7 +454,7 @@ ORDER BY cnt DESC, t.label ASC`)
 		return nil, err
 	}
 	defer rows.Close()
-	var out []Tag
+	out := make([]Tag, 0)
 	for rows.Next() {
 		var tag Tag
 		var aliasesJSON, rulesJSON string

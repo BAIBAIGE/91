@@ -1065,8 +1065,13 @@ export type AdminTag = {
 
 export type TagMatchRules = NonNullable<AdminTag["matchRules"]>;
 
-export function listTags() {
-  return request<AdminTag[]>("/tags");
+export async function listTags(): Promise<AdminTag[]> {
+  const tags = await request<AdminTag[] | null>("/tags");
+  if (tags === null) return [];
+  if (!Array.isArray(tags)) {
+    throw new Error("Invalid /admin/api/tags response");
+  }
+  return tags;
 }
 
 export function createTag(label: string) {

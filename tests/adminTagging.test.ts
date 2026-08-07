@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { listTags } from "../src/admin/api.ts";
 
 const apiSource = readFileSync(
   new URL("../src/admin/api.ts", import.meta.url),
@@ -33,6 +34,21 @@ function ruleBody(css: string, selector: string): string {
   assert.ok(match, `Expected CSS rule for ${selector}`);
   return match[1];
 }
+
+test("admin tags API treats a legacy null collection as empty", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () =>
+    new Response("null", {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    })) as typeof fetch;
+
+  try {
+    assert.deepEqual(await listTags(), []);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
 
 test("admin tags keep builtin, user, and auto-generated tag management", () => {
   assert.match(apiSource, /export type TagMatchRules/);

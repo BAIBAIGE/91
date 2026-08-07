@@ -82,10 +82,27 @@ func TestPutSettingsTogglesBuiltinTagPackAndStartsRetagOnRestore(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list tags after disabling: %v", err)
 	}
+	if tags == nil {
+		t.Fatal("list tags after disabling returned nil, want an empty collection")
+	}
+	if len(tags) != 0 {
+		t.Fatalf("tags after disabling = %#v, want an empty collection", tags)
+	}
 	for _, tag := range tags {
 		if tag.Source == "builtin" {
 			t.Fatalf("builtin tag %q survived disable", tag.Label)
 		}
+	}
+	tagsRecorder := httptest.NewRecorder()
+	server.handleListTags(
+		tagsRecorder,
+		httptest.NewRequest(http.MethodGet, "/admin/api/tags", nil),
+	)
+	if tagsRecorder.Code != http.StatusOK {
+		t.Fatalf("list tags status = %d, body=%s", tagsRecorder.Code, tagsRecorder.Body.String())
+	}
+	if body := strings.TrimSpace(tagsRecorder.Body.String()); body != "[]" {
+		t.Fatalf("empty tag response = %s, want []", body)
 	}
 
 	recorder = httptest.NewRecorder()
