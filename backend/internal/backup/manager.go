@@ -65,6 +65,9 @@ type Manager struct {
 	uploadProgress  map[string]OperationProgress
 	restoreBusy     bool
 	restoreProgress *OperationProgress
+	restoreBarrier  *catalog.WriteBarrier
+	restoreGateHeld bool
+	closed          bool
 
 	runCtx    context.Context
 	runCancel context.CancelFunc
@@ -120,7 +123,7 @@ func NewManager(cfg Config) (*Manager, error) {
 		assetRoot:      assetRoot,
 		backupDir:      filepath.Join(dataRoot, "backups"),
 		snapshotDir:    filepath.Join(dataRoot, ".backup-snapshots"),
-		restoreDir:     filepath.Join(dataRoot, ".restore-staging"),
+		restoreDir:     filepath.Join(dataRoot, restoreStageDirName),
 		restartManaged: cfg.RestartManaged,
 		now:            cfg.Now,
 		availableBytes: cfg.AvailableBytes,
@@ -174,8 +177,58 @@ func (m *Manager) Start(parent context.Context) {
 }
 
 func (m *Manager) Close() {
-	if m != nil && m.runCancel != nil {
-		m.runCancel()
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	m.closed = true
+	runCancel := m.runCancel
+	m.mu.Unlock()
+	if runCancel != nil {
+		runCancel()
+	}
+	m.releaseRestoreMaintenance()
+}
+
+func (m *Manager) beginRestoreMaintenance(ctx context.Context) error {
+	persistence.Lock()
+	barrier, err := m.catalog.BeginWriteBarrier(ctx)
+	if err != nil {
+		persistence.Unlock()
+		return fmt.Errorf("backup: enter restore maintenance mode: %w", err)
+	}
+	m.mu.Lock()
+	if m.closed || m.restoreBarrier != nil || m.restoreGateHeld {
+		closed := m.closed
+		m.mu.Unlock()
+		_ = barrier.Close()
+		persistence.Unlock()
+		if closed {
+			return errors.New("backup: manager is closed")
+		}
+		return ErrRestorePending
+	}
+	m.restoreBarrier = barrier
+	m.restoreGateHeld = true
+	m.mu.Unlock()
+	return nil
+}
+
+func (m *Manager) releaseRestoreMaintenance() {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	barrier := m.restoreBarrier
+	gateHeld := m.restoreGateHeld
+	m.restoreBarrier = nil
+	m.restoreGateHeld = false
+	m.mu.Unlock()
+	if barrier != nil {
+		_ = barrier.Close()
+	}
+	if gateHeld {
+		persistence.Unlock()
 	}
 }
 
@@ -206,7 +259,6 @@ func (m *Manager) nowTime() time.Time {
 
 func (m *Manager) sourceSpecs() []sourceSpec {
 	return []sourceSpec{
-		{name: "config", source: m.configPath, prefix: "payload/config.yaml"},
 		{name: "previews", source: m.previewPath, prefix: "payload/previews"},
 		{name: "uploads", source: filepath.Join(m.assetRoot, "uploads"), prefix: "payload/uploads"},
 		{name: "crawler-scripts", source: filepath.Join(m.assetRoot, "crawler-scripts"), prefix: "payload/crawler-scripts"},
@@ -255,6 +307,12 @@ func (m *Manager) Estimate(ctx context.Context) (Estimate, error) {
 		estimate.FileCount += count
 		estimate.TotalBytes += size
 	}
+	count, size, err := m.estimateLocalStorageResources(ctx, false)
+	if err != nil {
+		return Estimate{}, err
+	}
+	estimate.FileCount += count
+	estimate.TotalBytes += size
 	available, err := m.availableBytes(m.dataRoot)
 	if err != nil {
 		return Estimate{}, fmt.Errorf("backup: inspect available space: %w", err)
@@ -266,6 +324,139 @@ func (m *Manager) Estimate(ctx context.Context) (Estimate, error) {
 	m.estimateUntil = now.Add(30 * time.Second)
 	m.mu.Unlock()
 	return estimate, nil
+}
+
+// EstimateForSelection keeps the preflight check conservative while avoiding
+// charging a partial backup for unrelated application asset roots. The final
+// task size is always replaced with the manifest size after snapshotting.
+func (m *Manager) EstimateForSelection(ctx context.Context, selection BackupSelection) (Estimate, error) {
+	if !selection.Any() {
+		return Estimate{}, ErrNoBackupContent
+	}
+	var estimate Estimate
+	for _, databasePath := range []string{m.dbPath, m.dbPath + "-wal"} {
+		info, err := os.Lstat(databasePath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return Estimate{}, err
+		}
+		if info.Mode().IsRegular() {
+			estimate.TotalBytes += info.Size()
+		}
+	}
+	estimate.FileCount = 1
+	addSource := func(name, source string) error {
+		count, size, err := scanSource(ctx, source)
+		if err != nil {
+			return fmt.Errorf("backup: estimate %s: %w", name, err)
+		}
+		estimate.FileCount += count
+		estimate.TotalBytes += size
+		return nil
+	}
+	if selection.CloudDrives || selection.CrawlerScripts || selection.UploadStorage || selection.LocalStorage {
+		if err := addSource("previews", m.previewPath); err != nil {
+			return Estimate{}, err
+		}
+	}
+	if selection.UploadStorage {
+		if err := addSource("uploads", filepath.Join(m.assetRoot, "uploads")); err != nil {
+			return Estimate{}, err
+		}
+	}
+	if selection.CrawlerScripts {
+		for _, spec := range []sourceSpec{
+			{name: "crawler-scripts", source: filepath.Join(m.assetRoot, "crawler-scripts")},
+			{name: "scriptcrawlers", source: filepath.Join(m.assetRoot, "scriptcrawlers")},
+			{name: "spider91", source: filepath.Join(m.assetRoot, "spider91")},
+		} {
+			if err := addSource(spec.name, spec.source); err != nil {
+				return Estimate{}, err
+			}
+		}
+	}
+	if selection.LocalStorage {
+		count, size, err := m.estimateLocalStorageResources(ctx, true)
+		if err != nil {
+			return Estimate{}, err
+		}
+		estimate.FileCount += count
+		estimate.TotalBytes += size
+	}
+	available, err := m.availableBytes(m.dataRoot)
+	if err != nil {
+		return Estimate{}, fmt.Errorf("backup: inspect available space: %w", err)
+	}
+	estimate.AvailableBytes = available
+	estimate.RequiredBytes = requiredBackupBytes(estimate.TotalBytes)
+	return estimate, nil
+}
+
+func (m *Manager) estimateLocalStorageResources(ctx context.Context, strict bool) (int, int64, error) {
+	drives, err := m.catalog.ListDrives(ctx)
+	if err != nil {
+		return 0, 0, err
+	}
+	var count int
+	var size int64
+	for _, drive := range drives {
+		if drive == nil || !strings.EqualFold(strings.TrimSpace(drive.Kind), "localstorage") {
+			continue
+		}
+		rawPath := strings.TrimSpace(drive.Credentials["path"])
+		if rawPath == "" {
+			if strict {
+				return 0, 0, fmt.Errorf("backup: local storage %s has no configured path", drive.ID)
+			}
+			continue
+		}
+		root, err := resolveLocalStoragePath(rawPath)
+		if err != nil {
+			return 0, 0, fmt.Errorf("backup: estimate local storage %s: %w", drive.ID, err)
+		}
+		videos, err := m.catalog.ListVideosByDrive(ctx, drive.ID)
+		if err != nil {
+			return 0, 0, fmt.Errorf("backup: estimate local storage %s: %w", drive.ID, err)
+		}
+		seen := make(map[string]struct{})
+		for _, video := range videos {
+			if video == nil {
+				continue
+			}
+			for _, fileID := range []string{video.FileID, video.TranscodedFileID} {
+				relative, decodeErr := decodeLocalStorageFileID(fileID)
+				if decodeErr != nil {
+					if strict {
+						return 0, 0, fmt.Errorf("backup: decode local storage file for video %s: %w", video.ID, decodeErr)
+					}
+					continue
+				}
+				if relative == "" {
+					continue
+				}
+				candidate := filepath.Join(root, filepath.FromSlash(relative))
+				clean, _, info, ok, resolveErr := resolveContainedRegularFile(root, candidate)
+				if resolveErr != nil {
+					if strict {
+						return 0, 0, fmt.Errorf("backup: inspect local storage file for video %s: %w", video.ID, resolveErr)
+					}
+					continue
+				}
+				if !ok {
+					continue
+				}
+				if _, exists := seen[clean]; exists {
+					continue
+				}
+				seen[clean] = struct{}{}
+				count++
+				size += info.Size()
+			}
+		}
+	}
+	return count, size, nil
 }
 
 func requiredBackupBytes(total int64) int64 {
@@ -374,8 +565,15 @@ func excludedBackupFile(name string) bool {
 	return false
 }
 
-func (m *Manager) Create(ctx context.Context) (*TaskStatus, error) {
-	estimate, err := m.Estimate(ctx)
+func (m *Manager) Create(ctx context.Context, requested ...BackupSelection) (*TaskStatus, error) {
+	selection := FullBackupSelection()
+	if len(requested) > 0 {
+		selection = requested[0]
+		if !selection.Any() {
+			return nil, ErrNoBackupContent
+		}
+	}
+	estimate, err := m.EstimateForSelection(ctx, selection)
 	if err != nil {
 		return nil, err
 	}
@@ -415,7 +613,7 @@ func (m *Manager) Create(ctx context.Context) (*TaskStatus, error) {
 	}
 	status := *m.current
 	m.mu.Unlock()
-	go m.runBackup(taskCtx, id, started)
+	go m.runBackup(taskCtx, id, started, selection)
 	return &status, nil
 }
 
@@ -481,12 +679,12 @@ func (m *Manager) finishTask(id, state string, err error) {
 	m.mu.Unlock()
 }
 
-func (m *Manager) runBackup(ctx context.Context, id string, createdAt time.Time) {
+func (m *Manager) runBackup(ctx context.Context, id string, createdAt time.Time, selection BackupSelection) {
 	m.updateTask(id, func(status *TaskStatus) {
 		status.State = "running"
 		status.Phase = "estimating"
 	})
-	estimate, err := m.Estimate(ctx)
+	estimate, err := m.EstimateForSelection(ctx, selection)
 	if err != nil {
 		m.finishTask(id, taskEndState(ctx, "failed"), err)
 		return
@@ -507,13 +705,14 @@ func (m *Manager) runBackup(ctx context.Context, id string, createdAt time.Time)
 		return
 	}
 	defer os.RemoveAll(snapshotRoot)
-	if err := m.createSnapshot(ctx, snapshotRoot); err != nil {
+	snapshotState, err := m.createSnapshot(ctx, snapshotRoot, selection)
+	if err != nil {
 		m.finishTask(id, taskEndState(ctx, "failed"), err)
 		return
 	}
 
 	m.updateTask(id, func(status *TaskStatus) { status.Phase = "hashing" })
-	manifest, err := m.buildManifest(ctx, id, createdAt, snapshotRoot)
+	manifest, err := m.buildManifest(ctx, id, createdAt, snapshotRoot, snapshotState)
 	if err != nil {
 		m.finishTask(id, taskEndState(ctx, "failed"), err)
 		return
@@ -526,7 +725,7 @@ func (m *Manager) runBackup(ctx context.Context, id string, createdAt time.Time)
 		status.Phase = "compressing"
 	})
 
-	name := "video-site-91-full-" + createdAt.Local().Format("20060102-150405") + ".zip"
+	name := backupNamePrefix + createdAt.Local().Format("20060102-150405") + ".zip"
 	finalPath := filepath.Join(m.backupDir, name)
 	if _, statErr := os.Stat(finalPath); statErr == nil {
 		name = strings.TrimSuffix(name, ".zip") + "-" + id[:8] + ".zip"
@@ -599,32 +798,74 @@ func taskEndState(ctx context.Context, fallback string) string {
 	return fallback
 }
 
-func (m *Manager) createSnapshot(ctx context.Context, snapshotRoot string) error {
+func (m *Manager) createSnapshot(
+	ctx context.Context,
+	snapshotRoot string,
+	selection BackupSelection,
+) (snapshotSelectionState, error) {
 	persistence.Lock()
 	defer persistence.Unlock()
 	if err := ctx.Err(); err != nil {
-		return err
+		return snapshotSelectionState{}, err
 	}
 	dbDestination := filepath.Join(snapshotRoot, "payload", "database.sqlite")
 	if err := m.catalog.BackupTo(ctx, dbDestination); err != nil {
-		return err
+		return snapshotSelectionState{}, err
 	}
-	if err := redactSnapshotDatabase(ctx, dbDestination); err != nil {
-		return err
+	if err := redactSnapshotDatabase(ctx, dbDestination, selection.UserInfo); err != nil {
+		return snapshotSelectionState{}, err
 	}
-	for _, spec := range m.sourceSpecs() {
-		destination := filepath.Join(snapshotRoot, filepath.FromSlash(spec.prefix))
-		var err error
-		if spec.name == "config" {
-			err = snapshotRedactedConfig(ctx, spec.source, destination)
-		} else {
-			err = snapshotSource(ctx, spec.source, destination)
+	state, err := filterSnapshotDatabase(ctx, dbDestination, selection)
+	if err != nil {
+		return snapshotSelectionState{}, err
+	}
+	if err := compactSnapshotDatabase(ctx, dbDestination); err != nil {
+		return snapshotSelectionState{}, err
+	}
+	selection = state.Selection
+	if selection.AllResources() {
+		for _, spec := range m.sourceSpecs() {
+			destination := filepath.Join(snapshotRoot, filepath.FromSlash(spec.prefix))
+			if err := snapshotSource(ctx, spec.source, destination); err != nil {
+				return snapshotSelectionState{}, fmt.Errorf("backup: snapshot %s: %w", spec.name, err)
+			}
 		}
-		if err != nil {
-			return fmt.Errorf("backup: snapshot %s: %w", spec.name, err)
+		if selection.LocalStorage {
+			if err := m.snapshotSelectedLocalStorage(ctx, snapshotRoot, state); err != nil {
+				return snapshotSelectionState{}, err
+			}
+		}
+	} else {
+		if selection.CloudDrives || selection.CrawlerScripts || selection.UploadStorage || selection.LocalStorage {
+			if err := m.snapshotSelectedPreviews(ctx, snapshotRoot, state); err != nil {
+				return snapshotSelectionState{}, err
+			}
+		}
+		if selection.UploadStorage {
+			if err := m.snapshotSelectedUploads(ctx, snapshotRoot, state); err != nil {
+				return snapshotSelectionState{}, err
+			}
+		}
+		if selection.CrawlerScripts {
+			for _, spec := range []sourceSpec{
+				{name: "crawler-scripts", source: filepath.Join(m.assetRoot, "crawler-scripts"), prefix: "payload/crawler-scripts"},
+				{name: "spider91", source: filepath.Join(m.assetRoot, "spider91"), prefix: "payload/spider91"},
+			} {
+				if err := snapshotSource(ctx, spec.source, filepath.Join(snapshotRoot, filepath.FromSlash(spec.prefix))); err != nil {
+					return snapshotSelectionState{}, fmt.Errorf("backup: snapshot %s: %w", spec.name, err)
+				}
+			}
+			if err := m.snapshotSelectedCrawlerVideos(ctx, snapshotRoot, state); err != nil {
+				return snapshotSelectionState{}, err
+			}
+		}
+		if selection.LocalStorage {
+			if err := m.snapshotSelectedLocalStorage(ctx, snapshotRoot, state); err != nil {
+				return snapshotSelectionState{}, err
+			}
 		}
 	}
-	return nil
+	return state, nil
 }
 
 func snapshotSource(ctx context.Context, source, destination string) error {
@@ -736,17 +977,26 @@ func linkOrCopy(source, destination string, mode os.FileMode) error {
 	return nil
 }
 
-func (m *Manager) buildManifest(ctx context.Context, id string, createdAt time.Time, snapshotRoot string) (Manifest, error) {
+func (m *Manager) buildManifest(
+	ctx context.Context,
+	id string,
+	createdAt time.Time,
+	snapshotRoot string,
+	state snapshotSelectionState,
+) (Manifest, error) {
 	manifest := Manifest{
 		FormatVersion:  FormatVersion,
 		AppVersion:     m.appVersion,
 		CreatedAt:      createdAt.UTC(),
 		SourceDataRoot: filepath.Clean(m.dataRoot),
-		Included: []string{
-			"database", "config", "previews", "uploads",
-			"crawler-scripts", "scriptcrawlers", "spider91",
-		},
+		SourceDBPath:   filepath.Clean(m.dbPath),
+		SourcePreview:  filepath.Clean(m.previewPath),
+		Selection:      &state.Selection,
 	}
+	for _, root := range state.LocalStorageRoots {
+		manifest.LocalStorage = append(manifest.LocalStorage, root.LocalStorageRoot)
+	}
+	manifest.Included = includedForSelection(state.Selection, len(state.LocalStorageRoots) > 0)
 	err := filepath.WalkDir(filepath.Join(snapshotRoot, "payload"), func(current string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -841,13 +1091,46 @@ func writeJSONAtomic(filePath string, value any, mode os.FileMode) error {
 	if err := os.MkdirAll(filepath.Dir(filePath), 0o700); err != nil {
 		return err
 	}
-	tmp := filePath + ".part"
-	if err := os.WriteFile(tmp, append(data, '\n'), mode); err != nil {
+	directory := filepath.Dir(filePath)
+	temporary, err := os.CreateTemp(directory, "."+filepath.Base(filePath)+"-*.part")
+	if err != nil {
 		return err
 	}
-	if err := os.Rename(tmp, filePath); err != nil {
-		_ = os.Remove(tmp)
+	temporaryPath := temporary.Name()
+	removeTemporary := true
+	defer func() {
+		_ = temporary.Close()
+		if removeTemporary {
+			_ = os.Remove(temporaryPath)
+		}
+	}()
+	if err := temporary.Chmod(mode.Perm()); err != nil {
 		return err
+	}
+	if _, err := temporary.Write(append(data, '\n')); err != nil {
+		return err
+	}
+	if err := temporary.Sync(); err != nil {
+		return err
+	}
+	if err := temporary.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(temporaryPath, filePath); err != nil {
+		return err
+	}
+	removeTemporary = false
+	directoryHandle, err := os.Open(directory)
+	if err != nil {
+		return err
+	}
+	syncErr := directoryHandle.Sync()
+	closeErr := directoryHandle.Close()
+	if syncErr != nil {
+		return syncErr
+	}
+	if closeErr != nil {
+		return closeErr
 	}
 	return nil
 }

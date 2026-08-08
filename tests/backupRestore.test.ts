@@ -16,6 +16,30 @@ const backupApiHandler = readFileSync(
   new URL("../backend/internal/api/admin_backups.go", import.meta.url),
   "utf8"
 );
+const backupTypes = readFileSync(
+  new URL("../backend/internal/backup/types.go", import.meta.url),
+  "utf8"
+);
+const backupArchive = readFileSync(
+  new URL("../backend/internal/backup/archive.go", import.meta.url),
+  "utf8"
+);
+const backupRestorePrepare = readFileSync(
+  new URL("../backend/internal/backup/restore_prepare.go", import.meta.url),
+  "utf8"
+);
+const backupRestoreMerge = readFileSync(
+  new URL("../backend/internal/backup/restore_merge.go", import.meta.url),
+  "utf8"
+);
+const backupRestoreAssets = readFileSync(
+  new URL("../backend/internal/backup/restore_assets.go", import.meta.url),
+  "utf8"
+);
+const backupRestoreLocal = readFileSync(
+  new URL("../backend/internal/backup/restore_local.go", import.meta.url),
+  "utf8"
+);
 const authContext = readFileSync(
   new URL("../src/admin/AuthContext.tsx", import.meta.url),
   "utf8"
@@ -49,6 +73,20 @@ test("backup page keeps destructive restore confirmation concise", () => {
   assert.match(backupApiHandler, /request\.Confirmation != "确认恢复"/);
   assert.match(page, /服务就绪后返回登录页/);
   assert.match(page, /请手动重启后端，页面会继续检测/);
+  assert.match(page, /<span>恢复所选内容并重启<\/span>/);
+  assert.doesNotMatch(page, /将恢复所选内容并重启/);
+});
+
+test("restore acknowledgement stays bounded and survives the planned restart gap", () => {
+  assert.match(backupApiHandler, /writeRestoreAccepted/);
+  assert.match(backupApiHandler, /compactRestoreReport/);
+  assert.match(backupApiHandler, /http\.Flusher/);
+  assert.match(backupApiHandler, /restoreRestartGracePeriod/);
+  assert.match(api, /export class APIResponseError/);
+  assert.match(page, /shouldConfirmRestoreAfterTransportError/);
+  assert.match(page, /restoreConfirmationStartedAt/);
+  assert.match(page, /backupState\.pendingRestore \|\| Boolean\(backupState\.restoreProgress\)/);
+  assert.match(page, /RESTORE_CONFIRMATION_GRACE_MS/);
 });
 
 test("restore confirmation input uses the shared theme-aware field palette", () => {
@@ -75,6 +113,136 @@ test("backup creation uses credential-neutral backup wording", () => {
     /\.admin-btn\.is-transparent,\s*\.admin-btn\.is-transparent:hover:not\(:disabled\)\s*\{[^}]*background:\s*transparent;/s
   );
   assert.doesNotMatch(page, /创建完整备份|完整备份任务已开始|还没有完整备份/);
+});
+
+test("backup creation lets administrators choose a durable backup scope", () => {
+  assert.match(page, /title="选择备份内容"/);
+  for (const label of [
+    "网盘凭证和对应视频资源",
+    "爬虫脚本和对应的视频资源",
+    "上传存储和对应视频资源",
+    "本地存储和对应的视频资源",
+    "用户信息",
+  ]) {
+    assert.match(page, new RegExp(label));
+  }
+  assert.match(page, /Object\.values\(backupSelection\)\.some\(Boolean\)/);
+  assert.match(api, /export type BackupSelection/);
+  assert.match(api, /function createBackup\(selection\?: BackupSelection\)/);
+  assert.match(api, /JSON\.stringify\(selection\)/);
+  assert.match(backupApiHandler, /ErrNoBackupContent/);
+});
+
+test("backup creation starts with every scope unchecked", () => {
+  assert.match(
+    page,
+    /const EMPTY_BACKUP_SELECTION:[\s\S]*?cloudDrives: false,[\s\S]*?crawlerScripts: false,[\s\S]*?uploadStorage: false,[\s\S]*?localStorage: false,[\s\S]*?userInfo: false,/
+  );
+  assert.match(
+    page,
+    /function handleCreate\(\) \{\s*setBackupSelection\(\{ \.\.\.EMPTY_BACKUP_SELECTION \}\);/
+  );
+  assert.doesNotMatch(page, /FULL_BACKUP_SELECTION/);
+});
+
+test("backup scope stays visible when choosing and confirming a restore", () => {
+  assert.match(page, /function backupSelectionLabels/);
+  assert.match(page, /backupSelectionLabels\(record\.selection\)/);
+  assert.match(
+    page,
+    /<dt>恢复内容<\/dt>[\s\S]*?backupSelectionLabels\(restoreTarget\.selection\)/
+  );
+  assert.match(
+    css,
+    /\.backup-scope-list\s*\{[^}]*display:\s*flex;[^}]*flex-wrap:\s*wrap;/s
+  );
+  assert.match(
+    css,
+    /\.backup-scope\s*\{[^}]*background:\s*transparent;[^}]*color:\s*var\(--text-muted\);/s
+  );
+  assert.match(
+    css,
+    /\.backup-scope\s*\{[^}]*border:\s*1px solid var\(--border-default\);/s
+  );
+  assert.doesNotMatch(
+    css,
+    /\.backup-scope\s*\{[^}]*background:\s*var\(--(?:accent-soft|bg-elevated)\);/s
+  );
+  assert.match(
+    css,
+    /\.backup-restore-summary > \.backup-restore-summary__scope\s*\{[^}]*grid-column:\s*1 \/ -1;/s
+  );
+});
+
+test("backup archives accept only the current protocol", () => {
+  assert.match(backupTypes, /FormatVersion = 3/);
+  assert.doesNotMatch(
+    backupTypes,
+    /ScopedFormatVersion|LegacyFormatVersion|UserConfig/
+  );
+  assert.match(
+    backupArchive,
+    /if manifest\.FormatVersion != FormatVersion \{[\s\S]*?unsupported format version/
+  );
+  assert.match(backupArchive, /if manifest\.Selection == nil/);
+  assert.doesNotMatch(
+    backupArchive,
+    /ScopedFormatVersion|LegacyFormatVersion|EffectiveSelection/
+  );
+  assert.doesNotMatch(backupRestorePrepare, /\.IsFull\(\)|UserConfig/);
+  assert.doesNotMatch(api, /userConfig/);
+});
+
+test("upload storage merges while each source local storage keeps an isolated namespace", () => {
+  assert.match(backupRestoreMerge, /driveUsesMergeRestore/);
+  assert.match(backupRestoreMerge, /restore_merged_drives/);
+  assert.doesNotMatch(
+    backupRestoreMerge,
+    /DELETE FROM main\.remote_upload_jobs/
+  );
+  assert.doesNotMatch(backupRestoreMerge, /INSERT OR REPLACE/);
+  assert.match(
+    backupRestoreMerge,
+    /INSERT OR IGNORE INTO main\.video_tags/
+  );
+  assert.match(backupRestoreAssets, /prepareMergedUploadStorage/);
+  assert.match(
+    backupRestoreAssets,
+    /snapshotSource\(ctx, source, merged\)[\s\S]*?overlaySource\(ctx, target, merged\)/
+  );
+  assert.match(backupRestorePrepare, /prepareIsolatedLocalStorage/);
+  assert.doesNotMatch(backupRestorePrepare, /prepareMergedLocalStorage/);
+  assert.match(
+    backupRestoreLocal,
+    /fmt\.Sprintf\("localstorage-restore-%s-%03d", stageID, index\+1\)/
+  );
+  assert.match(backupRestoreLocal, /SourceDriveID/);
+  assert.match(backupRestoreLocal, /rewriteLocalStorageCatalog/);
+  assert.match(backupRestoreLocal, /videoid\.ForDrive\("localstorage", video\.newDriveID/);
+  const isolatedLocalRestore = backupRestoreAssets.slice(
+    backupRestoreAssets.indexOf("func prepareIsolatedLocalStorage"),
+    backupRestoreAssets.indexOf("func overlaySource")
+  );
+  assert.doesNotMatch(
+    isolatedLocalRestore,
+    /preserve target local storage|overlaySource\(ctx, target, merged\)/
+  );
+});
+
+test("backup creation dialog uses flat chrome without structural divider lines", () => {
+  assert.match(
+    css,
+    /\.admin-modal\.admin-modal--backup-create\s*\{[^}]*width:\s*min\(520px,\s*100%\);[^}]*border:\s*0;[^}]*box-shadow:\s*none;/s
+  );
+  assert.match(
+    css,
+    /\.admin-modal--backup-create \.admin-modal__header,\s*\.admin-modal--backup-create \.admin-modal__footer\s*\{[^}]*border:\s*0;[^}]*background:\s*var\(--bg-surface\);/s
+  );
+  assert.match(css, /\.backup-selection-option\s*\{[^}]*border:\s*0;/s);
+  assert.doesNotMatch(
+    css,
+    /\.backup-selection-option:hover\s*\{[^}]*border-color:/s
+  );
 });
 
 test("backup overview uses one full-width card with three evenly distributed metrics", () => {
@@ -189,6 +357,52 @@ test("backup long operations render phase-driven task checklists", () => {
   assert.match(css, /prefers-reduced-motion/);
 });
 
+test("active backup task progress uses neutral status colors", () => {
+  assert.match(
+    css,
+    /\.backup-task\s*\{[^}]*border:\s*1px solid var\(--border-subtle\);[^}]*background:\s*var\(--bg-surface\);/s
+  );
+  assert.match(
+    css,
+    /\.backup-task__percent\s*\{[^}]*color:\s*var\(--text-muted\);/s
+  );
+  assert.match(
+    css,
+    /\.backup-task \.backup-progress > span\s*\{[^}]*background:\s*var\(--text-muted\);/s
+  );
+});
+
+test("active backup task keeps metrics, percentage, and cancellation above the progress bar", () => {
+  const activeTask = page.slice(
+    page.indexOf("{current && taskActive(current)"),
+    page.indexOf('<div className="backup-grid">')
+  );
+  assert.match(
+    activeTask,
+    /className="backup-task__progress-row"[\s\S]*?className="backup-task__meta"[\s\S]*?className="backup-task__percent"[\s\S]*?onClick=\{handleCancelBackup\}[\s\S]*?className="backup-progress"/
+  );
+  assert.match(
+    css,
+    /\.backup-task__progress-row\s*\{[^}]*display:\s*grid;[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\) auto auto;/s
+  );
+  assert.match(
+    css,
+    /\.backup-task__meta > span\s*\{[^}]*text-overflow:\s*ellipsis;[^}]*white-space:\s*nowrap;/s
+  );
+});
+
+test("active backup cancellation uses the transparent ordinary button style", () => {
+  assert.match(
+    page,
+    /taskActive\(current\) && current\.cancellable[\s\S]*?className="admin-btn is-transparent"[\s\S]*?onClick=\{handleCancelBackup\}/
+  );
+  assert.doesNotMatch(page, /className="admin-btn is-stop" onClick=\{handleCancelBackup\}/);
+  assert.match(
+    css,
+    /\.admin-btn\.is-transparent,\s*\.admin-btn\.is-transparent:hover:not\(:disabled\)\s*\{[^}]*background:\s*transparent;/s
+  );
+});
+
 test("backup layout collapses safely on narrow screens", () => {
   assert.match(css, /@media \(max-width: 600px\)[\s\S]*?\.backup-stat/);
   assert.match(css, /@media \(max-width: 600px\)[\s\S]*?\.backup-file-picker/);
@@ -211,9 +425,16 @@ test("deploy keeps systemd environment lines separate from LimitNOFILE", () => {
   assert.doesNotMatch(deploy, /\$\{env_lines\}LimitNOFILE=65536/);
 });
 
-test("restore polling distinguishes success from an automatic rollback", () => {
-  assert.match(page, /!backupState\.pendingRestore/);
-  assert.match(page, /旧数据已自动回滚/);
+test("restore polling reports a missing durable restore only after its grace window", () => {
+  assert.match(
+    page,
+    /const restoreInProgress =\s*backupState\.pendingRestore \|\| Boolean\(backupState\.restoreProgress\)/
+  );
+  assert.match(
+    page,
+    /!restoreInProgress[\s\S]*?RESTORE_CONFIRMATION_GRACE_MS[\s\S]*?未确认恢复已启动，当前数据保持不变，请重试/
+  );
+  assert.match(page, /未确认恢复已启动，当前数据保持不变，请重试/);
   assert.match(page, /restoreReport\?\.localStorageWarnings/);
   assert.match(page, /restoreReport\?\.missingAssets/);
 });

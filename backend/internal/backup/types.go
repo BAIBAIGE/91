@@ -6,8 +6,8 @@ import (
 )
 
 const (
-	// FormatVersion is the on-disk backup format understood by this release.
-	FormatVersion = 1
+	// FormatVersion is the only supported on-disk backup format.
+	FormatVersion = 3
 	// ChunkSize is intentionally fixed so an interrupted migration upload can
 	// be resumed by another browser session without renegotiating boundaries.
 	ChunkSize int64 = 16 << 20
@@ -17,7 +17,12 @@ const (
 	// fresh process after a pending restore has been staged.
 	RestartExitCode = 75
 
-	manifestName = "manifest.json"
+	manifestName           = "manifest.json"
+	backupNamePrefix       = "video-site-91-backup-"
+	legacyBackupNamePrefix = "video-site-91-full-"
+	restoreStageDirName    = ".restore-staging"
+	maxRestoreOperations   = 1024
+	maxJSONSidecarBytes    = int64(64 << 20)
 )
 
 var (
@@ -29,17 +34,54 @@ var (
 	ErrUploadFinalizing  = errors.New("迁移上传正在完整校验")
 	ErrRestorePending    = errors.New("已有恢复任务等待重启")
 	ErrInsufficientSpace = errors.New("磁盘可用空间不足")
+	ErrNoBackupContent   = errors.New("请至少选择一项备份内容")
 )
 
 type Manifest struct {
-	FormatVersion  int            `json:"formatVersion"`
-	AppVersion     string         `json:"appVersion"`
-	CreatedAt      time.Time      `json:"createdAt"`
-	SourceDataRoot string         `json:"sourceDataRoot"`
-	FileCount      int            `json:"fileCount"`
-	TotalSize      int64          `json:"totalSize"`
-	Included       []string       `json:"included"`
-	Files          []ManifestFile `json:"files"`
+	FormatVersion  int                `json:"formatVersion"`
+	AppVersion     string             `json:"appVersion"`
+	CreatedAt      time.Time          `json:"createdAt"`
+	SourceDataRoot string             `json:"sourceDataRoot"`
+	SourceDBPath   string             `json:"sourceDatabasePath,omitempty"`
+	SourcePreview  string             `json:"sourcePreviewRoot,omitempty"`
+	FileCount      int                `json:"fileCount"`
+	TotalSize      int64              `json:"totalSize"`
+	Included       []string           `json:"included"`
+	Selection      *BackupSelection   `json:"selection,omitempty"`
+	LocalStorage   []LocalStorageRoot `json:"localStorage,omitempty"`
+	Files          []ManifestFile     `json:"files,omitempty"`
+}
+
+// BackupSelection is the user-visible scope of a backup. The database schema
+// itself is always included because it is the catalog needed to restore the
+// selected resources; its rows are filtered to this scope during snapshotting.
+type BackupSelection struct {
+	CloudDrives    bool `json:"cloudDrives"`
+	CrawlerScripts bool `json:"crawlerScripts"`
+	UploadStorage  bool `json:"uploadStorage"`
+	LocalStorage   bool `json:"localStorage"`
+	UserInfo       bool `json:"userInfo"`
+}
+
+func FullBackupSelection() BackupSelection {
+	return BackupSelection{
+		CloudDrives:    true,
+		CrawlerScripts: true,
+		UploadStorage:  true,
+		LocalStorage:   true,
+		UserInfo:       true,
+	}
+}
+
+func (s BackupSelection) Any() bool {
+	return s.CloudDrives || s.CrawlerScripts || s.UploadStorage || s.LocalStorage || s.UserInfo
+}
+
+// LocalStorageRoot describes one selected localstorage drive copied into the
+// archive. ArchivePath is relative to payload/localstorage.
+type LocalStorageRoot struct {
+	DriveID     string `json:"driveId"`
+	ArchivePath string `json:"archivePath"`
 }
 
 type ManifestFile struct {
@@ -73,19 +115,20 @@ type TaskStatus struct {
 }
 
 type BackupRecord struct {
-	ID                 string    `json:"id"`
-	Name               string    `json:"name"`
-	Size               int64     `json:"size"`
-	SHA256             string    `json:"sha256,omitempty"`
-	CreatedAt          time.Time `json:"createdAt"`
-	VerificationStatus string    `json:"verificationStatus"`
-	VerificationError  string    `json:"verificationError,omitempty"`
-	Imported           bool      `json:"imported"`
-	AppVersion         string    `json:"appVersion,omitempty"`
-	SourceDataRoot     string    `json:"sourceDataRoot,omitempty"`
-	FileCount          int       `json:"fileCount,omitempty"`
-	ExpandedSize       int64     `json:"expandedSize,omitempty"`
-	Included           []string  `json:"included,omitempty"`
+	ID                 string           `json:"id"`
+	Name               string           `json:"name"`
+	Size               int64            `json:"size"`
+	SHA256             string           `json:"sha256,omitempty"`
+	CreatedAt          time.Time        `json:"createdAt"`
+	VerificationStatus string           `json:"verificationStatus"`
+	VerificationError  string           `json:"verificationError,omitempty"`
+	Imported           bool             `json:"imported"`
+	AppVersion         string           `json:"appVersion,omitempty"`
+	SourceDataRoot     string           `json:"sourceDataRoot,omitempty"`
+	FileCount          int              `json:"fileCount,omitempty"`
+	ExpandedSize       int64            `json:"expandedSize,omitempty"`
+	Included           []string         `json:"included,omitempty"`
+	Selection          *BackupSelection `json:"selection,omitempty"`
 }
 
 type ListResult struct {

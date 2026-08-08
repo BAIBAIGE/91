@@ -425,7 +425,9 @@ func (m *Manager) processJob(ctx context.Context, job *catalog.RemoteUploadJob) 
 		return err
 	}
 
-	persistence.RLock()
+	if err := persistence.RLockContext(ctx); err != nil {
+		return err
+	}
 	mutationLocked := true
 	defer func() {
 		if mutationLocked {

@@ -6,13 +6,35 @@
 // hashing and ZIP compression happen after the gate is released.
 package persistence
 
-import "sync"
+import (
+	"context"
+	"sync"
+	"time"
+)
 
 var gate sync.RWMutex
 
 // RLock enters a normal persistence mutation critical section.
 func RLock() {
 	gate.RLock()
+}
+
+// RLockContext enters a normal mutation section without trapping a canceled
+// background worker behind a backup/restore barrier. Callers must still pair a
+// successful return with RUnlock.
+func RLockContext(ctx context.Context) error {
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if gate.TryRLock() {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
 }
 
 // RUnlock leaves a normal persistence mutation critical section.

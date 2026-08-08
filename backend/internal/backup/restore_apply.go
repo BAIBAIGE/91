@@ -121,7 +121,7 @@ func RollbackAppliedRestore(applied *AppliedRestore, cause error) error {
 
 func validateRestoreMarker(marker restoreMarker, dataRoot string) error {
 	if marker.MarkerVersion != 1 || marker.BackupID == "" ||
-		len(marker.Operations) == 0 || len(marker.Operations) > 16 {
+		validateRestoreOperationCount(len(marker.Operations)) != nil {
 		return errors.New("backup: pending restore marker is invalid")
 	}
 	switch marker.State {
@@ -133,7 +133,14 @@ func validateRestoreMarker(marker restoreMarker, dataRoot string) error {
 	if err != nil || filepath.Clean(markerRoot) != filepath.Clean(dataRoot) {
 		return errors.New("backup: pending restore belongs to another data root")
 	}
+	stageRoot, err := filepath.Abs(marker.StageRoot)
+	expectedStageParent := filepath.Join(filepath.Clean(dataRoot), restoreStageDirName)
+	if err != nil || filepath.Dir(stageRoot) != expectedStageParent ||
+		filepath.Base(stageRoot) == "." || filepath.Base(stageRoot) == ".." {
+		return errors.New("backup: pending restore staging root is invalid")
+	}
 	seenTargets := make(map[string]bool, len(marker.Operations))
+	targets := make([]string, 0, len(marker.Operations))
 	for _, operation := range marker.Operations {
 		switch operation.State {
 		case "pending", "target-moved", "applied", "rolledback":
@@ -151,6 +158,12 @@ func validateRestoreMarker(marker restoreMarker, dataRoot string) error {
 			return fmt.Errorf("backup: duplicate restore target for %s", operation.Name)
 		}
 		seenTargets[target] = true
+		for _, existing := range targets {
+			if restoreTargetPathsOverlap(existing, target) {
+				return fmt.Errorf("backup: overlapping restore target for %s", operation.Name)
+			}
+		}
+		targets = append(targets, target)
 		parent := filepath.Dir(target)
 		for label, candidate := range map[string]string{
 			"staged":   operation.Staged,
@@ -166,6 +179,13 @@ func validateRestoreMarker(marker restoreMarker, dataRoot string) error {
 				return fmt.Errorf("backup: %s path for %s has an invalid name", label, operation.Name)
 			}
 		}
+	}
+	return nil
+}
+
+func validateRestoreOperationCount(count int) error {
+	if count <= 0 || count > maxRestoreOperations {
+		return fmt.Errorf("backup: restore requires %d operations; allowed range is 1-%d", count, maxRestoreOperations)
 	}
 	return nil
 }

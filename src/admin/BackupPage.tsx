@@ -20,12 +20,33 @@ import { useToast } from "./ToastContext";
 import { useAdminRouteActive } from "./AdminRouteCache";
 
 const RESUME_KEY = "video-site-91-backup-upload-v1";
+const RESTORE_CONFIRMATION_GRACE_MS = 30_000;
+const RESTORE_POLL_INTERVAL_MS = 1_200;
 
 type ResumeState = {
   id: string;
   fileName: string;
   size: number;
   lastModified: number;
+};
+
+const BACKUP_SELECTION_OPTIONS: Array<{
+  key: keyof api.BackupSelection;
+  label: string;
+}> = [
+  { key: "cloudDrives", label: "网盘凭证和对应视频资源" },
+  { key: "crawlerScripts", label: "爬虫脚本和对应的视频资源" },
+  { key: "uploadStorage", label: "上传存储和对应视频资源" },
+  { key: "localStorage", label: "本地存储和对应的视频资源" },
+  { key: "userInfo", label: "用户信息" },
+];
+
+const EMPTY_BACKUP_SELECTION: api.BackupSelection = {
+  cloudDrives: false,
+  crawlerScripts: false,
+  uploadStorage: false,
+  localStorage: false,
+  userInfo: false,
 };
 
 function formatBytes(value: number | undefined) {
@@ -46,8 +67,21 @@ function formatTime(value: string | undefined) {
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString("zh-CN");
 }
 
+function backupSelectionLabels(selection: api.BackupSelection | undefined) {
+  if (!selection) return ["范围不可用"];
+  const labels = BACKUP_SELECTION_OPTIONS.filter((option) => selection[option.key]).map(
+    (option) => option.label
+  );
+  return labels.length > 0 ? labels : ["未选择内容"];
+}
+
 function taskActive(task: api.BackupTask | undefined) {
   return task?.state === "queued" || task?.state === "running" || task?.state === "canceling";
+}
+
+function shouldConfirmRestoreAfterTransportError(error: unknown) {
+  if (error instanceof api.UnauthorizedError) return false;
+  return !(error instanceof api.APIResponseError) || error.status >= 500;
 }
 
 function taskPhase(phase: string | undefined) {
@@ -206,6 +240,10 @@ export function BackupPage() {
   const [data, setData] = useState<api.BackupList | null>(null);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
+  const [createOpen, setCreateOpen] = useState(false);
+  const [backupSelection, setBackupSelection] = useState<api.BackupSelection>(
+    EMPTY_BACKUP_SELECTION
+  );
   const [deleteTarget, setDeleteTarget] = useState<api.BackupRecord | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [restoreTarget, setRestoreTarget] = useState<api.BackupRecord | null>(null);
@@ -222,6 +260,7 @@ export function BackupPage() {
   const [resumeHint, setResumeHint] = useState<ResumeState | null>(() => readResumeState());
   const uploadAbort = useRef<AbortController | null>(null);
   const pauseRequested = useRef(false);
+  const restoreConfirmationStartedAt = useRef<number | null>(null);
 
   const refresh = async (silent = false) => {
     try {
@@ -301,8 +340,13 @@ export function BackupPage() {
   }, [restoreSubmitting]);
 
   useEffect(() => {
-    if (!restoring) return;
+    if (!restoring) {
+      restoreConfirmationStartedAt.current = null;
+      return;
+    }
     let active = true;
+    const startedAt = restoreConfirmationStartedAt.current ?? Date.now();
+    restoreConfirmationStartedAt.current = startedAt;
     const redirectToLogin = () => {
       if (!active) return;
       // Restore deliberately clears every server session. Keep the central
@@ -321,13 +365,18 @@ export function BackupPage() {
           const backupState = await api.listBackups();
           if (!active) return;
           setData(backupState);
-          // A successful restore clears this session. If the old session is
-          // still valid and the marker is gone, startup rejected the restored
-          // data and switched back to the previous installation.
-          if (!backupState.pendingRestore) {
+          // A request can lose its response while the service is preparing to
+          // restart. Keep confirming while preparation or a pending marker is
+          // visible; only report failure after a bounded grace period.
+          const restoreInProgress =
+            backupState.pendingRestore || Boolean(backupState.restoreProgress);
+          if (
+            !restoreInProgress &&
+            Date.now() - startedAt >= RESTORE_CONFIRMATION_GRACE_MS
+          ) {
             setRestoring(false);
             setRestoreReport(null);
-            show("恢复未能启动，旧数据已自动回滚", "error");
+            show("未确认恢复已启动，当前数据保持不变，请重试", "error");
             return;
           }
         }
@@ -337,14 +386,14 @@ export function BackupPage() {
           return;
         }
       }
-      if (active) window.setTimeout(poll, 1200);
+      if (active) window.setTimeout(poll, RESTORE_POLL_INTERVAL_MS);
     };
     const timer = window.setTimeout(poll, 1000);
     return () => {
       active = false;
       window.clearTimeout(timer);
     };
-  }, [restoring, navigate, invalidateSession]);
+  }, [restoring, navigate, invalidateSession, show]);
 
   const current = data?.current;
   const progress = useMemo(() => {
@@ -352,10 +401,17 @@ export function BackupPage() {
     return Math.min(100, Math.max(0, (current.processedBytes / current.totalBytes) * 100));
   }, [current?.processedBytes, current?.totalBytes]);
 
-  async function handleCreate() {
+  function handleCreate() {
+    setBackupSelection({ ...EMPTY_BACKUP_SELECTION });
+    setCreateOpen(true);
+  }
+
+  async function handleConfirmCreate() {
+    if (!Object.values(backupSelection).some(Boolean)) return;
     setCreating(true);
     try {
-      await api.createBackup();
+      await api.createBackup(backupSelection);
+      setCreateOpen(false);
       show("备份任务已开始", "success");
       await refresh(true);
     } catch (error) {
@@ -363,6 +419,13 @@ export function BackupPage() {
     } finally {
       setCreating(false);
     }
+  }
+
+  function toggleBackupSelection(key: keyof api.BackupSelection) {
+    setBackupSelection((currentSelection) => ({
+      ...currentSelection,
+      [key]: !currentSelection[key],
+    }));
   }
 
   async function handleCancelBackup() {
@@ -536,10 +599,22 @@ export function BackupPage() {
       setRestoreReport(result.report);
       setRestoreTarget(null);
       setRestoreText("");
+      restoreConfirmationStartedAt.current = Date.now();
       setRestoring(true);
       show("恢复已通过校验，服务正在切换数据并重启", "success");
     } catch (error) {
-      show(error instanceof Error ? error.message : "恢复失败", "error");
+      if (shouldConfirmRestoreAfterTransportError(error)) {
+        // The server may already have staged the restore and restarted before
+        // the browser received its acknowledgement. Confirm the durable state
+        // instead of falsely reporting a failed restore.
+        setRestoreTarget(null);
+        setRestoreText("");
+        restoreConfirmationStartedAt.current = Date.now();
+        setRestoring(true);
+        show("连接暂时中断，正在确认恢复状态", "success");
+      } else {
+        show(error instanceof Error ? error.message : "恢复失败", "error");
+      }
     } finally {
       setRestoreSubmitting(false);
     }
@@ -636,7 +711,24 @@ export function BackupPage() {
             <div className="backup-task__title">
               <strong>{taskPhase(current.phase)}</strong>
             </div>
+          </div>
+          <div className="backup-task__progress-row">
+            <div className="backup-task__meta">
+              <span>
+                {current.processedFiles}/{current.fileCount} 文件 · {formatBytes(current.processedBytes)} /{" "}
+                {formatBytes(current.totalBytes)} · {formatBytes(current.bytesPerSecond)}/s
+              </span>
+            </div>
             <strong className="backup-task__percent">{progress.toFixed(1)}%</strong>
+            {taskActive(current) && current.cancellable && (
+              <button
+                type="button"
+                className="admin-btn is-transparent"
+                onClick={handleCancelBackup}
+              >
+                取消
+              </button>
+            )}
           </div>
           <div
             className="backup-progress"
@@ -646,19 +738,6 @@ export function BackupPage() {
             aria-valuenow={Math.round(progress)}
           >
             <span style={{ width: `${progress}%` }} />
-          </div>
-          <div className="backup-task__foot">
-            <div className="backup-task__meta">
-              <span>
-                {current.processedFiles}/{current.fileCount} 文件 · {formatBytes(current.processedBytes)} /{" "}
-                {formatBytes(current.totalBytes)} · {formatBytes(current.bytesPerSecond)}/s
-              </span>
-            </div>
-            {taskActive(current) && current.cancellable && (
-              <button type="button" className="admin-btn is-stop" onClick={handleCancelBackup}>
-                取消
-              </button>
-            )}
           </div>
           {current.error && <p className="backup-task__error">{current.error}</p>}
         </section>
@@ -768,6 +847,11 @@ export function BackupPage() {
                             : "待校验"}
                       </span>
                     </div>
+                    <div className="backup-scope-list" aria-label="备份范围">
+                      {backupSelectionLabels(record.selection).map((label) => (
+                        <span className="backup-scope" key={label}>{label}</span>
+                      ))}
+                    </div>
                     {record.verificationError && (
                       <div className="backup-record__error">{record.verificationError}</div>
                     )}
@@ -818,6 +902,50 @@ export function BackupPage() {
         onCancel={() => setDeleteTarget(null)}
         onConfirm={handleDelete}
       />
+
+      <Modal
+        open={createOpen}
+        title="选择备份内容"
+        className="admin-modal--backup-create"
+        onClose={() => {
+          if (!creating) setCreateOpen(false);
+        }}
+        footer={
+          <>
+            <button
+              type="button"
+              className="admin-btn"
+              onClick={() => setCreateOpen(false)}
+              disabled={creating}
+            >
+              取消
+            </button>
+            <button
+              type="button"
+              className="admin-btn"
+              onClick={handleConfirmCreate}
+              disabled={creating || !Object.values(backupSelection).some(Boolean)}
+            >
+              {creating ? <Loader2 size={14} className="admin-spin" /> : null}
+              确认
+            </button>
+          </>
+        }
+      >
+        <fieldset className="backup-selection-list" aria-label="备份内容">
+          {BACKUP_SELECTION_OPTIONS.map((option) => (
+            <label className="backup-selection-option" key={option.key}>
+              <input
+                type="checkbox"
+                checked={backupSelection[option.key]}
+                onChange={() => toggleBackupSelection(option.key)}
+                disabled={creating}
+              />
+              <span>{option.label}</span>
+            </label>
+          ))}
+        </fieldset>
+      </Modal>
 
       <Modal
         open={restoreTarget !== null || restoring}
@@ -886,7 +1014,7 @@ export function BackupPage() {
           <div className="backup-restore-form">
             <div className="backup-restore-warning">
               <CircleAlert size={18} />
-              <span>将替换全部数据并重启</span>
+              <span>恢复所选内容并重启</span>
             </div>
             <dl className="backup-restore-summary">
               <div>
@@ -903,6 +1031,16 @@ export function BackupPage() {
                   {restoreTarget.verificationStatus === "verified"
                     ? "已完整校验"
                     : "恢复前将重新完整校验"}
+                </dd>
+              </div>
+              <div className="backup-restore-summary__scope">
+                <dt>恢复内容</dt>
+                <dd>
+                  <span className="backup-scope-list">
+                    {backupSelectionLabels(restoreTarget.selection).map((label) => (
+                      <span className="backup-scope" key={label}>{label}</span>
+                    ))}
+                  </span>
                 </dd>
               </div>
             </dl>

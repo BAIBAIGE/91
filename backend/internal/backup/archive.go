@@ -24,10 +24,11 @@ import (
 )
 
 const (
-	maxArchiveFiles           = 1_000_000
-	maxManifestBytes    int64 = 64 << 20
-	maxExpandedBytes    int64 = 8 << 40
-	maxCompressionRatio       = uint64(10_000)
+	maxArchiveFiles             = 1_000_000
+	maxArchiveDirectories       = 4096
+	maxManifestBytes      int64 = 64 << 20
+	maxExpandedBytes      int64 = 8 << 40
+	maxCompressionRatio         = uint64(10_000)
 )
 
 type VerifyOptions struct {
@@ -78,13 +79,29 @@ func writeArchive(
 		return err
 	}
 
-	for _, directory := range []string{
-		"payload/previews/",
-		"payload/uploads/",
-		"payload/crawler-scripts/",
-		"payload/scriptcrawlers/",
-		"payload/spider91/",
+	directories := make([]string, 0, 6+len(manifest.LocalStorage))
+	for _, item := range []struct {
+		name string
+		ok   bool
+	}{
+		{name: "previews", ok: manifestIncludes(manifest, "previews")},
+		{name: "uploads", ok: manifestIncludes(manifest, "uploads")},
+		{name: "crawler-scripts", ok: manifestIncludes(manifest, "crawler-scripts")},
+		{name: "scriptcrawlers", ok: manifestIncludes(manifest, "scriptcrawlers")},
+		{name: "spider91", ok: manifestIncludes(manifest, "spider91")},
+		{name: "localstorage", ok: manifestIncludes(manifest, "localstorage")},
 	} {
+		if item.ok {
+			directories = append(directories, "payload/"+item.name+"/")
+		}
+	}
+	for _, root := range manifest.LocalStorage {
+		if root.ArchivePath != "" {
+			directories = append(directories, "payload/localstorage/"+root.ArchivePath+"/")
+		}
+	}
+	sort.Strings(directories)
+	for _, directory := range directories {
 		dirHeader := &zip.FileHeader{Name: directory, Method: zip.Store, Modified: manifest.CreatedAt}
 		dirHeader.SetMode(os.ModeDir | 0o755)
 		if _, err := writer.CreateHeader(dirHeader); err != nil {
@@ -160,6 +177,56 @@ func writeArchive(
 	return nil
 }
 
+func manifestIncludes(manifest Manifest, name string) bool {
+	for _, included := range manifest.Included {
+		if included == name {
+			return true
+		}
+	}
+	return false
+}
+
+func includedForSelection(selection BackupSelection, hasLocalStorageRoots bool) []string {
+	included := []string{"database"}
+	if selection.CloudDrives || selection.CrawlerScripts || selection.UploadStorage || selection.LocalStorage {
+		included = append(included, "previews")
+	}
+	if selection.UploadStorage {
+		included = append(included, "uploads")
+	}
+	if selection.CrawlerScripts {
+		included = append(included, "crawler-scripts", "scriptcrawlers", "spider91")
+	}
+	if selection.LocalStorage && hasLocalStorageRoots {
+		included = append(included, "localstorage")
+	}
+	return included
+}
+
+func validateManifestIncluded(manifest Manifest, selection BackupSelection) error {
+	expectedNames := includedForSelection(selection, len(manifest.LocalStorage) > 0)
+	expected := make(map[string]struct{}, len(expectedNames))
+	for _, name := range expectedNames {
+		expected[name] = struct{}{}
+	}
+	seen := make(map[string]struct{}, len(manifest.Included))
+	for _, name := range manifest.Included {
+		if _, duplicate := seen[name]; duplicate {
+			return fmt.Errorf("backup: manifest included list repeats %q", name)
+		}
+		seen[name] = struct{}{}
+		if _, allowed := expected[name]; !allowed {
+			return fmt.Errorf("backup: manifest included entry %q does not match the selected backup scope", name)
+		}
+	}
+	for _, name := range expectedNames {
+		if _, exists := seen[name]; !exists {
+			return fmt.Errorf("backup: manifest included list is missing %q for the selected backup scope", name)
+		}
+	}
+	return nil
+}
+
 func compressionMethod(name string) uint16 {
 	switch strings.ToLower(path.Ext(name)) {
 	case ".mp4", ".mkv", ".mov", ".avi", ".webm", ".jpg", ".jpeg", ".png",
@@ -206,7 +273,7 @@ func InspectArchive(archivePath string) (Manifest, error) {
 		return Manifest{}, fmt.Errorf("backup: open ZIP: %w", err)
 	}
 	defer reader.Close()
-	manifest, _, err := inspectZIP(&reader.Reader)
+	manifest, _, _, _, err := validateArchiveMetadata(&reader.Reader, VerifyOptions{})
 	return manifest, err
 }
 
@@ -282,6 +349,9 @@ func VerifyArchive(ctx context.Context, archivePath string, options VerifyOption
 	progress.Phase = "database"
 	emitArchiveProgress(options, progress)
 	if err := verifySQLite(databasePath); err != nil {
+		return ValidationReport{}, err
+	}
+	if err := validateArchiveDatabaseScope(ctx, databasePath, manifest); err != nil {
 		return ValidationReport{}, err
 	}
 
@@ -361,6 +431,13 @@ func VerifyAndExtractArchive(
 	if err := verifySQLite(filepath.Join(stageRoot, "payload", "database.sqlite")); err != nil {
 		return ValidationReport{}, err
 	}
+	if err := validateArchiveDatabaseScope(
+		ctx,
+		filepath.Join(stageRoot, "payload", "database.sqlite"),
+		manifest,
+	); err != nil {
+		return ValidationReport{}, err
+	}
 	return archiveValidationReport(manifest, options), nil
 }
 
@@ -374,6 +451,22 @@ func validateArchiveMetadata(
 	}
 	if manifest.FormatVersion != FormatVersion {
 		return Manifest{}, nil, nil, nil, fmt.Errorf("backup: unsupported format version %d", manifest.FormatVersion)
+	}
+	if manifest.Selection == nil {
+		return Manifest{}, nil, nil, nil, errors.New("backup: selection is missing")
+	}
+	selection := *manifest.Selection
+	if !selection.Any() {
+		return Manifest{}, nil, nil, nil, ErrNoBackupContent
+	}
+	if strings.TrimSpace(manifest.SourceDataRoot) == "" || strings.TrimSpace(manifest.SourcePreview) == "" {
+		return Manifest{}, nil, nil, nil, errors.New("backup: source paths are missing")
+	}
+	if err := validateManifestIncluded(manifest, selection); err != nil {
+		return Manifest{}, nil, nil, nil, err
+	}
+	if err := validateRestoreOperationCount(manifestRestoreOperationCount(manifest)); err != nil {
+		return Manifest{}, nil, nil, nil, err
 	}
 	if newerVersion(manifest.AppVersion, options.CurrentVersion) {
 		return Manifest{}, nil, nil, nil, fmt.Errorf(
@@ -395,7 +488,6 @@ func validateArchiveMetadata(
 	expected := make(map[string]ManifestFile, len(manifest.Files))
 	var declaredTotal int64
 	databaseDeclared := false
-	configDeclared := false
 	for _, entry := range manifest.Files {
 		clean, ok := cleanArchivePath(entry.Path)
 		if !ok || !validPayloadPath(clean) {
@@ -413,10 +505,58 @@ func validateArchiveMetadata(
 		}
 		declaredTotal += entry.Size
 		databaseDeclared = databaseDeclared || clean == "payload/database.sqlite"
-		configDeclared = configDeclared || clean == "payload/config.yaml"
+		switch {
+		case strings.HasPrefix(clean, "payload/previews/"):
+			if !(selection.CloudDrives || selection.CrawlerScripts || selection.UploadStorage || selection.LocalStorage) {
+				return Manifest{}, nil, nil, nil, errors.New("backup: preview assets are present without a selected video resource")
+			}
+		case strings.HasPrefix(clean, "payload/uploads/"):
+			if !selection.UploadStorage {
+				return Manifest{}, nil, nil, nil, errors.New("backup: upload assets are present although upload storage was not selected")
+			}
+		case strings.HasPrefix(clean, "payload/crawler-scripts/") ||
+			strings.HasPrefix(clean, "payload/scriptcrawlers/") ||
+			strings.HasPrefix(clean, "payload/spider91/"):
+			if !selection.CrawlerScripts {
+				return Manifest{}, nil, nil, nil, errors.New("backup: crawler assets are present although crawler scripts were not selected")
+			}
+		case strings.HasPrefix(clean, "payload/localstorage/"):
+			if !selection.LocalStorage {
+				return Manifest{}, nil, nil, nil, errors.New("backup: local storage assets are present although local storage was not selected")
+			}
+		}
 	}
-	if !databaseDeclared || !configDeclared {
-		return Manifest{}, nil, nil, nil, errors.New("backup: database or configuration is missing")
+	if !databaseDeclared {
+		return Manifest{}, nil, nil, nil, errors.New("backup: database is missing")
+	}
+	if !selection.LocalStorage && len(manifest.LocalStorage) > 0 {
+		return Manifest{}, nil, nil, nil, errors.New("backup: local storage metadata is present although local storage was not selected")
+	}
+	seenLocalStorage := make(map[string]struct{}, len(manifest.LocalStorage))
+	localStorageArchives := make(map[string]struct{}, len(manifest.LocalStorage))
+	for _, root := range manifest.LocalStorage {
+		if root.DriveID == "" || root.ArchivePath == "" || filepath.Base(root.ArchivePath) != root.ArchivePath ||
+			strings.ContainsAny(root.ArchivePath, `/\\`+"\x00") || root.ArchivePath != archiveDriveComponent(root.DriveID) {
+			return Manifest{}, nil, nil, nil, errors.New("backup: local storage metadata is invalid")
+		}
+		if _, exists := seenLocalStorage[root.DriveID]; exists {
+			return Manifest{}, nil, nil, nil, errors.New("backup: duplicate local storage metadata")
+		}
+		seenLocalStorage[root.DriveID] = struct{}{}
+		localStorageArchives[root.ArchivePath] = struct{}{}
+	}
+	for name := range expected {
+		if !strings.HasPrefix(name, "payload/localstorage/") {
+			continue
+		}
+		relative := strings.TrimPrefix(name, "payload/localstorage/")
+		archiveRoot, _, found := strings.Cut(relative, "/")
+		if !found || archiveRoot == "" {
+			return Manifest{}, nil, nil, nil, errors.New("backup: local storage file path is invalid")
+		}
+		if _, exists := localStorageArchives[archiveRoot]; !exists {
+			return Manifest{}, nil, nil, nil, errors.New("backup: local storage file is not declared in metadata")
+		}
 	}
 	if manifest.FileCount != len(manifest.Files) || manifest.FileCount != len(expected) {
 		return Manifest{}, nil, nil, nil, errors.New("backup: manifest file count does not match")
@@ -431,6 +571,19 @@ func validateArchiveMetadata(
 	}
 	sort.Strings(names)
 	return manifest, filesByName, expected, names, nil
+}
+
+func manifestRestoreOperationCount(manifest Manifest) int {
+	// WAL, shared-memory, and the database are always switched together.
+	count := 3 + len(manifest.LocalStorage)
+	for _, name := range []string{
+		"previews", "uploads", "crawler-scripts", "scriptcrawlers", "spider91",
+	} {
+		if manifestIncludes(manifest, name) {
+			count++
+		}
+	}
+	return count
 }
 
 func verifyArchiveEntry(
@@ -492,13 +645,15 @@ func archiveValidationReport(manifest Manifest, options VerifyOptions) Validatio
 }
 
 func inspectZIP(reader *zip.Reader) (Manifest, map[string]*zip.File, error) {
-	if len(reader.File) == 0 || len(reader.File) > maxArchiveFiles+16 {
+	if len(reader.File) == 0 || len(reader.File) > maxArchiveFiles+maxArchiveDirectories+1 {
 		return Manifest{}, nil, errors.New("backup: ZIP file count is invalid")
 	}
 	filesByName := make(map[string]*zip.File, len(reader.File))
 	caseNames := make(map[string]string, len(reader.File))
 	var manifestFile *zip.File
 	var expanded uint64
+	regularFileCount := 0
+	directoryCount := 0
 	for _, file := range reader.File {
 		cleanName := strings.TrimSuffix(file.Name, "/")
 		clean, ok := cleanArchivePath(cleanName)
@@ -511,6 +666,10 @@ func inspectZIP(reader *zip.Reader) (Manifest, map[string]*zip.File, error) {
 		}
 		caseNames[lower] = clean
 		if file.FileInfo().IsDir() {
+			directoryCount++
+			if err := validateArchiveEntryCounts(regularFileCount, directoryCount); err != nil {
+				return Manifest{}, nil, err
+			}
 			if cleanName == "" {
 				return Manifest{}, nil, errors.New("backup: invalid directory entry")
 			}
@@ -518,6 +677,10 @@ func inspectZIP(reader *zip.Reader) (Manifest, map[string]*zip.File, error) {
 				return Manifest{}, nil, fmt.Errorf("backup: invalid directory path %q", file.Name)
 			}
 			continue
+		}
+		regularFileCount++
+		if err := validateArchiveEntryCounts(regularFileCount, directoryCount); err != nil {
+			return Manifest{}, nil, err
 		}
 		if file.Flags&0x1 != 0 {
 			return Manifest{}, nil, fmt.Errorf("backup: encrypted ZIP entry %q is not supported", clean)
@@ -580,29 +743,43 @@ func inspectZIP(reader *zip.Reader) (Manifest, map[string]*zip.File, error) {
 	return manifest, filesByName, nil
 }
 
+func validateArchiveEntryCounts(regularFiles, directories int) error {
+	// maxArchiveFiles describes payload files in the manifest. A valid ZIP has
+	// one additional regular entry for manifest.json.
+	if regularFiles > maxArchiveFiles+1 {
+		return errors.New("backup: ZIP file count exceeds the allowed limit")
+	}
+	if directories > maxArchiveDirectories {
+		return errors.New("backup: ZIP directory count exceeds the allowed limit")
+	}
+	return nil
+}
+
 func validPayloadDirectory(name string) bool {
 	switch name {
 	case "payload", "payload/previews", "payload/uploads", "payload/crawler-scripts",
-		"payload/scriptcrawlers", "payload/spider91":
+		"payload/scriptcrawlers", "payload/spider91", "payload/localstorage":
 		return true
 	default:
 		return strings.HasPrefix(name, "payload/previews/") ||
 			strings.HasPrefix(name, "payload/uploads/") ||
 			strings.HasPrefix(name, "payload/crawler-scripts/") ||
 			strings.HasPrefix(name, "payload/scriptcrawlers/") ||
-			strings.HasPrefix(name, "payload/spider91/")
+			strings.HasPrefix(name, "payload/spider91/") ||
+			strings.HasPrefix(name, "payload/localstorage/")
 	}
 }
 
 func validPayloadPath(name string) bool {
-	if name == "payload/database.sqlite" || name == "payload/config.yaml" {
+	if name == "payload/database.sqlite" {
 		return true
 	}
 	return strings.HasPrefix(name, "payload/previews/") ||
 		strings.HasPrefix(name, "payload/uploads/") ||
 		strings.HasPrefix(name, "payload/crawler-scripts/") ||
 		strings.HasPrefix(name, "payload/scriptcrawlers/") ||
-		strings.HasPrefix(name, "payload/spider91/")
+		strings.HasPrefix(name, "payload/spider91/") ||
+		strings.HasPrefix(name, "payload/localstorage/")
 }
 
 func validSHA256(value string) bool {
@@ -633,7 +810,9 @@ func verifySQLite(databasePath string) error {
 	}
 	requiredTables := []string{
 		"videos", "drives", "users", "admin_sessions", "settings",
-		"remote_upload_jobs", "video_shares", "deleted_videos",
+		"remote_upload_jobs", "video_shares", "deleted_videos", "scans",
+		"crawler_seen_sources", "tags", "video_tags", "video_reaction_visits",
+		"shorts_feed_sessions", "banned_login_ips",
 	}
 	for _, table := range requiredTables {
 		var count int

@@ -560,11 +560,11 @@ func (m *Manager) FinalizeUpload(ctx context.Context, id string) (record BackupR
 		return BackupRecord{}, err
 	}
 	if stored.SHA256 != "" && !strings.EqualFold(stored.SHA256, archiveHash) {
-		return BackupRecord{}, errors.New("完整备份 SHA-256 校验失败")
+		return BackupRecord{}, errors.New("备份 SHA-256 校验失败")
 	}
 
 	name := fmt.Sprintf(
-		"video-site-91-full-imported-%s-%s.zip",
+		backupNamePrefix+"imported-%s-%s.zip",
 		m.nowTime().Local().Format("20060102-150405"),
 		id,
 	)

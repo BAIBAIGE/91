@@ -11,11 +11,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/video-site/backend/internal/catalog"
 	"github.com/video-site/backend/internal/config"
 	"github.com/video-site/backend/internal/localpath"
 	"github.com/video-site/backend/internal/mediaasset"
-	"gopkg.in/yaml.v3"
 )
 
 type restoreMarker struct {
@@ -88,8 +86,12 @@ func (m *Manager) PrepareRestore(ctx context.Context, id string) (ValidationRepo
 		return ValidationReport{}, err
 	}
 	prepared := false
+	maintenanceAcquired := false
 	defer func() {
 		if !prepared {
+			if maintenanceAcquired {
+				m.releaseRestoreMaintenance()
+			}
 			_ = os.RemoveAll(stageRoot)
 		}
 	}()
@@ -109,6 +111,7 @@ func (m *Manager) PrepareRestore(ctx context.Context, id string) (ValidationRepo
 	if err != nil {
 		return ValidationReport{}, err
 	}
+	selection := *report.Manifest.Selection
 
 	m.setRestoreProgress(OperationProgress{
 		Phase:          "rewriting",
@@ -117,31 +120,11 @@ func (m *Manager) PrepareRestore(ctx context.Context, id string) (ValidationRepo
 		ProcessedFiles: report.Manifest.FileCount,
 		TotalFiles:     report.Manifest.FileCount,
 	})
-	targetAdmins, err := m.catalog.ListAdmins(ctx)
-	if err != nil {
-		return ValidationReport{}, fmt.Errorf("backup: read target administrators: %w", err)
-	}
-	sourceConfig, err := readBackupConfig(filepath.Join(stageRoot, "payload", "config.yaml"))
-	if err != nil {
-		return ValidationReport{}, err
-	}
 	targetConfig := *m.appConfig
 	targetRuntimeConfig := targetConfig
 	targetRuntimeConfig.Storage = config.Storage{
 		DBPath:          m.dbPath,
 		LocalPreviewDir: m.previewPath,
-	}
-	mergedConfig := mergeRestoreConfig(sourceConfig, targetConfig)
-	configBytes, err := yaml.Marshal(&mergedConfig)
-	if err != nil {
-		return ValidationReport{}, fmt.Errorf("backup: encode restored config: %w", err)
-	}
-	if err := os.WriteFile(
-		filepath.Join(stageRoot, "payload", "config.yaml"),
-		configBytes,
-		0o600,
-	); err != nil {
-		return ValidationReport{}, err
 	}
 
 	stageDatabase := filepath.Join(stageRoot, "payload", "database.sqlite")
@@ -157,16 +140,24 @@ func (m *Manager) PrepareRestore(ctx context.Context, id string) (ValidationRepo
 			return ValidationReport{}, err
 		}
 	}
+	var localStoragePlans []isolatedLocalStorageRestore
+	if selection.LocalStorage {
+		localStoragePlans, err = m.planIsolatedLocalStorageRestore(ctx, stageID, report.Manifest.LocalStorage)
+		if err != nil {
+			return ValidationReport{}, err
+		}
+	}
 	rewriteReport, err := rewriteRestoredDatabase(
 		ctx,
 		stageDatabase,
+		selection,
 		stagePreview,
 		report.Manifest.SourceDataRoot,
-		sourceConfig,
 		targetRuntimeConfig,
 		m.dataRoot,
 		m.assetRoot,
-		targetAdmins,
+		report.Manifest.SourcePreview,
+		localStoragePlans,
 	)
 	if err != nil {
 		return ValidationReport{}, err
@@ -175,6 +166,37 @@ func (m *Manager) PrepareRestore(ctx context.Context, id string) (ValidationRepo
 	report.LocalStorageWarnings = append(report.LocalStorageWarnings, rewriteReport.LocalStorageWarnings...)
 	report.MissingAssets = append(report.MissingAssets, rewriteReport.MissingAssets...)
 	report.Warnings = append(report.Warnings, rewriteReport.Warnings...)
+	mergedDatabase := filepath.Join(stageRoot, "payload", "database-merged.sqlite")
+	if err := m.beginRestoreMaintenance(ctx); err != nil {
+		return ValidationReport{}, err
+	}
+	maintenanceAcquired = true
+	mergeErr := m.catalog.BackupTo(ctx, mergedDatabase)
+	if mergeErr != nil {
+		return ValidationReport{}, fmt.Errorf("backup: snapshot current database for selective restore: %w", mergeErr)
+	}
+	sourceReplacementPreviewPaths, err := collectPreviewAssetPaths(ctx, stageDatabase, stagePreview, false)
+	if err != nil {
+		return ValidationReport{}, fmt.Errorf("backup: inspect restored preview ownership: %w", err)
+	}
+	targetMergedPreviewPaths, err := collectPreviewAssetPaths(
+		ctx,
+		mergedDatabase,
+		targetRuntimeConfig.Storage.LocalPreviewDir,
+		true,
+	)
+	if err != nil {
+		return ValidationReport{}, fmt.Errorf("backup: inspect target preview ownership: %w", err)
+	}
+	if err := mergeSelectiveRestoreDatabase(ctx, mergedDatabase, stageDatabase, selection); err != nil {
+		return ValidationReport{}, err
+	}
+	if err := os.Remove(stageDatabase); err != nil {
+		return ValidationReport{}, err
+	}
+	if err := os.Rename(mergedDatabase, stageDatabase); err != nil {
+		return ValidationReport{}, err
+	}
 
 	m.setRestoreProgress(OperationProgress{
 		Phase:          "preparing-switch",
@@ -183,22 +205,138 @@ func (m *Manager) PrepareRestore(ctx context.Context, id string) (ValidationRepo
 		ProcessedFiles: report.Manifest.FileCount,
 		TotalFiles:     report.Manifest.FileCount,
 	})
+	previewSource := stagePreview
+	resourceSelection := selection.CloudDrives || selection.CrawlerScripts || selection.UploadStorage || selection.LocalStorage
+	allResourceSelections := selection.CloudDrives && selection.CrawlerScripts && selection.UploadStorage && selection.LocalStorage
+	if resourceSelection && manifestIncludes(report.Manifest, "previews") {
+		previewSource, err = prepareMergedPreview(
+			ctx,
+			stageRoot,
+			stagePreview,
+			targetRuntimeConfig.Storage.LocalPreviewDir,
+			targetMergedPreviewPaths,
+			!allResourceSelections,
+			sourceReplacementPreviewPaths,
+		)
+		if err != nil {
+			return ValidationReport{}, err
+		}
+	}
+	uploadSource := filepath.Join(stageRoot, "payload", "uploads")
+	if selection.UploadStorage && manifestIncludes(report.Manifest, "uploads") {
+		uploadSource, err = prepareMergedUploadStorage(
+			ctx,
+			stageRoot,
+			uploadSource,
+			filepath.Join(m.assetRoot, "uploads"),
+		)
+		if err != nil {
+			return ValidationReport{}, err
+		}
+	}
+	localStorageSources := []preparedLocalStorage(nil)
+	if selection.LocalStorage && len(localStoragePlans) > 0 {
+		localStorageSources, err = prepareIsolatedLocalStorage(
+			ctx,
+			stageRoot,
+			report.Manifest.LocalStorage,
+			localStoragePlans,
+		)
+		if err != nil {
+			return ValidationReport{}, err
+		}
+	}
 	targets := []struct {
 		name   string
 		kind   string
 		source string
 		target string
-	}{
-		{name: "previews", kind: "dir", source: stagePreview, target: targetRuntimeConfig.Storage.LocalPreviewDir},
-		{name: "uploads", kind: "dir", source: filepath.Join(stageRoot, "payload", "uploads"), target: filepath.Join(m.assetRoot, "uploads")},
-		{name: "crawler-scripts", kind: "dir", source: filepath.Join(stageRoot, "payload", "crawler-scripts"), target: filepath.Join(m.assetRoot, "crawler-scripts")},
-		{name: "scriptcrawlers", kind: "dir", source: filepath.Join(stageRoot, "payload", "scriptcrawlers"), target: filepath.Join(m.assetRoot, "scriptcrawlers")},
-		{name: "spider91", kind: "dir", source: filepath.Join(stageRoot, "payload", "spider91"), target: filepath.Join(m.assetRoot, "spider91")},
-		{name: "database-wal", kind: "remove", target: targetRuntimeConfig.Storage.DBPath + "-wal"},
-		{name: "database-shm", kind: "remove", target: targetRuntimeConfig.Storage.DBPath + "-shm"},
-		{name: "database", kind: "file", source: stageDatabase, target: targetRuntimeConfig.Storage.DBPath},
-		{name: "config", kind: "file", source: filepath.Join(stageRoot, "payload", "config.yaml"), target: m.configPath},
+	}{}
+	if resourceSelection && manifestIncludes(report.Manifest, "previews") {
+		targets = append(targets, struct {
+			name   string
+			kind   string
+			source string
+			target string
+		}{name: "previews", kind: "dir", source: previewSource, target: targetRuntimeConfig.Storage.LocalPreviewDir})
 	}
+	if selection.UploadStorage && manifestIncludes(report.Manifest, "uploads") {
+		targets = append(targets, struct {
+			name   string
+			kind   string
+			source string
+			target string
+		}{name: "uploads", kind: "dir", source: uploadSource, target: filepath.Join(m.assetRoot, "uploads")})
+	}
+	if selection.CrawlerScripts {
+		for _, item := range []struct {
+			name string
+		}{
+			{name: "crawler-scripts"},
+			{name: "scriptcrawlers"},
+			{name: "spider91"},
+		} {
+			if !manifestIncludes(report.Manifest, item.name) {
+				continue
+			}
+			targets = append(targets, struct {
+				name   string
+				kind   string
+				source string
+				target string
+			}{
+				name:   item.name,
+				kind:   "dir",
+				source: filepath.Join(stageRoot, "payload", item.name),
+				target: filepath.Join(m.assetRoot, item.name),
+			})
+		}
+	}
+	for _, localStorage := range localStorageSources {
+		targets = append(targets, struct {
+			name   string
+			kind   string
+			source string
+			target string
+		}{
+			name:   "localstorage-" + archiveDriveComponent(localStorage.DriveID),
+			kind:   "dir",
+			source: localStorage.Source,
+			target: localStorage.Target,
+		})
+	}
+	targets = append(targets,
+		struct {
+			name   string
+			kind   string
+			source string
+			target string
+		}{name: "database-wal", kind: "remove", target: targetRuntimeConfig.Storage.DBPath + "-wal"},
+		struct {
+			name   string
+			kind   string
+			source string
+			target string
+		}{name: "database-shm", kind: "remove", target: targetRuntimeConfig.Storage.DBPath + "-shm"},
+		struct {
+			name   string
+			kind   string
+			source string
+			target string
+		}{name: "database", kind: "file", source: stageDatabase, target: targetRuntimeConfig.Storage.DBPath},
+	)
+	if err := validateRestoreOperationCount(len(targets)); err != nil {
+		return ValidationReport{}, err
+	}
+	for index := range targets {
+		for prior := 0; prior < index; prior++ {
+			if restoreTargetPathsOverlap(targets[index].target, targets[prior].target) {
+				return ValidationReport{}, fmt.Errorf("backup: restore targets overlap: %s and %s", targets[prior].name, targets[index].name)
+			}
+		}
+	}
+	markerReport := report
+	markerReport.Manifest.Files = nil
 	marker := restoreMarker{
 		MarkerVersion: 1,
 		BackupID:      id,
@@ -206,7 +344,7 @@ func (m *Manager) PrepareRestore(ctx context.Context, id string) (ValidationRepo
 		StageRoot:     stageRoot,
 		CreatedAt:     m.nowTime(),
 		State:         "pending",
-		Report:        report,
+		Report:        markerReport,
 	}
 	for _, target := range targets {
 		operation, err := prepareRestoreSwitch(stageID, target.name, target.kind, target.source, target.target)
@@ -230,29 +368,6 @@ func (m *Manager) PrepareRestore(ctx context.Context, id string) (ValidationRepo
 		TotalFiles:     report.Manifest.FileCount,
 	})
 	return report, nil
-}
-
-func readBackupConfig(filePath string) (config.Config, error) {
-	data, err := os.ReadFile(filePath)
-	if err != nil {
-		return config.Config{}, fmt.Errorf("backup: read restored config: %w", err)
-	}
-	var restored config.Config
-	if err := yaml.Unmarshal(data, &restored); err != nil {
-		return config.Config{}, fmt.Errorf("backup: parse restored config: %w", err)
-	}
-	return restored, nil
-}
-
-func mergeRestoreConfig(source, target config.Config) config.Config {
-	source.Server.Listen = target.Server.Listen
-	source.Server.Admin = target.Server.Admin
-	source.Server.AllowedOrigins = append([]string(nil), target.Server.AllowedOrigins...)
-	source.Storage = target.Storage
-	source.Logging = target.Logging
-	source.Preview.FFmpegPath = target.Preview.FFmpegPath
-	source.Preview.FFprobePath = target.Preview.FFprobePath
-	return source
 }
 
 func prepareRestoreSwitch(stageID, name, kind, source, target string) (restoreSwitch, error) {
@@ -379,13 +494,14 @@ func cleanupPreparedSwitches(operations []restoreSwitch) {
 func rewriteRestoredDatabase(
 	ctx context.Context,
 	databasePath string,
+	selection BackupSelection,
 	stagePreviewDir string,
 	sourceDataRoot string,
-	sourceConfig config.Config,
 	targetConfig config.Config,
 	targetDataRoot string,
 	targetAssetRoot string,
-	targetAdmins []*catalog.User,
+	sourcePreviewOverride string,
+	localStoragePlans []isolatedLocalStorageRestore,
 ) (ValidationReport, error) {
 	dsn := databasePath + "?_pragma=busy_timeout(5000)"
 	database, err := sql.Open("sqlite", dsn)
@@ -401,7 +517,10 @@ func rewriteRestoredDatabase(
 
 	report := ValidationReport{VerificationStatus: "verified"}
 	sourceDataRoot = cleanNonEmptyPath(sourceDataRoot)
-	sourcePreviewRoot := restoredSourcePreviewRoot(sourceDataRoot, sourceConfig)
+	sourcePreviewRoot := cleanNonEmptyPath(sourcePreviewOverride)
+	if sourcePreviewRoot == "" {
+		return ValidationReport{}, errors.New("backup: source preview root is missing")
+	}
 	sourceAssetRoot := cleanNonEmptyPath(filepath.Dir(sourcePreviewRoot))
 	targetPreviewRoot := cleanNonEmptyPath(targetConfig.Storage.LocalPreviewDir)
 	targetDataRoot = cleanNonEmptyPath(targetDataRoot)
@@ -412,6 +531,23 @@ func rewriteRestoredDatabase(
 			{from: sourceAssetRoot, to: targetAssetRoot},
 			{from: sourceDataRoot, to: targetDataRoot},
 		})
+	}
+	localVideoIDs := make(map[string]string)
+	if selection.LocalStorage {
+		localVideoIDs, err = rewriteLocalStorageCatalog(ctx, tx, localStoragePlans, stagePreviewDir)
+		if err != nil {
+			return ValidationReport{}, err
+		}
+		for _, plan := range localStoragePlans {
+			report.PathRewrites = appendLimited(report.PathRewrites, fmt.Sprintf(
+				"本地存储已恢复为新的独立存储 %s",
+				plan.Name,
+			))
+		}
+	}
+	previousLocalVideoIDs := make(map[string]string, len(localVideoIDs))
+	for oldID, newID := range localVideoIDs {
+		previousLocalVideoIDs[newID] = oldID
 	}
 
 	rows, err := tx.QueryContext(ctx, `
@@ -447,6 +583,19 @@ SELECT id, COALESCE(preview_local, ''), COALESCE(preview_status, ''),
 	missingCount := 0
 	for _, video := range videos {
 		rewrittenPreview := rewrite(video.previewLocal)
+		if previousID := previousLocalVideoIDs[video.id]; previousID != "" {
+			rewrittenPreview = remapLocalPreviewPath(
+				video.previewLocal,
+				rewrittenPreview,
+				previousID,
+				video.id,
+				sourcePreviewRoot,
+				targetPreviewRoot,
+			)
+			if strings.HasPrefix(video.thumbnailURL, "/p/thumb/") {
+				video.thumbnailURL = "/p/thumb/" + video.id
+			}
+		}
 		if rewrittenPreview != video.previewLocal && video.previewLocal != "" {
 			report.PathRewrites = appendLimited(report.PathRewrites, fmt.Sprintf(
 				"视频 %s 的预览路径已改写到目标数据目录",
@@ -458,9 +607,9 @@ SELECT id, COALESCE(preview_local, ''), COALESCE(preview_status, ''),
 			if video.previewLocal == "" {
 				previewMissing = true
 			} else {
-				relative, ok := relativeWithin(sourcePreviewRoot, video.previewLocal)
+				relative, ok := relativeWithin(targetPreviewRoot, rewrittenPreview)
 				if !ok {
-					relative, ok = relativeWithin(targetPreviewRoot, rewrittenPreview)
+					relative, ok = relativeWithin(sourcePreviewRoot, video.previewLocal)
 				}
 				if !ok {
 					previewMissing = true
@@ -534,6 +683,10 @@ UPDATE videos
 	if err := driveRows.Close(); err != nil {
 		return ValidationReport{}, err
 	}
+	localStorageTargets := make(map[string]string, len(localStoragePlans))
+	for _, plan := range localStoragePlans {
+		localStorageTargets[plan.DriveID] = plan.TargetPath
+	}
 	for _, drive := range drives {
 		if scriptPath := drive.creds["script_path"]; scriptPath != "" {
 			rewritten := rewrite(scriptPath)
@@ -542,21 +695,25 @@ UPDATE videos
 				report.PathRewrites = appendLimited(report.PathRewrites, fmt.Sprintf("爬虫 %s 的脚本路径已改写", drive.id))
 			}
 		}
-		credentialsJSON, err := json.Marshal(drive.creds)
-		if err != nil {
-			return ValidationReport{}, err
-		}
 		status := ""
 		lastError := ""
 		if strings.EqualFold(drive.kind, "localstorage") {
 			localPath := strings.TrimSpace(drive.creds["path"])
-			if localPath != "" {
+			if targetPath, restored := localStorageTargets[drive.id]; restored {
+				drive.creds["path"] = targetPath
+				localPath = targetPath
+				status = "ok"
+			} else if localPath != "" {
 				if info, statErr := os.Stat(localPath); statErr != nil || !info.IsDir() {
 					status = "disconnected"
 					lastError = "恢复后目标服务器找不到本地存储路径：" + localPath
 					report.LocalStorageWarnings = appendLimited(report.LocalStorageWarnings, fmt.Sprintf("本地存储 %s：目标路径 %s 不存在，已标记未连接", drive.id, localPath))
 				}
 			}
+		}
+		credentialsJSON, err := json.Marshal(drive.creds)
+		if err != nil {
+			return ValidationReport{}, err
 		}
 		if status != "" {
 			_, err = tx.ExecContext(ctx, `
@@ -593,7 +750,13 @@ SELECT id, COALESCE(restore_payload, '') FROM deleted_videos WHERE COALESCE(rest
 		if err := json.Unmarshal([]byte(item.payload), &payload); err != nil {
 			continue
 		}
-		changed := rewriteJSONStrings(&payload, rewrite)
+		rewritePayloadValue := func(value string) string {
+			if mapped, ok := localVideoIDs[value]; ok {
+				return mapped
+			}
+			return rewrite(value)
+		}
+		changed := rewriteJSONStrings(&payload, rewritePayloadValue)
 		if !changed {
 			continue
 		}
@@ -605,10 +768,6 @@ SELECT id, COALESCE(restore_payload, '') FROM deleted_videos WHERE COALESCE(rest
 			return ValidationReport{}, err
 		}
 		report.PathRewrites = appendLimited(report.PathRewrites, fmt.Sprintf("删除记录 %s 的恢复载荷路径已改写", item.id))
-	}
-
-	if err := restoreTargetAdministrators(ctx, tx, targetAdmins); err != nil {
-		return ValidationReport{}, err
 	}
 
 	now := time.Now().UnixMilli()
@@ -672,22 +831,6 @@ func cleanNonEmptyPath(value string) string {
 		return filepath.Clean(value)
 	}
 	return filepath.Clean(absolute)
-}
-
-func restoredSourcePreviewRoot(sourceDataRoot string, sourceConfig config.Config) string {
-	configuredPreview := strings.TrimSpace(sourceConfig.Storage.LocalPreviewDir)
-	if filepath.IsAbs(configuredPreview) {
-		return cleanNonEmptyPath(configuredPreview)
-	}
-	configuredDBDir := filepath.Dir(strings.TrimSpace(sourceConfig.Storage.DBPath))
-	relative, err := filepath.Rel(configuredDBDir, configuredPreview)
-	if err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
-		return cleanNonEmptyPath(filepath.Join(sourceDataRoot, relative))
-	}
-	// Current deployments keep previews directly under the data root. This is
-	// also the safest fallback for an old relative config whose working
-	// directory is unknowable on the target server.
-	return cleanNonEmptyPath(filepath.Join(sourceDataRoot, filepath.Base(configuredPreview)))
 }
 
 func rewriteJSONStrings(value *any, rewrite func(string) string) bool {

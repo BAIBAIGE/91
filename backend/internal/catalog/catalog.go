@@ -31,6 +31,15 @@ type Catalog struct {
 	matcher        *tagging.Matcher
 }
 
+// WriteBarrier owns a database connection with a BEGIN IMMEDIATE transaction.
+// While it is held, every catalog writer is blocked at SQLite itself, including
+// callers that do not participate in higher-level persistence coordination.
+type WriteBarrier struct {
+	conn *sql.Conn
+	once sync.Once
+	err  error
+}
+
 type CrawlerAssetCounts struct {
 	Total       int
 	Local       int
@@ -58,6 +67,43 @@ func Open(path string) (*Catalog, error) {
 }
 
 func (c *Catalog) Close() error { return c.db.Close() }
+
+// BeginWriteBarrier waits for existing writers and prevents new write
+// transactions while still allowing read-only queries and online snapshots.
+func (c *Catalog) BeginWriteBarrier(ctx context.Context) (*WriteBarrier, error) {
+	if c == nil || c.db == nil {
+		return nil, errors.New("catalog: database is not open")
+	}
+	conn, err := c.db.Conn(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("catalog: reserve write barrier connection: %w", err)
+	}
+	if _, err := conn.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
+		_ = conn.Close()
+		return nil, fmt.Errorf("catalog: begin write barrier: %w", err)
+	}
+	return &WriteBarrier{conn: conn}, nil
+}
+
+// Close releases the write barrier. It is safe to call more than once.
+func (b *WriteBarrier) Close() error {
+	if b == nil {
+		return nil
+	}
+	b.once.Do(func() {
+		if b.conn == nil {
+			return
+		}
+		if _, err := b.conn.ExecContext(context.Background(), `ROLLBACK`); err != nil {
+			b.err = fmt.Errorf("catalog: release write barrier: %w", err)
+		}
+		if err := b.conn.Close(); err != nil && b.err == nil {
+			b.err = fmt.Errorf("catalog: close write barrier connection: %w", err)
+		}
+		b.conn = nil
+	})
+	return b.err
+}
 
 // BackupTo creates an online, transactionally consistent SQLite snapshot.
 // VACUUM INTO uses SQLite's own read transaction, so WAL pages that have not

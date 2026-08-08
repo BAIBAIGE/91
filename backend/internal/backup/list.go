@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -29,7 +30,7 @@ func (m *Manager) List(ctx context.Context) (ListResult, error) {
 		if entry.IsDir() || !strings.HasSuffix(strings.ToLower(entry.Name()), ".zip") {
 			continue
 		}
-		if !strings.HasPrefix(entry.Name(), "video-site-91-full-") {
+		if !hasKnownBackupNamePrefix(entry.Name()) {
 			continue
 		}
 		archivePath := filepath.Join(m.backupDir, entry.Name())
@@ -48,7 +49,10 @@ func (m *Manager) List(ctx context.Context) (ListResult, error) {
 		if err := readJSONFile(metaPath(archivePath), &meta); err == nil &&
 			meta.Name == entry.Name() &&
 			meta.Size == info.Size() &&
-			meta.ModifiedAt.Equal(info.ModTime().UTC()) {
+			meta.ModifiedAt.Equal(info.ModTime().UTC()) &&
+			meta.Manifest.FormatVersion == FormatVersion &&
+			meta.Manifest.Selection != nil &&
+			meta.Manifest.Selection.Any() {
 			record.SHA256 = meta.SHA256
 			record.VerificationStatus = "verified"
 			record.Imported = meta.Imported
@@ -91,6 +95,10 @@ func applyManifestToRecord(record *BackupRecord, manifest Manifest, fallback tim
 	record.FileCount = manifest.FileCount
 	record.ExpandedSize = manifest.TotalSize
 	record.Included = append([]string(nil), manifest.Included...)
+	if manifest.Selection != nil {
+		selection := *manifest.Selection
+		record.Selection = &selection
+	}
 }
 
 func (m *Manager) OpenBackup(id string) (*os.File, os.FileInfo, string, error) {
@@ -146,7 +154,7 @@ func (m *Manager) resolveBackup(id string) (string, string, error) {
 	id = strings.TrimSpace(id)
 	if id == "" || id == "." || id == ".." || filepath.Base(id) != id ||
 		strings.ContainsAny(id, `/\`+"\x00") ||
-		!strings.HasPrefix(id, "video-site-91-full-") {
+		!hasKnownBackupNamePrefix(id) {
 		return "", "", ErrBackupNotFound
 	}
 	name := id + ".zip"
@@ -168,12 +176,45 @@ func (m *Manager) resolveBackup(id string) (string, string, error) {
 	return archivePath, name, nil
 }
 
+func hasKnownBackupNamePrefix(name string) bool {
+	return strings.HasPrefix(name, backupNamePrefix) ||
+		strings.HasPrefix(name, legacyBackupNamePrefix)
+}
+
 func readJSONFile(filePath string, destination any) error {
-	data, err := os.ReadFile(filePath)
+	info, err := os.Lstat(filePath)
 	if err != nil {
 		return err
 	}
-	if len(data) > 64<<20 {
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return fmt.Errorf("backup: JSON sidecar is not a regular file")
+	}
+	if info.Size() > maxJSONSidecarBytes {
+		return fmt.Errorf("backup: JSON sidecar is too large")
+	}
+	file, err := os.Open(filePath)
+	if err != nil {
+		return err
+	}
+	openedInfo, err := file.Stat()
+	if err != nil {
+		_ = file.Close()
+		return err
+	}
+	if !openedInfo.Mode().IsRegular() || !os.SameFile(info, openedInfo) ||
+		openedInfo.Size() > maxJSONSidecarBytes {
+		_ = file.Close()
+		return fmt.Errorf("backup: JSON sidecar changed while opening")
+	}
+	data, readErr := io.ReadAll(io.LimitReader(file, maxJSONSidecarBytes+1))
+	closeErr := file.Close()
+	if readErr != nil {
+		return readErr
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	if int64(len(data)) > maxJSONSidecarBytes {
 		return fmt.Errorf("backup: JSON sidecar is too large")
 	}
 	return json.Unmarshal(data, destination)

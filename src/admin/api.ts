@@ -9,6 +9,16 @@ export class UnauthorizedError extends Error {
   }
 }
 
+export class APIResponseError extends Error {
+  constructor(
+    readonly status: number,
+    message: string
+  ) {
+    super(message);
+    this.name = "APIResponseError";
+  }
+}
+
 async function request<T>(
   path: string,
   init: RequestInit = {}
@@ -34,7 +44,7 @@ async function request<T>(
     } catch {
       // Keep a plain-text error response as-is.
     }
-    throw new Error(message || `HTTP ${res.status}`);
+    throw new APIResponseError(res.status, message || `HTTP ${res.status}`);
   }
   if (res.status === 204) return undefined as T;
   const ct = res.headers.get("content-type") ?? "";
@@ -204,6 +214,7 @@ export type BackupRecord = {
   fileCount?: number;
   expandedSize?: number;
   included?: string[];
+  selection?: BackupSelection;
 };
 
 export type BackupList = {
@@ -251,6 +262,15 @@ export type BackupManifest = {
   fileCount: number;
   totalSize: number;
   included: string[];
+  selection: BackupSelection;
+};
+
+export type BackupSelection = {
+  cloudDrives: boolean;
+  crawlerScripts: boolean;
+  uploadStorage: boolean;
+  localStorage: boolean;
+  userInfo: boolean;
 };
 
 export type RestoreReport = {
@@ -266,8 +286,11 @@ export function listBackups() {
   return request<BackupList>("/backups");
 }
 
-export function createBackup() {
-  return request<BackupTask>("/backups", { method: "POST" });
+export function createBackup(selection?: BackupSelection) {
+  return request<BackupTask>("/backups", {
+    method: "POST",
+    body: selection ? JSON.stringify(selection) : undefined,
+  });
 }
 
 export function cancelBackup() {

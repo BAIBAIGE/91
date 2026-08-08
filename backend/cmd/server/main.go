@@ -524,13 +524,13 @@ func main() {
 		log.Printf("[remote-upload] shutdown: %v", err)
 	}
 	if restoreRestart {
-		backupManager.Close()
-		if err := cat.Close(); err != nil {
-			log.Printf("[restore] close catalog before restart: %v", err)
-		}
+		// Keep the restore maintenance barrier held until process exit. Releasing
+		// it here would let canceled background workers write after the target
+		// snapshot that is about to replace the live database.
 		log.Printf("[restore] pending restore staged; exiting with restart code %d", backup.RestartExitCode)
 		os.Exit(backup.RestartExitCode)
 	}
+	backupManager.Close()
 }
 
 func loadApplicationConfig(path, workingDir string) (*config.Config, *config.Config, error) {

@@ -2,7 +2,6 @@ package scanner
 
 import (
 	"context"
-	"encoding/base64"
 	"fmt"
 	"log"
 	"path"
@@ -11,6 +10,7 @@ import (
 
 	"github.com/video-site/backend/internal/catalog"
 	"github.com/video-site/backend/internal/drives"
+	"github.com/video-site/backend/internal/videoid"
 	"github.com/video-site/backend/internal/videoname"
 )
 
@@ -167,7 +167,7 @@ func (s *Scanner) walk(ctx context.Context, dirID, dirName string, stats *Stats,
 		progress(dirName)
 		stats.SeenFileIDs[e.ID] = struct{}{}
 
-		id := s.Drive.Kind() + "-" + s.Drive.ID() + "-" + videoIDFilePart(e.ID)
+		id := videoid.ForDrive(s.Drive.Kind(), s.Drive.ID(), e.ID)
 		if deleted, err := s.Catalog.IsDeletedVideoCandidate(ctx, id, s.Drive.ID(), e.ID, e.Hash, e.Name, e.Size); err != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return ctxErr
@@ -334,8 +334,5 @@ func (s *Scanner) findDuplicateByFileSignature(ctx context.Context, fileName str
 }
 
 func videoIDFilePart(fileID string) string {
-	if !strings.ContainsAny(fileID, `/\`+"\x00") {
-		return fileID
-	}
-	return "b64_" + base64.RawURLEncoding.EncodeToString([]byte(fileID))
+	return videoid.FilePart(fileID)
 }
