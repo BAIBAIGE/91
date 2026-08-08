@@ -45,6 +45,10 @@ nightly:
   # 运行时会统一编排扫描、媒体资产生成和后续清理任务。
   start_time: "01:00"
 
+tags:
+  # 是否启用系统内置标签包；后台保存后会热更新。
+  builtin_pack_enabled: true
+
 preview:
   # 是否启用 ffmpeg 抽帧生成预览视频
   enabled: true

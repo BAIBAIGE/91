@@ -11,7 +11,7 @@ import (
 	"github.com/video-site/backend/internal/nightly"
 )
 
-func TestConfigSavePersistsAndHotUpdatesScheduler(t *testing.T) {
+func TestConfigSavePersistsAndHotUpdatesRuntimeSettings(t *testing.T) {
 	cat, err := catalog.Open(filepath.Join(t.TempDir(), "catalog.db"))
 	if err != nil {
 		t.Fatalf("open catalog: %v", err)
@@ -26,15 +26,24 @@ func TestConfigSavePersistsAndHotUpdatesScheduler(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	app := &App{cat: cat, configManager: manager}
+	tagCacheInvalidations := 0
+	app := &App{
+		cat:           cat,
+		configManager: manager,
+		onTagsChanged: func() { tagCacheInvalidations++ },
+	}
 	app.nightlyRunner = nightly.New(nightly.Config{Settings: cat, StartTime: manager.LiveSettings().NightlyStartTime})
-	manager.SetApply(app.applyLiveConfig)
+	if err := manager.SetApply(func(settings config.LiveSettings) error {
+		return app.applyLiveConfig(context.Background(), settings)
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	_, version, err := manager.ReadYAML()
 	if err != nil {
 		t.Fatal(err)
 	}
-	next, err := manager.ReplaceYAML([]byte("nightly:\n  start_time: \"00:45\"\n"), version)
+	next, err := manager.ReplaceYAML([]byte("nightly:\n  start_time: \"00:45\"\ntags:\n  builtin_pack_enabled: false\n"), version)
 	if err != nil {
 		t.Fatalf("replace config: %v", err)
 	}
@@ -43,6 +52,16 @@ func TestConfigSavePersistsAndHotUpdatesScheduler(t *testing.T) {
 	}
 	if got := app.nightlyRunner.StartTime(); got != "00:45" {
 		t.Fatalf("live scheduler start time = %q, want 00:45", got)
+	}
+	if next.Settings.BuiltinTagsEnabled {
+		t.Fatalf("updated settings = %#v, want built-in tags disabled", next.Settings)
+	}
+	enabled, err := cat.BuiltinTagsEnabled(context.Background())
+	if err != nil || enabled {
+		t.Fatalf("catalog built-in setting = %v, %v; want disabled", enabled, err)
+	}
+	if tagCacheInvalidations != 1 {
+		t.Fatalf("tag cache invalidations = %d, want 1", tagCacheInvalidations)
 	}
 	reloaded, err := config.NewManager(path)
 	if err != nil {
@@ -85,7 +104,10 @@ func TestMigratedRuntimeSettingsCanBeRemovedFromSQLite(t *testing.T) {
 	if err := cat.SetSetting(ctx, obsoleteDuplicateReviewEnabledSetting, "false"); err != nil {
 		t.Fatal(err)
 	}
-	if err := cat.DeleteSettings(ctx, legacyNightlyStartTimeSetting, obsoleteDuplicateReviewEnabledSetting); err != nil {
+	if err := cat.SetSetting(ctx, legacyBuiltinTagsEnabledSetting, "false"); err != nil {
+		t.Fatal(err)
+	}
+	if err := cat.DeleteSettings(ctx, legacyNightlyStartTimeSetting, legacyBuiltinTagsEnabledSetting, obsoleteDuplicateReviewEnabledSetting); err != nil {
 		t.Fatal(err)
 	}
 	legacy, err := loadLegacyRuntimeSettings(ctx, cat)

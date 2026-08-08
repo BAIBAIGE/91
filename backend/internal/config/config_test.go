@@ -244,6 +244,28 @@ func TestParseNightlyStartTime(t *testing.T) {
 	}
 }
 
+func TestParseBuiltinTagConfiguration(t *testing.T) {
+	defaults, err := Parse([]byte("{}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !defaults.Tags.IsBuiltinPackEnabled() {
+		t.Fatal("built-in tags should default to enabled")
+	}
+
+	disabled, err := Parse([]byte("tags:\n  builtin_pack_enabled: false\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if disabled.Tags.IsBuiltinPackEnabled() {
+		t.Fatal("explicitly disabled built-in tags were enabled")
+	}
+
+	if _, err := Parse([]byte("tags:\n  builtin_pack_enabled: not-a-boolean\n")); err == nil {
+		t.Fatal("non-boolean built-in tag configuration was accepted")
+	}
+}
+
 func TestParseRejectsInvalidNightlyStartTime(t *testing.T) {
 	_, err := Parse([]byte("nightly:\n  start_time: \"24:00\"\n"))
 	if !errors.Is(err, ErrInvalidNightlyStartTime) {

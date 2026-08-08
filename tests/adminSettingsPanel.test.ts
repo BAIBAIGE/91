@@ -82,27 +82,37 @@ test("configuration panel groups typed fields from the real YAML document", () =
   assert.match(apiSource, /ConfigConflictError/);
 });
 
-test("configuration panel can remove and restore the built-in tag pack", () => {
+test("built-in tag changes use the configuration draft and shared save review", () => {
   assert.match(pageSource, /id: "config-tags"/);
   assert.match(pageSource, /title="内置标签"/);
   assert.match(pageSource, /description="管理系统内置标签"/);
-  assert.match(pageSource, /label="内置标签开关"/);
+  assert.match(pageSource, /label="内置标签"/);
+  assert.doesNotMatch(pageSource, /内置标签开关/);
   assert.doesNotMatch(pageSource, /自定义标签不受影响/);
   assert.doesNotMatch(pageSource, /builtin-tags-description/);
-  assert.match(pageSource, /api\.getSettings\(\)/);
-  assert.match(pageSource, /invalidateTagsCache\(\)/);
-  assert.match(
-    pageSource,
-    /api\.updateSettings\(\{ builtinTagsEnabled: enabled \}\)/
-  );
+  assert.doesNotMatch(pageSource, /api\.getSettings\(\)|api\.updateSettings\(/);
+  assert.doesNotMatch(pageSource, /builtinTagsChange\b|builtinTagsDirty/);
   assert.match(pageSource, /role="switch"/);
-  assert.match(pageSource, /aria-checked=\{builtinTagsEnabled === true\}/);
-  assert.match(pageSource, /setRemoveBuiltinTagsConfirmOpen\(true\)/);
+  assert.match(pageSource, /aria-checked=\{draft\.builtinTagsEnabled\}/);
   assert.match(
     pageSource,
-    /<ConfirmModal[\s\S]*?title="移除内置标签"[\s\S]*?confirmText="确认移除"[\s\S]*?danger/
+    /updateVisualField\("builtinTagsEnabled", !draft\.builtinTagsEnabled\)/
   );
-  assert.match(apiSource, /builtinTagsEnabled: boolean/);
+  assert.match(
+    pageSource,
+    /api\.updateConfigYAML\(pendingSave\.after, pendingSave\.version\)[\s\S]*?builtinTagsChanged[\s\S]*?invalidateTagsCache\(\)/
+  );
+  assert.match(pageSource, /visualDirtyFields\.has\("builtinTagsEnabled"\)[\s\S]*?"待恢复"[\s\S]*?"待移除"/);
+  assert.doesNotMatch(pageSource, /ConfirmModal|removeBuiltinTagsConfirmOpen/);
+  assert.match(configYamlSource, /builtinTagsEnabled: boolean/);
+  assert.match(configYamlSource, /\["tags", "builtin_pack_enabled"\]/);
+  assert.match(configYamlSource, /builtinTagsEnabledEdits/);
+  assert.match(configYamlSource, /builtin_pack_enabled: \$\{rendered\}/);
+  assert.match(diffModalSource, /const hasChanges = diff\.additions \+ diff\.deletions > 0/);
+  assert.match(diffModalSource, /aria-label="config\.yaml 变更对比"/);
+  assert.doesNotMatch(diffModalSource, /settingChanges|应用设置|Database|TriangleAlert/);
+  assert.doesNotMatch(adminCss, /admin-config-diff-settings|admin-config-diff-setting__/);
+  assert.match(apiSource, /settings:\s*\{[\s\S]*?builtinTagsEnabled: boolean/);
   assert.match(adminCss, /\.admin-config-control--switch\s*\{[^}]*display:\s*flex/s);
 });
 
@@ -301,7 +311,7 @@ test("compact configuration rows stay inline on mobile", () => {
 
   assert.match(markup, /class="admin-config-row admin-config-row--inline"/);
   assert.match(pageSource, /label="启动时间"[\s\S]*?layout="inline"/);
-  assert.match(pageSource, /label="内置标签开关"[\s\S]*?layout="inline"/);
+  assert.match(pageSource, /label="内置标签"[\s\S]*?layout="inline"/);
   assert.match(
     adminCss,
     /@media \(max-width: 768px\)[\s\S]*?\.admin-config-row--inline\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\) auto;[^}]*align-items:\s*center;/s

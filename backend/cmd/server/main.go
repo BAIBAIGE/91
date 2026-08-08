@@ -140,6 +140,7 @@ func main() {
 	if err := cat.DeleteSettings(
 		context.Background(),
 		legacyNightlyStartTimeSetting,
+		legacyBuiltinTagsEnabledSetting,
 		obsoleteDuplicateReviewEnabledSetting,
 	); err != nil {
 		log.Fatalf("remove migrated SQLite configuration: %v", err)
@@ -199,6 +200,11 @@ func main() {
 	// 登录态校验拖慢端口监听。
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	if err := configManager.SetApply(func(settings config.LiveSettings) error {
+		return app.applyLiveConfig(ctx, settings)
+	}); err != nil {
+		log.Fatalf("apply initial live configuration: %v", err)
+	}
 
 	if _, err := app.normalizeLegacyThumbnailFiles(ctx); err != nil {
 		log.Printf("[thumbnail-maintenance] migration failed: %v", err)
@@ -289,6 +295,7 @@ func main() {
 		},
 		GetTheme: func() string { return app.Theme() },
 	}
+	app.onTagsChanged = apiServer.InvalidateTagCache
 
 	adminServer := &api.AdminServer{
 		Catalog:         cat,
@@ -482,7 +489,6 @@ func main() {
 		RestoreCrawlerVideos:  app.restoreScriptCrawlerVideos,
 		RunDedupeAssetCleanup: app.cleanupDuplicateVideoAssets,
 	})
-	configManager.SetApply(app.applyLiveConfig)
 	go configManager.Watch(ctx)
 	go app.nightlyRunner.Run(ctx)
 

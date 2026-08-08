@@ -16,7 +16,6 @@ import {
 } from "lucide-react";
 import { invalidateTagsCache } from "@/data/videos";
 import * as api from "./api";
-import { ConfirmModal } from "./ConfirmModal";
 import { useToast } from "./ToastContext";
 import { ConfigDiffModal } from "./settings/ConfigDiffModal";
 import {
@@ -85,11 +84,6 @@ export function SettingsPage() {
   const [loadError, setLoadError] = useState("");
   const [saving, setSaving] = useState(false);
   const [pendingSave, setPendingSave] = useState<PendingSave | null>(null);
-  const [builtinTagsEnabled, setBuiltinTagsEnabled] = useState<boolean | null>(null);
-  const [builtinTagsLoading, setBuiltinTagsLoading] = useState(true);
-  const [builtinTagsLoadError, setBuiltinTagsLoadError] = useState("");
-  const [builtinTagsSaving, setBuiltinTagsSaving] = useState(false);
-  const [removeBuiltinTagsConfirmOpen, setRemoveBuiltinTagsConfirmOpen] = useState(false);
 
   const visualDirtyFields = useMemo(
     () => (loaded ? changedVisualFields(loaded.visual, draft) : new Set<VisualField>()),
@@ -162,34 +156,12 @@ export function SettingsPage() {
     }
   }
 
-  async function loadBuiltinTagsSetting(silent = false) {
-    if (!silent) {
-      setBuiltinTagsLoading(true);
-      setBuiltinTagsLoadError("");
-    }
-    try {
-      const settings = await api.getSettings();
-      setBuiltinTagsEnabled(settings.builtinTagsEnabled !== false);
-      setBuiltinTagsLoadError("");
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "读取内置标签设置失败";
-      if (!silent) {
-        setBuiltinTagsLoadError(message);
-        show(message, "error");
-      }
-    } finally {
-      if (!silent) setBuiltinTagsLoading(false);
-    }
-  }
-
   useEffect(() => {
     void load();
-    void loadBuiltinTagsSetting();
   }, []);
 
   useAdminRouteRevalidation(() => {
     if (!dirty) void load(true);
-    void loadBuiltinTagsSetting(true);
   });
 
   useEffect(() => {
@@ -278,12 +250,15 @@ export function SettingsPage() {
 
       const response = await api.updateConfigYAML(pendingSave.after, pendingSave.version);
       const visual = parseConfig(pendingSave.after).draft;
+      const builtinTagsChanged =
+        loaded.visual.builtinTagsEnabled !== visual.builtinTagsEnabled;
       setLoaded({ content: pendingSave.after, version: response.version, visual });
       setWorkingYAML(pendingSave.after);
       setDraft(visual);
       setSourceTouched(false);
       setSourceError("");
       setPendingSave(null);
+      if (builtinTagsChanged) invalidateTagsCache();
       show(
         response.restartRequired
           ? "配置已保存；部分字段需重启服务后生效"
@@ -368,29 +343,6 @@ export function SettingsPage() {
       setSourceError("");
     } catch (error) {
       show(error instanceof Error ? error.message : "更新配置失败", "error");
-    }
-  }
-
-  async function updateBuiltinTags(enabled: boolean) {
-    if (builtinTagsSaving) return;
-    setBuiltinTagsSaving(true);
-    try {
-      const settings = await api.updateSettings({ builtinTagsEnabled: enabled });
-      const savedEnabled = settings.builtinTagsEnabled !== false;
-      setBuiltinTagsEnabled(savedEnabled);
-      setBuiltinTagsLoadError("");
-      setRemoveBuiltinTagsConfirmOpen(false);
-      invalidateTagsCache();
-      show(
-        savedEnabled
-          ? "内置标签已恢复"
-          : "内置标签及其已有视频关联已移除",
-        "success"
-      );
-    } catch (error) {
-      show(error instanceof Error ? error.message : "更新内置标签设置失败", "error");
-    } finally {
-      setBuiltinTagsSaving(false);
     }
   }
 
@@ -531,51 +483,31 @@ export function SettingsPage() {
                   description="管理系统内置标签"
                 >
                   <SettingsRow
-                    label="内置标签开关"
+                    label="内置标签"
                     labelID="builtin-tags-label"
                     layout="inline"
                   >
                     <div className="admin-config-control admin-config-control--switch">
-                      {builtinTagsLoadError ? (
-                        <button
-                          type="button"
-                          className="admin-config-control__retry"
-                          onClick={() => void loadBuiltinTagsSetting()}
-                          disabled={controlsDisabled || builtinTagsLoading || builtinTagsSaving}
-                        >
-                          重新读取
-                        </button>
-                      ) : (
-                        <span className="admin-config-control__status">
-                          {builtinTagsLoading
-                            ? "读取中"
-                            : builtinTagsEnabled
-                              ? "已启用"
-                              : "已移除"}
-                        </span>
-                      )}
+                      <span className="admin-config-control__status">
+                        {visualDirtyFields.has("builtinTagsEnabled")
+                          ? draft.builtinTagsEnabled
+                            ? "待恢复"
+                            : "待移除"
+                          : draft.builtinTagsEnabled
+                            ? "已启用"
+                            : "已移除"}
+                      </span>
                       <button
                         id="builtin-tags-toggle"
                         type="button"
-                        className={`toggle-switch ${builtinTagsEnabled ? "is-on" : ""} ${
-                          builtinTagsSaving ? "is-saving" : ""
-                        }`}
+                        className={`toggle-switch ${draft.builtinTagsEnabled ? "is-on" : ""}`}
                         role="switch"
-                        aria-checked={builtinTagsEnabled === true}
+                        aria-checked={draft.builtinTagsEnabled}
                         aria-labelledby="builtin-tags-label"
-                        disabled={
-                          controlsDisabled ||
-                          builtinTagsLoading ||
-                          builtinTagsSaving ||
-                          builtinTagsEnabled === null
+                        disabled={controlsDisabled}
+                        onClick={() =>
+                          updateVisualField("builtinTagsEnabled", !draft.builtinTagsEnabled)
                         }
-                        onClick={() => {
-                          if (builtinTagsEnabled) {
-                            setRemoveBuiltinTagsConfirmOpen(true);
-                          } else {
-                            void updateBuiltinTags(true);
-                          }
-                        }}
                       >
                         <span className="toggle-switch__dot" />
                       </button>
@@ -637,20 +569,6 @@ export function SettingsPage() {
         saving={saving}
         onClose={() => setPendingSave(null)}
         onConfirm={() => void confirmSave()}
-      />
-      <ConfirmModal
-        open={removeBuiltinTagsConfirmOpen}
-        title="移除内置标签"
-        message="确定移除全部内置标签及其已有视频关联吗？自定义标签不会被删除。"
-        confirmText="确认移除"
-        danger
-        hideIcon
-        centerMessage
-        loading={builtinTagsSaving}
-        onCancel={() => {
-          if (!builtinTagsSaving) setRemoveBuiltinTagsConfirmOpen(false);
-        }}
-        onConfirm={() => void updateBuiltinTags(false)}
       />
     </>
   );

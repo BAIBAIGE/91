@@ -51,7 +51,10 @@ test("retained pages revalidate silently when they become active again", () => {
   }
 
   assert.match(backupSource, /if \(!routeActive\) return;[\s\S]*?refresh\(true\)/);
-  assert.match(settingsSource, /if \(!dirty\) void load\(true\)/);
+  assert.match(
+    settingsSource,
+    /if \(!dirty\) void load\(true\)/
+  );
   assert.match(settingsSource, /if \(silent && dirtyRef\.current\) return/);
 });
 

@@ -1127,7 +1127,6 @@ export type Theme = "dark" | "pink" | "sky";
 
 export type Settings = {
   theme: Theme;
-  builtinTagsEnabled: boolean;
 };
 
 export function getSettings() {
@@ -1157,6 +1156,7 @@ export type ConfigSaveResult = {
   restartRequired: boolean;
   settings: {
     nightlyStartTime: string;
+    builtinTagsEnabled: boolean;
   };
 };
 

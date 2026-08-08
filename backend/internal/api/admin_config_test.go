@@ -42,11 +42,11 @@ func TestConfigYAMLGetReturnsRealFileAndETag(t *testing.T) {
 }
 
 func TestConfigYAMLPutValidatesPersistsAndPublishes(t *testing.T) {
-	server, path := newConfigAPIForTest(t, "# keep\nnightly:\n  start_time: \"01:00\"\nfuture:\n  value: keep\n")
+	server, path := newConfigAPIForTest(t, "# keep\nnightly:\n  start_time: \"01:00\"\ntags:\n  builtin_pack_enabled: true\nfuture:\n  value: keep\n")
 	get := httptest.NewRecorder()
 	server.handleGetConfigYAML(get, httptest.NewRequest(http.MethodGet, "/admin/api/config.yaml", nil))
 
-	candidate := "# keep\nnightly:\n  start_time: \"00:45\"\nfuture:\n  value: keep\n"
+	candidate := "# keep\nnightly:\n  start_time: \"00:45\"\ntags:\n  builtin_pack_enabled: false\nfuture:\n  value: keep\n"
 	request := httptest.NewRequest(http.MethodPut, "/admin/api/config.yaml", strings.NewReader(candidate))
 	request.Header.Set("If-Match", get.Header().Get("ETag"))
 	recorder := httptest.NewRecorder()
@@ -64,6 +64,9 @@ func TestConfigYAMLPutValidatesPersistsAndPublishes(t *testing.T) {
 	}
 	if response.Settings.NightlyStartTime != "00:45" {
 		t.Fatalf("published settings = %#v", response.Settings)
+	}
+	if response.Settings.BuiltinTagsEnabled {
+		t.Fatalf("published settings = %#v, want built-in tags disabled", response.Settings)
 	}
 	written, err := os.ReadFile(path)
 	if err != nil {

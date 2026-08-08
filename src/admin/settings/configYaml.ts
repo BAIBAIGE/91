@@ -12,12 +12,14 @@ import {
 
 export type SettingsDraft = {
   nightlyStartTime: string;
+  builtinTagsEnabled: boolean;
 };
 
 export type VisualField = keyof SettingsDraft;
 
 export const DEFAULT_DRAFT: SettingsDraft = {
   nightlyStartTime: "01:00",
+  builtinTagsEnabled: true,
 };
 
 type ParsedMap = YAMLMap<ParsedNode, ParsedNode | null>;
@@ -68,7 +70,25 @@ function draftFromDocument(document: ReturnType<typeof configDocument>): Setting
       nightlyStartTime = `${String(legacyHour).padStart(2, "0")}:00`;
     }
   }
-  return { nightlyStartTime };
+
+  const tagsNode = document.get("tags", true);
+  if (
+    tagsNode !== undefined &&
+    tagsNode !== null &&
+    !isMap(tagsNode) &&
+    !(isScalar(tagsNode) && tagsNode.value === null)
+  ) {
+    throw new Error("tags 必须是映射对象");
+  }
+  const configuredBuiltinTags = document.getIn(["tags", "builtin_pack_enabled"]);
+  let builtinTagsEnabled = DEFAULT_DRAFT.builtinTagsEnabled;
+  if (configuredBuiltinTags !== undefined && configuredBuiltinTags !== null) {
+    if (typeof configuredBuiltinTags !== "boolean") {
+      throw new Error("tags.builtin_pack_enabled 必须是布尔值");
+    }
+    builtinTagsEnabled = configuredBuiltinTags;
+  }
+  return { nightlyStartTime, builtinTagsEnabled };
 }
 
 export function parseConfig(source: string) {
@@ -371,6 +391,122 @@ function nightlyStartTimeEdits(
   ];
 }
 
+function replaceBooleanPairValue(
+  source: string,
+  pair: ParsedPair,
+  value: boolean
+): SourceEdit {
+  const node = pair.value;
+  if (node && !isScalar(node)) {
+    throw new Error("tags.builtin_pack_enabled 必须是布尔值");
+  }
+  const rendered = value ? "true" : "false";
+
+  if (node?.range && node.range[0] < node.range[1]) {
+    return {
+      start: node.range[0],
+      end: node.range[1],
+      text: rendered,
+    };
+  }
+
+  if (!isScalar(pair.key)) {
+    throw new Error("无法定位 tags.builtin_pack_enabled 的键名");
+  }
+  const keyRange = requiredRange(pair.key, "tags.builtin_pack_enabled");
+  const endOfLine = lineEndIncludingBreak(source, keyRange[1]);
+  const colon = source.indexOf(":", keyRange[1]);
+  if (colon === -1 || colon >= endOfLine) {
+    throw new Error("无法定位 tags.builtin_pack_enabled 的值");
+  }
+
+  let whitespaceEnd = colon + 1;
+  while (source[whitespaceEnd] === " " || source[whitespaceEnd] === "\t") {
+    whitespaceEnd += 1;
+  }
+  const commentGap = source[whitespaceEnd] === "#" ? " " : "";
+  return {
+    start: colon + 1,
+    end: whitespaceEnd,
+    text: ` ${rendered}${commentGap}`,
+  };
+}
+
+function addTagsSection(
+  source: string,
+  document: ReturnType<typeof configDocument>,
+  root: ParsedMap | null,
+  value: boolean
+): SourceEdit {
+  const rendered = value ? "true" : "false";
+  if (root && isFlowMap(root)) {
+    return insertFlowMapEntry(
+      source,
+      root,
+      `tags: { builtin_pack_enabled: ${rendered} }`
+    );
+  }
+
+  const position = root?.range?.[2] ?? document.range?.[1] ?? source.length;
+  return insertLinesAtBoundary(source, position, [
+    "tags:",
+    `  builtin_pack_enabled: ${rendered}`,
+  ]);
+}
+
+function builtinTagsEnabledEdits(
+  source: string,
+  document: ReturnType<typeof configDocument>,
+  value: boolean
+): SourceEdit[] {
+  const root = isMap(document.contents) ? (document.contents as ParsedMap) : null;
+  const tagsPair = root ? findPair(root, "tags") : undefined;
+  if (!tagsPair) return [addTagsSection(source, document, root, value)];
+
+  const rendered = value ? "true" : "false";
+  const tagsNode = tagsPair.value;
+  if (
+    !tagsNode ||
+    (isScalar(tagsNode) &&
+      tagsNode.value === null &&
+      (!tagsNode.range || tagsNode.range[0] === tagsNode.range[1]))
+  ) {
+    return [
+      insertAfterEmptyMapKey(
+        source,
+        tagsPair,
+        `builtin_pack_enabled: ${rendered}`
+      ),
+    ];
+  }
+  if (isScalar(tagsNode) && tagsNode.value === null) {
+    const range = requiredRange(tagsNode, "tags");
+    return [
+      {
+        start: range[0],
+        end: range[1],
+        text: `{ builtin_pack_enabled: ${rendered} }`,
+      },
+    ];
+  }
+  if (!isMap(tagsNode)) {
+    throw new Error("tags 必须是映射对象");
+  }
+
+  const tags = tagsNode as ParsedMap;
+  const builtinPair = findPair(tags, "builtin_pack_enabled");
+  if (builtinPair) {
+    return [replaceBooleanPairValue(source, builtinPair, value)];
+  }
+
+  const entry = `builtin_pack_enabled: ${rendered}`;
+  return [
+    isFlowMap(tags)
+      ? insertFlowMapEntry(source, tags, entry)
+      : insertBlockMapEntry(source, tags, entry),
+  ];
+}
+
 function applySourceEdits(source: string, edits: readonly SourceEdit[]) {
   const ordered = [...edits].sort((left, right) => right.start - left.start);
   let boundary = source.length;
@@ -396,13 +532,21 @@ export function applyVisualFields(
   draft: SettingsDraft,
   fields: ReadonlySet<VisualField>
 ) {
-  if (!fields.has("nightlyStartTime")) return source;
-
-  const document = configDocument(source);
-  const updated = applySourceEdits(
-    source,
-    nightlyStartTimeEdits(source, document, draft.nightlyStartTime)
-  );
+  let updated = source;
+  if (fields.has("nightlyStartTime")) {
+    const document = configDocument(updated);
+    updated = applySourceEdits(
+      updated,
+      nightlyStartTimeEdits(updated, document, draft.nightlyStartTime)
+    );
+  }
+  if (fields.has("builtinTagsEnabled")) {
+    const document = configDocument(updated);
+    updated = applySourceEdits(
+      updated,
+      builtinTagsEnabledEdits(updated, document, draft.builtinTagsEnabled)
+    );
+  }
 
   // Source ranges perform the write, while a fresh parse verifies that the
   // localized edit still produced one valid YAML document.
@@ -414,6 +558,9 @@ export function changedVisualFields(saved: SettingsDraft, draft: SettingsDraft) 
   const fields = new Set<VisualField>();
   if (saved.nightlyStartTime !== draft.nightlyStartTime) {
     fields.add("nightlyStartTime");
+  }
+  if (saved.builtinTagsEnabled !== draft.builtinTagsEnabled) {
+    fields.add("builtinTagsEnabled");
   }
   return fields;
 }

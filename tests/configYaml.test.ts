@@ -3,15 +3,30 @@ import test from "node:test";
 
 import {
   applyVisualFields,
+  changedVisualFields,
   configDocument,
+  parseConfig,
   type VisualField,
 } from "../src/admin/settings/configYaml";
 import { buildConfigDiff } from "../src/admin/settings/configDiff";
 
 const nightlyStartTime = new Set<VisualField>(["nightlyStartTime"]);
+const builtinTagsEnabled = new Set<VisualField>(["builtinTagsEnabled"]);
 
 function updateStartTime(source: string, value = "02:00") {
-  return applyVisualFields(source, { nightlyStartTime: value }, nightlyStartTime);
+  return applyVisualFields(
+    source,
+    { nightlyStartTime: value, builtinTagsEnabled: true },
+    nightlyStartTime
+  );
+}
+
+function updateBuiltinTags(source: string, value = false) {
+  return applyVisualFields(
+    source,
+    { nightlyStartTime: "01:00", builtinTagsEnabled: value },
+    builtinTagsEnabled
+  );
 }
 
 test("visual config updates only the start_time scalar in the original YAML", () => {
@@ -103,7 +118,76 @@ test("visual config keeps YAML valid for an empty time input without touching ot
 test("visual config returns the exact source when no visual field is dirty", () => {
   const source = 'video_extensions: [".mp4", ".mkv"]\n';
   assert.equal(
-    applyVisualFields(source, { nightlyStartTime: "02:00" }, new Set()),
+    applyVisualFields(
+      source,
+      { nightlyStartTime: "02:00", builtinTagsEnabled: false },
+      new Set()
+    ),
     source
+  );
+});
+
+test("visual config reads the built-in tag switch from config.yaml", () => {
+  assert.equal(parseConfig("{}\n").draft.builtinTagsEnabled, true);
+  assert.equal(
+    parseConfig("tags:\n  builtin_pack_enabled: false\n").draft.builtinTagsEnabled,
+    false
+  );
+  assert.throws(
+    () => parseConfig('tags:\n  builtin_pack_enabled: "false"\n'),
+    /tags\.builtin_pack_enabled 必须是布尔值/
+  );
+  assert.throws(() => parseConfig("tags: false\n"), /tags 必须是映射对象/);
+});
+
+test("visual config updates only the built-in tag boolean in the original YAML", () => {
+  const source = [
+    "tags:",
+    "  # keep the tag comment",
+    "  builtin_pack_enabled: true # hot reload",
+    "future:",
+    "  keep: yes",
+    "",
+  ].join("\n");
+  assert.equal(
+    updateBuiltinTags(source),
+    source.replace("builtin_pack_enabled: true", "builtin_pack_enabled: false")
+  );
+});
+
+test("visual config inserts the built-in tag field into block, flow, and empty mappings", () => {
+  assert.equal(
+    updateBuiltinTags("tags:\n  future: keep\ntail: ok\n"),
+    "tags:\n  future: keep\n  builtin_pack_enabled: false\ntail: ok\n"
+  );
+  assert.equal(
+    updateBuiltinTags("tags: { future: keep }\ntail: ok\n"),
+    "tags: { future: keep, builtin_pack_enabled: false }\ntail: ok\n"
+  );
+  assert.equal(
+    updateBuiltinTags("head: ok\n"),
+    "head: ok\ntags:\n  builtin_pack_enabled: false\n"
+  );
+});
+
+test("visual config applies multiple missing YAML fields without overlapping edits", () => {
+  const fields = new Set<VisualField>(["nightlyStartTime", "builtinTagsEnabled"]);
+  assert.equal(
+    applyVisualFields(
+      "head: ok\n",
+      { nightlyStartTime: "03:30", builtinTagsEnabled: false },
+      fields
+    ),
+    "head: ok\nnightly:\n  start_time: 03:30\ntags:\n  builtin_pack_enabled: false\n"
+  );
+});
+
+test("changed visual fields includes the real config.yaml built-in tag field", () => {
+  assert.deepEqual(
+    changedVisualFields(
+      { nightlyStartTime: "01:00", builtinTagsEnabled: true },
+      { nightlyStartTime: "01:00", builtinTagsEnabled: false }
+    ),
+    new Set<VisualField>(["builtinTagsEnabled"])
   );
 });
