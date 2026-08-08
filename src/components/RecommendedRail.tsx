@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
-import { Link, useLocation } from "react-router-dom";
+import { Link, useLocation } from "react-router";
 import type { PreviewState, VideoItem } from "@/types";
 import { formatCount } from "@/lib/format";
 import { previewController } from "@/lib/previewController";

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useLocation } from "react-router-dom";
+import { useLocation } from "react-router";
 import linkUsedImage from "@/assets/share-link-used.webp";
 import { VideoInfoPanel } from "@/components/VideoInfoPanel";
 import { VideoMetaHeader } from "@/components/VideoMetaHeader";

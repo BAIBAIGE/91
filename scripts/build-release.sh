@@ -41,8 +41,8 @@ build_frontend() {
     npm --prefix "$ROOT_DIR" install
   fi
 
-  log "building frontend"
-  npm --prefix "$ROOT_DIR" run build
+  log "verifying and building frontend"
+  npm --prefix "$ROOT_DIR" run verify
 }
 
 build_package() {

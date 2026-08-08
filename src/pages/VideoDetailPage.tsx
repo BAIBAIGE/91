@@ -4,7 +4,7 @@ import {
   useNavigate,
   useNavigationType,
   useParams,
-} from "react-router-dom";
+} from "react-router";
 import { AppShell } from "@/components/AppShell";
 import { VideoPlayer } from "@/components/VideoPlayer";
 import { VideoActions } from "@/components/VideoActions";

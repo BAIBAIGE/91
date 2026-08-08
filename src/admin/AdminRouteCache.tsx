@@ -12,7 +12,7 @@ import {
   useLocation,
   useNavigationType,
   useOutlet,
-} from "react-router-dom";
+} from "react-router";
 import { ADMIN_PAGE_TITLES } from "./adminPageTitle";
 
 type CachedAdminRoute = {

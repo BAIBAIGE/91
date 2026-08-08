@@ -1,6 +1,6 @@
 import { defineConfig, type Plugin, type ProxyOptions } from "vite";
 import react from "@vitejs/plugin-react";
-import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 const backendTarget = "http://127.0.0.1:9192";
 const backendProxy: Record<string, ProxyOptions> = {
@@ -38,7 +38,7 @@ export default defineConfig({
   plugins: [react(), hashedAssetCachePlugin()],
   resolve: {
     alias: {
-      "@": path.resolve(__dirname, "src"),
+      "@": fileURLToPath(new URL("./src", import.meta.url)),
     },
   },
   server: {

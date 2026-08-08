@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import { Check, Home, Loader2, LogOut, Palette, RefreshCw } from "lucide-react";
 import { applyTheme, getCurrentTheme } from "@/lib/theme";
 import * as api from "./api";

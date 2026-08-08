@@ -1260,7 +1260,7 @@ test("shorts keeps per-swipe work off the queue length", () => {
 });
 
 test("shorts back button exits document fullscreen before showing home", () => {
-  assert.match(shortsPageSource, /import \{ Link, useNavigate \} from "react-router-dom";/);
+  assert.match(shortsPageSource, /import \{ Link, useNavigate \} from "react-router";/);
   assert.match(shortsPageSource, /const navigate = useNavigate\(\);/);
   assert.match(
     shortsPageSource,

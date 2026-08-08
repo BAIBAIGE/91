@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router";
 import { fetchTags, readCachedTags, type TagItem } from "@/data/videos";
 
 const TAG_PLACEHOLDER_COUNT = 16;

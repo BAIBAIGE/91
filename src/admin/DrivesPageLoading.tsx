@@ -5,7 +5,7 @@ import {
   FolderX,
   HardDrive,
 } from "lucide-react";
-import { useSearchParams } from "react-router-dom";
+import { useSearchParams } from "react-router";
 import { StorageSummary } from "./drive/StorageSummary";
 import { SkipDirsLoadingIndicator } from "./drive/SkipDirsLoadingIndicator";
 

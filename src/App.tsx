@@ -1,5 +1,5 @@
 import { Suspense, lazy, useEffect, type ReactNode } from "react";
-import { Navigate, Route, Routes, useLocation } from "react-router-dom";
+import { Navigate, Route, Routes, useLocation } from "react-router";
 import { SkyStarfield } from "@/components/SkyStarfield";
 import { AdminLayout } from "@/admin/AdminLayout";
 import { CrawlersPageLoading } from "@/admin/CrawlersPageLoading";
