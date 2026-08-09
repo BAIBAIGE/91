@@ -164,7 +164,8 @@ export function DriveGenerationPanel({
   const transcodeRunning =
     (d.transcodeGenerationStatus?.state || "idle") !== "idle";
   const canStartTranscode =
-    (d.transcodePendingCount ?? 0) > 0 || (d.transcodeFailedCount ?? 0) > 0;
+    d.canUpload &&
+    ((d.transcodePendingCount ?? 0) > 0 || (d.transcodeFailedCount ?? 0) > 0);
 
   return (
     <div className="admin-detail-card">
@@ -265,7 +266,11 @@ export function DriveGenerationPanel({
             className="admin-btn"
             disabled={!canStartTranscode || togglingTranscodeId === d.id}
             onClick={onStartTranscode}
-            title="把浏览器播放不了的视频（AVI/WMV/RMVB、MPEG-4 等老格式）转码成 H.264 MP4 并上传回本存储。转码不会自动运行，只能在这里手动开启。"
+            title={
+              d.canUpload
+                ? "把浏览器播放不了的视频（AVI/WMV/RMVB、MPEG-4 等老格式）转码成 H.264 MP4 并上传回本存储。转码不会自动运行，只能在这里手动开启。"
+                : "该存储不支持上传转码产物"
+            }
           >
             <span>
               {togglingTranscodeId === d.id

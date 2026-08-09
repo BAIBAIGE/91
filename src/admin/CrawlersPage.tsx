@@ -33,7 +33,6 @@ import {
 
 const BUSY_STATES = new Set(["scanning", "generating", "uploading", "queued"]);
 const POLL_INTERVAL_MS = 5000;
-const UPLOAD_TARGET_KINDS = new Set(["p115", "pikpak", "p123", "googledrive", "onedrive", "wopan", "guangyapan", "webdav"]);
 
 function statusBusy(status?: api.DriveGenerationStatus) {
   return BUSY_STATES.has(status?.state ?? "");
@@ -76,7 +75,7 @@ export function CrawlersPage() {
       try {
         const [data, drives] = await Promise.all([api.listCrawlers(), api.listDrives()]);
         setList(data);
-        setUploadTargets(drives.filter((d) => UPLOAD_TARGET_KINDS.has(d.kind)));
+        setUploadTargets(drives.filter((d) => d.canUpload));
       } catch (e) {
         if (!silent) show(e instanceof Error ? e.message : "加载爬虫失败", "error");
       } finally {

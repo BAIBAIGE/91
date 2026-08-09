@@ -102,12 +102,35 @@ func (a *App) attachDriveUnlocked(ctx context.Context, d *catalog.Drive) error {
 	switch d.Kind {
 	case "quark":
 		drv = quark.New(quark.Config{
-			ID:     d.ID,
-			Cookie: d.Credentials["cookie"],
-			RootID: d.RootID,
+			ID:            d.ID,
+			Cookie:        d.Credentials["cookie"],
+			RootID:        d.RootID,
+			UploadTempDir: a.uploadWorkDir("quark"),
 			OnCookieUpdate: func(cookie string) {
-				d.Credentials["cookie"] = cookie
-				_ = a.cat.UpsertDrive(ctx, d)
+				// A cached original link snapshots the old cookie in its Headers.
+				// Invalidate it even if another process already persisted the same
+				// rotated value or this persistence attempt later fails.
+				if a.proxy != nil {
+					a.proxy.InvalidateDrive(d.ID)
+				}
+				persistCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+				defer cancel()
+				current, err := a.cat.GetDrive(persistCtx, d.ID)
+				if err != nil {
+					log.Printf("[drive %s] load before persisting rotated Quark cookie: %v", d.ID, err)
+					return
+				}
+				if current.Credentials == nil {
+					current.Credentials = make(map[string]string)
+				}
+				if current.Credentials["cookie"] == cookie {
+					return
+				}
+				current.Credentials["cookie"] = cookie
+				if err := a.cat.UpsertDrive(persistCtx, current); err != nil {
+					log.Printf("[drive %s] persist rotated Quark cookie: %v", d.ID, err)
+					return
+				}
 			},
 		})
 	case "p115":
@@ -1220,8 +1243,9 @@ func (a *App) runScanWithTaskContext(ctx context.Context, driveID string) {
 	// 不在 SeenFileIDs 中的视频 → 视为已被删除。
 	//
 	// scriptcrawler / localupload 走自己的生命周期管理，不应该参与扫描清理；
-	// stats.Errors > 0 时（云盘 API 中途抖动）保守起见跳过这一轮，避免把
-	// "暂时列不出来"误认成"被用户删了"。
+	// stats.Errors > 0 时（云盘 API 中途抖动）保守起见跳过这一轮；即使完整
+	// 扫描成功，也要连续两次缺失才删除，避免一次异常空列表破坏 catalog 和
+	// 已生成的本地资产。
 	if drv.Kind() != scriptcrawler.Kind && drv.ID() != localupload.DriveID {
 		if stats.Errors > 0 {
 			log.Printf("[cleanup] skip stale cleanup for drive=%s kind=%s: scan had %d directory errors", driveID, drv.Kind(), stats.Errors)
@@ -1247,6 +1271,16 @@ func (a *App) runScanWithTaskContext(ctx context.Context, driveID string) {
 }
 
 func (a *App) cleanupMissingDriveVideos(ctx context.Context, driveID string, liveFileIDs map[string]struct{}, visitedDirIDs map[string]struct{}, fullDriveScan bool) (int, error) {
+	const confirmationThreshold = 2
+	confirmedMissing, err := a.cat.ConfirmMissingDriveFiles(
+		ctx, driveID, liveFileIDs, visitedDirIDs, fullDriveScan, confirmationThreshold,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("confirm missing drive files: %w", err)
+	}
+	if len(confirmedMissing) == 0 {
+		return 0, nil
+	}
 	items, err := a.cat.ListVideosByDrive(ctx, driveID)
 	if err != nil {
 		return 0, err
@@ -1258,13 +1292,8 @@ func (a *App) cleanupMissingDriveVideos(ctx context.Context, driveID string, liv
 	}
 	removed := 0
 	for _, v := range items {
-		if _, ok := liveFileIDs[v.FileID]; ok {
+		if _, ok := confirmedMissing[v.FileID]; !ok {
 			continue
-		}
-		if !fullDriveScan {
-			if _, ok := visitedDirIDs[v.ParentID]; !ok {
-				continue
-			}
 		}
 		if err := removeLocalVideoAssets(localDir, v); err != nil {
 			return removed, fmt.Errorf("remove local assets for %s: %w", v.ID, err)

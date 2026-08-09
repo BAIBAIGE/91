@@ -13,8 +13,8 @@ import (
 
 	"github.com/video-site/backend/internal/api"
 	"github.com/video-site/backend/internal/crawlerupload"
+	"github.com/video-site/backend/internal/drives"
 	"github.com/video-site/backend/internal/drives/localupload"
-	"github.com/video-site/backend/internal/drives/scriptcrawler"
 	"github.com/video-site/backend/internal/fingerprint"
 	"github.com/video-site/backend/internal/preview"
 	"github.com/video-site/backend/internal/transcode"
@@ -335,9 +335,8 @@ func (a *App) startDriveTranscode(ctx context.Context, driveID string) (bool, st
 	if !ok {
 		return false, "存储未挂载或不可用"
 	}
-	switch drv.Kind() {
-	case scriptcrawler.Kind:
-		return false, "爬虫存储不支持转码"
+	if _, ok := drv.(drives.Uploader); !ok {
+		return false, "该存储不支持上传转码产物"
 	}
 	workDir := a.transcodeWorkDir()
 	if err := os.MkdirAll(workDir, 0o755); err != nil {

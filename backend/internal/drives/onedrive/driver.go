@@ -219,9 +219,10 @@ func (d *Driver) StreamURL(ctx context.Context, fileID string) (*drives.StreamLi
 		return nil, errors.New("onedrive download url: empty")
 	}
 	return &drives.StreamLink{
-		URL:     item.DownloadURL,
-		Headers: http.Header{},
-		Expires: time.Now().Add(10 * time.Minute),
+		URL:                item.DownloadURL,
+		Headers:            http.Header{},
+		Expires:            time.Now().Add(10 * time.Minute),
+		ClientRedirectSafe: true,
 	}, nil
 }
 

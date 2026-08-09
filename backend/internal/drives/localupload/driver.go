@@ -3,7 +3,6 @@ package localupload
 import (
 	"context"
 	"errors"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -68,14 +67,6 @@ func (d *Driver) StreamURL(ctx context.Context, fileID string) (*drives.StreamLi
 		URL:     path,
 		Expires: time.Now().Add(24 * time.Hour),
 	}, nil
-}
-
-func (d *Driver) Upload(context.Context, string, string, io.Reader, int64) (string, error) {
-	return "", drives.ErrNotSupported
-}
-
-func (d *Driver) EnsureDir(context.Context, string) (string, error) {
-	return "", drives.ErrNotSupported
 }
 
 func (d *Driver) Remove(ctx context.Context, fileID string) error {

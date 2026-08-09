@@ -245,7 +245,7 @@ func (d *Driver) StreamURL(ctx context.Context, fileID string) (*drives.StreamLi
 	if u == "" {
 		return nil, errors.New("guangyapan stream: empty download url")
 	}
-	return &drives.StreamLink{URL: u, Headers: http.Header{}, Expires: time.Now().Add(10 * time.Minute)}, nil
+	return &drives.StreamLink{URL: u, Headers: http.Header{}, Expires: time.Now().Add(10 * time.Minute), ClientRedirectSafe: true}, nil
 }
 
 func (d *Driver) Upload(ctx context.Context, parentID, name string, r io.Reader, size int64) (string, error) {

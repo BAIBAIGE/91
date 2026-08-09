@@ -55,6 +55,8 @@ type fakeUploadDrive struct {
 	gotBodies   map[string][]byte
 	gotParents  map[string]string
 	ensureCalls []string
+	listCalls   int
+	listEntries []drives.Entry
 }
 
 func newFakeUploadDrive(id, kind, rootID string) *fakeUploadDrive {
@@ -74,7 +76,10 @@ func (d *fakeUploadDrive) RootID() string {
 }
 func (d *fakeUploadDrive) Init(context.Context) error { return nil }
 func (d *fakeUploadDrive) List(context.Context, string) ([]drives.Entry, error) {
-	return nil, nil
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.listCalls++
+	return append([]drives.Entry(nil), d.listEntries...), nil
 }
 func (d *fakeUploadDrive) Stat(context.Context, string) (*drives.Entry, error) {
 	return nil, drives.ErrNotSupported
@@ -106,6 +111,17 @@ func (d *fakeUploadDrive) UploadAndReportHash(_ context.Context, parentID, name 
 
 var _ drives.Drive = (*fakeUploadDrive)(nil)
 var _ uploadTarget = (*fakeUploadDrive)(nil)
+
+type fakeReconcileDrive struct {
+	*fakeUploadDrive
+	existing  *UploadResult
+	findCalls int
+}
+
+func (d *fakeReconcileDrive) FindExisting(_ context.Context, _, _ string, _ int64) (*UploadResult, error) {
+	d.findCalls++
+	return d.existing, nil
+}
 
 func TestRunOnceUploadsScriptCrawlerLocalVideo(t *testing.T) {
 	ctx := context.Background()
@@ -219,6 +235,62 @@ func TestRunOnceRequiresPerCrawlerUploadTarget(t *testing.T) {
 	}
 	if got.DriveID != src.ID() {
 		t.Fatalf("drive_id = %q, want local crawler drive", got.DriveID)
+	}
+}
+
+func TestRunOnceReconcilesRemoteWriteAfterCatalogCrashWithoutReupload(t *testing.T) {
+	ctx := context.Background()
+	cat := setupCatalog(t)
+	src := setupScriptCrawler(t, "crawler-reconcile")
+	target := &fakeReconcileDrive{
+		fakeUploadDrive: newFakeUploadDrive("target-drive", "quark", "target-root"),
+		existing:        &UploadResult{FileID: "existing-remote-fid", Hash: strings.Repeat("c", 40), Size: 13},
+	}
+	reg := newFakeRegistry()
+	reg.Add(src)
+	reg.Add(target)
+	if err := cat.UpsertDrive(ctx, &catalog.Drive{
+		ID: src.ID(), Kind: scriptcrawler.Kind, Name: "Reconcile", RootID: "/",
+		Credentials:   map[string]string{"script_path": "/tmp/example.py", "upload_drive_id": target.ID()},
+		TeaserEnabled: true,
+	}); err != nil {
+		t.Fatalf("upsert crawler drive: %v", err)
+	}
+	videoID := writeCrawlerVideo(t, cat, src, "source-crash", ".mp4", []byte("video payload"), true)
+
+	m := New(Config{Catalog: cat, Registry: reg})
+	if err := m.RunOnce(ctx); err != nil {
+		t.Fatalf("run once: %v", err)
+	}
+	if target.findCalls != 1 || target.uploadCalls != 0 {
+		t.Fatalf("find calls=%d upload calls=%d, want reconciliation only", target.findCalls, target.uploadCalls)
+	}
+	got, err := cat.GetVideo(ctx, videoID)
+	if err != nil {
+		t.Fatalf("get migrated video: %v", err)
+	}
+	if got.DriveID != target.ID() || got.FileID != "existing-remote-fid" || got.ContentHash != strings.Repeat("c", 40) {
+		t.Fatalf("migrated video = drive %q file %q hash %q", got.DriveID, got.FileID, got.ContentHash)
+	}
+	if _, err := os.Stat(filepath.Join(src.VideosDir(), "source-crash.mp4")); !os.IsNotExist(err) {
+		t.Fatalf("local source was not cleaned after reconciliation: %v", err)
+	}
+}
+
+func TestDestinationReconciliationCachesOneDirectorySnapshot(t *testing.T) {
+	drive := newFakeUploadDrive("target", "quark", "root")
+	drive.listEntries = []drives.Entry{{ID: "remote", Name: "movie.mp4", Size: 10}}
+	cache := &existingUploadCache{}
+	first, err := findExistingDriveUpload(context.Background(), drive, cache, "parent", "movie.mp4", 10)
+	if err != nil || first == nil || first.FileID != "remote" {
+		t.Fatalf("first lookup = %#v, err=%v", first, err)
+	}
+	second, err := findExistingDriveUpload(context.Background(), drive, cache, "parent", "missing.mp4", 10)
+	if err != nil || second != nil {
+		t.Fatalf("second lookup = %#v, err=%v", second, err)
+	}
+	if drive.listCalls != 1 {
+		t.Fatalf("List calls = %d, want one cached directory snapshot", drive.listCalls)
 	}
 }
 

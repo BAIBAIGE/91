@@ -6,6 +6,7 @@ import (
 	"strconv"
 
 	"github.com/video-site/backend/internal/catalog"
+	drivepkg "github.com/video-site/backend/internal/drives"
 	"github.com/video-site/backend/internal/drives/scriptcrawler"
 )
 
@@ -49,6 +50,7 @@ func (a *AdminServer) handleListDrives(w http.ResponseWriter, r *http.Request) {
 		Status        string `json:"status"`
 		LastError     string `json:"lastError,omitempty"`
 		HasCredential bool   `json:"hasCredential"`
+		CanUpload     bool   `json:"canUpload"`
 		// TeaserEnabled 控制是否给本盘生成预览视频；封面生成不受影响。
 		// 前端用它在网盘列表/编辑表单展示开关状态。
 		TeaserEnabled bool `json:"teaserEnabled"`
@@ -129,6 +131,7 @@ func (a *AdminServer) handleListDrives(w http.ResponseWriter, r *http.Request) {
 			RootID: d.RootID, ScanRootID: d.ScanRootID,
 			Status: d.Status, LastError: d.LastError,
 			HasCredential:                 hasCred,
+			CanUpload:                     drivepkg.CapabilitiesForKind(d.Kind).Upload,
 			TeaserEnabled:                 d.TeaserEnabled,
 			SkipDirIDs:                    append([]string{}, d.SkipDirIDs...),
 			LastCrawlAt:                   lastCrawlAt,
@@ -203,7 +206,7 @@ func (a *AdminServer) handleUpsertDrive(w http.ResponseWriter, r *http.Request) 
 		body.Credentials = credentials
 	} else if body.Kind == "googledrive" {
 		body.Credentials = mergeGoogleDriveCredentials(existing, body.Credentials)
-	} else if body.Kind == "localstorage" || body.Kind == "guangyapan" || body.Kind == "webdav" {
+	} else if body.Kind == "quark" || body.Kind == "localstorage" || body.Kind == "guangyapan" || body.Kind == "webdav" {
 		// 按键合并、空值沿用旧值：这些网盘的编辑表单允许只改某几个字段，
 		// 其它 token / 路径 / 开关字段应保留旧值。
 		body.Credentials = mergeNonEmptyCredentials(existing, body.Credentials)

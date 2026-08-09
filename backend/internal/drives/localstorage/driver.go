@@ -256,14 +256,6 @@ func (d *Driver) localSTRMLink(strmPath, target string) (*drives.StreamLink, err
 	}, nil
 }
 
-func (d *Driver) Upload(context.Context, string, string, io.Reader, int64) (string, error) {
-	return "", drives.ErrNotSupported
-}
-
-func (d *Driver) EnsureDir(context.Context, string) (string, error) {
-	return "", drives.ErrNotSupported
-}
-
 func (d *Driver) Remove(ctx context.Context, fileID string) error {
 	if err := ctx.Err(); err != nil {
 		return err

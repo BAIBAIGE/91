@@ -16,6 +16,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/video-site/backend/internal/streamhttp"
 )
 
 // MediaInfo 是 ffprobe 探测出来的、做兼容性判定所需的最小信息。
@@ -89,6 +91,15 @@ func ProbeFile(ctx context.Context, ffprobePath, path string) (MediaInfo, error)
 // 请求 seek），流量通常在 MB 级。headers 原样传给 ffprobe，携带网盘直链
 // 需要的 Cookie / User-Agent / Referer 等。
 func ProbeURL(ctx context.Context, ffprobePath, rawURL string, headers http.Header) (MediaInfo, error) {
+	if streamhttp.HasSensitiveHeaders(headers) {
+		localURL, cleanup, err := streamhttp.StartLoopbackRelay(ctx, rawURL, headers)
+		if err != nil {
+			return MediaInfo{}, fmt.Errorf("transcode: protect remote credentials: %w", err)
+		}
+		defer cleanup()
+		rawURL = localURL
+		headers = nil
+	}
 	var extra []string
 	if h := formatFFmpegHeaders(headers); h != "" {
 		extra = append(extra, "-headers", h)
@@ -109,6 +120,11 @@ func formatFFmpegHeaders(h http.Header) string {
 	sort.Strings(keys)
 	var b strings.Builder
 	for _, k := range keys {
+		if strings.EqualFold(k, "Authorization") ||
+			strings.EqualFold(k, "Proxy-Authorization") ||
+			strings.EqualFold(k, "Cookie") {
+			continue
+		}
 		for _, v := range h[k] {
 			b.WriteString(k)
 			b.WriteString(": ")

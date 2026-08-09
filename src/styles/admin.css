@@ -7606,6 +7606,27 @@ body.admin-mobile-nav-open {
 }
 
 /* ----- 扫描跳过目录树 ----- */
+.admin-skipdirs-autosave {
+  min-width: 7.5em;
+  color: var(--text-faint);
+  font-size: var(--font-xs);
+  font-weight: var(--weight-regular);
+  text-align: right;
+  white-space: nowrap;
+}
+
+.admin-skipdirs-autosave.is-saving {
+  color: var(--text-muted);
+}
+
+.admin-skipdirs-autosave.is-saved {
+  color: var(--success);
+}
+
+.admin-skipdirs-autosave.is-error {
+  color: var(--danger);
+}
+
 .admin-skipdirs-row {
   display: flex;
   align-items: center;

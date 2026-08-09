@@ -111,9 +111,6 @@ export function DriveDetailLoading({ onBack }: { onBack: () => void }) {
                 <FolderX size={16} />
                 <span>扫描跳过目录</span>
               </div>
-              <button type="button" className="admin-btn" disabled>
-                保存更改
-              </button>
             </header>
             <div className="admin-detail-tree-container">
               <SkipDirsLoadingIndicator />

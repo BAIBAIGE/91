@@ -19,6 +19,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/video-site/backend/internal/catalog"
+	"github.com/video-site/backend/internal/drives"
 	"github.com/video-site/backend/internal/drives/scriptcrawler"
 	"github.com/video-site/backend/internal/persistence"
 )
@@ -314,19 +315,14 @@ func (a *AdminServer) validateCrawlerUploadDrive(ctx context.Context, driveID st
 	if err != nil || d == nil {
 		return fmt.Errorf("上传目标网盘 %q 不存在", driveID)
 	}
-	if !isCrawlerUploadTargetKind(d.Kind) {
-		return fmt.Errorf("上传目标网盘 %q 类型为 %s，仅支持 115网盘、PikPak、123网盘、Google Drive、OneDrive、联通网盘、光鸭网盘、WebDAV", driveID, d.Kind)
+	if !drives.CapabilitiesForKind(d.Kind).Upload {
+		return fmt.Errorf("上传目标网盘 %q 类型为 %s，不支持上传", driveID, d.Kind)
 	}
 	return nil
 }
 
 func isCrawlerUploadTargetKind(kind string) bool {
-	switch strings.TrimSpace(kind) {
-	case "p115", "pikpak", "p123", "googledrive", "onedrive", "wopan", "guangyapan", "webdav":
-		return true
-	default:
-		return false
-	}
+	return drives.CapabilitiesForKind(kind).Upload
 }
 
 func crawlerIDSlug(raw string) string {

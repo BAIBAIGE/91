@@ -327,9 +327,10 @@ func (d *Driver) StreamURL(ctx context.Context, fileID string) (*drives.StreamLi
 		headers.Set("User-Agent", d.userAgent)
 	}
 	return &drives.StreamLink{
-		URL:     url,
-		Headers: headers,
-		Expires: expires,
+		URL:                url,
+		Headers:            headers,
+		Expires:            expires,
+		ClientRedirectSafe: true,
 	}, nil
 }
 

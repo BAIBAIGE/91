@@ -2,13 +2,15 @@ package quark
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
+	"html"
 	"net/http"
 	"path"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-resty/resty/v2"
@@ -23,24 +25,28 @@ const (
 )
 
 type Driver struct {
-	id                    string
-	cookie                string
-	rootID                string
-	ua                    string
-	referer               string
-	apiBase               string
-	pr                    string
-	client                *resty.Client
-	onCookieUpdate        func(string)
-	useTranscodingAddress bool
+	id             string
+	cookie         string
+	rootID         string
+	ua             string
+	referer        string
+	apiBase        string
+	pr             string
+	client         *resty.Client
+	uploadClient   *http.Client
+	onCookieUpdate func(string)
+	uploadTempDir  string
+	requestMu      sync.Mutex
+	cookieMu       sync.RWMutex
+	ensureDirMu    sync.Mutex
 }
 
 type Config struct {
-	ID                    string
-	Cookie                string
-	RootID                string
-	UseTranscodingAddress bool // 开启后对视频文件返回转码直链（支持 302），但可能画质不一致
-	OnCookieUpdate        func(cookie string)
+	ID             string
+	Cookie         string
+	RootID         string
+	UploadTempDir  string
+	OnCookieUpdate func(cookie string)
 }
 
 func New(c Config) *Driver {
@@ -49,21 +55,22 @@ func New(c Config) *Driver {
 		rootID = "0"
 	}
 	d := &Driver{
-		id:                    c.ID,
-		cookie:                c.Cookie,
-		rootID:                rootID,
-		ua:                    defaultUA,
-		referer:               defaultReferer,
-		apiBase:               defaultAPI,
-		pr:                    defaultPR,
-		useTranscodingAddress: c.UseTranscodingAddress,
-		onCookieUpdate:        c.OnCookieUpdate,
+		id:             c.ID,
+		cookie:         c.Cookie,
+		rootID:         rootID,
+		ua:             defaultUA,
+		referer:        defaultReferer,
+		apiBase:        defaultAPI,
+		pr:             defaultPR,
+		uploadTempDir:  c.UploadTempDir,
+		onCookieUpdate: c.OnCookieUpdate,
 	}
 	d.client = resty.New().
 		SetTimeout(30*time.Second).
 		SetHeader("Accept", "application/json, text/plain, */*").
 		SetHeader("Referer", d.referer).
 		SetHeader("User-Agent", d.ua)
+	d.uploadClient = newQuarkUploadHTTPClient(nil)
 	return d
 }
 
@@ -77,12 +84,19 @@ type resp struct {
 	Status  int    `json:"status"`
 	Code    int    `json:"code"`
 	Message string `json:"message"`
+	Msg     string `json:"msg"`
 }
 
 func (d *Driver) request(ctx context.Context, path, method string, query map[string]string, body any, out any) error {
+	// Quark can rotate credential cookies on any response. Serializing provider
+	// requests prevents two concurrent responses from applying rotations out of
+	// order; cookieMu protects playback readers that only need a snapshot.
+	d.requestMu.Lock()
+	defer d.requestMu.Unlock()
+
 	req := d.client.R().
 		SetContext(ctx).
-		SetHeader("Cookie", d.cookie).
+		SetHeader("Cookie", d.cookieSnapshot()).
 		SetQueryParam("pr", d.pr).
 		SetQueryParam("fr", "pc")
 	if query != nil {
@@ -91,32 +105,45 @@ func (d *Driver) request(ctx context.Context, path, method string, query map[str
 	if body != nil {
 		req.SetBody(body)
 	}
-	if out != nil {
-		req.SetResult(out)
-	}
-	var e resp
-	req.SetError(&e)
-
 	res, err := req.Execute(method, d.apiBase+path)
 	if err != nil {
 		return err
 	}
 
-	// 处理 cookie 刷新（__puus）
-	for _, ck := range res.Cookies() {
-		if ck.Name == "__puus" {
-			d.cookie = setCookieValue(d.cookie, "__puus", ck.Value)
-			if d.onCookieUpdate != nil {
-				d.onCookieUpdate(d.cookie)
-			}
-		}
+	if cookie, changed := d.applyResponseCookies(res.Cookies()); changed && d.onCookieUpdate != nil {
+		// Keep persistence callbacks in request order as well. A later rotation
+		// must never be overwritten in storage by an earlier slow callback.
+		d.onCookieUpdate(cookie)
 	}
 
-	if e.Status >= 400 || e.Code != 0 {
-		if e.Message == "" {
-			return fmt.Errorf("quark api error: status=%d code=%d", e.Status, e.Code)
+	raw := res.Body()
+	var envelope resp
+	jsonErr := error(nil)
+	if len(raw) > 0 {
+		jsonErr = json.Unmarshal(raw, &envelope)
+	}
+	statusCode := res.StatusCode()
+	if statusCode < http.StatusOK || statusCode >= http.StatusMultipleChoices {
+		apiErr := quarkResponseError(statusCode, envelope, raw)
+		if statusCode == http.StatusTooManyRequests || envelope.Status == http.StatusTooManyRequests || envelope.Code == http.StatusTooManyRequests {
+			return &drives.RateLimitError{Provider: d.Kind(), RetryAfter: parseRetryAfter(res.Header().Get("Retry-After")), Err: apiErr}
 		}
-		return errors.New(e.Message)
+		return apiErr
+	}
+	if jsonErr != nil {
+		return fmt.Errorf("quark api %s: decode response: %w", path, jsonErr)
+	}
+	if envelope.Status >= http.StatusBadRequest || envelope.Code != 0 {
+		apiErr := quarkResponseError(statusCode, envelope, raw)
+		if envelope.Status == http.StatusTooManyRequests || envelope.Code == http.StatusTooManyRequests {
+			return &drives.RateLimitError{Provider: d.Kind(), RetryAfter: parseRetryAfter(res.Header().Get("Retry-After")), Err: apiErr}
+		}
+		return apiErr
+	}
+	if out != nil && len(raw) > 0 {
+		if err := json.Unmarshal(raw, out); err != nil {
+			return fmt.Errorf("quark api %s: decode result: %w", path, err)
+		}
 	}
 	return nil
 }
@@ -134,6 +161,8 @@ type file struct {
 	Category  int    `json:"category"`
 	File      bool   `json:"file"`
 	UpdatedAt int64  `json:"updated_at"`
+	MD5       string `json:"md5"`
+	SHA1      string `json:"sha1"`
 }
 
 type sortResp struct {
@@ -199,7 +228,7 @@ func (d *Driver) StreamURL(ctx context.Context, fileID string) (*drives.StreamLi
 	headers := http.Header{}
 	headers.Set("User-Agent", d.ua)
 	headers.Set("Referer", d.referer)
-	headers.Set("Cookie", d.cookie)
+	headers.Set("Cookie", d.cookieSnapshot())
 
 	return &drives.StreamLink{
 		URL:     r.Data[0].DownloadUrl,
@@ -231,6 +260,9 @@ func (d *Driver) MakeDir(ctx context.Context, parentID, name string) (string, er
 }
 
 func (d *Driver) EnsureDir(ctx context.Context, pathFromRoot string) (string, error) {
+	d.ensureDirMu.Lock()
+	defer d.ensureDirMu.Unlock()
+
 	parts := splitPath(pathFromRoot)
 	currentID := d.rootID
 	for _, name := range parts {
@@ -241,7 +273,17 @@ func (d *Driver) EnsureDir(ctx context.Context, pathFromRoot string) (string, er
 		if childID == "" {
 			id, err := d.MakeDir(ctx, currentID, name)
 			if err != nil {
+				// A competing process/account client may have created the same
+				// directory. Re-list before treating the conflict as fatal.
+				if existing, listErr := d.findChildDir(ctx, currentID, name); listErr == nil && existing != "" {
+					childID = existing
+					currentID = childID
+					continue
+				}
 				return "", err
+			}
+			if strings.TrimSpace(id) == "" {
+				return "", errors.New("quark mkdir: empty directory id")
 			}
 			childID = id
 		}
@@ -263,11 +305,9 @@ func (d *Driver) findChildDir(ctx context.Context, parent, name string) (string,
 	return "", nil
 }
 
-// ---------- 上传（第一版不实现，走本地预览视频兜底） ----------
-
-func (d *Driver) Upload(ctx context.Context, parentID, name string, r io.Reader, size int64) (string, error) {
-	return "", drives.ErrNotSupported
-}
+// Upload is implemented in upload.go. Keeping the protocol isolated makes the
+// replayable staging and multipart lifecycle auditable independently from list
+// and playback operations.
 
 func (d *Driver) Remove(ctx context.Context, fileID string) error {
 	fileID = strings.TrimSpace(fileID)
@@ -285,18 +325,35 @@ func (d *Driver) Remove(ctx context.Context, fileID string) error {
 	return nil
 }
 
+func (d *Driver) Rename(ctx context.Context, fileID, newName string) error {
+	fileID = strings.TrimSpace(fileID)
+	newName = strings.TrimSpace(newName)
+	if fileID == "" || newName == "" {
+		return errors.New("quark rename: empty file id or name")
+	}
+	body := map[string]any{"fid": fileID, "file_name": newName}
+	if err := d.request(ctx, "/file/rename", http.MethodPost, nil, body, nil); err != nil {
+		return fmt.Errorf("quark rename: %w", err)
+	}
+	return nil
+}
+
 // ---------- helpers ----------
 
 func fileToEntry(f *file, parentID string) drives.Entry {
 	return drives.Entry{
-		ID:       f.Fid,
-		Name:     f.FileName,
+		ID: f.Fid,
+		// Quark escapes names in directory listings. Decode before directory
+		// matching and upload reconciliation so "A&B" is not treated as a
+		// different object from "A&amp;B".
+		Name:     html.UnescapeString(f.FileName),
 		Size:     f.Size,
 		IsDir:    !f.File,
 		ParentID: parentID,
 		MimeType: guessMime(f.FileName),
 		ModTime:  time.UnixMilli(f.UpdatedAt),
 		Category: f.Category,
+		Hash:     firstNonEmptyString(f.SHA1, f.MD5),
 	}
 }
 
@@ -358,5 +415,62 @@ func setCookieValue(cookie, key, value string) string {
 	return strings.Join(out, "; ")
 }
 
+func (d *Driver) cookieSnapshot() string {
+	d.cookieMu.RLock()
+	defer d.cookieMu.RUnlock()
+	return d.cookie
+}
+
+func (d *Driver) applyResponseCookies(cookies []*http.Cookie) (string, bool) {
+	d.cookieMu.Lock()
+	defer d.cookieMu.Unlock()
+	next := d.cookie
+	for _, ck := range cookies {
+		if ck == nil || (ck.Name != "__puus" && ck.Name != "__pus") || ck.Value == "" {
+			continue
+		}
+		next = setCookieValue(next, ck.Name, ck.Value)
+	}
+	if next == d.cookie {
+		return d.cookie, false
+	}
+	d.cookie = next
+	return next, true
+}
+
+func quarkResponseError(httpStatus int, envelope resp, raw []byte) error {
+	message := strings.TrimSpace(envelope.Message)
+	if message == "" {
+		message = strings.TrimSpace(envelope.Msg)
+	}
+	if message == "" {
+		message = strings.TrimSpace(string(raw))
+		if len(message) > 256 {
+			message = message[:256] + "..."
+		}
+	}
+	if message == "" {
+		message = http.StatusText(httpStatus)
+	}
+	return fmt.Errorf("quark api error: http=%d status=%d code=%d: %s", httpStatus, envelope.Status, envelope.Code, message)
+}
+
+func parseRetryAfter(raw string) time.Duration {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0
+	}
+	if seconds, err := strconv.Atoi(raw); err == nil && seconds >= 0 {
+		return time.Duration(seconds) * time.Second
+	}
+	if deadline, err := http.ParseTime(raw); err == nil {
+		if wait := time.Until(deadline); wait > 0 {
+			return wait
+		}
+	}
+	return 0
+}
+
 var _ drives.Drive = (*Driver)(nil)
 var _ drives.Remover = (*Driver)(nil)
+var _ drives.Uploader = (*Driver)(nil)

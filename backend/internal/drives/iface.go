@@ -31,13 +31,6 @@ type Drive interface {
 	// 代理层据此回源，透传 Range
 	StreamURL(ctx context.Context, fileID string) (*StreamLink, error)
 
-	// Upload 把本地流写入指定目录，返回新文件 fileID。
-	// 当前预览视频和封面只保存在本地，不再通过该方法写回网盘。
-	Upload(ctx context.Context, parentID, name string, r io.Reader, size int64) (string, error)
-
-	// EnsureDir 保证指定路径存在（相对根目录），返回最终目录 fileID。
-	EnsureDir(ctx context.Context, pathFromRoot string) (string, error)
-
 	// RootID 返回根目录 fileID
 	RootID() string
 }
@@ -52,6 +45,14 @@ type Drive interface {
 // the returned StreamLink.
 type GenerationStreamProvider interface {
 	GenerationStreamURL(ctx context.Context, fileID string, forceRefresh bool) (*StreamLink, error)
+}
+
+// Uploader is the optional write capability of a drive. Callers that produce
+// remote files must assert it before starting work instead of discovering an
+// unsupported operation only after an expensive download/transcode has run.
+type Uploader interface {
+	Upload(ctx context.Context, parentID, name string, r io.Reader, size int64) (string, error)
+	EnsureDir(ctx context.Context, pathFromRoot string) (string, error)
 }
 
 // Remover is an optional drive capability. It mirrors OpenList's optional
@@ -103,6 +104,12 @@ type StreamLink struct {
 	// browser instead of following it on the server. Background consumers such
 	// as fingerprinting and transcoding still follow redirects to read bytes.
 	PassThroughRedirects bool
+
+	// ClientRedirectSafe is an explicit per-link trust decision. It is true only
+	// when URL alone authorizes the browser request and no secret Header values
+	// are required after redirecting. This is intentionally not inferred from
+	// drive Kind because redirect safety belongs to the returned link.
+	ClientRedirectSafe bool
 }
 
 // ErrNotSupported 代表某家盘不支持某操作

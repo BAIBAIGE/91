@@ -1425,10 +1425,26 @@ func TestCleanupMissingPikPakVideosRemovesDatabaseRowsAndLocalAssets(t *testing.
 	}
 	removed, err := app.cleanupMissingDriveVideos(ctx, "PikPak", map[string]struct{}{"kept": {}}, nil, true)
 	if err != nil {
-		t.Fatalf("cleanup missing videos: %v", err)
+		t.Fatalf("first cleanup missing videos: %v", err)
+	}
+	if removed != 0 {
+		t.Fatalf("first removed = %d, want 0 before confirmation", removed)
+	}
+	if _, err := cat.GetVideo(ctx, "pikpak-PikPak-obsolete"); err != nil {
+		t.Fatalf("obsolete video removed after one scan: %v", err)
+	}
+	for _, path := range []string{obsoletePreview, obsoleteThumb} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("asset %s removed after one scan: %v", path, err)
+		}
+	}
+
+	removed, err = app.cleanupMissingDriveVideos(ctx, "PikPak", map[string]struct{}{"kept": {}}, nil, true)
+	if err != nil {
+		t.Fatalf("confirmed cleanup missing videos: %v", err)
 	}
 	if removed != 1 {
-		t.Fatalf("removed = %d, want 1", removed)
+		t.Fatalf("confirmed removed = %d, want 1", removed)
 	}
 	if _, err := cat.GetVideo(ctx, "pikpak-PikPak-obsolete"); err != sql.ErrNoRows {
 		t.Fatalf("obsolete video lookup error = %v, want sql.ErrNoRows", err)

@@ -1,8 +1,24 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ChevronRight, FolderX } from "lucide-react";
 import * as api from "../api";
 import { useToast } from "../ToastContext";
 import { SkipDirsLoadingIndicator } from "./SkipDirsLoadingIndicator";
+
+const AUTO_SAVE_DELAY_MS = 300;
+const AUTO_SAVE_RETRY_BASE_MS = 1000;
+const AUTO_SAVE_RETRY_MAX_MS = 8000;
+
+type SaveStatus = "idle" | "pending" | "saving" | "saved" | "error";
+
+function normalizeDirIds(ids: Iterable<string>): string[] {
+  return Array.from(
+    new Set(Array.from(ids, (id) => id.trim()).filter(Boolean))
+  ).sort();
+}
+
+function dirIdsKey(ids: Iterable<string>): string {
+  return JSON.stringify(normalizeDirIds(ids));
+}
 
 type SkipDirsPanelProps = {
   drive: api.AdminDrive;
@@ -12,38 +28,175 @@ type SkipDirsPanelProps = {
 export function SkipDirsPanel({ drive, onSaved }: SkipDirsPanelProps) {
   const { show } = useToast();
   const [selected, setSelected] = useState<Set<string>>(
-    () => new Set(drive.skipDirIds ?? [])
+    () => new Set(normalizeDirIds(drive.skipDirIds ?? []))
   );
-  const [saving, setSaving] = useState(false);
+  const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
+  const selectedRef = useRef(selected);
+  const draftRevisionRef = useRef(0);
+  const savedRevisionRef = useRef(0);
+  const serverKeyRef = useRef(dirIdsKey(drive.skipDirIds ?? []));
+  const saveChainRef = useRef<Promise<void>>(Promise.resolve());
+  const saveTimerRef = useRef<number | null>(null);
+  const retryAttemptRef = useRef(0);
+  const failureToastShownRef = useRef(false);
+  const mountedRef = useRef(true);
+  const onSavedRef = useRef(onSaved);
+  const showRef = useRef(show);
+  const scheduleSaveRef = useRef<(delay: number, retrying?: boolean) => void>(
+    () => undefined
+  );
+
+  onSavedRef.current = onSaved;
+  showRef.current = show;
+
+  const enqueueSave = useCallback(() => {
+    const driveId = drive.id;
+    saveChainRef.current = saveChainRef.current.then(async () => {
+      const requestRevision = draftRevisionRef.current;
+      if (requestRevision === savedRevisionRef.current) return;
+
+      const requestIds = normalizeDirIds(selectedRef.current);
+      if (mountedRef.current) setSaveStatus("saving");
+
+      let response: { skipDirIds: string[] };
+      try {
+        response = await api.setDriveSkipDirIds(driveId, requestIds);
+      } catch (error) {
+        // A newer edit already has its own debounce timer/queued save. Only
+        // retry when the failed request still represents the latest draft.
+        if (requestRevision !== draftRevisionRef.current) {
+          if (mountedRef.current) setSaveStatus("pending");
+          return;
+        }
+        if (!mountedRef.current) return;
+
+        setSaveStatus("error");
+        if (!failureToastShownRef.current) {
+          failureToastShownRef.current = true;
+          showRef.current(
+            error instanceof Error ? error.message : "扫描跳过目录保存失败",
+            "error"
+          );
+        }
+        retryAttemptRef.current += 1;
+        const retryDelay = Math.min(
+          AUTO_SAVE_RETRY_BASE_MS * 2 ** (retryAttemptRef.current - 1),
+          AUTO_SAVE_RETRY_MAX_MS
+        );
+        scheduleSaveRef.current(retryDelay, true);
+        return;
+      }
+
+      const savedIds = normalizeDirIds(response.skipDirIds ?? []);
+      const savedKey = dirIdsKey(savedIds);
+      serverKeyRef.current = savedKey;
+      retryAttemptRef.current = 0;
+      failureToastShownRef.current = false;
+      if (mountedRef.current) {
+        onSavedRef.current({ id: driveId, skipDirIds: savedIds });
+      }
+
+      const currentKey = dirIdsKey(selectedRef.current);
+      if (requestRevision === draftRevisionRef.current) {
+        const next = new Set(savedIds);
+        selectedRef.current = next;
+        savedRevisionRef.current = requestRevision;
+        if (mountedRef.current) {
+          setSelected(next);
+          setSaveStatus("saved");
+        }
+        return;
+      }
+
+      // The user changed the selection while this request was running. When
+      // the latest draft happens to equal the normalized server response, it
+      // is already durable; otherwise its debounce timer/queued save wins.
+      if (currentKey === savedKey) {
+        savedRevisionRef.current = draftRevisionRef.current;
+        if (mountedRef.current) setSaveStatus("saved");
+      } else if (mountedRef.current) {
+        setSaveStatus("pending");
+      }
+    });
+  }, [drive.id]);
+
+  const scheduleSave = useCallback(
+    (delay: number, retrying = false) => {
+      if (saveTimerRef.current !== null) {
+        window.clearTimeout(saveTimerRef.current);
+      }
+      if (mountedRef.current && !retrying) setSaveStatus("pending");
+      saveTimerRef.current = window.setTimeout(() => {
+        saveTimerRef.current = null;
+        enqueueSave();
+      }, delay);
+    },
+    [enqueueSave]
+  );
+  scheduleSaveRef.current = scheduleSave;
+
+  const serverSkipDirKey = dirIdsKey(drive.skipDirIds ?? []);
 
   useEffect(() => {
-    setSelected(new Set(drive.skipDirIds ?? []));
-  }, [drive.id, drive.skipDirIds]);
+    // Polling may replace drive.skipDirIds with a fresh array every five
+    // seconds. Treat it as a server snapshot, not as authority over a dirty
+    // local draft. Content equality also avoids resets caused by array identity.
+    if (draftRevisionRef.current !== savedRevisionRef.current) return;
+    if (serverSkipDirKey === serverKeyRef.current) return;
+
+    const incoming = normalizeDirIds(drive.skipDirIds ?? []);
+    const next = new Set(incoming);
+    serverKeyRef.current = serverSkipDirKey;
+    selectedRef.current = next;
+    setSelected(next);
+    setSaveStatus("idle");
+  }, [drive.skipDirIds, serverSkipDirKey]);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      if (saveTimerRef.current !== null) {
+        window.clearTimeout(saveTimerRef.current);
+        saveTimerRef.current = null;
+        // Auto-save should not silently lose a click when the user leaves the
+        // detail page during the short debounce window.
+        enqueueSave();
+      }
+    };
+  }, [enqueueSave]);
 
   const toggle = useCallback((id: string) => {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) {
-        next.delete(id);
-      } else {
-        next.add(id);
-      }
-      return next;
-    });
-  }, []);
-
-  async function handleSave() {
-    setSaving(true);
-    try {
-      const ids = Array.from(selected);
-      const resp = await api.setDriveSkipDirIds(drive.id, ids);
-      onSaved({ id: drive.id, skipDirIds: resp.skipDirIds });
-    } catch (e) {
-      show(e instanceof Error ? e.message : "保存失败", "error");
-    } finally {
-      setSaving(false);
+    const next = new Set(selectedRef.current);
+    if (next.has(id)) {
+      next.delete(id);
+    } else {
+      next.add(id);
     }
-  }
+    selectedRef.current = next;
+    draftRevisionRef.current += 1;
+    retryAttemptRef.current = 0;
+    setSelected(next);
+    scheduleSave(AUTO_SAVE_DELAY_MS);
+  }, [scheduleSave]);
+
+  const saveStatusText =
+    saveStatus === "idle"
+      ? null
+      : {
+          pending: "保存中…",
+          saving: "保存中…",
+          saved: "已自动保存",
+          error: "保存失败，正在重试…",
+        }[saveStatus];
+  const saveStatusClass =
+    saveStatus === "error"
+      ? "is-error"
+      : saveStatus === "saved"
+        ? "is-saved"
+        : saveStatus === "pending" || saveStatus === "saving"
+          ? "is-saving"
+          : "";
 
   return (
     <div className="admin-detail-card">
@@ -52,14 +205,15 @@ export function SkipDirsPanel({ drive, onSaved }: SkipDirsPanelProps) {
           <FolderX size={16} />
           <span>扫描跳过目录</span>
         </div>
-        <button
-          className="admin-btn"
-          onClick={handleSave}
-          disabled={saving}
-          style={{ padding: "4px 10px", fontSize: "12px", height: "auto" }}
-        >
-          {saving ? "保存中..." : "保存更改"}
-        </button>
+        {saveStatusText && (
+          <span
+            className={`admin-skipdirs-autosave ${saveStatusClass}`.trim()}
+            role="status"
+            aria-live="polite"
+          >
+            {saveStatusText}
+          </span>
+        )}
       </header>
 
       <div className="admin-detail-tree-container">

@@ -293,8 +293,8 @@ func TestFFmpegHTTPInputOptionsUsesDedicatedUserAgent(t *testing.T) {
 	if strings.Contains(joined, "User-Agent:") {
 		t.Fatalf("args = %#v, user agent should not be duplicated in raw headers", args)
 	}
-	if !strings.Contains(joined, "Cookie: UID=redacted") {
-		t.Fatalf("args = %#v, want cookie preserved in raw headers", args)
+	if strings.Contains(joined, "UID=redacted") || strings.Contains(joined, "Cookie:") {
+		t.Fatalf("args = %#v, secret cookie must never be passed to ffmpeg", args)
 	}
 }
 
@@ -310,6 +310,11 @@ func TestShouldProxy115FFmpegLinks(t *testing.T) {
 	}
 	if shouldProxyFFmpegLink(&drives.StreamLink{URL: "https://download.example/file.mp4"}) {
 		t.Fatal("generic link should not use local ffmpeg proxy")
+	}
+	if !shouldProxyFFmpegLink(&drives.StreamLink{
+		URL: "https://download.example/protected.mp4", Headers: http.Header{"Cookie": {"secret=1"}},
+	}) {
+		t.Fatal("credential-bearing link should use local ffmpeg proxy")
 	}
 }
 

@@ -1,11 +1,67 @@
 package streamhttp
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 )
+
+func TestLoopbackRelayKeepsCredentialsOutOfCrossOriginRedirect(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "" || r.Header.Get("Cookie") != "" || r.Header.Get("Proxy-Authorization") != "" {
+			t.Errorf("credentials leaked to target: %#v", r.Header)
+		}
+		if r.Header.Get("Range") != "bytes=1-3" {
+			t.Errorf("Range = %q", r.Header.Get("Range"))
+		}
+		w.Header().Set("Content-Range", "bytes 1-3/5")
+		w.WriteHeader(http.StatusPartialContent)
+		_, _ = io.WriteString(w, "bcd")
+	}))
+	t.Cleanup(target.Close)
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer secret" || r.Header.Get("Cookie") != "session=secret" {
+			t.Errorf("origin credentials = %#v", r.Header)
+		}
+		http.Redirect(w, r, target.URL+"/video", http.StatusFound)
+	}))
+	t.Cleanup(origin.Close)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	localURL, cleanup, err := StartLoopbackRelay(ctx, origin.URL+"/source", http.Header{
+		"Authorization": {"Bearer secret"},
+		"Cookie":        {"session=secret"},
+	})
+	if err != nil {
+		t.Fatalf("StartLoopbackRelay: %v", err)
+	}
+	defer cleanup()
+	req, _ := http.NewRequest(http.MethodGet, localURL, nil)
+	req.Header.Set("Range", "bytes=1-3")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("relay request: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusPartialContent || string(body) != "bcd" || resp.Header.Get("Content-Range") != "bytes 1-3/5" {
+		t.Fatalf("response status=%d headers=%#v body=%q", resp.StatusCode, resp.Header, body)
+	}
+}
+
+func TestHasSensitiveHeaders(t *testing.T) {
+	if HasSensitiveHeaders(http.Header{"User-Agent": {"ordinary"}}) {
+		t.Fatal("ordinary headers reported sensitive")
+	}
+	for _, key := range []string{"Authorization", "Proxy-Authorization", "Cookie"} {
+		if !HasSensitiveHeaders(http.Header{key: {"secret"}}) {
+			t.Fatalf("%s was not reported sensitive", key)
+		}
+	}
+}
 
 func TestClientCrossOriginRedirectDropsImplicitRefererAndCredentials(t *testing.T) {
 	cdn := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

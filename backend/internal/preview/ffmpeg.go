@@ -9,7 +9,6 @@ import (
 	"io"
 	"log"
 	"math"
-	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -857,6 +856,9 @@ func shouldProxyFFmpegLink(link *drives.StreamLink) bool {
 	if link.PassThroughRedirects {
 		return true
 	}
+	if streamhttp.HasSensitiveHeaders(link.Headers) {
+		return true
+	}
 	if strings.Contains(raw, "115cdn") {
 		return true
 	}
@@ -864,80 +866,13 @@ func shouldProxyFFmpegLink(link *drives.StreamLink) bool {
 }
 
 func startLocalFFmpegProxy(ctx context.Context, link *drives.StreamLink) (*drives.StreamLink, func(), error) {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	localURL, cleanup, err := streamhttp.StartLoopbackRelay(ctx, link.URL, link.Headers)
 	if err != nil {
 		return nil, nil, err
 	}
-	client := &http.Client{Timeout: 0}
-	if link.PassThroughRedirects {
-		client = streamhttp.NewClient(0)
-	}
-	srv := &http.Server{
-		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path != "/stream" {
-				http.NotFound(w, r)
-				return
-			}
-			if r.Method != http.MethodGet && r.Method != http.MethodHead {
-				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-				return
-			}
-			req, err := http.NewRequestWithContext(r.Context(), r.Method, link.URL, nil)
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusBadGateway)
-				return
-			}
-			for k, vs := range link.Headers {
-				for _, v := range vs {
-					req.Header.Add(k, v)
-				}
-			}
-			if rng := r.Header.Get("Range"); rng != "" {
-				req.Header.Set("Range", rng)
-			}
-
-			resp, err := client.Do(req)
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusBadGateway)
-				return
-			}
-			defer resp.Body.Close()
-
-			for _, k := range []string{
-				"Content-Type", "Content-Length", "Content-Range",
-				"Accept-Ranges", "Last-Modified", "Etag",
-			} {
-				if v := resp.Header.Get(k); v != "" {
-					w.Header().Set(k, v)
-				}
-			}
-			w.WriteHeader(resp.StatusCode)
-			if r.Method != http.MethodHead {
-				_, _ = io.Copy(w, resp.Body)
-			}
-		}),
-	}
-	go func() {
-		if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Printf("[preview] local ffmpeg proxy: %v", err)
-		}
-	}()
-
-	var once sync.Once
-	cleanup := func() {
-		once.Do(func() {
-			shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-			defer cancel()
-			_ = srv.Shutdown(shutdownCtx)
-		})
-	}
-	go func() {
-		<-ctx.Done()
-		cleanup()
-	}()
 
 	proxied := *link
-	proxied.URL = "http://" + ln.Addr().String() + "/stream"
+	proxied.URL = localURL
 	proxied.Headers = nil
 	proxied.PassThroughRedirects = false
 	return &proxied, cleanup, nil
@@ -1922,7 +1857,10 @@ func buildHeaders(h map[string][]string) string {
 	}
 	var sb strings.Builder
 	for k, vs := range h {
-		if strings.EqualFold(k, "User-Agent") {
+		if strings.EqualFold(k, "User-Agent") ||
+			strings.EqualFold(k, "Authorization") ||
+			strings.EqualFold(k, "Proxy-Authorization") ||
+			strings.EqualFold(k, "Cookie") {
 			continue
 		}
 		for _, v := range vs {

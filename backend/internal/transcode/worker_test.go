@@ -51,7 +51,7 @@ func TestFormatFFmpegHeaders(t *testing.T) {
 	h.Set("User-Agent", "test-agent")
 	h.Set("Cookie", "a=1")
 	h.Add("Cookie", "b=2")
-	want := "Cookie: a=1\r\nCookie: b=2\r\nUser-Agent: test-agent\r\n"
+	want := "User-Agent: test-agent\r\n"
 	if got := formatFFmpegHeaders(h); got != want {
 		t.Fatalf("formatFFmpegHeaders = %q, want %q", got, want)
 	}

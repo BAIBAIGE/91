@@ -44,10 +44,11 @@ type TaskStatus struct {
 // Worker 串行处理一个 drive 的转码任务。生命周期与一次"开始转码"对应：
 // Run 处理完整个候选列表（或 ctx 被取消）后即结束，不常驻。
 type Worker struct {
-	cfg Config
-	cat *catalog.Catalog
-	drv drives.Drive
-	hc  *http.Client
+	cfg      Config
+	cat      *catalog.Catalog
+	drv      drives.Drive
+	uploader drives.Uploader
+	hc       *http.Client
 
 	mu           sync.Mutex
 	state        string
@@ -73,12 +74,14 @@ func NewWorker(cfg Config, cat *catalog.Catalog, drv drives.Drive) *Worker {
 	if cfg.WorkDir == "" {
 		cfg.WorkDir = os.TempDir()
 	}
+	uploader, _ := drv.(drives.Uploader)
 	return &Worker{
-		cfg:   cfg,
-		cat:   cat,
-		drv:   drv,
-		hc:    streamhttp.NewClient(0),
-		state: "idle",
+		cfg:      cfg,
+		cat:      cat,
+		drv:      drv,
+		uploader: uploader,
+		hc:       streamhttp.NewClient(0),
+		state:    "idle",
 	}
 }
 
@@ -152,6 +155,9 @@ func (w *Worker) doneCount() int {
 }
 
 func (w *Worker) process(ctx context.Context, v *catalog.Video) error {
+	if w.uploader == nil {
+		return fmt.Errorf("transcode output: %w", drives.ErrNotSupported)
+	}
 	// 候选列表是任务开始时的快照，条目排队期间可能已被其它途径处理
 	// （如单条工具、上一次被打断的任务）。以库里当前状态为准防止重复
 	// 转码；读失败不阻塞，继续按快照处理。
@@ -227,7 +233,7 @@ func (w *Worker) finish(ctx context.Context, v *catalog.Video, info MediaInfo, l
 		return err
 	}
 	defer f.Close()
-	fileID, err := w.drv.Upload(ctx, dirID, transcodedName(v), f, stat.Size())
+	fileID, err := w.uploader.Upload(ctx, dirID, transcodedName(v), f, stat.Size())
 	if err != nil {
 		return fmt.Errorf("upload transcoded file: %w", err)
 	}
@@ -302,7 +308,7 @@ func (w *Worker) downloadTo(ctx context.Context, link *drives.StreamLink, dst st
 // 跳过列表（幂等），避免 scanner 把产物再当新视频收进库。
 func (w *Worker) ensureTargetDir(ctx context.Context) (string, error) {
 	w.targetDirOnce.Do(func() {
-		dirID, err := w.drv.EnsureDir(ctx, w.cfg.TargetDirName)
+		dirID, err := w.uploader.EnsureDir(ctx, w.cfg.TargetDirName)
 		if err != nil {
 			w.targetDirErr = err
 			return

@@ -395,6 +395,8 @@ export type AdminDrive = {
   status: string;
   lastError?: string;
   hasCredential: boolean;
+  /** 后端能力表声明该挂载可写入文件；爬虫目标与转码入口据此展示。 */
+  canUpload: boolean;
   /** 当前是否给该盘生成预览视频（per-drive 开关，替代旧的全局 preview.enabled；封面不受影响）。 */
   teaserEnabled: boolean;
   /**

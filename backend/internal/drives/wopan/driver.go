@@ -157,9 +157,10 @@ func (d *Driver) StreamURL(ctx context.Context, fileID string) (*drives.StreamLi
 		return nil, fmt.Errorf("wopan download url: empty response")
 	}
 	return &drives.StreamLink{
-		URL:     data.List[0].DownloadUrl,
-		Headers: http.Header{},
-		Expires: time.Now().Add(10 * time.Minute),
+		URL:                data.List[0].DownloadUrl,
+		Headers:            http.Header{},
+		Expires:            time.Now().Add(10 * time.Minute),
+		ClientRedirectSafe: true,
 	}, nil
 }
 

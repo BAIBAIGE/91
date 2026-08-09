@@ -205,6 +205,35 @@ CREATE TABLE IF NOT EXISTS scans (
     error       TEXT
 );
 
+-- A provider listing is not authoritative enough to delete catalog data after
+-- one empty response. Missing files are confirmed across complete successful
+-- scans; seeing the file again clears the counter immediately.
+CREATE TABLE IF NOT EXISTS drive_scan_misses (
+    drive_id            TEXT NOT NULL,
+    file_id             TEXT NOT NULL,
+    consecutive_misses  INTEGER NOT NULL DEFAULT 0,
+    last_missing_at     INTEGER NOT NULL,
+    PRIMARY KEY (drive_id, file_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_drive_scan_misses_threshold
+    ON drive_scan_misses(drive_id, consecutive_misses);
+
+CREATE TRIGGER IF NOT EXISTS cleanup_drive_scan_miss_after_video_delete
+AFTER DELETE ON videos
+WHEN NOT EXISTS (
+    SELECT 1 FROM videos WHERE drive_id = OLD.drive_id AND file_id = OLD.file_id
+)
+BEGIN
+    DELETE FROM drive_scan_misses WHERE drive_id = OLD.drive_id AND file_id = OLD.file_id;
+END;
+
+CREATE TRIGGER IF NOT EXISTS cleanup_drive_scan_misses_after_drive_delete
+AFTER DELETE ON drives
+BEGIN
+    DELETE FROM drive_scan_misses WHERE drive_id = OLD.id;
+END;
+
 -- 管理后台 session（简单 token 存储）
 CREATE TABLE IF NOT EXISTS admin_sessions (
     token      TEXT PRIMARY KEY,

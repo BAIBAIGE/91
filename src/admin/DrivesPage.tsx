@@ -97,6 +97,7 @@ export function DrivesPage() {
   const selectedDriveId = searchParams.get("drive") || null;
   const { show } = useToast();
   const pollConnectionLost = useRef(false);
+  const driveListRequestVersion = useRef(0);
   const maintenanceBusy = scanningAll || maintenanceStatus.running || maintenanceStatus.queued;
   const formDirty = form.id
     ? !sameForm(form, initialForm)
@@ -119,6 +120,7 @@ export function DrivesPage() {
   }
 
   async function refresh() {
+    const requestVersion = ++driveListRequestVersion.current;
     setLoading(true);
     setLoadError("");
     try {
@@ -127,24 +129,30 @@ export function DrivesPage() {
         api.getDriveStorage(),
         api.getScanAllJobStatus().catch(() => null),
       ]);
-      setList(data ?? []);
+      if (requestVersion === driveListRequestVersion.current) {
+        setList(data ?? []);
+      }
       setStorage(storageData);
       if (jobStatus) setMaintenanceStatus(jobStatus);
     } catch (e) {
-      const message = e instanceof Error ? e.message : "加载失败";
-      setLoadError(message);
-      show(message, "error");
+      if (requestVersion === driveListRequestVersion.current) {
+        const message = e instanceof Error ? e.message : "加载失败";
+        setLoadError(message);
+        show(message, "error");
+      }
     } finally {
       setLoading(false);
     }
   }
 
   async function refreshDriveList() {
+    const requestVersion = ++driveListRequestVersion.current;
     try {
       const [data, jobStatus] = await Promise.all([
         api.listDrives(),
         api.getScanAllJobStatus().catch(() => null),
       ]);
+      if (requestVersion !== driveListRequestVersion.current) return;
       setList(data ?? []);
       if (jobStatus) setMaintenanceStatus(jobStatus);
       if (pollConnectionLost.current) {
@@ -152,6 +160,7 @@ export function DrivesPage() {
         show("连接已恢复，网盘数据已更新", "success");
       }
     } catch {
+      if (requestVersion !== driveListRequestVersion.current) return;
       if (!pollConnectionLost.current) {
         pollConnectionLost.current = true;
         show("连接中断，网盘数据可能不是最新", "error");
@@ -679,14 +688,17 @@ export function DrivesPage() {
             </div>
 
             <SkipDirsPanel
+              key={d.id}
               drive={d}
               onSaved={(saved) => {
+                // Invalidate list requests that began before this write. Their
+                // old snapshot must not overwrite the just-confirmed value.
+                driveListRequestVersion.current += 1;
                 setList((prev) =>
                   prev.map((item) =>
                     item.id === saved.id ? { ...item, skipDirIds: saved.skipDirIds } : item
                   )
                 );
-                refreshDriveList();
               }}
             />
           </div>

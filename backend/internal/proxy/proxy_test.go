@@ -274,7 +274,7 @@ func (d *proxyResultDrive) StreamURL(context.Context, string) (*drives.StreamLin
 		return nil, result.err
 	}
 	return &drives.StreamLink{
-		URL: result.url, Headers: http.Header{}, Expires: time.Now().Add(time.Minute),
+		URL: result.url, Headers: http.Header{}, Expires: time.Now().Add(time.Minute), ClientRedirectSafe: redirectKindForTest(d.kind),
 	}, nil
 }
 func (d *proxyResultDrive) Upload(context.Context, string, string, io.Reader, int64) (string, error) {
@@ -629,13 +629,15 @@ func (d *proxyContextIgnoringDrive) StreamURL(context.Context, string) (*drives.
 		<-d.releaseFirst
 		close(d.firstReturned)
 		return &drives.StreamLink{
-			URL:     "https://cdn.example/stale.mp4",
-			Expires: time.Now().Add(10 * time.Minute),
+			URL:                "https://cdn.example/stale.mp4",
+			Expires:            time.Now().Add(10 * time.Minute),
+			ClientRedirectSafe: true,
 		}, nil
 	}
 	return &drives.StreamLink{
-		URL:     "https://cdn.example/fresh.mp4",
-		Expires: time.Now().Add(10 * time.Minute),
+		URL:                "https://cdn.example/fresh.mp4",
+		Expires:            time.Now().Add(10 * time.Minute),
+		ClientRedirectSafe: true,
 	}, nil
 }
 func (d *proxyContextIgnoringDrive) Upload(context.Context, string, string, io.Reader, int64) (string, error) {
@@ -672,9 +674,10 @@ func (d *proxyFakeDrive) StreamURLWithHeader(_ context.Context, fileID string, h
 	ua := header.Get("User-Agent")
 	d.calls = append(d.calls, proxyFakeCall{fileID: fileID, ua: ua})
 	return &drives.StreamLink{
-		URL:     "https://cdn.example/" + fileID + "?ua=" + ua,
-		Headers: http.Header{"User-Agent": {ua}},
-		Expires: time.Now().Add(time.Minute),
+		URL:                "https://cdn.example/" + fileID + "?ua=" + ua,
+		Headers:            http.Header{"User-Agent": {ua}},
+		Expires:            time.Now().Add(time.Minute),
+		ClientRedirectSafe: redirectKindForTest(d.kind),
 	}, nil
 }
 func (d *proxyFakeDrive) Upload(context.Context, string, string, io.Reader, int64) (string, error) {
@@ -1040,9 +1043,10 @@ func (d *proxyFakePikPakDrive) Stat(context.Context, string) (*drives.Entry, err
 func (d *proxyFakePikPakDrive) StreamURL(_ context.Context, fileID string) (*drives.StreamLink, error) {
 	d.calls++
 	return &drives.StreamLink{
-		URL:     "https://cdn.pikpak.example/" + fileID,
-		Headers: http.Header{},
-		Expires: time.Now().Add(10 * time.Minute),
+		URL:                "https://cdn.pikpak.example/" + fileID,
+		Headers:            http.Header{},
+		Expires:            time.Now().Add(10 * time.Minute),
+		ClientRedirectSafe: true,
 	}, nil
 }
 func (d *proxyFakePikPakDrive) Upload(context.Context, string, string, io.Reader, int64) (string, error) {
@@ -1079,7 +1083,17 @@ func (d *proxyFakeSimpleDrive) StreamURL(context.Context, string) (*drives.Strea
 		Headers:              d.headers.Clone(),
 		Expires:              time.Now().Add(10 * time.Minute),
 		PassThroughRedirects: d.passThroughRedirects,
+		ClientRedirectSafe:   redirectKindForTest(d.kind),
 	}, nil
+}
+
+func redirectKindForTest(kind string) bool {
+	switch kind {
+	case "p115", "pikpak", "onedrive", "p123", "wopan", "guangyapan":
+		return true
+	default:
+		return false
+	}
 }
 func (d *proxyFakeSimpleDrive) Upload(context.Context, string, string, io.Reader, int64) (string, error) {
 	return "", drives.ErrNotSupported
@@ -1088,3 +1102,19 @@ func (d *proxyFakeSimpleDrive) EnsureDir(context.Context, string) (string, error
 	return "", drives.ErrNotSupported
 }
 func (d *proxyFakeSimpleDrive) RootID() string { return "0" }
+
+func TestClientRedirectSafeRequiresAbsoluteHTTPURL(t *testing.T) {
+	for _, link := range []*drives.StreamLink{
+		nil,
+		{URL: "https://cdn.example/file", ClientRedirectSafe: false},
+		{URL: "javascript:alert(1)", ClientRedirectSafe: true},
+		{URL: "/relative", ClientRedirectSafe: true},
+	} {
+		if clientRedirectSafe(link) {
+			t.Fatalf("link %#v unexpectedly accepted", link)
+		}
+	}
+	if !clientRedirectSafe(&drives.StreamLink{URL: "https://cdn.example/file", ClientRedirectSafe: true}) {
+		t.Fatal("absolute HTTPS redirect was rejected")
+	}
+}

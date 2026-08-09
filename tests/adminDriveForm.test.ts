@@ -142,9 +142,9 @@ test("crawler upload target uses explicit local-save option instead of auto targ
   assert.match(combinedSource, /本地保存，不上传/);
   assert.match(
     crawlerPageSource,
-    /UPLOAD_TARGET_KINDS\s*=\s*new Set\(\["p115", "pikpak", "p123", "googledrive", "onedrive", "wopan", "guangyapan", "webdav"\]\)/
+    /drives\.filter\(\(d\) => d\.canUpload\)/
   );
-  assert.match(crawlerPageSource, /drives\.filter\(\(d\) => UPLOAD_TARGET_KINDS\.has\(d\.kind\)\)/);
+  assert.match(apiSource, /canUpload: boolean/);
   assert.doesNotMatch(combinedSource, /自动：唯一/);
   assert.doesNotMatch(combinedSource, /自动模式/);
   assert.doesNotMatch(combinedSource, /较早的视频会上传到该云盘根目录下/);
@@ -308,6 +308,7 @@ test("quark drive form supports qr login and manual cookie fallback", () => {
   assert.ok(match, "quark credential field block should be present");
   assert.match(match[1], /key: "cookie"/);
   assert.match(match[1], /__pus=\.\.\.; __puus=\.\.\.; \.\.\./);
+  assert.doesNotMatch(match[1], /use_transcoding_address|客户端 302/);
 });
 
 test("p123 drive form exposes qr login and phone or email password login", () => {
@@ -689,7 +690,7 @@ test("crawler management is a separate admin section", () => {
   assert.doesNotMatch(adminCss, /admin-crawler-(pipeline|stage)/);
   assert.doesNotMatch(crawlerPageSource, /teaserEnabled: form\.teaserEnabled/);
   assert.doesNotMatch(crawlerPageSource, /aria-pressed=\{form\.teaserEnabled\}/);
-  assert.match(crawlerPageSource, /UPLOAD_TARGET_KINDS/);
+  assert.match(crawlerPageSource, /drives\.filter\(\(d\) => d\.canUpload\)/);
   assert.doesNotMatch(crawlerPageSource, /新建脚本/);
   assert.doesNotMatch(crawlerPageSource, /爬虫 ID/);
   assert.doesNotMatch(crawlerPageSource, /crawler-id/);
@@ -1163,6 +1164,10 @@ test("drive detail refresh state uses the detail skeleton without list actions",
     drivesPageLoadingSource,
     /className="admin-detail-tree-container"[\s\S]*<SkipDirsLoadingIndicator \/>/
   );
+  assert.doesNotMatch(
+    drivesPageLoadingSource,
+    /保存更改|修改后自动保存|admin-skipdirs-autosave/
+  );
   assert.doesNotMatch(drivesPageLoadingSource, /admin-drive-detail-loading__tree/);
   assert.doesNotMatch(adminCss, /admin-drive-detail-loading__tree/);
   assert.match(skipDirsPanelSource, /const showLoading = open && !loaded && !error/);
@@ -1275,6 +1280,27 @@ test("drive skip directory tree uses a solid selection box without status pills"
     /\.admin-skipdirs-checkbox:checked\s*\{[^}]*border-color:\s*var\(--accent\)[^}]*background:\s*var\(--accent\)/s
   );
   assert.doesNotMatch(adminCss, /\.admin-skipdirs-flag\s*\{/);
+});
+
+test("drive skip directory selections auto-save without polling away local edits", () => {
+  assert.doesNotMatch(skipDirsPanelSource, /保存更改|handleSave/);
+  assert.match(skipDirsPanelSource, /const AUTO_SAVE_DELAY_MS = 300/);
+  assert.match(
+    skipDirsPanelSource,
+    /saveChainRef\.current = saveChainRef\.current\.then/
+  );
+  assert.match(
+    skipDirsPanelSource,
+    /draftRevisionRef\.current !== savedRevisionRef\.current/
+  );
+  assert.match(skipDirsPanelSource, /保存失败，正在重试…/);
+  assert.doesNotMatch(skipDirsPanelSource, /修改后自动保存/);
+  assert.match(skipDirsPanelSource, /saveStatus === "idle"[\s\S]*\? null/);
+  assert.match(drivesPageSource, /driveListRequestVersion\.current \+= 1/);
+  assert.doesNotMatch(
+    drivesPageSource,
+    /onSaved=\{\(saved\)[\s\S]*?refreshDriveList\(\);[\s\S]*?\}\}/
+  );
 });
 
 test("drive cards label fingerprint count as video fingerprint count", () => {

@@ -95,7 +95,7 @@ func mergeGoogleDriveCredentials(existing *catalog.Drive, incoming map[string]st
 }
 
 // mergeNonEmptyCredentials 逐键合并凭证：incoming 里非空的键覆盖旧值，
-// 空值/缺失的键沿用旧值。googledrive、webdav、localstorage 和 guangyapan 的编辑表单都依赖
+// 空值/缺失的键沿用旧值。quark、googledrive、webdav、localstorage 和 guangyapan 的编辑表单都依赖
 // 这个语义（留空 = 不修改）。
 func mergeNonEmptyCredentials(existing *catalog.Drive, incoming map[string]string) map[string]string {
 	merged := map[string]string{}

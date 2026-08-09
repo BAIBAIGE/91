@@ -470,9 +470,10 @@ func (d *Driver) streamURLWithUA(ctx context.Context, fileID string, ua string) 
 	}
 
 	return &drives.StreamLink{
-		URL:     info.Url.Url,
-		Headers: headers,
-		Expires: time.Now().Add(25 * time.Minute), // 115 直链 30 分钟过期，留余量
+		URL:                info.Url.Url,
+		Headers:            headers,
+		Expires:            time.Now().Add(25 * time.Minute), // 115 直链 30 分钟过期，留余量
+		ClientRedirectSafe: true,
 	}, nil
 }
 
