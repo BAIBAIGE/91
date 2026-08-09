@@ -86,6 +86,50 @@ func TestGuangYaPanLegacyRootPath(t *testing.T) {
 	}
 }
 
+func TestPersistDriveCredentialsPreservesSkipDirsSavedAfterAttach(t *testing.T) {
+	ctx := context.Background()
+	cat, err := catalog.Open(filepath.Join(t.TempDir(), "catalog.db"))
+	if err != nil {
+		t.Fatalf("open catalog: %v", err)
+	}
+	t.Cleanup(func() { _ = cat.Close() })
+
+	if err := cat.UpsertDrive(ctx, &catalog.Drive{
+		ID:         "pikpak-main",
+		Kind:       "pikpak",
+		Name:       "PikPak",
+		RootID:     "root",
+		SkipDirIDs: []string{"old-dir"},
+		Credentials: map[string]string{
+			"access_token":  "old-access",
+			"refresh_token": "old-refresh",
+		},
+		Status: "ok",
+	}); err != nil {
+		t.Fatalf("seed drive: %v", err)
+	}
+	if err := cat.SetDriveSkipDirIDs(ctx, "pikpak-main", []string{"latest-dir"}); err != nil {
+		t.Fatalf("save skip dirs: %v", err)
+	}
+
+	app := &App{cat: cat}
+	app.persistDriveCredentials("pikpak-main", map[string]string{
+		"access_token":  "new-access",
+		"refresh_token": "new-refresh",
+	})
+
+	got, err := cat.GetDrive(ctx, "pikpak-main")
+	if err != nil {
+		t.Fatalf("get drive: %v", err)
+	}
+	if len(got.SkipDirIDs) != 1 || got.SkipDirIDs[0] != "latest-dir" {
+		t.Fatalf("skip dir ids = %#v, want latest setting", got.SkipDirIDs)
+	}
+	if got.Credentials["access_token"] != "new-access" || got.Credentials["refresh_token"] != "new-refresh" {
+		t.Fatalf("credentials = %#v, want refreshed tokens", got.Credentials)
+	}
+}
+
 func TestListDriveDirChildrenPersistsFailureAndRecovery(t *testing.T) {
 	ctx := context.Background()
 	cat, err := catalog.Open(filepath.Join(t.TempDir(), "catalog.db"))

@@ -2655,6 +2655,19 @@ type Drive struct {
 }
 
 func (c *Catalog) UpsertDrive(ctx context.Context, d *Drive) error {
+	return c.upsertDrive(ctx, d, true)
+}
+
+// UpsertDrivePreservingSkipDirIDs writes the authoritative drive fields while
+// retaining the current skip_dir_ids value when the row already exists. It is
+// intended for admin edits whose request omitted skipDirIds: preserving the
+// value in SQL avoids a read-then-write race with the dedicated skip-dir API.
+// New rows still receive the normalized value from d (normally an empty list).
+func (c *Catalog) UpsertDrivePreservingSkipDirIDs(ctx context.Context, d *Drive) error {
+	return c.upsertDrive(ctx, d, false)
+}
+
+func (c *Catalog) upsertDrive(ctx context.Context, d *Drive, replaceSkipDirIDs bool) error {
 	normalizeDriveRootFields(d)
 	cred, _ := json.Marshal(d.Credentials)
 	skipDirs := d.SkipDirIDs
@@ -2679,10 +2692,10 @@ ON CONFLICT(id) DO UPDATE SET
   status         = excluded.status,
   last_error     = excluded.last_error,
   teaser_enabled = excluded.teaser_enabled,
-  skip_dir_ids   = excluded.skip_dir_ids,
+  skip_dir_ids   = CASE WHEN ? != 0 THEN excluded.skip_dir_ids ELSE drives.skip_dir_ids END,
   updated_at     = excluded.updated_at
 `, d.ID, d.Kind, d.Name, d.RootID, d.ScanRootID, string(cred), d.Status, d.LastError, boolToInt(d.TeaserEnabled), string(skipDirsJSON),
-		d.CreatedAt.UnixMilli(), d.UpdatedAt.UnixMilli())
+		d.CreatedAt.UnixMilli(), d.UpdatedAt.UnixMilli(), boolToInt(replaceSkipDirIDs))
 	return err
 }
 
@@ -2778,6 +2791,48 @@ func (c *Catalog) GetDrive(ctx context.Context, id string) (*Drive, error) {
 func (c *Catalog) DeleteDrive(ctx context.Context, id string) error {
 	_, err := c.db.ExecContext(ctx, `DELETE FROM drives WHERE id = ?`, id)
 	return err
+}
+
+// PatchDriveCredentials atomically merges the supplied credential keys into
+// the stored JSON object. Runtime token/cookie refreshes must use this method
+// instead of UpsertDrive: a driver instance can hold an old Drive snapshot,
+// and replacing the full row from that snapshot can roll back independently
+// saved settings such as skip_dir_ids or root_id.
+func (c *Catalog) PatchDriveCredentials(ctx context.Context, id string, updates map[string]string) error {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return fmt.Errorf("catalog: patch drive credentials: empty id")
+	}
+	cleaned := make(map[string]string, len(updates))
+	for rawKey, value := range updates {
+		key := strings.TrimSpace(rawKey)
+		if key == "" {
+			continue
+		}
+		cleaned[key] = value
+	}
+	if len(cleaned) == 0 {
+		return nil
+	}
+	payload, err := json.Marshal(cleaned)
+	if err != nil {
+		return fmt.Errorf("catalog: marshal drive credential patch: %w", err)
+	}
+	res, err := c.db.ExecContext(ctx, `
+UPDATE drives
+   SET credentials = json_patch(
+         CASE WHEN json_valid(COALESCE(credentials, '')) THEN credentials ELSE '{}' END,
+         ?
+       ),
+       updated_at = ?
+ WHERE id = ?`, string(payload), time.Now().UnixMilli(), id)
+	if err != nil {
+		return fmt.Errorf("catalog: patch drive credentials: %w", err)
+	}
+	if rows, err := res.RowsAffected(); err == nil && rows == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
 }
 
 // SetDriveRuntimeStatus updates only the connection state observed while the

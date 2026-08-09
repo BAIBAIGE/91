@@ -781,6 +781,7 @@ func TestHandleUpsertDrivePreservesExistingCredentialsWhenRequestCredentialsEmpt
 		Name:       "Old name",
 		RootID:     "0",
 		ScanRootID: "0",
+		SkipDirIDs: []string{"keep-skipped"},
 		Credentials: map[string]string{
 			"cookie": "existing-cookie",
 		},
@@ -816,6 +817,53 @@ func TestHandleUpsertDrivePreservesExistingCredentialsWhenRequestCredentialsEmpt
 	}
 	if got.Credentials["cookie"] != "existing-cookie" {
 		t.Fatalf("cookie credential = %q, want existing-cookie", got.Credentials["cookie"])
+	}
+	if len(got.SkipDirIDs) != 1 || got.SkipDirIDs[0] != "keep-skipped" {
+		t.Fatalf("skip dir ids = %#v, want preserved setting", got.SkipDirIDs)
+	}
+}
+
+func TestHandleUpsertDriveClearsSkipDirsWhenExplicitlyRequested(t *testing.T) {
+	ctx := context.Background()
+	cat, err := catalog.Open(t.TempDir() + "/catalog.db")
+	if err != nil {
+		t.Fatalf("open catalog: %v", err)
+	}
+	t.Cleanup(func() { _ = cat.Close() })
+
+	if err := cat.UpsertDrive(ctx, &catalog.Drive{
+		ID:         "quark-main",
+		Kind:       "quark",
+		Name:       "Quark",
+		RootID:     "0",
+		SkipDirIDs: []string{"remove-me"},
+		Credentials: map[string]string{
+			"cookie": "existing-cookie",
+		},
+	}); err != nil {
+		t.Fatalf("seed drive: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/drives", strings.NewReader(`{
+		"id": "quark-main",
+		"kind": "quark",
+		"name": "Quark",
+		"rootId": "0",
+		"credentials": {},
+		"skipDirIds": []
+	}`))
+	rr := httptest.NewRecorder()
+	(&AdminServer{Catalog: cat}).handleUpsertDrive(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rr.Code, rr.Body.String())
+	}
+	got, err := cat.GetDrive(ctx, "quark-main")
+	if err != nil {
+		t.Fatalf("get drive: %v", err)
+	}
+	if len(got.SkipDirIDs) != 0 {
+		t.Fatalf("skip dir ids = %#v, want cleared", got.SkipDirIDs)
 	}
 }
 

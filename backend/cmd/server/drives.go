@@ -94,6 +94,21 @@ func (a *App) recordDriveRuntimeStatus(driveID, status, lastError string) {
 	}
 }
 
+// persistDriveCredentials applies only the credential keys produced by a
+// runtime token/cookie refresh. Driver callbacks can outlive the Drive value
+// used during attachment, so writing that whole value back would risk rolling
+// back independently saved settings such as skip directories or root IDs.
+func (a *App) persistDriveCredentials(driveID string, updates map[string]string) {
+	if a == nil || a.cat == nil || len(updates) == 0 {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := a.cat.PatchDriveCredentials(ctx, driveID, updates); err != nil {
+		log.Printf("[drive %s] persist refreshed credentials: %v", driveID, err)
+	}
+}
+
 func (a *App) attachDriveUnlocked(ctx context.Context, d *catalog.Drive) error {
 	if d == nil {
 		return errors.New("nil drive")
@@ -113,24 +128,7 @@ func (a *App) attachDriveUnlocked(ctx context.Context, d *catalog.Drive) error {
 				if a.proxy != nil {
 					a.proxy.InvalidateDrive(d.ID)
 				}
-				persistCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-				defer cancel()
-				current, err := a.cat.GetDrive(persistCtx, d.ID)
-				if err != nil {
-					log.Printf("[drive %s] load before persisting rotated Quark cookie: %v", d.ID, err)
-					return
-				}
-				if current.Credentials == nil {
-					current.Credentials = make(map[string]string)
-				}
-				if current.Credentials["cookie"] == cookie {
-					return
-				}
-				current.Credentials["cookie"] = cookie
-				if err := a.cat.UpsertDrive(persistCtx, current); err != nil {
-					log.Printf("[drive %s] persist rotated Quark cookie: %v", d.ID, err)
-					return
-				}
+				a.persistDriveCredentials(d.ID, map[string]string{"cookie": cookie})
 			},
 		})
 	case "p115":
@@ -150,11 +148,7 @@ func (a *App) attachDriveUnlocked(ctx context.Context, d *catalog.Drive) error {
 			RootID:        d.RootID,
 			UploadTempDir: a.uploadWorkDir(p123.Kind),
 			OnTokenUpdate: func(access string) {
-				if d.Credentials == nil {
-					d.Credentials = make(map[string]string)
-				}
-				d.Credentials["access_token"] = access
-				_ = a.cat.UpsertDrive(ctx, d)
+				a.persistDriveCredentials(d.ID, map[string]string{"access_token": access})
 			},
 		})
 	case "pikpak":
@@ -171,11 +165,12 @@ func (a *App) attachDriveUnlocked(ctx context.Context, d *catalog.Drive) error {
 			DisableMediaLink: pikpak.ParseBoolDefault(d.Credentials["disable_media_link"], true),
 			UploadTempDir:    a.uploadWorkDir("pikpak"),
 			OnTokenUpdate: func(access, refresh, captcha, deviceID string) {
-				d.Credentials["access_token"] = access
-				d.Credentials["refresh_token"] = refresh
-				d.Credentials["captcha_token"] = captcha
-				d.Credentials["device_id"] = deviceID
-				_ = a.cat.UpsertDrive(ctx, d)
+				a.persistDriveCredentials(d.ID, map[string]string{
+					"access_token":  access,
+					"refresh_token": refresh,
+					"captcha_token": captcha,
+					"device_id":     deviceID,
+				})
 			},
 		})
 	case "wopan":
@@ -187,9 +182,10 @@ func (a *App) attachDriveUnlocked(ctx context.Context, d *catalog.Drive) error {
 			RootID:        d.RootID,
 			UploadTempDir: a.uploadWorkDir("wopan"),
 			OnTokenUpdate: func(access, refresh string) {
-				d.Credentials["access_token"] = access
-				d.Credentials["refresh_token"] = refresh
-				_ = a.cat.UpsertDrive(ctx, d)
+				a.persistDriveCredentials(d.ID, map[string]string{
+					"access_token":  access,
+					"refresh_token": refresh,
+				})
 			},
 		})
 	case guangyapan.Kind:
@@ -212,13 +208,7 @@ func (a *App) attachDriveUnlocked(ctx context.Context, d *catalog.Drive) error {
 			AccountBaseURL: d.Credentials["account_base_url"],
 			APIBaseURL:     d.Credentials["api_base_url"],
 			OnCredentialsUpdate: func(updated map[string]string) {
-				if d.Credentials == nil {
-					d.Credentials = make(map[string]string)
-				}
-				for k, v := range updated {
-					d.Credentials[k] = v
-				}
-				_ = a.cat.UpsertDrive(ctx, d)
+				a.persistDriveCredentials(d.ID, updated)
 			},
 		})
 	case "onedrive":
@@ -232,12 +222,10 @@ func (a *App) attachDriveUnlocked(ctx context.Context, d *catalog.Drive) error {
 			SiteID:       d.Credentials["site_id"],
 			RenewAPIURL:  d.Credentials["api_url_address"],
 			OnTokenUpdate: func(access, refresh string) {
-				if d.Credentials == nil {
-					d.Credentials = make(map[string]string)
-				}
-				d.Credentials["access_token"] = access
-				d.Credentials["refresh_token"] = refresh
-				_ = a.cat.UpsertDrive(ctx, d)
+				a.persistDriveCredentials(d.ID, map[string]string{
+					"access_token":  access,
+					"refresh_token": refresh,
+				})
 			},
 		})
 	case googledrive.Kind:
@@ -251,12 +239,10 @@ func (a *App) attachDriveUnlocked(ctx context.Context, d *catalog.Drive) error {
 			OAuthURL:     d.Credentials["oauth_url"],
 			APIBaseURL:   d.Credentials["api_base_url"],
 			OnTokenUpdate: func(access, refresh string) {
-				if d.Credentials == nil {
-					d.Credentials = make(map[string]string)
-				}
-				d.Credentials["access_token"] = access
-				d.Credentials["refresh_token"] = refresh
-				_ = a.cat.UpsertDrive(ctx, d)
+				a.persistDriveCredentials(d.ID, map[string]string{
+					"access_token":  access,
+					"refresh_token": refresh,
+				})
 			},
 		})
 	case webdav.Kind:
@@ -289,13 +275,17 @@ func (a *App) attachDriveUnlocked(ctx context.Context, d *catalog.Drive) error {
 		}
 		d.Status = "error"
 		d.LastError = err.Error()
-		_ = a.cat.UpsertDrive(ctx, d)
+		if persistErr := a.cat.SetDriveRuntimeStatus(ctx, d.ID, d.Status, d.LastError); persistErr != nil {
+			log.Printf("[drive %s] persist attach failure: %v", d.ID, persistErr)
+		}
 		return err
 	}
 
 	d.Status = "ok"
 	d.LastError = ""
-	_ = a.cat.UpsertDrive(ctx, d)
+	if err := a.cat.SetDriveRuntimeStatus(ctx, d.ID, d.Status, d.LastError); err != nil {
+		log.Printf("[drive %s] persist attach success: %v", d.ID, err)
+	}
 	if a.proxy != nil {
 		a.proxy.InvalidateDrive(d.ID)
 	}
