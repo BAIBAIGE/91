@@ -124,6 +124,10 @@ func (a *AdminServer) handleDeleteBackup(w http.ResponseWriter, r *http.Request)
 	if !a.backupsAvailable(w) {
 		return
 	}
+	if a.BackupTransfers != nil && a.BackupTransfers.BackupInUse(routeParam(r, "id")) {
+		writeErr(w, http.StatusConflict, errors.New("该备份正在发送到其它服务器，不能删除"))
+		return
+	}
 	if err := a.Backups.Delete(routeParam(r, "id")); err != nil {
 		code := http.StatusInternalServerError
 		if errors.Is(err, backup.ErrBackupNotFound) {

@@ -11,9 +11,25 @@ const page = readFileSync(
   new URL("../src/admin/BackupPage.tsx", import.meta.url),
   "utf8"
 );
+const sha256 = readFileSync(
+  new URL("../src/lib/sha256.ts", import.meta.url),
+  "utf8"
+);
 const api = readFileSync(new URL("../src/admin/api.ts", import.meta.url), "utf8");
 const backupApiHandler = readFileSync(
   new URL("../backend/internal/api/admin_backups.go", import.meta.url),
+  "utf8"
+);
+const backupTransferRoutes = readFileSync(
+  new URL("../backend/internal/api/admin.go", import.meta.url),
+  "utf8"
+);
+const backupTransferApi = readFileSync(
+  new URL("../backend/internal/api/backup_transfers.go", import.meta.url),
+  "utf8"
+);
+const backupTransferSender = readFileSync(
+  new URL("../backend/internal/backuptransfer/outgoing.go", import.meta.url),
   "utf8"
 );
 const backupTypes = readFileSync(
@@ -297,15 +313,31 @@ test("backup loading keeps the fixed page shell and leaves backend data blank", 
   );
 });
 
-test("migration upload uses resumable 16 MiB server chunks with hashes", () => {
+test("migration upload uses resumable 16 MiB server chunks with HTTP-compatible hashes", () => {
   assert.match(api, /X-Chunk-SHA256/);
   assert.match(api, /\/backup-uploads\/\$\{encodeURIComponent\(id\)\}\/chunks\/\$\{index\}/);
-  assert.match(page, /crypto\.subtle\.digest\("SHA-256"/);
+  assert.match(page, /sha256Blob\(blob\)/);
+  assert.match(sha256, /globalThis\.crypto\?\.subtle \?\? null/);
+  assert.match(sha256, /subtle\.digest\("SHA-256", buffer\)/);
+  assert.match(sha256, /import\("@noble\/hashes\/sha2\.js"\)/);
   assert.match(page, /localStorage\.setItem\(RESUME_KEY/);
   assert.match(page, /继续上传/);
   assert.match(page, /handlePause/);
   assert.match(page, /校验并入库/);
   assert.doesNotMatch(page, /正在合并并完整校验/);
+});
+
+test("server transfer uses scoped pairing tokens and never auto-restores imports", () => {
+  assert.match(api, /createBackupTransfer/);
+  assert.match(api, /createBackupReceiveToken/);
+  assert.match(page, /从服务器接收/);
+  assert.match(page, /发送到其它服务器/);
+  assert.match(page, /目标端只会校验并加入备份列表，不会自动恢复/);
+  assert.match(backupTransferRoutes, /r\.Route\("\/peer\/v1\/backups"/);
+  assert.match(backupTransferApi, /peerBearerToken\(r\)/);
+  assert.match(backupTransferApi, /Content-Digest/);
+  assert.match(backupTransferSender, /目标服务器必须使用 HTTPS/);
+  assert.match(backupTransferSender, /receivedChunks\(status\)/);
 });
 
 test("backup upload aligns its picker with an ordinary compact upload button", () => {

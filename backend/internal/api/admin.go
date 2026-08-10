@@ -10,15 +10,17 @@ import (
 	"github.com/video-site/backend/internal/applog"
 	"github.com/video-site/backend/internal/auth"
 	"github.com/video-site/backend/internal/backup"
+	"github.com/video-site/backend/internal/backuptransfer"
 	"github.com/video-site/backend/internal/catalog"
 	"github.com/video-site/backend/internal/config"
 	"github.com/video-site/backend/internal/drives/quark"
 )
 
 type AdminServer struct {
-	Catalog *catalog.Catalog
-	Auth    *auth.Authenticator
-	Backups *backup.Manager
+	Catalog         *catalog.Catalog
+	Auth            *auth.Authenticator
+	Backups         *backup.Manager
+	BackupTransfers *backuptransfer.Manager
 	// Logs is the durable runtime log store exposed only through the
 	// administrator-authenticated routes below.
 	Logs *applog.Store
@@ -289,11 +291,18 @@ func (a *AdminServer) Register(r chi.Router) {
 			r.Get("/backups/{id}/download", a.handleDownloadBackup)
 			r.Delete("/backups/{id}", a.handleDeleteBackup)
 			r.Post("/backups/{id}/restore", a.handleRestoreBackup)
+			r.Post("/backups/{id}/transfers", a.handleCreateBackupTransfer)
 			r.Post("/backup-uploads", a.handleBeginBackupUpload)
 			r.Get("/backup-uploads/{id}", a.handleBackupUploadStatus)
 			r.Put("/backup-uploads/{id}/chunks/{index}", a.handleBackupUploadChunk)
 			r.Post("/backup-uploads/{id}/finalize", a.handleFinalizeBackupUpload)
 			r.Delete("/backup-uploads/{id}", a.handleCancelBackupUpload)
+			r.Get("/backup-transfers", a.handleListBackupTransfers)
+			r.Delete("/backup-transfers/{id}", a.handleCancelBackupTransfer)
+			r.Post("/backup-transfers/{id}/retry", a.handleRetryBackupTransfer)
+			r.Get("/backup-receive-tokens", a.handleListBackupReceiveTokens)
+			r.Post("/backup-receive-tokens", a.handleCreateBackupReceiveToken)
+			r.Delete("/backup-receive-tokens/{id}", a.handleRevokeBackupReceiveToken)
 			r.Get("/jobs/scan-all/status", a.handleScanAllJobStatus)
 			r.Post("/jobs/scan-all/run", a.handleRunScanAllJob)
 			// 兼容旧前端缓存；旧路径现在也遵循“只扫盘 + 去重”的语义。
@@ -301,5 +310,17 @@ func (a *AdminServer) Register(r chi.Router) {
 			r.Post("/jobs/nightly/run", a.handleRunNightlyJob)
 			r.Post("/tasks/stop", a.handleStopAllTasks)
 		})
+	})
+
+	// Peer routes use narrowly scoped receive tokens rather than browser login
+	// sessions. Keeping them outside /admin/api prevents machine credentials
+	// from acquiring unrelated administrator capabilities.
+	r.Route("/peer/v1/backups", func(r chi.Router) {
+		r.Get("/capabilities", a.handlePeerBackupCapabilities)
+		r.Post("/imports", a.handlePeerBeginBackupImport)
+		r.Get("/imports/{id}", a.handlePeerBackupImportStatus)
+		r.Put("/imports/{id}/chunks/{index}", a.handlePeerBackupImportChunk)
+		r.Post("/imports/{id}/finalize", a.handlePeerFinalizeBackupImport)
+		r.Delete("/imports/{id}", a.handlePeerCancelBackupImport)
 	})
 }

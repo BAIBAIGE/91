@@ -24,6 +24,7 @@ import (
 	"github.com/video-site/backend/internal/applog"
 	"github.com/video-site/backend/internal/auth"
 	"github.com/video-site/backend/internal/backup"
+	"github.com/video-site/backend/internal/backuptransfer"
 	"github.com/video-site/backend/internal/catalog"
 	"github.com/video-site/backend/internal/config"
 	"github.com/video-site/backend/internal/crawlerupload"
@@ -275,6 +276,21 @@ func main() {
 	}
 	backupManager.Start(ctx)
 	defer backupManager.Close()
+	backupTransferManager, err := backuptransfer.New(backuptransfer.Config{
+		Backups: backupManager,
+		RootDir: filepath.Join(filepath.Dir(cfg.Storage.DBPath), "backups", ".peer-transfer"),
+	})
+	if err != nil {
+		log.Fatalf("configure backup transfer service: %v", err)
+	}
+	backupTransferManager.Start(ctx)
+	defer func() {
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer shutdownCancel()
+		if err := backupTransferManager.Shutdown(shutdownCtx); err != nil {
+			log.Printf("[backup-transfer] shutdown: %v", err)
+		}
+	}()
 
 	apiServer := &api.Server{
 		Catalog:        cat,
@@ -301,6 +317,7 @@ func main() {
 		Catalog:         cat,
 		Auth:            authr,
 		Backups:         backupManager,
+		BackupTransfers: backupTransferManager,
 		Logs:            logStore,
 		ConfigManager:   configManager,
 		VersionFilePath: versionFilePath,

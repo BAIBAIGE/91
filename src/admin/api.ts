@@ -385,6 +385,78 @@ export function restoreBackup(
   });
 }
 
+export type BackupTransferState =
+  | "queued"
+  | "connecting"
+  | "uploading"
+  | "finalizing"
+  | "retrying"
+  | "completed"
+  | "failed"
+  | "canceled";
+
+export type BackupTransferJob = {
+  id: string;
+  backupId: string;
+  backupName: string;
+  targetUrl: string;
+  state: BackupTransferState | string;
+  size: number;
+  sha256: string;
+  processedBytes: number;
+  totalChunks?: number;
+  processedChunks?: number;
+  attempts?: number;
+  nextAttemptAt?: string;
+  error?: string;
+  targetBackupId?: string;
+  targetBackupName?: string;
+  createdAt: string;
+  startedAt?: string;
+  updatedAt: string;
+  finishedAt?: string;
+  cancellable: boolean;
+  retryable: boolean;
+};
+
+export type BackupReceiveToken = {
+  id: string;
+  token: string;
+  createdAt: string;
+  expiresAt: string;
+};
+
+export function listBackupTransfers() {
+  return request<BackupTransferJob[]>("/backup-transfers");
+}
+
+export function createBackupTransfer(
+  backupId: string,
+  input: { targetUrl: string; receiveToken: string }
+) {
+  return request<BackupTransferJob>(
+    `/backups/${encodeURIComponent(backupId)}/transfers`,
+    { method: "POST", body: JSON.stringify(input) }
+  );
+}
+
+export function cancelBackupTransfer(id: string) {
+  return request<BackupTransferJob>(`/backup-transfers/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
+}
+
+export function retryBackupTransfer(id: string) {
+  return request<BackupTransferJob>(
+    `/backup-transfers/${encodeURIComponent(id)}/retry`,
+    { method: "POST" }
+  );
+}
+
+export function createBackupReceiveToken() {
+  return request<BackupReceiveToken>("/backup-receive-tokens", { method: "POST" });
+}
+
 // ---------- Drives ----------
 
 export type AdminDrive = {

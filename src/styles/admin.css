@@ -8839,6 +8839,65 @@ body.admin-mobile-nav-open {
   overflow-wrap: anywhere;
 }
 
+/* ----- Server-to-server transfers ----- */
+.backup-transfer-list {
+  display: grid;
+  gap: var(--space-3);
+  margin-bottom: var(--space-5);
+}
+
+.backup-transfer {
+  display: grid;
+  gap: 10px;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+}
+
+.backup-transfer.is-error {
+  border-color: color-mix(in srgb, var(--danger) 40%, var(--border-subtle));
+}
+
+.backup-transfer__head,
+.backup-transfer__meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.backup-transfer__head > div:first-child {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.backup-transfer__head strong {
+  color: var(--text-strong);
+  font-size: var(--font-sm);
+}
+
+.backup-transfer__head span {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: var(--font-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.backup-transfer__actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: var(--space-2);
+}
+
+.backup-transfer__meta {
+  color: var(--text-faint);
+  font-size: var(--font-xs);
+  font-variant-numeric: tabular-nums;
+}
+
 /* ----- Two-column layout ----- */
 .backup-grid {
   display: grid;
@@ -10122,6 +10181,87 @@ body.admin-logs-fullscreen-active {
   width: min(620px, 100%);
 }
 
+.admin-modal.admin-modal--backup-transfer {
+  width: min(620px, 100%);
+}
+
+.backup-transfer-form,
+.backup-receive-code {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.backup-transfer-summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+}
+
+.backup-transfer-summary > svg {
+  flex: 0 0 auto;
+  color: var(--accent);
+}
+
+.backup-transfer-summary > div {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.backup-transfer-summary strong {
+  overflow: hidden;
+  color: var(--text-strong);
+  font-family: ui-monospace, SFMono-Regular, "JetBrains Mono", monospace;
+  font-size: var(--font-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.backup-transfer-summary span,
+.backup-transfer-hint,
+.backup-receive-code > p,
+.backup-receive-code__expiry {
+  color: var(--text-muted);
+  font-size: var(--font-xs);
+  line-height: 1.6;
+}
+
+.backup-transfer-hint,
+.backup-receive-code > p {
+  margin: 0;
+}
+
+.backup-transfer-token-input {
+  min-height: 88px;
+  resize: vertical;
+  font-family: ui-monospace, SFMono-Regular, "JetBrains Mono", monospace;
+}
+
+.backup-receive-code__value {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: stretch;
+  gap: var(--space-2);
+}
+
+.backup-receive-code__value code {
+  min-width: 0;
+  padding: 11px 12px;
+  overflow-wrap: anywhere;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  color: var(--text-default);
+  font-size: var(--font-xs);
+  line-height: 1.55;
+  user-select: all;
+}
+
 .backup-restore-form {
   display: grid;
   gap: var(--space-4);
@@ -10272,6 +10412,14 @@ body.admin-logs-fullscreen-active {
 
   .backup-record__actions {
     grid-column: auto;
+  }
+
+  .backup-transfer__head {
+    align-items: flex-start;
+  }
+
+  .backup-receive-code__value {
+    grid-template-columns: 1fr;
   }
 }
 

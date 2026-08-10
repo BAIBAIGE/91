@@ -1,0 +1,12 @@
+// Package backuptransfer implements the versioned, source-push protocol used
+// to copy verified backup archives between two application servers.
+//
+// A target administrator creates a short-lived receive token. The source uses
+// that token over HTTPS to negotiate protocol capabilities, create an import,
+// upload independently hashed chunks, and request final verification. The
+// target binds the token to the first transfer ID, persists only its hash, and
+// publishes the archive through backup.Manager after full-archive validation.
+// Durable jobs, received chunk ranges, and idempotent final receipts allow
+// either server to restart without routing backup bytes through a browser.
+// Importing an archive never schedules or applies a restore.
+package backuptransfer

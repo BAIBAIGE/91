@@ -10,8 +10,13 @@ import {
   Archive,
   Check,
   CircleAlert,
+  Copy,
   Loader2,
+  Send,
+  Server,
 } from "lucide-react";
+import { copyTextToClipboard } from "@/lib/clipboard";
+import { sha256Blob } from "@/lib/sha256";
 import * as api from "./api";
 import { useAuth } from "./AuthContext";
 import { ConfirmModal } from "./ConfirmModal";
@@ -77,6 +82,35 @@ function backupSelectionLabels(selection: api.BackupSelection | undefined) {
 
 function taskActive(task: api.BackupTask | undefined) {
   return task?.state === "queued" || task?.state === "running" || task?.state === "canceling";
+}
+
+function transferActive(transfer: api.BackupTransferJob) {
+  return ["queued", "connecting", "uploading", "finalizing", "retrying"].includes(
+    transfer.state
+  );
+}
+
+function transferStateLabel(state: string) {
+  switch (state) {
+    case "queued":
+      return "等待发送";
+    case "connecting":
+      return "连接目标服务器";
+    case "uploading":
+      return "服务器直传中";
+    case "finalizing":
+      return "目标服务器校验入库";
+    case "retrying":
+      return "连接中断，等待重试";
+    case "completed":
+      return "发送完成";
+    case "failed":
+      return "发送失败";
+    case "canceled":
+      return "已取消";
+    default:
+      return state;
+  }
 }
 
 function shouldConfirmRestoreAfterTransportError(error: unknown) {
@@ -238,6 +272,7 @@ export function BackupPage() {
   const { invalidateSession } = useAuth();
   const { show } = useToast();
   const [data, setData] = useState<api.BackupList | null>(null);
+  const [transfers, setTransfers] = useState<api.BackupTransferJob[]>([]);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
@@ -252,6 +287,13 @@ export function BackupPage() {
   const [restoring, setRestoring] = useState(false);
   const [restartManaged, setRestartManaged] = useState(true);
   const [restoreReport, setRestoreReport] = useState<api.RestoreReport | null>(null);
+  const [sendTarget, setSendTarget] = useState<api.BackupRecord | null>(null);
+  const [sendURL, setSendURL] = useState("");
+  const [sendToken, setSendToken] = useState("");
+  const [sending, setSending] = useState(false);
+  const [receiveToken, setReceiveToken] = useState<api.BackupReceiveToken | null>(null);
+  const [receiveTokenOpen, setReceiveTokenOpen] = useState(false);
+  const [generatingReceiveToken, setGeneratingReceiveToken] = useState(false);
 
   const [file, setFile] = useState<File | null>(null);
   const [upload, setUpload] = useState<api.BackupUploadSession | null>(null);
@@ -266,6 +308,11 @@ export function BackupPage() {
     try {
       const next = await api.listBackups();
       setData(next);
+      try {
+        setTransfers(await api.listBackupTransfers());
+      } catch (error) {
+        if (!silent) throw error;
+      }
     } catch (error) {
       if (!silent) show(error instanceof Error ? error.message : "加载备份列表失败", "error");
     } finally {
@@ -400,6 +447,13 @@ export function BackupPage() {
     if (!current?.totalBytes) return 0;
     return Math.min(100, Math.max(0, (current.processedBytes / current.totalBytes) * 100));
   }, [current?.processedBytes, current?.totalBytes]);
+  const visibleTransfers = useMemo(() => {
+    const active = transfers.filter(transferActive);
+    const recentFinished = transfers
+      .filter((transfer) => !transferActive(transfer))
+      .slice(0, Math.max(0, 5 - active.length));
+    return [...active, ...recentFinished];
+  }, [transfers]);
 
   function handleCreate() {
     setBackupSelection({ ...EMPTY_BACKUP_SELECTION });
@@ -450,6 +504,65 @@ export function BackupPage() {
       show(error instanceof Error ? error.message : "删除备份失败", "error");
     } finally {
       setDeleting(false);
+    }
+  }
+
+  async function handleCreateReceiveToken() {
+    setGeneratingReceiveToken(true);
+    try {
+      const created = await api.createBackupReceiveToken();
+      setReceiveToken(created);
+      setReceiveTokenOpen(true);
+    } catch (error) {
+      show(error instanceof Error ? error.message : "生成服务器接收码失败", "error");
+    } finally {
+      setGeneratingReceiveToken(false);
+    }
+  }
+
+  async function handleCopyReceiveToken() {
+    if (!receiveToken) return;
+    const copied = await copyTextToClipboard(receiveToken.token);
+    show(copied ? "接收码已复制" : "复制失败，请手动复制", copied ? "success" : "error");
+  }
+
+  async function handleSendBackup() {
+    if (!sendTarget || sending) return;
+    setSending(true);
+    try {
+      await api.createBackupTransfer(sendTarget.id, {
+        targetUrl: sendURL.trim(),
+        receiveToken: sendToken.trim(),
+      });
+      setSendTarget(null);
+      setSendURL("");
+      setSendToken("");
+      show("服务器发送任务已创建", "success");
+      await refresh(true);
+    } catch (error) {
+      show(error instanceof Error ? error.message : "创建服务器发送任务失败", "error");
+    } finally {
+      setSending(false);
+    }
+  }
+
+  async function handleCancelTransfer(id: string) {
+    try {
+      await api.cancelBackupTransfer(id);
+      show("正在取消服务器发送任务", "info");
+      await refresh(true);
+    } catch (error) {
+      show(error instanceof Error ? error.message : "取消服务器发送失败", "error");
+    }
+  }
+
+  async function handleRetryTransfer(id: string) {
+    try {
+      await api.retryBackupTransfer(id);
+      show("服务器发送任务已重新排队", "success");
+      await refresh(true);
+    } catch (error) {
+      show(error instanceof Error ? error.message : "重试服务器发送失败", "error");
     }
   }
 
@@ -566,7 +679,7 @@ export function BackupPage() {
     pauseRequested.current = true;
     uploadAbort.current?.abort();
     setUploading(false);
-    show("上传已暂停，已完成分片会保留 24 小时", "info");
+    show("上传已暂停，已完成分片会保留 72 小时", "info");
   }
 
   async function handleCancelUpload() {
@@ -743,10 +856,79 @@ export function BackupPage() {
         </section>
       )}
 
+      {visibleTransfers.length > 0 && (
+        <section className="backup-transfer-list" aria-label="服务器发送任务">
+          <div className="backup-section-heading">
+            <h2>服务器发送</h2>
+          </div>
+          {visibleTransfers.map((transfer) => {
+            const percent = transfer.size
+              ? Math.min(100, Math.max(0, (transfer.processedBytes / transfer.size) * 100))
+              : 0;
+            return (
+              <article
+                className={`backup-transfer ${transfer.state === "failed" ? "is-error" : ""}`}
+                key={transfer.id}
+              >
+                <div className="backup-transfer__head">
+                  <div>
+                    <strong>{transferStateLabel(transfer.state)}</strong>
+                    <span>{transfer.backupName} → {transfer.targetUrl}</span>
+                  </div>
+                  <div className="backup-transfer__actions">
+                    {transfer.cancellable && transferActive(transfer) && (
+                      <button
+                        type="button"
+                        className="admin-btn is-transparent"
+                        onClick={() => handleCancelTransfer(transfer.id)}
+                      >
+                        取消
+                      </button>
+                    )}
+                    {transfer.retryable && (
+                      <button
+                        type="button"
+                        className="admin-btn is-transparent"
+                        onClick={() => handleRetryTransfer(transfer.id)}
+                      >
+                        重试
+                      </button>
+                    )}
+                  </div>
+                </div>
+                <div className="backup-transfer__meta">
+                  <span>{formatBytes(transfer.processedBytes)} / {formatBytes(transfer.size)}</span>
+                  <strong>{percent.toFixed(1)}%</strong>
+                </div>
+                <div
+                  className="backup-progress"
+                  role="progressbar"
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-valuenow={Math.round(percent)}
+                >
+                  <span style={{ width: `${percent}%` }} />
+                </div>
+                {transfer.error && <p className="backup-task__error">{transfer.error}</p>}
+              </article>
+            );
+          })}
+        </section>
+      )}
+
       <div className="backup-grid">
         <section className="admin-card backup-upload-card">
           <div className="backup-section-heading">
             <h2>上传备份包</h2>
+            <button
+              type="button"
+              className="admin-btn is-transparent"
+              onClick={handleCreateReceiveToken}
+              disabled={!data || generatingReceiveToken}
+            >
+              {generatingReceiveToken ? <Loader2 size={14} className="admin-spin" /> : <Server size={14} />}
+              从服务器接收
+            </button>
           </div>
           <div className="backup-upload-controls">
             <label
@@ -864,6 +1046,23 @@ export function BackupPage() {
                       type="button"
                       className="admin-btn"
                       onClick={() => {
+                        setSendTarget(record);
+                        setSendURL("");
+                        setSendToken("");
+                      }}
+                      disabled={
+                        record.verificationStatus !== "verified" ||
+                        data.pendingRestore ||
+                        transfers.some(transferActive)
+                      }
+                    >
+                      <Send size={14} />
+                      发送
+                    </button>
+                    <button
+                      type="button"
+                      className="admin-btn"
+                      onClick={() => {
                         setRestoreReport(null);
                         setRestoreTarget(record);
                       }}
@@ -945,6 +1144,121 @@ export function BackupPage() {
             </label>
           ))}
         </fieldset>
+      </Modal>
+
+      <Modal
+        open={sendTarget !== null}
+        title="发送到其它服务器"
+        className="admin-modal--backup-transfer"
+        onClose={() => {
+          if (sending) return;
+          setSendTarget(null);
+          setSendURL("");
+          setSendToken("");
+        }}
+        footer={
+          <>
+            <button
+              type="button"
+              className="admin-btn"
+              disabled={sending}
+              onClick={() => {
+                setSendTarget(null);
+                setSendURL("");
+                setSendToken("");
+              }}
+            >
+              取消
+            </button>
+            <button
+              type="button"
+              className="admin-btn"
+              disabled={sending || !sendURL.trim() || !sendToken.trim()}
+              onClick={handleSendBackup}
+            >
+              {sending ? <Loader2 size={14} className="admin-spin" /> : <Send size={14} />}
+              开始发送
+            </button>
+          </>
+        }
+      >
+        <div className="backup-transfer-form">
+          <div className="backup-transfer-summary">
+            <Archive size={18} />
+            <div>
+              <strong>{sendTarget?.name}</strong>
+              <span>{formatBytes(sendTarget?.size)}</span>
+            </div>
+          </div>
+          <label className="backup-field">
+            <span>目标服务器地址</span>
+            <input
+              className="admin-input"
+              type="url"
+              value={sendURL}
+              onChange={(event) => setSendURL(event.target.value)}
+              placeholder="https://target.example.com"
+              autoComplete="url"
+              disabled={sending}
+            />
+          </label>
+          <label className="backup-field">
+            <span>目标服务器接收码</span>
+            <textarea
+              className="admin-input backup-transfer-token-input"
+              value={sendToken}
+              onChange={(event) => setSendToken(event.target.value)}
+              placeholder="在目标服务器的备份页面生成并粘贴到这里"
+              autoComplete="off"
+              spellCheck={false}
+              disabled={sending}
+            />
+          </label>
+          <p className="backup-transfer-hint">
+            备份包由本机后端直接发送到目标服务器；目标端只会校验并加入备份列表，不会自动恢复。
+          </p>
+        </div>
+      </Modal>
+
+      <Modal
+        open={receiveTokenOpen}
+        title="从其它服务器接收"
+        className="admin-modal--backup-transfer"
+        onClose={() => {
+          setReceiveTokenOpen(false);
+          setReceiveToken(null);
+        }}
+        footer={
+          <button
+            type="button"
+            className="admin-btn"
+            onClick={() => {
+              setReceiveTokenOpen(false);
+              setReceiveToken(null);
+            }}
+          >
+            完成
+          </button>
+        }
+      >
+        <div className="backup-receive-code">
+          <p>将这个一次性接收码复制到源服务器。首次连接后，它只允许同一个发送任务继续断点续传。</p>
+          <div className="backup-receive-code__value">
+            <code>{receiveToken?.token}</code>
+            <button
+              type="button"
+              className="admin-btn"
+              onClick={handleCopyReceiveToken}
+              disabled={!receiveToken}
+            >
+              <Copy size={14} />
+              复制
+            </button>
+          </div>
+          <span className="backup-receive-code__expiry">
+            未使用时有效至 {formatTime(receiveToken?.expiresAt)}。接收码只展示这一次，请勿通过不可信渠道传递。
+          </span>
+        </div>
       </Modal>
 
       <Modal
@@ -1059,13 +1373,6 @@ export function BackupPage() {
       </Modal>
     </div>
   );
-}
-
-async function sha256Blob(blob: Blob) {
-  const digest = await crypto.subtle.digest("SHA-256", await blob.arrayBuffer());
-  return Array.from(new Uint8Array(digest))
-    .map((value) => value.toString(16).padStart(2, "0"))
-    .join("");
 }
 
 function delay(milliseconds: number) {

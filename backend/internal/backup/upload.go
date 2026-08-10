@@ -213,6 +213,10 @@ func (m *Manager) PutChunk(
 			return UploadSession{}, err
 		}
 		if valid {
+			latest.ExpiresAt = m.nowTime().Add(UploadTTL)
+			if err := writeJSONAtomic(m.uploadSidecar(id), latest, 0o600); err != nil {
+				return UploadSession{}, err
+			}
 			return publicUploadSession(latest), nil
 		}
 	}
@@ -232,10 +236,21 @@ func (m *Manager) PutChunk(
 		return UploadSession{}, io.ErrShortWrite
 	}
 	latest.Received[index] = UploadChunk{Index: index, Size: written, SHA256: actualHash}
+	latest.ExpiresAt = m.nowTime().Add(UploadTTL)
 	if err := writeJSONAtomic(m.uploadSidecar(id), latest, 0o600); err != nil {
 		return UploadSession{}, err
 	}
 	return publicUploadSession(latest), nil
+}
+
+// FindImportedUpload resolves the durable receipt for an upload whose final
+// HTTP response may have been lost after the archive was atomically published.
+// It is intentionally keyed by the opaque upload ID embedded in archive meta.
+func (m *Manager) FindImportedUpload(ctx context.Context, id string) (BackupRecord, bool, error) {
+	if !validUploadID(id) {
+		return BackupRecord{}, false, ErrUploadNotFound
+	}
+	return m.recoverFinalizedUpload(ctx, id)
 }
 
 func (m *Manager) ensureAssembledUpload(

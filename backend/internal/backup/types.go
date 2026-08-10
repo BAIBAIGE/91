@@ -12,7 +12,7 @@ const (
 	// be resumed by another browser session without renegotiating boundaries.
 	ChunkSize int64 = 16 << 20
 	// UploadTTL is the retention period for an unfinished migration upload.
-	UploadTTL = 24 * time.Hour
+	UploadTTL = 72 * time.Hour
 	// RestartExitCode asks the supported systemd/Docker deployment to start a
 	// fresh process after a pending restore has been staged.
 	RestartExitCode = 75
