@@ -724,6 +724,9 @@ func TestRunCrawlerMigrationAfterManualCrawlRequiresCrawlerUploadTarget(t *testi
 	if migrator.called.Load() != 1 {
 		t.Fatalf("migration calls = %d, want 1", migrator.called.Load())
 	}
+	if got := migrator.lastDriveID(); got != "crawler-main" {
+		t.Fatalf("post-crawl migration drive = %q, want crawler-main", got)
+	}
 }
 
 func TestScheduleCrawlerUploadMigrationRunsForConfiguredCrawler(t *testing.T) {
@@ -771,6 +774,9 @@ func TestScheduleCrawlerUploadMigrationRunsForConfiguredCrawler(t *testing.T) {
 			t.Fatalf("migration calls = %d, want 1", migrator.called.Load())
 		case <-time.After(10 * time.Millisecond):
 		}
+	}
+	if got := migrator.lastDriveID(); got != "crawler-truvaze" {
+		t.Fatalf("migration drive = %q, want crawler-truvaze", got)
 	}
 }
 
@@ -870,6 +876,26 @@ func TestScheduleManualCrawlerUploadMigrationRunsWhenAssetsReady(t *testing.T) {
 			t.Fatalf("migration calls = %d, want 1", migrator.called.Load())
 		case <-time.After(10 * time.Millisecond):
 		}
+	}
+	if got := migrator.lastDriveID(); got != "crawler-ready" {
+		t.Fatalf("migration drive = %q, want crawler-ready", got)
+	}
+
+	deadline = time.After(time.Second)
+	for app.driveHasActiveWork("crawler-ready") {
+		select {
+		case <-deadline:
+			t.Fatal("manual upload task did not finish")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	migrator.rejectStart.Store(true)
+	accepted, message = app.scheduleManualCrawlerUploadMigration(ctx, "crawler-ready")
+	if accepted {
+		t.Fatal("accepted = true while global uploader is busy")
+	}
+	if !strings.Contains(message, "其他爬虫上传任务") {
+		t.Fatalf("message = %q, want global upload busy reason", message)
 	}
 }
 
@@ -2078,11 +2104,33 @@ func TestCleanupDriveVideosForDeleteScriptCrawlerRemovesOnlyLocalRows(t *testing
 		t.Fatalf("seed crawler drive: %v", err)
 	}
 
+	app := &App{
+		cfg:                &config.Config{Storage: config.Storage{LocalPreviewDir: localDir}},
+		cat:                cat,
+		registry:           proxy.NewRegistry(),
+		workers:            make(map[string]*preview.Worker),
+		thumbWorkers:       make(map[string]*preview.ThumbWorker),
+		fingerprintWorkers: make(map[string]*fingerprint.Worker),
+	}
+	crawlerStorage := app.scriptCrawlerDriveDir(driveID)
+	localSource := filepath.Join(crawlerStorage, "videos", "source.mp4")
+	migratedSourceResidue := filepath.Join(crawlerStorage, "videos", "migrated.mp4")
+	sourceThumb := filepath.Join(crawlerStorage, "thumbs", "source.jpg")
+	crawlState := filepath.Join(crawlerStorage, ".crawl", "seen.txt")
 	localPreview := filepath.Join(localDir, "scriptcrawler-crawler-main-source.mp4")
 	localThumb := filepath.Join(localDir, "thumbs", "scriptcrawler-crawler-main-source.jpg")
 	migratedPreview := filepath.Join(localDir, "scriptcrawler-crawler-main-migrated.mp4")
 	migratedThumb := filepath.Join(localDir, "thumbs", "scriptcrawler-crawler-main-migrated.jpg")
-	for _, path := range []string{localPreview, localThumb, migratedPreview, migratedThumb} {
+	for _, path := range []string{
+		localSource,
+		migratedSourceResidue,
+		sourceThumb,
+		crawlState,
+		localPreview,
+		localThumb,
+		migratedPreview,
+		migratedThumb,
+	} {
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			t.Fatalf("mkdir %s: %v", path, err)
 		}
@@ -2127,14 +2175,6 @@ func TestCleanupDriveVideosForDeleteScriptCrawlerRemovesOnlyLocalRows(t *testing
 		}
 	}
 
-	app := &App{
-		cfg:                &config.Config{Storage: config.Storage{LocalPreviewDir: localDir}},
-		cat:                cat,
-		registry:           proxy.NewRegistry(),
-		workers:            make(map[string]*preview.Worker),
-		thumbWorkers:       make(map[string]*preview.ThumbWorker),
-		fingerprintWorkers: make(map[string]*fingerprint.Worker),
-	}
 	removed, err := app.cleanupDriveVideosForDelete(ctx, driveID)
 	if err != nil {
 		t.Fatalf("cleanup crawler videos: %v", err)
@@ -2160,6 +2200,27 @@ func TestCleanupDriveVideosForDeleteScriptCrawlerRemovesOnlyLocalRows(t *testing
 		if _, err := os.Stat(path); err != nil {
 			t.Fatalf("%s missing, stat err=%v", path, err)
 		}
+	}
+	if _, err := os.Stat(crawlerStorage); !os.IsNotExist(err) {
+		t.Fatalf("crawler storage still exists, stat err=%v", err)
+	}
+}
+
+func TestRemoveScriptCrawlerStorageForDeleteRejectsPathsOutsideDriveRoot(t *testing.T) {
+	root := t.TempDir()
+	localDir := filepath.Join(root, "previews")
+	marker := filepath.Join(root, "keep.txt")
+	if err := os.WriteFile(marker, []byte("keep"), 0o644); err != nil {
+		t.Fatalf("write marker: %v", err)
+	}
+	app := &App{cfg: &config.Config{Storage: config.Storage{LocalPreviewDir: localDir}}}
+	for _, driveID := range []string{".", ".."} {
+		if err := app.removeScriptCrawlerStorageForDelete(driveID); err == nil {
+			t.Fatalf("drive %q cleanup succeeded, want unsafe path error", driveID)
+		}
+	}
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatalf("marker was removed: %v", err)
 	}
 }
 
@@ -2643,12 +2704,38 @@ func (d *serverSourceRemovableFakeDrive) Remove(ctx context.Context, fileID stri
 }
 
 type serverFakeCrawlerUploadRunner struct {
-	called atomic.Int32
+	called      atomic.Int32
+	rejectStart atomic.Bool
+	mu          sync.Mutex
+	driveIDs    []string
 }
 
 func (r *serverFakeCrawlerUploadRunner) RunOnce(context.Context) error {
 	r.called.Add(1)
 	return nil
+}
+
+func (r *serverFakeCrawlerUploadRunner) StartDrive(_ context.Context, driveID string) (<-chan error, bool) {
+	if r.rejectStart.Load() {
+		return nil, false
+	}
+	r.called.Add(1)
+	r.mu.Lock()
+	r.driveIDs = append(r.driveIDs, driveID)
+	r.mu.Unlock()
+	done := make(chan error, 1)
+	done <- nil
+	close(done)
+	return done, true
+}
+
+func (r *serverFakeCrawlerUploadRunner) lastDriveID() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(r.driveIDs) == 0 {
+		return ""
+	}
+	return r.driveIDs[len(r.driveIDs)-1]
 }
 
 type serverBlockingListDrive struct {

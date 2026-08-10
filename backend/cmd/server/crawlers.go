@@ -198,7 +198,12 @@ func (a *App) runCrawlerUploadMigrationAfterSave(ctx context.Context, driveID st
 		log.Printf("[scriptcrawler] drive=%s skip saved upload migration after wait: %v", driveID, err)
 		return
 	}
-	if err := a.crawlerUploader.RunOnce(ctx); err != nil {
+	runDone, accepted := a.crawlerUploader.StartDrive(ctx, driveID)
+	if !accepted {
+		log.Printf("[scriptcrawler] drive=%s skip saved upload migration: another crawler upload is running", driveID)
+		return
+	}
+	if err := <-runDone; err != nil {
 		log.Printf("[scriptcrawler] drive=%s saved upload migration: %v", driveID, err)
 	}
 }
@@ -251,6 +256,15 @@ func (a *App) scheduleManualCrawlerUploadMigration(ctx context.Context, driveID 
 	a.crawlerUploadMu.Unlock()
 
 	taskCtx, done := a.registerDriveTaskContext(ctx, driveID)
+	runDone, accepted := a.crawlerUploader.StartDrive(taskCtx, driveID)
+	if !accepted {
+		done()
+		a.crawlerUploadMu.Lock()
+		delete(a.crawlerUploadRunning, driveID)
+		a.crawlerUploadMu.Unlock()
+		return false, "已有其他爬虫上传任务正在运行，请稍后重试"
+	}
+	log.Printf("[scriptcrawler] drive=%s running manual upload migration target=%s", driveID, targetDriveID)
 	go func() {
 		defer func() {
 			done()
@@ -258,7 +272,9 @@ func (a *App) scheduleManualCrawlerUploadMigration(ctx context.Context, driveID 
 			delete(a.crawlerUploadRunning, driveID)
 			a.crawlerUploadMu.Unlock()
 		}()
-		a.runManualCrawlerUploadMigration(taskCtx, driveID, targetDriveID)
+		if err := <-runDone; err != nil {
+			log.Printf("[scriptcrawler] drive=%s manual upload migration: %v", driveID, err)
+		}
 	}()
 	return true, ""
 }
@@ -293,17 +309,6 @@ func crawlerCatalogVideoIDPrefixes(d *catalog.Drive) []string {
 	}
 }
 
-func (a *App) runManualCrawlerUploadMigration(ctx context.Context, driveID, targetDriveID string) {
-	if err := ctx.Err(); err != nil {
-		log.Printf("[scriptcrawler] drive=%s skip manual upload migration: %v", driveID, err)
-		return
-	}
-	log.Printf("[scriptcrawler] drive=%s running manual upload migration target=%s", driveID, targetDriveID)
-	if err := a.crawlerUploader.RunOnce(ctx); err != nil {
-		log.Printf("[scriptcrawler] drive=%s manual upload migration: %v", driveID, err)
-	}
-}
-
 func (a *App) runCrawlerMigrationAfterManualCrawl(ctx context.Context, driveID string) {
 	if err := ctx.Err(); err != nil {
 		log.Printf("[scriptcrawler] drive=%s skip post-crawl migration: %v", driveID, err)
@@ -329,7 +334,10 @@ func (a *App) runCrawlerMigrationAfterManualCrawl(ctx context.Context, driveID s
 			log.Printf("[scriptcrawler] drive=%s skip post-crawl migration: migrator not configured", driveID)
 		} else {
 			log.Printf("[scriptcrawler] drive=%s running post-crawl migration target=%s", driveID, targetDriveID)
-			if err := a.crawlerUploader.RunOnce(ctx); err != nil {
+			runDone, accepted := a.crawlerUploader.StartDrive(ctx, driveID)
+			if !accepted {
+				log.Printf("[scriptcrawler] drive=%s skip post-crawl migration: another crawler upload is running", driveID)
+			} else if err := <-runDone; err != nil {
 				log.Printf("[scriptcrawler] drive=%s post-crawl migration: %v", driveID, err)
 			}
 		}

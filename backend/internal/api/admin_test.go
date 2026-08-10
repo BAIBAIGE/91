@@ -2036,7 +2036,7 @@ func TestCrawlerScriptDownloadURLKeepsNonGitHubURL(t *testing.T) {
 	}
 }
 
-func TestHandleDeleteCrawlerRemovesImportedScript(t *testing.T) {
+func TestHandleDeleteCrawlerRemovesScriptLocalVideosAndDrive(t *testing.T) {
 	ctx := context.Background()
 	tmp := t.TempDir()
 	cat, err := catalog.Open(filepath.Join(tmp, "catalog.db"))
@@ -2083,6 +2083,17 @@ func TestHandleDeleteCrawlerRemovesImportedScript(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("seed video: %v", err)
 	}
+	if err := cat.UpsertVideo(ctx, &catalog.Video{
+		ID:          "migrated-video-from-crawler",
+		DriveID:     "pikpak",
+		FileID:      "remote-file-id",
+		Title:       "Keep Migrated Video",
+		PublishedAt: now,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}); err != nil {
+		t.Fatalf("seed migrated video: %v", err)
+	}
 
 	req := httptest.NewRequest(http.MethodDelete, "/admin/api/crawlers/crawler-delete-me", nil)
 	rctx := chi.NewRouteContext()
@@ -2091,16 +2102,25 @@ func TestHandleDeleteCrawlerRemovesImportedScript(t *testing.T) {
 	rr := httptest.NewRecorder()
 
 	stopped := false
+	removed := false
 	(&AdminServer{
 		Catalog:         cat,
 		LocalPreviewDir: filepath.Join(tmp, "previews"),
-		OnDriveDeleteCleanup: func(context.Context, string) (int, error) {
-			t.Fatal("crawler delete must not delete imported videos")
-			return 0, nil
+		OnDriveDeleteCleanup: func(cleanupCtx context.Context, driveID string) (int, error) {
+			if driveID != "crawler-delete-me" {
+				t.Fatalf("cleanup drive = %q, want crawler-delete-me", driveID)
+			}
+			if err := cat.DeleteVideo(cleanupCtx, "video-from-crawler"); err != nil {
+				t.Fatalf("delete local crawler video: %v", err)
+			}
+			return 1, nil
 		},
 		OnStopDriveTasks: func(driveID string) bool {
 			stopped = driveID == "crawler-delete-me"
 			return true
+		},
+		OnDriveRemoved: func(driveID string) {
+			removed = driveID == "crawler-delete-me"
 		},
 	}).handleDeleteCrawler(rr, req)
 
@@ -2113,15 +2133,17 @@ func TestHandleDeleteCrawlerRemovesImportedScript(t *testing.T) {
 	if !stopped {
 		t.Fatal("stop hook was not called")
 	}
-	drive, err := cat.GetDrive(ctx, "crawler-delete-me")
-	if err != nil {
-		t.Fatalf("crawler drive should remain for existing videos: %v", err)
+	if !removed {
+		t.Fatal("drive removed hook was not called")
 	}
-	if drive.Credentials["script_path"] != "" || drive.Credentials["proxy"] != "" || drive.Credentials["target_new"] != "" || drive.Credentials["paused"] != "" {
-		t.Fatalf("crawler credentials were not cleared: %+v", drive.Credentials)
+	if _, err := cat.GetDrive(ctx, "crawler-delete-me"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("crawler drive lookup error = %v, want sql.ErrNoRows", err)
 	}
-	if _, err := cat.GetVideo(ctx, "video-from-crawler"); err != nil {
-		t.Fatalf("imported video should remain: %v", err)
+	if _, err := cat.GetVideo(ctx, "video-from-crawler"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("local crawler video lookup error = %v, want sql.ErrNoRows", err)
+	}
+	if _, err := cat.GetVideo(ctx, "migrated-video-from-crawler"); err != nil {
+		t.Fatalf("migrated crawler video should remain: %v", err)
 	}
 	var got struct {
 		OK            bool `json:"ok"`
@@ -2131,7 +2153,7 @@ func TestHandleDeleteCrawlerRemovesImportedScript(t *testing.T) {
 	if err := json.NewDecoder(rr.Body).Decode(&got); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if !got.OK || got.DeletedVideos != 0 || !got.DeletedScript {
+	if !got.OK || got.DeletedVideos != 1 || !got.DeletedScript {
 		t.Fatalf("response = %#v", got)
 	}
 }

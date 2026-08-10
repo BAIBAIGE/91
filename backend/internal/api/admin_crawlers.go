@@ -788,29 +788,30 @@ func (a *AdminServer) handleDeleteCrawler(w http.ResponseWriter, r *http.Request
 	if a.OnStopDriveTasks != nil {
 		a.OnStopDriveTasks(id)
 	}
-
-	persistence.RLock()
-	defer persistence.RUnlock()
-	deletedScript, scriptErr := a.removeImportedCrawlerScript(d)
-	if d.Credentials == nil {
-		d.Credentials = map[string]string{}
+	if a.OnDriveDeleteCleanup == nil {
+		http.Error(w, "crawler video cleanup is not available", http.StatusInternalServerError)
+		return
 	}
-	delete(d.Credentials, "script_path")
-	delete(d.Credentials, "proxy")
-	delete(d.Credentials, "target_new")
-	delete(d.Credentials, "paused")
-	delete(d.Credentials, "builtin")
-	delete(d.Credentials, "python_path")
-	delete(d.Credentials, "config_json")
-	d.Status = "disconnected"
-	d.LastError = ""
-	if err := a.Catalog.UpsertDrive(r.Context(), d); err != nil {
+	deletedVideos, err := a.OnDriveDeleteCleanup(r.Context(), id)
+	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
+
+	persistence.RLock()
+	deletedScript, scriptErr := a.removeImportedCrawlerScript(d)
+	deleteErr := a.Catalog.DeleteDrive(r.Context(), id)
+	persistence.RUnlock()
+	if deleteErr != nil {
+		writeErr(w, http.StatusInternalServerError, deleteErr)
+		return
+	}
+	if a.OnDriveRemoved != nil {
+		a.OnDriveRemoved(id)
+	}
 	resp := map[string]any{
 		"ok":            true,
-		"deletedVideos": 0,
+		"deletedVideos": deletedVideos,
 		"deletedScript": deletedScript,
 	}
 	if scriptErr != nil {

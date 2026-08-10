@@ -539,26 +539,61 @@ func (m *Migrator) markCooldownLogged() bool {
 // 整轮被 cooldown / context 取消时也通过日志可观测。保留 error 返回签名是为
 // 给未来需要把 nightly 失败状态展示给 admin 用。
 func (m *Migrator) RunOnce(ctx context.Context) error {
-	m.runOnce(ctx)
+	if !m.tryBeginRun() {
+		return nil
+	}
+	defer m.finishRun()
+	m.run(ctx, "")
 	return nil
 }
 
-// runOnce 单轮：扫所有 scriptcrawler drive，对每条还有本地文件的视频做迁移。
-//
-// 互斥保证：同一 Migrator 内不会并发跑两轮（避免重复上传）。
-func (m *Migrator) runOnce(ctx context.Context) {
+// StartDrive 原子地占用迁移器并异步迁移指定的单个爬虫。返回 false 表示
+// 此时已有全量或单爬虫迁移在运行；调用方必须把它作为“任务忙”反馈给用户，
+// 不能把这次请求报告成已接受。完成通道只会返回一个结果并随后关闭。
+func (m *Migrator) StartDrive(ctx context.Context, driveID string) (<-chan error, bool) {
+	driveID = strings.TrimSpace(driveID)
+	if driveID == "" || !m.tryBeginRun() {
+		return nil, false
+	}
+	done := make(chan error, 1)
+	go func() {
+		func() {
+			defer m.finishRun()
+			m.run(ctx, driveID)
+		}()
+		done <- nil
+		close(done)
+	}()
+	return done, true
+}
+
+// tryBeginRun synchronously reserves the one global migration slot. The
+// reservation happens before StartDrive reports success, eliminating the old
+// race where the HTTP API returned accepted and the background RunOnce then
+// silently discovered that another migration was already running.
+func (m *Migrator) tryBeginRun() bool {
+	if m == nil {
+		return false
+	}
 	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.running {
-		m.mu.Unlock()
-		return
+		return false
 	}
 	m.running = true
+	return true
+}
+
+func (m *Migrator) finishRun() {
+	m.mu.Lock()
+	m.running = false
 	m.mu.Unlock()
-	defer func() {
-		m.mu.Lock()
-		m.running = false
-		m.mu.Unlock()
-	}()
+}
+
+// run executes either the global nightly migration (driveID empty) or one
+// explicitly selected crawler. The two modes share upload and cleanup logic,
+// but only the nightly mode enumerates every crawler in the registry.
+func (m *Migrator) run(ctx context.Context, driveID string) {
 
 	// captcha 冷却期间整轮跳过 —— 不做任何 PikPak API 调用、不做本地清理，
 	// 等冷却结束。这样从用户视角看：进入冷却 → 一行日志 → 完全静默 → 冷却
@@ -572,7 +607,12 @@ func (m *Migrator) runOnce(ctx context.Context) {
 		log.Printf("[crawlerupload] captcha cooldown ended at %s, resuming migration", until.Format(time.RFC3339))
 	}
 
-	plans := m.migrationPlans(ctx)
+	var plans []migrationPlan
+	if driveID == "" {
+		plans = m.migrationPlans(ctx)
+	} else {
+		plans = m.migrationPlansForDrive(ctx, driveID)
+	}
 	if len(plans) == 0 {
 		// 没目标就静默 —— 用户选择了本地保存，或目标盘还没挂载。
 		return
@@ -656,38 +696,59 @@ func (m *Migrator) migrationPlans(ctx context.Context) []migrationPlan {
 	all := m.cfg.Registry.All()
 	out := make([]migrationPlan, 0, len(all))
 	for _, d := range all {
-		if d == nil {
-			continue
+		if plan, ok := m.migrationPlan(ctx, d); ok {
+			out = append(out, plan)
 		}
-		src, ok := d.(LocalSource)
-		if !ok {
-			continue
-		}
-		row, err := m.cfg.Catalog.GetDrive(ctx, d.ID())
-		if err != nil || row == nil || row.Kind != scriptcrawler.Kind {
-			continue
-		}
-		targetID := strings.TrimSpace(row.Credentials["upload_drive_id"])
-		if targetID == "" {
-			continue
-		}
-		resolvedID, target, err := m.resolveTargetID(targetID)
-		if err != nil {
-			log.Printf("[crawlerupload] crawler=%s upload target=%q unavailable: %v", row.ID, targetID, err)
-			continue
-		}
-		out = append(out, migrationPlan{
-			source:              src,
-			row:                 row,
-			targetDriveID:       resolvedID,
-			target:              target,
-			uploadDir:           scriptCrawlerUploadDir(row.ID),
-			keepLatestN:         0,
-			requireAssetsReady:  true,
-			requirePreviewReady: row.TeaserEnabled,
-		})
 	}
 	return out
+}
+
+func (m *Migrator) migrationPlansForDrive(ctx context.Context, driveID string) []migrationPlan {
+	if m == nil || m.cfg.Catalog == nil || m.cfg.Registry == nil {
+		return nil
+	}
+	d, ok := m.cfg.Registry.Get(strings.TrimSpace(driveID))
+	if !ok {
+		return nil
+	}
+	plan, ok := m.migrationPlan(ctx, d)
+	if !ok {
+		return nil
+	}
+	return []migrationPlan{plan}
+}
+
+func (m *Migrator) migrationPlan(ctx context.Context, d drives.Drive) (migrationPlan, bool) {
+	if d == nil {
+		return migrationPlan{}, false
+	}
+	src, ok := d.(LocalSource)
+	if !ok {
+		return migrationPlan{}, false
+	}
+	row, err := m.cfg.Catalog.GetDrive(ctx, d.ID())
+	if err != nil || row == nil || row.Kind != scriptcrawler.Kind {
+		return migrationPlan{}, false
+	}
+	targetID := strings.TrimSpace(row.Credentials["upload_drive_id"])
+	if targetID == "" {
+		return migrationPlan{}, false
+	}
+	resolvedID, target, err := m.resolveTargetID(targetID)
+	if err != nil {
+		log.Printf("[crawlerupload] crawler=%s upload target=%q unavailable: %v", row.ID, targetID, err)
+		return migrationPlan{}, false
+	}
+	return migrationPlan{
+		source:              src,
+		row:                 row,
+		targetDriveID:       resolvedID,
+		target:              target,
+		uploadDir:           scriptCrawlerUploadDir(row.ID),
+		keepLatestN:         0,
+		requireAssetsReady:  true,
+		requirePreviewReady: row.TeaserEnabled,
+	}, true
 }
 
 func scriptCrawlerUploadDir(driveID string) string {

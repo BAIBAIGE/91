@@ -600,7 +600,8 @@ test("crawler management is a separate admin section", () => {
   assert.doesNotMatch(crawlerDeleteModal, /details=/);
   assert.doesNotMatch(crawlerDeleteModal, /danger/);
   assert.doesNotMatch(crawlerDeleteModal, /confirmText=/);
-  assert.doesNotMatch(crawlerDeleteModal, /爬虫配置和脚本文件会被删除|已爬取的视频、封面和预览会保留/);
+  assert.match(crawlerDeleteModal, /本地保留的视频、封面、预览和抓取文件将一并删除/);
+  assert.match(crawlerDeleteModal, /已迁移到网盘的视频不受影响/);
   assert.match(confirmModalSource, /plainConfirm \? "" : danger \? " is-danger" : " is-primary"/);
   assert.match(confirmModalSource, /hideIcon \? " has-no-icon" : ""/);
   assert.match(adminCss, /\.admin-confirm\.has-no-icon\s*\{[^}]*grid-template-columns\s*:\s*minmax\(0,\s*1fr\)/s);
@@ -664,6 +665,7 @@ test("crawler management is a separate admin section", () => {
   assert.doesNotMatch(crawlerPageSource, /预览：开/);
   assert.doesNotMatch(crawlerPageSource, /预览：关/);
   assert.match(crawlerPageSource, /触发上传/);
+  assert.match(crawlerPageSource, /已触发当前爬虫的上传任务/);
   assert.match(crawlerPageSource, /暂停使用/);
   assert.match(crawlerPageSource, /恢复使用/);
   assert.doesNotMatch(crawlerPageSource, /<Download size=\{13\} \/>\s*\{running \? "触发中\.\.\." : "立即抓取"\}/);

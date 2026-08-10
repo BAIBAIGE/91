@@ -129,7 +129,7 @@ export function CrawlersPage() {
         show(resp.message || "当前爬虫暂不满足上传条件", "info");
         return;
       }
-      show("已触发上传任务", "success");
+      show("已触发当前爬虫的上传任务", "success");
       await refresh(true);
     } catch (e) {
       show(e instanceof Error ? e.message : "触发上传失败", "error");
@@ -198,7 +198,7 @@ export function CrawlersPage() {
       if (resp.warning) {
         show(`已删除爬虫配置，但脚本文件清理失败：${resp.warning}`, "error");
       } else {
-        show("已删除爬虫，已爬取的视频保留", "success");
+        show(`已删除爬虫，并清理 ${resp.deletedVideos} 个本地视频`, "success");
       }
       setDeleteTarget(null);
       if (detailTargetId === deleteTarget.id) setDetailTargetId("");
@@ -319,7 +319,7 @@ export function CrawlersPage() {
       <ConfirmModal
         open={deleteTarget !== null}
         title="删除爬虫"
-        message={`确定删除爬虫「${deleteTarget?.name ?? ""}」？`}
+        message={`确定删除爬虫「${deleteTarget?.name ?? ""}」？本地保留的视频、封面、预览和抓取文件将一并删除；已迁移到网盘的视频不受影响。`}
         plainConfirm
         hideIcon
         loading={deleting}

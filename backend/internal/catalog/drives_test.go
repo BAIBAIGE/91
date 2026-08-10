@@ -2,8 +2,11 @@ package catalog
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestUpsertDriveUsesRootIDAsScanRootID(t *testing.T) {
@@ -228,6 +231,72 @@ func TestUpsertDriveIgnoresRootIDForLocalStorageAndScriptCrawler(t *testing.T) {
 		}
 		if got.ScanRootID != "/" {
 			t.Fatalf("%s scanRootId = %q, want /", tc.kind, got.ScanRootID)
+		}
+	}
+}
+
+func TestDeleteDriveRemovesOwnedStateAndKeepsMigratedVideos(t *testing.T) {
+	ctx := context.Background()
+	cat, err := Open(t.TempDir() + "/catalog.db")
+	if err != nil {
+		t.Fatalf("open catalog: %v", err)
+	}
+	t.Cleanup(func() { _ = cat.Close() })
+
+	for _, drive := range []*Drive{
+		{ID: "crawler-source", Kind: "scriptcrawler", Name: "Crawler"},
+		{ID: "cloud-target", Kind: "pikpak", Name: "PikPak"},
+	} {
+		if err := cat.UpsertDrive(ctx, drive); err != nil {
+			t.Fatalf("seed drive %s: %v", drive.ID, err)
+		}
+	}
+	now := time.Now()
+	migrated := &Video{
+		ID:          "scriptcrawler-crawler-source-item-1",
+		DriveID:     "cloud-target",
+		FileID:      "remote-file",
+		Title:       "Migrated video",
+		PublishedAt: now,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+	if err := cat.UpsertVideo(ctx, migrated); err != nil {
+		t.Fatalf("seed migrated video: %v", err)
+	}
+	if err := cat.MarkCrawlerSourceSeen(ctx, "scriptcrawler", "crawler-source", "item-1", "imported", migrated.ID, "sampled", 123); err != nil {
+		t.Fatalf("seed crawler source state: %v", err)
+	}
+	if _, err := cat.db.ExecContext(ctx, `INSERT INTO scans (drive_id, started_at) VALUES (?, ?)`, "crawler-source", now.UnixMilli()); err != nil {
+		t.Fatalf("seed scan: %v", err)
+	}
+	if _, err := cat.db.ExecContext(ctx, `INSERT INTO drive_scan_misses (drive_id, file_id, consecutive_misses, last_missing_at) VALUES (?, ?, ?, ?)`, "crawler-source", "missing-file", 1, now.UnixMilli()); err != nil {
+		t.Fatalf("seed scan miss: %v", err)
+	}
+
+	if err := cat.DeleteDrive(ctx, "crawler-source"); err != nil {
+		t.Fatalf("delete drive: %v", err)
+	}
+	if _, err := cat.GetDrive(ctx, "crawler-source"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("deleted drive lookup error = %v, want sql.ErrNoRows", err)
+	}
+	if _, err := cat.GetVideo(ctx, migrated.ID); err != nil {
+		t.Fatalf("migrated video was removed: %v", err)
+	}
+	if _, err := cat.GetDrive(ctx, "cloud-target"); err != nil {
+		t.Fatalf("target drive was removed: %v", err)
+	}
+	for table, query := range map[string]string{
+		"crawler source": `SELECT COUNT(*) FROM crawler_seen_sources WHERE drive_id = ?`,
+		"scan":           `SELECT COUNT(*) FROM scans WHERE drive_id = ?`,
+		"scan miss":      `SELECT COUNT(*) FROM drive_scan_misses WHERE drive_id = ?`,
+	} {
+		var count int
+		if err := cat.db.QueryRowContext(ctx, query, "crawler-source").Scan(&count); err != nil {
+			t.Fatalf("count %s state: %v", table, err)
+		}
+		if count != 0 {
+			t.Fatalf("%s state count = %d, want 0", table, count)
 		}
 	}
 }

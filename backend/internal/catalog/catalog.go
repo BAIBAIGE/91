@@ -2789,8 +2789,31 @@ func (c *Catalog) GetDrive(ctx context.Context, id string) (*Drive, error) {
 }
 
 func (c *Catalog) DeleteDrive(ctx context.Context, id string) error {
-	_, err := c.db.ExecContext(ctx, `DELETE FROM drives WHERE id = ?`, id)
-	return err
+	tx, err := c.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	// Drive-scoped scan and crawler state has no foreign-key ownership in the
+	// legacy schema. Delete it in the same transaction as the drive so removing
+	// a drive cannot leave hidden state behind or affect a later drive that
+	// reuses the same ID. Video rows are intentionally handled by the caller:
+	// migrated crawler videos already belong to their destination drive and must
+	// survive removal of the crawler that originally discovered them.
+	for _, query := range []string{
+		`DELETE FROM drive_scan_misses WHERE drive_id = ?`,
+		`DELETE FROM scans WHERE drive_id = ?`,
+		`DELETE FROM crawler_seen_sources WHERE drive_id = ?`,
+	} {
+		if _, err := tx.ExecContext(ctx, query, id); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM drives WHERE id = ?`, id); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // PatchDriveCredentials atomically merges the supplied credential keys into

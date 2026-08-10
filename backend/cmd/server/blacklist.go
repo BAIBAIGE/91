@@ -14,6 +14,7 @@ import (
 	"github.com/video-site/backend/internal/api"
 	"github.com/video-site/backend/internal/catalog"
 	"github.com/video-site/backend/internal/drives"
+	"github.com/video-site/backend/internal/drives/scriptcrawler"
 	"github.com/video-site/backend/internal/mediaasset"
 	"github.com/video-site/backend/internal/persistence"
 )
@@ -372,6 +373,11 @@ func (a *App) cleanupDriveVideosForDelete(ctx context.Context, driveID string) (
 			return 0, fmt.Errorf("remove local assets for %s: %w", v.ID, err)
 		}
 	}
+	if d.Kind == scriptcrawler.Kind {
+		if err := a.removeScriptCrawlerStorageForDelete(d.ID); err != nil {
+			return 0, fmt.Errorf("remove crawler storage for %s: %w", d.ID, err)
+		}
+	}
 
 	removed := 0
 	for _, v := range items {
@@ -387,6 +393,27 @@ func (a *App) cleanupDriveVideosForDelete(ctx context.Context, driveID string) (
 		removed++
 	}
 	return removed, nil
+}
+
+// removeScriptCrawlerStorageForDelete removes the application-owned source
+// tree for a deleted crawler. The containment check is deliberately repeated
+// here instead of trusting the drive ID: this is a recursive destructive
+// operation and must never be able to target the shared scriptcrawlers root or
+// a path outside it.
+func (a *App) removeScriptCrawlerStorageForDelete(driveID string) error {
+	if a == nil || a.cfg == nil {
+		return errors.New("crawler storage root is unavailable")
+	}
+	root := a.scriptCrawlerRootDir()
+	rootPath, rootOK := localPathWithin(root, root)
+	targetPath, targetOK := localPathWithin(root, a.scriptCrawlerDriveDir(driveID))
+	if !rootOK || !targetOK || targetPath == rootPath {
+		return fmt.Errorf("unsafe crawler storage path for drive %q", driveID)
+	}
+	if err := os.RemoveAll(targetPath); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (a *App) cleanupOrphanDriveVideos(ctx context.Context) (int, error) {
