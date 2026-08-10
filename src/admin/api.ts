@@ -237,7 +237,6 @@ export type BackupOperationProgress = {
 export type BackupUploadChunk = {
   index: number;
   size: number;
-  sha256: string;
 };
 
 export type BackupUploadSession = {
@@ -310,7 +309,6 @@ export function backupDownloadURL(id: string) {
 export function beginBackupUpload(input: {
   fileName: string;
   size: number;
-  sha256?: string;
 }) {
   return request<BackupUploadSession>("/backup-uploads", {
     method: "POST",
@@ -326,7 +324,6 @@ export async function putBackupUploadChunk(
   id: string,
   index: number,
   chunk: Blob,
-  sha256: string,
   signal?: AbortSignal
 ): Promise<BackupUploadSession> {
   const res = await fetch(
@@ -336,7 +333,6 @@ export async function putBackupUploadChunk(
       credentials: "include",
       headers: {
         "Content-Type": "application/octet-stream",
-        "X-Chunk-SHA256": sha256,
       },
       body: chunk,
       signal,
@@ -357,10 +353,10 @@ export async function putBackupUploadChunk(
   return (await res.json()) as BackupUploadSession;
 }
 
-export function finalizeBackupUpload(id: string) {
+export function finalizeBackupUpload(id: string, sha256: string) {
   return request<BackupRecord>(
     `/backup-uploads/${encodeURIComponent(id)}/finalize`,
-    { method: "POST" }
+    { method: "POST", body: JSON.stringify({ sha256 }) }
   );
 }
 
@@ -404,8 +400,9 @@ export type BackupTransferJob = {
   size: number;
   sha256: string;
   processedBytes: number;
-  totalChunks?: number;
-  processedChunks?: number;
+  bytesPerSecond: number;
+  totalRanges?: number;
+  processedRanges?: number;
   attempts?: number;
   nextAttemptAt?: string;
   error?: string;
@@ -426,8 +423,35 @@ export type BackupReceiveToken = {
   expiresAt: string;
 };
 
+export type BackupReceiveTransfer = {
+  id: string;
+  sourceServerId: string;
+  backupId: string;
+  backupName: string;
+  state: BackupTransferState | string;
+  size: number;
+  processedBytes: number;
+  bytesPerSecond: number;
+  createdAt: string;
+  updatedAt: string;
+  finishedAt?: string;
+  targetBackupId?: string;
+  error?: string;
+  cancellable: boolean;
+};
+
 export function listBackupTransfers() {
   return request<BackupTransferJob[]>("/backup-transfers");
+}
+
+export function listBackupReceiveTransfers() {
+  return request<BackupReceiveTransfer[]>("/backup-receives");
+}
+
+export function cancelBackupReceiveTransfer(id: string) {
+  return request<void>(`/backup-receives/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
 }
 
 export function createBackupTransfer(

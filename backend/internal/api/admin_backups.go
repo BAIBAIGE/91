@@ -146,14 +146,20 @@ func (a *AdminServer) handleBeginBackupUpload(w http.ResponseWriter, r *http.Req
 	if !a.backupsAvailable(w) {
 		return
 	}
-	var input backup.BeginUploadInput
+	var input struct {
+		FileName string `json:"fileName"`
+		Size     int64  `json:"size"`
+	}
 	decoder := json.NewDecoder(io.LimitReader(r.Body, 8<<10))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&input); err != nil {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
-	session, err := a.Backups.BeginUpload(r.Context(), input)
+	session, err := a.Backups.BeginUpload(r.Context(), backup.BeginUploadInput{
+		FileName: input.FileName,
+		Size:     input.Size,
+	})
 	if err != nil {
 		code := http.StatusBadRequest
 		if errors.Is(err, backup.ErrInsufficientSpace) {
@@ -195,8 +201,7 @@ func (a *AdminServer) handleBackupUploadChunk(w http.ResponseWriter, r *http.Req
 		r.Context(),
 		routeParam(r, "id"),
 		index,
-		r.Header.Get("X-Chunk-SHA256"),
-		r.Body,
+		http.MaxBytesReader(w, r.Body, backup.ChunkSize+1),
 	)
 	if err != nil {
 		code := http.StatusBadRequest
@@ -215,7 +220,25 @@ func (a *AdminServer) handleFinalizeBackupUpload(w http.ResponseWriter, r *http.
 	if !a.backupsAvailable(w) {
 		return
 	}
-	record, err := a.Backups.FinalizeUpload(r.Context(), routeParam(r, "id"))
+	var input struct {
+		SHA256 string `json:"sha256"`
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 8<<10)
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&input); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		if err == nil {
+			err = errors.New("请求只能包含一个 JSON 对象")
+		}
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	record, err := a.Backups.FinalizeUpload(r.Context(), routeParam(r, "id"), input.SHA256)
 	if err != nil {
 		code := http.StatusBadRequest
 		switch {

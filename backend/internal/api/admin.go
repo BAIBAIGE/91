@@ -298,6 +298,8 @@ func (a *AdminServer) Register(r chi.Router) {
 			r.Post("/backup-uploads/{id}/finalize", a.handleFinalizeBackupUpload)
 			r.Delete("/backup-uploads/{id}", a.handleCancelBackupUpload)
 			r.Get("/backup-transfers", a.handleListBackupTransfers)
+			r.Get("/backup-receives", a.handleListBackupReceiveTransfers)
+			r.Delete("/backup-receives/{id}", a.handleCancelBackupReceiveTransfer)
 			r.Delete("/backup-transfers/{id}", a.handleCancelBackupTransfer)
 			r.Post("/backup-transfers/{id}/retry", a.handleRetryBackupTransfer)
 			r.Get("/backup-receive-tokens", a.handleListBackupReceiveTokens)
@@ -315,11 +317,11 @@ func (a *AdminServer) Register(r chi.Router) {
 	// Peer routes use narrowly scoped receive tokens rather than browser login
 	// sessions. Keeping them outside /admin/api prevents machine credentials
 	// from acquiring unrelated administrator capabilities.
-	r.Route("/peer/v1/backups", func(r chi.Router) {
+	r.Route(backuptransfer.PeerBackupPath, func(r chi.Router) {
 		r.Get("/capabilities", a.handlePeerBackupCapabilities)
 		r.Post("/imports", a.handlePeerBeginBackupImport)
 		r.Get("/imports/{id}", a.handlePeerBackupImportStatus)
-		r.Put("/imports/{id}/chunks/{index}", a.handlePeerBackupImportChunk)
+		r.Put("/imports/{id}/ranges/{index}", a.handlePeerBackupImportRange)
 		r.Post("/imports/{id}/finalize", a.handlePeerFinalizeBackupImport)
 		r.Delete("/imports/{id}", a.handlePeerCancelBackupImport)
 	})

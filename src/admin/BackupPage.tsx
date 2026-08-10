@@ -13,8 +13,9 @@ import {
   Copy,
   Loader2,
   Send,
-  Server,
 } from "lucide-react";
+import { FileIcon } from "@/components/icons/FileIcon";
+import { ServerIcon } from "@/components/icons/ServerIcon";
 import { copyTextToClipboard } from "@/lib/clipboard";
 import { sha256Blob } from "@/lib/sha256";
 import * as api from "./api";
@@ -90,6 +91,21 @@ function transferActive(transfer: api.BackupTransferJob) {
   );
 }
 
+function receiveTransferActive(transfer: api.BackupReceiveTransfer) {
+  return transfer.state === "uploading" || transfer.state === "finalizing";
+}
+
+function visibleProgressTransfers<T extends { state: string }>(
+  transfers: T[],
+  isActive: (transfer: T) => boolean
+) {
+  const active = transfers.filter(isActive);
+  const recentFailures = transfers
+    .filter((transfer) => transfer.state === "failed")
+    .slice(0, Math.max(0, 5 - active.length));
+  return [...active, ...recentFailures];
+}
+
 function transferStateLabel(state: string) {
   switch (state) {
     case "queued":
@@ -108,6 +124,23 @@ function transferStateLabel(state: string) {
       return "发送失败";
     case "canceled":
       return "已取消";
+    default:
+      return state;
+  }
+}
+
+function receiveTransferStateLabel(state: string) {
+  switch (state) {
+    case "uploading":
+      return "正在接收备份包";
+    case "finalizing":
+      return "正在校验并入库";
+    case "completed":
+      return "接收完成";
+    case "failed":
+      return "接收失败";
+    case "canceled":
+      return "接收已取消";
     default:
       return state;
   }
@@ -273,6 +306,10 @@ export function BackupPage() {
   const { show } = useToast();
   const [data, setData] = useState<api.BackupList | null>(null);
   const [transfers, setTransfers] = useState<api.BackupTransferJob[]>([]);
+  const [receiveTransfers, setReceiveTransfers] = useState<api.BackupReceiveTransfer[]>([]);
+  const [cancelingReceiveIds, setCancelingReceiveIds] = useState<Set<string>>(
+    () => new Set()
+  );
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
@@ -300,7 +337,9 @@ export function BackupPage() {
   const [uploading, setUploading] = useState(false);
   const [finalizing, setFinalizing] = useState(false);
   const [resumeHint, setResumeHint] = useState<ResumeState | null>(() => readResumeState());
+  const localFileInput = useRef<HTMLInputElement>(null);
   const uploadAbort = useRef<AbortController | null>(null);
+  const uploadHashAbort = useRef<AbortController | null>(null);
   const pauseRequested = useRef(false);
   const restoreConfirmationStartedAt = useRef<number | null>(null);
 
@@ -309,7 +348,12 @@ export function BackupPage() {
       const next = await api.listBackups();
       setData(next);
       try {
-        setTransfers(await api.listBackupTransfers());
+        const [nextTransfers, nextReceives] = await Promise.all([
+          api.listBackupTransfers(),
+          api.listBackupReceiveTransfers(),
+        ]);
+        setTransfers(nextTransfers);
+        setReceiveTransfers(nextReceives);
       } catch (error) {
         if (!silent) throw error;
       }
@@ -448,13 +492,14 @@ export function BackupPage() {
     if (!current?.totalBytes) return 0;
     return Math.min(100, Math.max(0, (current.processedBytes / current.totalBytes) * 100));
   }, [current?.processedBytes, current?.totalBytes]);
-  const visibleTransfers = useMemo(() => {
-    const active = transfers.filter(transferActive);
-    const recentFinished = transfers
-      .filter((transfer) => !transferActive(transfer))
-      .slice(0, Math.max(0, 5 - active.length));
-    return [...active, ...recentFinished];
-  }, [transfers]);
+  const visibleTransfers = useMemo(
+    () => visibleProgressTransfers(transfers, transferActive),
+    [transfers]
+  );
+  const visibleReceiveTransfers = useMemo(
+    () => visibleProgressTransfers(receiveTransfers, receiveTransferActive),
+    [receiveTransfers]
+  );
 
   function handleCreate() {
     setBackupSelection({ ...EMPTY_BACKUP_SELECTION });
@@ -557,6 +602,31 @@ export function BackupPage() {
     }
   }
 
+  async function handleCancelReceiveTransfer(id: string) {
+    if (cancelingReceiveIds.has(id)) return;
+    setCancelingReceiveIds((current) => new Set(current).add(id));
+    try {
+      await api.cancelBackupReceiveTransfer(id);
+      setReceiveTransfers((current) =>
+        current.map((transfer) =>
+          transfer.id === id
+            ? { ...transfer, state: "canceled", cancellable: false }
+            : transfer
+        )
+      );
+      show("服务器接收已取消，临时文件正在清理", "success");
+      await refresh(true);
+    } catch (error) {
+      show(error instanceof Error ? error.message : "取消服务器接收失败", "error");
+    } finally {
+      setCancelingReceiveIds((current) => {
+        const next = new Set(current);
+        next.delete(id);
+        return next;
+      });
+    }
+  }
+
   async function handleRetryTransfer(id: string) {
     try {
       await api.retryBackupTransfer(id);
@@ -569,12 +639,23 @@ export function BackupPage() {
 
   function chooseFile(event: ChangeEvent<HTMLInputElement>) {
     const next = event.target.files?.[0] ?? null;
+    event.currentTarget.value = "";
     setFile(next);
     if (!next) return;
     const hint = readResumeState();
     if (hint && (hint.fileName !== next.name || hint.size !== next.size)) {
       setUpload(null);
     }
+    void handleUpload(next);
+  }
+
+  function handleLocalUploadEntry() {
+    if (!data || uploading || finalizing) return;
+    if (file && upload) {
+      void handleUpload(file);
+      return;
+    }
+    localFileInput.current?.click();
   }
 
   async function ensureUploadSession(selected: File) {
@@ -610,20 +691,23 @@ export function BackupPage() {
     return created;
   }
 
-  async function handleUpload() {
-    if (!file || uploading || finalizing) return;
+  async function handleUpload(selectedFile: File | null = file) {
+    if (!selectedFile || uploading || finalizing) return;
     setUploading(true);
     pauseRequested.current = false;
+    const hashController = new AbortController();
+    uploadHashAbort.current = hashController;
+    const archiveHashPromise = sha256Blob(selectedFile, hashController.signal);
+    void archiveHashPromise.catch(() => undefined);
     try {
-      let session = await ensureUploadSession(file);
+      let session = await ensureUploadSession(selectedFile);
       const received = new Set(session.received.map((chunk) => chunk.index));
       for (let index = 0; index < session.totalChunks; index += 1) {
         if (received.has(index)) continue;
         if (pauseRequested.current) return;
         const start = index * session.chunkSize;
-        const end = Math.min(file.size, start + session.chunkSize);
-        const blob = file.slice(start, end);
-        const hash = await sha256Blob(blob);
+        const end = Math.min(selectedFile.size, start + session.chunkSize);
+        const blob = selectedFile.slice(start, end);
         let lastError: unknown;
         for (let attempt = 0; attempt < 3; attempt += 1) {
           if (pauseRequested.current) return;
@@ -634,7 +718,6 @@ export function BackupPage() {
               session.id,
               index,
               blob,
-              hash,
               controller.signal
             );
             setUpload(session);
@@ -648,6 +731,8 @@ export function BackupPage() {
         }
         if (lastError) throw lastError;
       }
+      const archiveHash = await archiveHashPromise;
+      if (pauseRequested.current) return;
       setUpload({
         ...session,
         state: "finalizing",
@@ -660,7 +745,7 @@ export function BackupPage() {
         },
       });
       setFinalizing(true);
-      const completed = await api.finalizeBackupUpload(session.id);
+      const completed = await api.finalizeBackupUpload(session.id, archiveHash);
       localStorage.removeItem(RESUME_KEY);
       setResumeHint(null);
       setUpload(null);
@@ -668,8 +753,13 @@ export function BackupPage() {
       show(`迁移备份 ${completed.name} 已完成校验`, "success");
       await refresh(true);
     } catch (error) {
+      if (pauseRequested.current) return;
       show(error instanceof Error ? error.message : "迁移上传失败，可稍后重试", "error");
     } finally {
+      hashController.abort();
+      if (uploadHashAbort.current === hashController) {
+        uploadHashAbort.current = null;
+      }
       uploadAbort.current = null;
       setUploading(false);
       setFinalizing(false);
@@ -679,6 +769,7 @@ export function BackupPage() {
   function handlePause() {
     pauseRequested.current = true;
     uploadAbort.current?.abort();
+    uploadHashAbort.current?.abort();
     setUploading(false);
     show("上传已暂停，已完成分片会保留 72 小时", "info");
   }
@@ -687,6 +778,7 @@ export function BackupPage() {
     if (!upload) return;
     pauseRequested.current = true;
     uploadAbort.current?.abort();
+    uploadHashAbort.current?.abort();
     try {
       await api.cancelBackupUpload(upload.id);
       localStorage.removeItem(RESUME_KEY);
@@ -857,6 +949,65 @@ export function BackupPage() {
         </section>
       )}
 
+      {visibleReceiveTransfers.length > 0 && (
+        <section className="backup-transfer-list" aria-label="服务器接收任务">
+          <div className="backup-section-heading">
+            <h2>服务器接收</h2>
+          </div>
+          {visibleReceiveTransfers.map((transfer) => {
+            const percent = transfer.size
+              ? Math.min(100, Math.max(0, (transfer.processedBytes / transfer.size) * 100))
+              : 0;
+            return (
+              <article
+                className={`backup-transfer ${transfer.state === "failed" ? "is-error" : ""}`}
+                key={transfer.id}
+              >
+                <div className="backup-transfer__head">
+                  <div>
+                    <strong>{receiveTransferStateLabel(transfer.state)}</strong>
+                    <span>
+                      {transfer.backupName} · 来源 {transfer.sourceServerId.slice(0, 12)}
+                    </span>
+                  </div>
+                  {transfer.cancellable && (
+                    <div className="backup-transfer__actions">
+                      <button
+                        type="button"
+                        className="admin-btn is-transparent"
+                        onClick={() => handleCancelReceiveTransfer(transfer.id)}
+                        disabled={cancelingReceiveIds.has(transfer.id)}
+                      >
+                        {cancelingReceiveIds.has(transfer.id) ? "取消中..." : "取消"}
+                      </button>
+                    </div>
+                  )}
+                </div>
+                <div className="backup-transfer__meta">
+                  <span>
+                    {formatBytes(transfer.processedBytes)} / {formatBytes(transfer.size)}
+                    {transfer.state === "uploading" && (
+                      <> · 下载 {formatBytes(transfer.bytesPerSecond)}/s</>
+                    )}
+                  </span>
+                  <strong>{percent.toFixed(1)}%</strong>
+                </div>
+                <div
+                  className="backup-progress"
+                  role="progressbar"
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-valuenow={Math.round(percent)}
+                >
+                  <span style={{ width: `${percent}%` }} />
+                </div>
+                {transfer.error && <p className="backup-task__error">{transfer.error}</p>}
+              </article>
+            );
+          })}
+        </section>
+      )}
+
       {visibleTransfers.length > 0 && (
         <section className="backup-transfer-list" aria-label="服务器发送任务">
           <div className="backup-section-heading">
@@ -898,7 +1049,12 @@ export function BackupPage() {
                   </div>
                 </div>
                 <div className="backup-transfer__meta">
-                  <span>{formatBytes(transfer.processedBytes)} / {formatBytes(transfer.size)}</span>
+                  <span>
+                    {formatBytes(transfer.processedBytes)} / {formatBytes(transfer.size)}
+                    {transfer.state === "uploading" && (
+                      <> · 上传 {formatBytes(transfer.bytesPerSecond)}/s</>
+                    )}
+                  </span>
                   <strong>{percent.toFixed(1)}%</strong>
                 </div>
                 <div
@@ -921,48 +1077,51 @@ export function BackupPage() {
         <section className="admin-card backup-upload-card">
           <div className="backup-section-heading">
             <h2>上传备份包</h2>
+          </div>
+          <div className="backup-upload-entry-actions">
             <button
               type="button"
-              className="admin-btn is-transparent"
+              className="admin-btn"
               onClick={handleCreateReceiveToken}
               disabled={!data || generatingReceiveToken}
             >
-              {generatingReceiveToken ? <Loader2 size={14} className="admin-spin" /> : <Server size={14} />}
+              {generatingReceiveToken ? (
+                <Loader2 size={14} className="admin-spin" />
+              ) : (
+                <ServerIcon size={14} />
+              )}
               从服务器接收
             </button>
-          </div>
-          <div className="backup-upload-controls">
-            <label
-              className="backup-file-picker"
+            <button
+              type="button"
+              className="admin-btn"
+              onClick={handleLocalUploadEntry}
+              disabled={!data || uploading || finalizing}
               title={
                 resumeHint
                   ? `检测到未完成上传：${resumeHint.fileName}，重新选择同一文件继续`
-                  : "16 MiB 分片上传，支持暂停与断点续传"
+                  : undefined
               }
             >
-              <span>{file ? file.name : "选择 ZIP 备份包"}</span>
-              <input
-                type="file"
-                accept=".zip,application/zip"
-                onChange={chooseFile}
-                disabled={!data || uploading || finalizing}
-              />
-            </label>
+              <FileIcon size={14} />
+              从本地上传
+            </button>
+            <input
+              ref={localFileInput}
+              type="file"
+              accept=".zip,application/zip"
+              onChange={chooseFile}
+              disabled={!data || uploading || finalizing}
+              hidden
+            />
+          </div>
+          {(uploading || upload) && !finalizing ? (
             <div className="backup-upload-actions">
-              {finalizing ? null : !uploading ? (
-                <button
-                  type="button"
-                  className="admin-btn backup-upload-submit"
-                  onClick={handleUpload}
-                  disabled={!data || !file || finalizing}
-                >
-                  {upload?.received.length ? "继续上传" : "开始上传"}
-                </button>
-              ) : (
+              {uploading ? (
                 <button type="button" className="admin-btn" onClick={handlePause}>
                   暂停
                 </button>
-              )}
+              ) : null}
               {upload && (
                 <button
                   type="button"
@@ -974,7 +1133,7 @@ export function BackupPage() {
                 </button>
               )}
             </div>
-          </div>
+          ) : null}
           {upload && finalizing ? (
             <BackupOperationChecklist
               title="校验并入库"
@@ -1057,7 +1216,6 @@ export function BackupPage() {
                         transfers.some(transferActive)
                       }
                     >
-                      <Send size={14} />
                       发送
                     </button>
                     <button
@@ -1178,7 +1336,7 @@ export function BackupPage() {
               onClick={handleSendBackup}
             >
               {sending ? <Loader2 size={14} className="admin-spin" /> : <Send size={14} />}
-              开始发送
+              确认
             </button>
           </>
         }
@@ -1223,9 +1381,6 @@ export function BackupPage() {
               disabled={sending}
             />
           </label>
-          <p className="backup-transfer-hint">
-            支持 HTTP 的 IP+端口地址和 HTTPS 地址。备份包由本机后端直接发送；目标端只会校验并加入备份列表，不会自动恢复。
-          </p>
         </div>
       </Modal>
 
@@ -1237,21 +1392,9 @@ export function BackupPage() {
           setReceiveTokenOpen(false);
           setReceiveToken(null);
         }}
-        footer={
-          <button
-            type="button"
-            className="admin-btn"
-            onClick={() => {
-              setReceiveTokenOpen(false);
-              setReceiveToken(null);
-            }}
-          >
-            完成
-          </button>
-        }
       >
         <div className="backup-receive-code">
-          <p>将这个一次性接收码复制到源服务器。首次连接后，它只允许同一个发送任务继续断点续传。</p>
+          <p>将这个一次性接收码给到发送方</p>
           <div className="backup-receive-code__value">
             <code>{receiveToken?.token}</code>
             <button
@@ -1265,7 +1408,7 @@ export function BackupPage() {
             </button>
           </div>
           <span className="backup-receive-code__expiry">
-            未使用时有效至 {formatTime(receiveToken?.expiresAt)}。接收码只展示这一次，请勿通过不可信渠道传递。
+            未使用时有效至 {formatTime(receiveToken?.expiresAt)}，一个接收码只展示一次
           </span>
         </div>
       </Modal>

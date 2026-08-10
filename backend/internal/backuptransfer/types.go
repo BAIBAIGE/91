@@ -8,7 +8,9 @@ import (
 )
 
 const (
-	ProtocolVersion = 1
+	PeerBackupPath    = "/peer/backups"
+	TransferRangeSize = int64(16 << 20)
+	ParallelStreams   = 8
 
 	TransferQueued     = "queued"
 	TransferConnecting = "connecting"
@@ -37,6 +39,7 @@ var (
 	ErrUnauthorized         = errors.New("接收码无效或已过期")
 	ErrTokenBound           = errors.New("接收码已被其它传输使用")
 	ErrImportNotFound       = errors.New("服务器传输会话不存在")
+	ErrImportCanceled       = errors.New("接收端已取消接收")
 	ErrImportConflict       = errors.New("相同传输编号的备份元数据不一致")
 	ErrTransferNotFound     = errors.New("服务器发送任务不存在")
 	ErrTransferBusy         = errors.New("已有备份正在发送，请等待当前任务结束")
@@ -45,9 +48,9 @@ var (
 )
 
 type Capabilities struct {
-	ProtocolVersion      int   `json:"protocolVersion"`
 	BackupFormatVersions []int `json:"backupFormatVersions"`
-	ChunkSize            int64 `json:"chunkSize"`
+	RangeSize            int64 `json:"rangeSize"`
+	ParallelStreams      int   `json:"parallelStreams"`
 }
 
 type ReceiveToken struct {
@@ -81,8 +84,9 @@ type TransferJob struct {
 	Size             int64     `json:"size"`
 	SHA256           string    `json:"sha256"`
 	ProcessedBytes   int64     `json:"processedBytes"`
-	TotalChunks      int       `json:"totalChunks,omitempty"`
-	ProcessedChunks  int       `json:"processedChunks,omitempty"`
+	BytesPerSecond   int64     `json:"bytesPerSecond"`
+	TotalRanges      int       `json:"totalRanges,omitempty"`
+	ProcessedRanges  int       `json:"processedRanges,omitempty"`
 	Attempts         int       `json:"attempts,omitempty"`
 	NextAttemptAt    time.Time `json:"nextAttemptAt,omitempty"`
 	Error            string    `json:"error,omitempty"`
@@ -106,22 +110,39 @@ type ImportRequest struct {
 	FormatVersion  int    `json:"formatVersion"`
 }
 
-type ChunkRange struct {
+type IndexRange struct {
 	Start int `json:"start"`
 	End   int `json:"end"`
 }
 
 type ImportStatus struct {
-	TransferID    string               `json:"transferId"`
-	State         string               `json:"state"`
-	Size          int64                `json:"size"`
-	SHA256        string               `json:"sha256"`
-	ChunkSize     int64                `json:"chunkSize"`
-	TotalChunks   int                  `json:"totalChunks"`
-	Received      []ChunkRange         `json:"received"`
-	ReceivedBytes int64                `json:"receivedBytes"`
-	ExpiresAt     time.Time            `json:"expiresAt,omitempty"`
-	Record        *backup.BackupRecord `json:"record,omitempty"`
+	TransferID     string               `json:"transferId"`
+	State          string               `json:"state"`
+	Size           int64                `json:"size"`
+	SHA256         string               `json:"sha256"`
+	RangeSize      int64                `json:"rangeSize"`
+	TotalRanges    int                  `json:"totalRanges"`
+	Committed      []IndexRange         `json:"committed"`
+	CommittedBytes int64                `json:"committedBytes"`
+	ExpiresAt      time.Time            `json:"expiresAt,omitempty"`
+	Record         *backup.BackupRecord `json:"record,omitempty"`
+}
+
+type ReceiveTransfer struct {
+	ID             string    `json:"id"`
+	SourceServerID string    `json:"sourceServerId"`
+	BackupID       string    `json:"backupId"`
+	BackupName     string    `json:"backupName"`
+	State          string    `json:"state"`
+	Size           int64     `json:"size"`
+	ProcessedBytes int64     `json:"processedBytes"`
+	BytesPerSecond int64     `json:"bytesPerSecond"`
+	CreatedAt      time.Time `json:"createdAt"`
+	UpdatedAt      time.Time `json:"updatedAt"`
+	FinishedAt     time.Time `json:"finishedAt,omitempty"`
+	TargetBackupID string    `json:"targetBackupId,omitempty"`
+	Error          string    `json:"error,omitempty"`
+	Cancellable    bool      `json:"cancellable"`
 }
 
 func (j TransferJob) terminal() bool {

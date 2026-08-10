@@ -1,8 +1,6 @@
 package api
 
 import (
-	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -23,6 +21,34 @@ func (a *AdminServer) handleListBackupTransfers(w http.ResponseWriter, _ *http.R
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, a.BackupTransfers.ListTransfers())
+}
+
+func (a *AdminServer) handleListBackupReceiveTransfers(w http.ResponseWriter, r *http.Request) {
+	if !a.backupTransfersAvailable(w) {
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, a.BackupTransfers.ListReceiveTransfers(r.Context()))
+}
+
+func (a *AdminServer) handleCancelBackupReceiveTransfer(w http.ResponseWriter, r *http.Request) {
+	if !a.backupTransfersAvailable(w) {
+		return
+	}
+	if err := a.BackupTransfers.CancelReceiveTransfer(routeParam(r, "id")); err != nil {
+		code := http.StatusInternalServerError
+		switch {
+		case errors.Is(err, backuptransfer.ErrImportNotFound):
+			code = http.StatusNotFound
+		case errors.Is(err, backuptransfer.ErrImportConflict),
+			errors.Is(err, backuptransfer.ErrTransferTerminal):
+			code = http.StatusConflict
+		}
+		writeErr(w, code, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (a *AdminServer) handleCreateBackupTransfer(w http.ResponseWriter, r *http.Request) {
@@ -166,27 +192,33 @@ func (a *AdminServer) handlePeerBackupImportStatus(w http.ResponseWriter, r *htt
 	writeJSON(w, http.StatusOK, status)
 }
 
-func (a *AdminServer) handlePeerBackupImportChunk(w http.ResponseWriter, r *http.Request) {
+func (a *AdminServer) handlePeerBackupImportRange(w http.ResponseWriter, r *http.Request) {
 	if !a.backupTransfersAvailable(w) {
 		return
 	}
 	index, err := strconv.Atoi(routeParam(r, "index"))
 	if err != nil || index < 0 {
-		writeErr(w, http.StatusBadRequest, errors.New("分片序号无效"))
+		writeErr(w, http.StatusBadRequest, errors.New("传输区间序号无效"))
 		return
 	}
-	digest, err := peerChunkDigest(r)
+	offset, size, totalSize, err := peerContentRange(r.Header.Get("Content-Range"))
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, backup.ChunkSize+1)
-	if err := a.BackupTransfers.PutImportChunk(
+	if r.ContentLength >= 0 && r.ContentLength != size {
+		writeErr(w, http.StatusBadRequest, errors.New("Content-Length 与传输区间不一致"))
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, backuptransfer.TransferRangeSize+1)
+	if err := a.BackupTransfers.PutImportRange(
 		r.Context(),
 		peerBearerToken(r),
 		routeParam(r, "id"),
 		index,
-		digest,
+		offset,
+		size,
+		totalSize,
 		r.Body,
 	); err != nil {
 		writePeerTransferError(w, err)
@@ -247,29 +279,26 @@ func peerBearerToken(r *http.Request) string {
 	return parts[1]
 }
 
-func peerChunkDigest(r *http.Request) (string, error) {
-	legacy := strings.ToLower(strings.TrimSpace(r.Header.Get("X-Chunk-SHA256")))
-	standard := strings.TrimSpace(r.Header.Get("Content-Digest"))
-	if standard == "" {
-		if decoded, err := hex.DecodeString(legacy); err != nil || len(decoded) != 32 {
-			return "", errors.New("必须提供有效的分片 SHA-256")
-		}
-		return legacy, nil
+func peerContentRange(value string) (offset, size, total int64, err error) {
+	fields := strings.Fields(strings.TrimSpace(value))
+	if len(fields) != 2 || !strings.EqualFold(fields[0], "bytes") {
+		return 0, 0, 0, errors.New("必须提供有效的 Content-Range")
 	}
-	const prefix = "sha-256=:"
-	if !strings.HasPrefix(strings.ToLower(standard), prefix) || !strings.HasSuffix(standard, ":") {
-		return "", errors.New("Content-Digest 格式无效")
+	rangeAndTotal := strings.Split(fields[1], "/")
+	if len(rangeAndTotal) != 2 {
+		return 0, 0, 0, errors.New("Content-Range 格式无效")
 	}
-	encoded := standard[len(prefix) : len(standard)-1]
-	digest, err := base64.StdEncoding.DecodeString(encoded)
-	if err != nil || len(digest) != 32 {
-		return "", errors.New("Content-Digest SHA-256 无效")
+	bounds := strings.Split(rangeAndTotal[0], "-")
+	if len(bounds) != 2 {
+		return 0, 0, 0, errors.New("Content-Range 格式无效")
 	}
-	hexDigest := hex.EncodeToString(digest)
-	if legacy != "" && !strings.EqualFold(legacy, hexDigest) {
-		return "", errors.New("分片摘要请求头不一致")
+	start, startErr := strconv.ParseInt(bounds[0], 10, 64)
+	end, endErr := strconv.ParseInt(bounds[1], 10, 64)
+	total, totalErr := strconv.ParseInt(rangeAndTotal[1], 10, 64)
+	if startErr != nil || endErr != nil || totalErr != nil || start < 0 || end < start || total <= end {
+		return 0, 0, 0, errors.New("Content-Range 范围无效")
 	}
-	return hexDigest, nil
+	return start, end - start + 1, total, nil
 }
 
 func writePeerTransferError(w http.ResponseWriter, err error) {
@@ -285,9 +314,12 @@ func writePeerTransferError(w http.ResponseWriter, err error) {
 		code = http.StatusForbidden
 	case errors.Is(err, backuptransfer.ErrImportNotFound), errors.Is(err, backup.ErrUploadNotFound):
 		code = http.StatusNotFound
+	case errors.Is(err, backuptransfer.ErrImportCanceled):
+		code = http.StatusGone
 	case errors.Is(err, backuptransfer.ErrImportConflict),
 		errors.Is(err, backup.ErrUploadIncomplete),
 		errors.Is(err, backup.ErrUploadFinalizing),
+		errors.Is(err, backup.ErrUploadRangeBusy),
 		errors.Is(err, backuptransfer.ErrTransferTerminal):
 		code = http.StatusConflict
 	case errors.Is(err, backup.ErrInsufficientSpace):

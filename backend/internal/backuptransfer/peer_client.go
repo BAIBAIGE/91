@@ -3,10 +3,7 @@ package backuptransfer
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"crypto/tls"
-	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -47,13 +44,14 @@ func newPeerHTTPClient() *http.Client {
 	transport := &http.Transport{
 		Proxy:                 nil,
 		DialContext:           dialer.DialContext,
-		ForceAttemptHTTP2:     true,
-		MaxIdleConns:          8,
-		MaxIdleConnsPerHost:   2,
+		ForceAttemptHTTP2:     false,
+		DisableCompression:    true,
+		MaxIdleConns:          16,
+		MaxIdleConnsPerHost:   ParallelStreams,
+		MaxConnsPerHost:       ParallelStreams,
 		IdleConnTimeout:       90 * time.Second,
 		TLSHandshakeTimeout:   30 * time.Second,
 		ResponseHeaderTimeout: 60 * time.Second,
-		ExpectContinueTimeout: time.Second,
 		TLSClientConfig:       &tls.Config{MinVersion: tls.VersionTLS12},
 	}
 	return &http.Client{
@@ -66,7 +64,7 @@ func newPeerHTTPClient() *http.Client {
 
 func (m *Manager) peerCapabilities(ctx context.Context, targetURL, token string) (Capabilities, error) {
 	var capabilities Capabilities
-	err := m.peerJSON(ctx, http.MethodGet, targetURL+"/peer/v1/backups/capabilities", token, nil, &capabilities)
+	err := m.peerJSON(ctx, http.MethodGet, targetURL+PeerBackupPath+"/capabilities", token, nil, &capabilities)
 	return capabilities, err
 }
 
@@ -76,7 +74,7 @@ func (m *Manager) peerBeginImport(
 	request ImportRequest,
 ) (ImportStatus, error) {
 	var status ImportStatus
-	err := m.peerJSON(ctx, http.MethodPost, targetURL+"/peer/v1/backups/imports", token, request, &status)
+	err := m.peerJSON(ctx, http.MethodPost, targetURL+PeerBackupPath+"/imports", token, request, &status)
 	return status, err
 }
 
@@ -88,7 +86,7 @@ func (m *Manager) peerImportStatus(
 	err := m.peerJSON(
 		ctx,
 		http.MethodGet,
-		targetURL+"/peer/v1/backups/imports/"+transferID,
+		targetURL+PeerBackupPath+"/imports/"+transferID,
 		token,
 		nil,
 		&status,
@@ -96,20 +94,25 @@ func (m *Manager) peerImportStatus(
 	return status, err
 }
 
-func (m *Manager) peerPutChunk(
+func (m *Manager) peerPutRange(
 	ctx context.Context,
 	targetURL, token, transferID string,
 	index int,
-	body []byte,
-	digestHex string,
+	offset, size, totalSize int64,
+	body io.Reader,
+	onProgress func(int64),
 ) error {
-	requestCtx, cancel := context.WithTimeout(ctx, 15*time.Minute)
+	requestCtx, cancel := context.WithTimeout(ctx, 30*time.Minute)
 	defer cancel()
+	trackedBody := io.Reader(body)
+	if onProgress != nil {
+		trackedBody = &progressReader{reader: body, onProgress: onProgress}
+	}
 	request, err := http.NewRequestWithContext(
 		requestCtx,
 		http.MethodPut,
-		targetURL+"/peer/v1/backups/imports/"+transferID+"/chunks/"+strconv.Itoa(index),
-		bytes.NewReader(body),
+		targetURL+PeerBackupPath+"/imports/"+transferID+"/ranges/"+strconv.Itoa(index),
+		trackedBody,
 	)
 	if err != nil {
 		return err
@@ -117,11 +120,11 @@ func (m *Manager) peerPutChunk(
 	request.Header.Set("Authorization", "Bearer "+token)
 	request.Header.Set("Content-Type", "application/octet-stream")
 	request.Header.Set("Accept", "application/json")
-	request.Header.Set("X-Chunk-SHA256", digestHex)
-	if digest, err := hex.DecodeString(digestHex); err == nil && len(digest) == sha256.Size {
-		request.Header.Set("Content-Digest", "sha-256=:"+base64.StdEncoding.EncodeToString(digest)+":")
-	}
-	request.Header.Set("Expect", "100-continue")
+	request.Header.Set(
+		"Content-Range",
+		fmt.Sprintf("bytes %d-%d/%d", offset, offset+size-1, totalSize),
+	)
+	request.ContentLength = size
 	response, err := m.client.Do(request)
 	if err != nil {
 		return err
@@ -134,6 +137,19 @@ func (m *Manager) peerPutChunk(
 	return err
 }
 
+type progressReader struct {
+	reader     io.Reader
+	onProgress func(int64)
+}
+
+func (r *progressReader) Read(buffer []byte) (int, error) {
+	read, err := r.reader.Read(buffer)
+	if read > 0 {
+		r.onProgress(int64(read))
+	}
+	return read, err
+}
+
 func (m *Manager) peerFinalizeImport(
 	ctx context.Context,
 	targetURL, token, transferID string,
@@ -142,7 +158,7 @@ func (m *Manager) peerFinalizeImport(
 	err := m.peerJSON(
 		ctx,
 		http.MethodPost,
-		targetURL+"/peer/v1/backups/imports/"+transferID+"/finalize",
+		targetURL+PeerBackupPath+"/imports/"+transferID+"/finalize",
 		token,
 		struct{}{},
 		&status,
@@ -154,7 +170,7 @@ func (m *Manager) peerCancelImport(ctx context.Context, targetURL, token, transf
 	return m.peerJSON(
 		ctx,
 		http.MethodDelete,
-		targetURL+"/peer/v1/backups/imports/"+transferID,
+		targetURL+PeerBackupPath+"/imports/"+transferID,
 		token,
 		nil,
 		nil,
@@ -232,6 +248,9 @@ func decodePeerError(response *http.Response) error {
 	}
 	if message == "" {
 		message = "目标服务器返回 HTTP " + strconv.Itoa(response.StatusCode)
+	}
+	if response.StatusCode == http.StatusGone {
+		return ErrImportCanceled
 	}
 	return &peerHTTPError{Status: response.StatusCode, Message: message}
 }

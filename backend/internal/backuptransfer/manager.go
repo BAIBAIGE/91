@@ -33,16 +33,18 @@ type Manager struct {
 	client       *http.Client
 	now          func() time.Time
 
-	mu       sync.Mutex
-	identity serverIdentity
-	receiver receiverState
-	jobs     map[string]*storedTransferJob
-	started  bool
-	closed   bool
-	runCtx   context.Context
-	cancel   context.CancelFunc
-	wake     chan struct{}
-	done     chan struct{}
+	mu               sync.Mutex
+	identity         serverIdentity
+	receiver         receiverState
+	jobs             map[string]*storedTransferJob
+	outgoingProgress map[string]*streamProgress
+	incomingProgress map[string]*streamProgress
+	started          bool
+	closed           bool
+	runCtx           context.Context
+	cancel           context.CancelFunc
+	wake             chan struct{}
+	done             chan struct{}
 
 	receiveMu     sync.Mutex
 	currentID     string
@@ -58,16 +60,18 @@ func New(cfg Config) (*Manager, error) {
 		return nil, errors.New("backup transfer: state root is invalid")
 	}
 	m := &Manager{
-		backups:      cfg.Backups,
-		rootDir:      rootDir,
-		outgoingDir:  filepath.Join(rootDir, "outgoing"),
-		receiverPath: filepath.Join(rootDir, "receiver.json"),
-		identityPath: filepath.Join(rootDir, "identity.json"),
-		client:       cfg.HTTPClient,
-		now:          cfg.Now,
-		jobs:         make(map[string]*storedTransferJob),
-		wake:         make(chan struct{}, 1),
-		done:         make(chan struct{}),
+		backups:          cfg.Backups,
+		rootDir:          rootDir,
+		outgoingDir:      filepath.Join(rootDir, "outgoing"),
+		receiverPath:     filepath.Join(rootDir, "receiver.json"),
+		identityPath:     filepath.Join(rootDir, "identity.json"),
+		client:           cfg.HTTPClient,
+		now:              cfg.Now,
+		jobs:             make(map[string]*storedTransferJob),
+		outgoingProgress: make(map[string]*streamProgress),
+		incomingProgress: make(map[string]*streamProgress),
+		wake:             make(chan struct{}, 1),
+		done:             make(chan struct{}),
 	}
 	if m.client == nil {
 		m.client = newPeerHTTPClient()
@@ -157,9 +161,9 @@ func (m *Manager) ServerID() string {
 
 func (m *Manager) Capabilities() Capabilities {
 	return Capabilities{
-		ProtocolVersion:      ProtocolVersion,
 		BackupFormatVersions: []int{backup.FormatVersion},
-		ChunkSize:            backup.ChunkSize,
+		RangeSize:            TransferRangeSize,
+		ParallelStreams:      ParallelStreams,
 	}
 }
 
@@ -262,7 +266,8 @@ func validateStoredReceipt(
 ) error {
 	if !validOpaqueID(receipt.TokenID) || !validOpaqueID(receipt.Request.TransferID) ||
 		key != receiptKey(receipt.TokenID, receipt.Request.TransferID) ||
-		!validOpaqueID(receipt.UploadID) || receipt.CreatedAt.IsZero() || receipt.UpdatedAt.IsZero() ||
+		(receipt.UploadID != "" && !validOpaqueID(receipt.UploadID)) ||
+		receipt.CreatedAt.IsZero() || receipt.UpdatedAt.IsZero() ||
 		receipt.UpdatedAt.Before(receipt.CreatedAt) {
 		return errors.New("invalid receipt identity")
 	}
@@ -279,11 +284,11 @@ func validateStoredReceipt(
 	}
 	switch receipt.State {
 	case ImportUploading, ImportFinalizing:
-		if receipt.Record != nil {
+		if receipt.UploadID == "" || receipt.Record != nil {
 			return errors.New("active receipt contains a terminal record")
 		}
 	case ImportCompleted:
-		if receipt.Record == nil || receipt.Record.ID == "" || receipt.Record.Name == "" ||
+		if receipt.UploadID == "" || receipt.Record == nil || receipt.Record.ID == "" || receipt.Record.Name == "" ||
 			receipt.Record.Size != receipt.Request.Size || receipt.Record.VerificationStatus != "verified" ||
 			!strings.EqualFold(receipt.Record.SHA256, receipt.Request.SHA256) {
 			return errors.New("completed receipt record is invalid")
@@ -319,7 +324,7 @@ func (m *Manager) loadJobs() error {
 		if err := m.validateStoredJob(id, &job); err != nil {
 			return err
 		}
-		if job.TransferJob.terminal() && !job.FinishedAt.IsZero() &&
+		if job.TransferJob.terminal() && !job.CancelRequested && !job.FinishedAt.IsZero() &&
 			now.After(job.FinishedAt.Add(finishedJobTTL)) {
 			if err := os.Remove(filepath.Join(m.outgoingDir, entry.Name())); err != nil && !os.IsNotExist(err) {
 				return fmt.Errorf("backup transfer: remove expired outgoing job %s: %w", id, err)
@@ -327,14 +332,23 @@ func (m *Manager) loadJobs() error {
 			continue
 		}
 		changed := false
-		if job.CancelRequested && !job.TransferJob.terminal() {
-			job.State = TransferCanceled
-			job.Cancellable = false
-			job.Retryable = false
-			job.ReceiveToken = ""
-			job.FinishedAt = now
-			job.UpdatedAt = now
-			changed = true
+		job.BytesPerSecond = 0
+		if job.CancelRequested {
+			if job.ReceiveToken == "" {
+				job.CancelRequested = false
+				job.NextAttemptAt = time.Time{}
+				changed = true
+			} else if job.State != TransferCanceled || job.FinishedAt.IsZero() ||
+				job.Cancellable || job.Retryable {
+				job.State = TransferCanceled
+				job.Cancellable = false
+				job.Retryable = false
+				if job.FinishedAt.IsZero() {
+					job.FinishedAt = now
+				}
+				job.UpdatedAt = now
+				changed = true
+			}
 		} else {
 			switch job.State {
 			case TransferConnecting, TransferUploading, TransferFinalizing:
@@ -359,8 +373,8 @@ func (m *Manager) validateStoredJob(id string, job *storedTransferJob) error {
 	if job == nil || job.ID != id || !validOpaqueID(job.ID) || strings.TrimSpace(job.BackupID) == "" ||
 		strings.TrimSpace(job.BackupName) == "" || job.Size <= 0 || !validSHA256(job.SHA256) ||
 		job.CreatedAt.IsZero() || job.UpdatedAt.IsZero() || job.UpdatedAt.Before(job.CreatedAt) ||
-		job.ProcessedBytes < 0 || job.ProcessedBytes > job.Size || job.TotalChunks < 0 ||
-		job.ProcessedChunks < 0 || job.ProcessedChunks > job.TotalChunks ||
+		job.ProcessedBytes < 0 || job.ProcessedBytes > job.Size || job.TotalRanges < 0 ||
+		job.ProcessedRanges < 0 || job.ProcessedRanges > job.TotalRanges ||
 		(!job.FinishedAt.IsZero() && job.FinishedAt.Before(job.CreatedAt)) {
 		return fmt.Errorf("backup transfer: outgoing job %s is invalid", id)
 	}
@@ -384,7 +398,7 @@ func (m *Manager) validateStoredJob(id string, job *storedTransferJob) error {
 			return fmt.Errorf("backup transfer: completed outgoing job %s is invalid", id)
 		}
 	case TransferCanceled:
-		if job.ReceiveToken != "" || job.FinishedAt.IsZero() {
+		if job.FinishedAt.IsZero() || (!job.CancelRequested && job.ReceiveToken != "") {
 			return fmt.Errorf("backup transfer: canceled outgoing job %s is invalid", id)
 		}
 	case TransferFailed:

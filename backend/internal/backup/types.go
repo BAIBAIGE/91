@@ -32,6 +32,7 @@ var (
 	ErrUploadNotFound    = errors.New("迁移上传不存在或已过期")
 	ErrUploadIncomplete  = errors.New("迁移上传仍有缺失分片")
 	ErrUploadFinalizing  = errors.New("迁移上传正在完整校验")
+	ErrUploadRangeBusy   = errors.New("迁移上传区间正在写入")
 	ErrRestorePending    = errors.New("已有恢复任务等待重启")
 	ErrInsufficientSpace = errors.New("磁盘可用空间不足")
 	ErrNoBackupContent   = errors.New("请至少选择一项备份内容")
@@ -158,9 +159,8 @@ type BeginUploadInput struct {
 }
 
 type UploadChunk struct {
-	Index  int    `json:"index"`
-	Size   int64  `json:"size"`
-	SHA256 string `json:"sha256"`
+	Index int   `json:"index"`
+	Size  int64 `json:"size"`
 }
 
 type UploadSession struct {

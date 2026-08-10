@@ -65,7 +65,7 @@ func TestFrontendHandlerDoesNotSwallowBackendRoutes(t *testing.T) {
 		"/api/missing",
 		"/admin/api/missing",
 		"/p/missing",
-		"/peer/v1/backups/missing",
+		"/peer/backups/missing",
 	} {
 		req := httptest.NewRequest(http.MethodGet, target, nil)
 		rr := httptest.NewRecorder()

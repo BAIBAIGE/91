@@ -61,6 +61,8 @@ type Manager struct {
 	estimate        Estimate
 	estimateUntil   time.Time
 	uploadBusy      map[string]bool
+	uploadWriters   map[string]map[int]context.CancelFunc
+	uploadCanceling map[string]bool
 	uploadLocks     map[string]*uploadSessionLock
 	uploadProgress  map[string]OperationProgress
 	restoreBusy     bool
@@ -113,24 +115,26 @@ func NewManager(cfg Config) (*Manager, error) {
 	dataRoot := filepath.Dir(dbPath)
 	assetRoot := filepath.Dir(previewPath)
 	m := &Manager{
-		catalog:        cfg.Catalog,
-		appConfig:      cfg.AppConfig,
-		configPath:     configPath,
-		appVersion:     normalizedVersion(cfg.AppVersion),
-		dbPath:         dbPath,
-		previewPath:    previewPath,
-		dataRoot:       dataRoot,
-		assetRoot:      assetRoot,
-		backupDir:      filepath.Join(dataRoot, "backups"),
-		snapshotDir:    filepath.Join(dataRoot, ".backup-snapshots"),
-		restoreDir:     filepath.Join(dataRoot, restoreStageDirName),
-		restartManaged: cfg.RestartManaged,
-		now:            cfg.Now,
-		availableBytes: cfg.AvailableBytes,
-		uploadBusy:     make(map[string]bool),
-		uploadLocks:    make(map[string]*uploadSessionLock),
-		uploadProgress: make(map[string]OperationProgress),
-		restart:        make(chan struct{}, 1),
+		catalog:         cfg.Catalog,
+		appConfig:       cfg.AppConfig,
+		configPath:      configPath,
+		appVersion:      normalizedVersion(cfg.AppVersion),
+		dbPath:          dbPath,
+		previewPath:     previewPath,
+		dataRoot:        dataRoot,
+		assetRoot:       assetRoot,
+		backupDir:       filepath.Join(dataRoot, "backups"),
+		snapshotDir:     filepath.Join(dataRoot, ".backup-snapshots"),
+		restoreDir:      filepath.Join(dataRoot, restoreStageDirName),
+		restartManaged:  cfg.RestartManaged,
+		now:             cfg.Now,
+		availableBytes:  cfg.AvailableBytes,
+		uploadBusy:      make(map[string]bool),
+		uploadWriters:   make(map[string]map[int]context.CancelFunc),
+		uploadCanceling: make(map[string]bool),
+		uploadLocks:     make(map[string]*uploadSessionLock),
+		uploadProgress:  make(map[string]OperationProgress),
+		restart:         make(chan struct{}, 1),
 	}
 	m.uploadRoot = filepath.Join(m.backupDir, ".uploads")
 	if m.availableBytes == nil {

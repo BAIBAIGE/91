@@ -8937,54 +8937,21 @@ body.admin-mobile-nav-open {
   margin-bottom: 0;
 }
 
-.backup-upload-controls {
+.backup-upload-entry-actions {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: stretch;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: var(--space-2);
 }
 
-.backup-file-picker {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  min-width: 0;
-  width: auto;
+.backup-upload-entry-actions .admin-btn {
+  width: 100%;
   min-height: 40px;
-  padding: 8px 12px;
-  border: 1px dashed var(--border-default);
-  border-radius: var(--radius-sm);
-  background: var(--bg-elevated);
-  color: var(--text-default);
-  cursor: pointer;
-  transition: border-color 160ms ease, color 160ms ease, background 160ms ease;
-}
-
-.backup-file-picker:hover {
-  border-color: var(--border-accent);
-  background: var(--accent-soft);
-  color: var(--text-strong);
-}
-
-.backup-file-picker span {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.backup-file-picker input {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip: rect(0 0 0 0);
 }
 
 .backup-upload-actions {
   display: flex;
   align-items: stretch;
+  justify-content: flex-end;
   gap: var(--space-2);
 }
 
@@ -10223,7 +10190,6 @@ body.admin-logs-fullscreen-active {
 }
 
 .backup-transfer-summary span,
-.backup-transfer-hint,
 .backup-receive-code > p,
 .backup-receive-code__expiry {
   color: var(--text-muted);
@@ -10231,7 +10197,6 @@ body.admin-logs-fullscreen-active {
   line-height: 1.6;
 }
 
-.backup-transfer-hint,
 .backup-receive-code > p {
   margin: 0;
 }
@@ -10394,7 +10359,7 @@ body.admin-logs-fullscreen-active {
     font-size: var(--font-lg);
   }
 
-  .backup-upload-controls {
+  .backup-upload-entry-actions {
     grid-template-columns: 1fr;
   }
 
@@ -10403,7 +10368,6 @@ body.admin-logs-fullscreen-active {
     align-items: stretch;
   }
 
-  .backup-file-picker,
   .backup-upload-actions .admin-btn {
     width: 100%;
     max-width: none;

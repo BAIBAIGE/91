@@ -81,6 +81,71 @@ func (m *Manager) ListReceiveTokens() []ReceiveTokenInfo {
 	return out
 }
 
+func (m *Manager) ListReceiveTransfers(ctx context.Context) []ReceiveTransfer {
+	if m == nil {
+		return []ReceiveTransfer{}
+	}
+	m.mu.Lock()
+	receipts := make([]storedReceipt, 0, len(m.receiver.Receipts))
+	progress := make(map[string]*streamProgress, len(m.incomingProgress))
+	for _, receipt := range m.receiver.Receipts {
+		receipts = append(receipts, receipt)
+	}
+	for id, tracker := range m.incomingProgress {
+		progress[id] = tracker
+	}
+	m.mu.Unlock()
+
+	now := m.nowTime()
+	result := make([]ReceiveTransfer, 0, len(receipts))
+	for _, receipt := range receipts {
+		item := ReceiveTransfer{
+			ID:             receipt.Request.TransferID,
+			SourceServerID: receipt.Request.SourceServerID,
+			BackupID:       receipt.Request.BackupID,
+			BackupName:     receipt.Request.FileName,
+			State:          receipt.State,
+			Size:           receipt.Request.Size,
+			CreatedAt:      receipt.CreatedAt,
+			UpdatedAt:      receipt.UpdatedAt,
+			Cancellable:    receipt.State == ImportUploading,
+		}
+		status, err := m.statusForReceipt(ctx, receipt)
+		if err != nil {
+			item.State = TransferFailed
+			item.Error = err.Error()
+		} else {
+			item.State = status.State
+			item.ProcessedBytes = status.CommittedBytes
+			if status.Record != nil {
+				item.TargetBackupID = status.Record.ID
+			}
+		}
+		if tracker := progress[item.ID]; tracker != nil {
+			processed, bytesPerSecond, lastActivity := tracker.snapshot(now, item.Size)
+			if processed > item.ProcessedBytes {
+				item.ProcessedBytes = processed
+			}
+			item.BytesPerSecond = bytesPerSecond
+			if lastActivity.After(item.UpdatedAt) {
+				item.UpdatedAt = lastActivity
+			}
+		}
+		if item.State == ImportCompleted || item.State == ImportCanceled || item.State == TransferFailed {
+			item.FinishedAt = receipt.UpdatedAt
+			m.clearIncomingProgress(item.ID)
+		}
+		result = append(result, item)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].CreatedAt.Equal(result[j].CreatedAt) {
+			return result[i].ID > result[j].ID
+		}
+		return result[i].CreatedAt.After(result[j].CreatedAt)
+	})
+	return result
+}
+
 func (m *Manager) RevokeReceiveToken(id string) error {
 	if m == nil {
 		return ErrUnavailable
@@ -140,6 +205,12 @@ func (m *Manager) BeginImport(ctx context.Context, rawToken string, request Impo
 		status, statusErr := m.statusForReceipt(ctx, existing)
 		if !errors.Is(statusErr, ErrImportNotFound) {
 			if statusErr == nil {
+				if status.State != ImportCompleted && status.RangeSize != TransferRangeSize {
+					_ = m.backups.CancelUpload(existing.UploadID)
+					m.clearIncomingProgress(request.TransferID)
+					return m.restartExpiredImport(ctx, rawToken, key, existing)
+				}
+				m.incomingProgressFor(request.TransferID, status.CommittedBytes)
 				statusErr = m.touchReceiveToken(existing.TokenID, request.TransferID)
 			}
 			return status, statusErr
@@ -155,11 +226,11 @@ func (m *Manager) BeginImport(ctx context.Context, rawToken string, request Impo
 	}
 	m.mu.Unlock()
 
-	session, err := m.backups.BeginUpload(ctx, backup.BeginUploadInput{
+	session, err := m.backups.BeginRangeUpload(ctx, backup.BeginUploadInput{
 		FileName: request.FileName,
 		Size:     request.Size,
 		SHA256:   request.SHA256,
-	})
+	}, TransferRangeSize)
 	if err != nil {
 		return ImportStatus{}, err
 	}
@@ -190,7 +261,9 @@ func (m *Manager) BeginImport(ctx context.Context, rawToken string, request Impo
 		_ = m.backups.CancelUpload(session.ID)
 		return ImportStatus{}, authErr
 	}
-	return importStatusFromSession(receipt, session), nil
+	status := importStatusFromSession(receipt, session)
+	m.incomingProgressFor(request.TransferID, status.CommittedBytes)
+	return status, nil
 }
 
 func (m *Manager) restartExpiredImport(
@@ -199,11 +272,11 @@ func (m *Manager) restartExpiredImport(
 	key string,
 	receipt storedReceipt,
 ) (ImportStatus, error) {
-	session, err := m.backups.BeginUpload(ctx, backup.BeginUploadInput{
+	session, err := m.backups.BeginRangeUpload(ctx, backup.BeginUploadInput{
 		FileName: receipt.Request.FileName,
 		Size:     receipt.Request.Size,
 		SHA256:   receipt.Request.SHA256,
-	})
+	}, TransferRangeSize)
 	if err != nil {
 		return ImportStatus{}, err
 	}
@@ -231,7 +304,9 @@ func (m *Manager) restartExpiredImport(
 		_ = m.backups.CancelUpload(session.ID)
 		return ImportStatus{}, authErr
 	}
-	return importStatusFromSession(receipt, session), nil
+	status := importStatusFromSession(receipt, session)
+	m.incomingProgressFor(receipt.Request.TransferID, status.CommittedBytes)
+	return status, nil
 }
 
 func (m *Manager) ImportStatus(ctx context.Context, rawToken, transferID string) (ImportStatus, error) {
@@ -248,12 +323,12 @@ func (m *Manager) ImportStatus(ctx context.Context, rawToken, transferID string)
 	return status, err
 }
 
-func (m *Manager) PutImportChunk(
+func (m *Manager) PutImportRange(
 	ctx context.Context,
 	rawToken string,
 	transferID string,
 	index int,
-	digest string,
+	offset, size, totalSize int64,
 	body io.Reader,
 ) error {
 	receipt, err := m.authorizedReceipt(rawToken, transferID)
@@ -264,10 +339,44 @@ func (m *Manager) PutImportChunk(
 		if receipt.State == ImportCompleted {
 			return nil
 		}
+		if receipt.State == ImportCanceled {
+			return ErrImportCanceled
+		}
 		return backup.ErrUploadFinalizing
 	}
-	if _, err := m.backups.PutChunk(ctx, receipt.UploadID, index, digest, body); err != nil {
+	expectedSize := transferRangeBytes(receipt.Request.Size, index)
+	expectedOffset := int64(index) * TransferRangeSize
+	if expectedSize <= 0 || offset != expectedOffset || size != expectedSize || totalSize != receipt.Request.Size {
+		return errors.New("传输区间范围与备份元数据不一致")
+	}
+	session, err := m.backups.UploadStatus(receipt.UploadID)
+	if err != nil {
 		return err
+	}
+	committedBytes := uploadSessionBytes(session)
+	tracker := m.incomingProgressFor(transferID, committedBytes)
+	if !tracker.begin(index) {
+		return backup.ErrUploadRangeBusy
+	}
+	updated, wrote, err := m.backups.PutRange(
+		ctx,
+		receipt.UploadID,
+		index,
+		body,
+		func(bytes int64) { tracker.add(index, bytes, m.nowTime()) },
+	)
+	if err != nil {
+		tracker.abandon(index)
+		if m.receiptCanceled(receipt.TokenID, transferID) {
+			return ErrImportCanceled
+		}
+		return err
+	}
+	if wrote {
+		tracker.commit(index, uploadSessionBytes(updated), m.nowTime())
+	} else {
+		tracker.abandon(index)
+		tracker.setCommitted(uploadSessionBytes(updated))
 	}
 	return m.touchReceiveToken(receipt.TokenID, transferID)
 }
@@ -286,12 +395,13 @@ func (m *Manager) FinalizeImport(ctx context.Context, rawToken, transferID strin
 		return importStatusFromReceipt(receipt), nil
 	}
 	if receipt.State == ImportCanceled {
-		return ImportStatus{}, ErrImportNotFound
+		return ImportStatus{}, ErrImportCanceled
 	}
 	if err := m.setReceiptState(receipt.TokenID, transferID, ImportFinalizing, nil); err != nil {
 		return ImportStatus{}, err
 	}
-	record, finalizeErr := m.backups.FinalizeUpload(ctx, receipt.UploadID)
+	m.clearIncomingProgress(transferID)
+	record, finalizeErr := m.backups.FinalizeUpload(ctx, receipt.UploadID, receipt.Request.SHA256)
 	if errors.Is(finalizeErr, backup.ErrUploadNotFound) {
 		var found bool
 		record, found, finalizeErr = m.backups.FindImportedUpload(ctx, receipt.UploadID)
@@ -322,18 +432,134 @@ func (m *Manager) CancelImport(ctx context.Context, rawToken, transferID string)
 	defer m.receiveMu.Unlock()
 	receipt, err := m.authorizedReceipt(rawToken, transferID)
 	if err != nil {
+		if errors.Is(err, ErrImportNotFound) && validOpaqueID(strings.TrimSpace(transferID)) {
+			return nil
+		}
 		return err
 	}
+	return m.cancelReceiveReceipt(receipt)
+}
+
+// CancelReceiveTransfer is the administrator-authenticated cancellation path.
+// It deliberately resolves the durable receipt locally instead of requiring
+// the one-time peer credential, which is never retained in plaintext here.
+func (m *Manager) CancelReceiveTransfer(transferID string) error {
+	if m == nil {
+		return ErrUnavailable
+	}
+	m.receiveMu.Lock()
+	defer m.receiveMu.Unlock()
+	receipt, err := m.receiveReceiptByTransferID(transferID)
+	if err != nil {
+		return err
+	}
+	return m.cancelReceiveReceipt(receipt)
+}
+
+// cancelReceiveReceipt persists the terminal state before interrupting active
+// writers. That ordering prevents a canceled import from becoming resumable if
+// the process exits while its staging directory is being removed.
+func (m *Manager) cancelReceiveReceipt(receipt storedReceipt) error {
 	if receipt.State == ImportCompleted {
-		return ErrTransferTerminal
+		return nil
 	}
 	if receipt.State == ImportCanceled {
 		return nil
 	}
-	if err := m.backups.CancelUpload(receipt.UploadID); err != nil && !errors.Is(err, backup.ErrUploadNotFound) {
+	if receipt.State == ImportFinalizing {
+		return ErrTransferTerminal
+	}
+	transferID := receipt.Request.TransferID
+	if err := m.setReceiptState(receipt.TokenID, transferID, ImportCanceled, nil); err != nil {
 		return err
 	}
-	return m.setReceiptState(receipt.TokenID, transferID, ImportCanceled, nil)
+	m.clearIncomingProgress(transferID)
+	_ = m.backups.CancelUpload(receipt.UploadID)
+	m.signal()
+	return nil
+}
+
+func (m *Manager) receiveReceiptByTransferID(transferID string) (storedReceipt, error) {
+	transferID = strings.TrimSpace(transferID)
+	if !validOpaqueID(transferID) {
+		return storedReceipt{}, ErrImportNotFound
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var match storedReceipt
+	found := false
+	for _, receipt := range m.receiver.Receipts {
+		if receipt.Request.TransferID != transferID {
+			continue
+		}
+		if found {
+			return storedReceipt{}, ErrImportConflict
+		}
+		match = receipt
+		found = true
+	}
+	if !found {
+		return storedReceipt{}, ErrImportNotFound
+	}
+	return match, nil
+}
+
+// cleanupCanceledImports converges durable receiver cancellation with staging
+// cleanup. A non-empty upload ID on a canceled receipt is the persistent work
+// marker, so interrupted cleanup resumes after a service restart.
+func (m *Manager) cleanupCanceledImports() bool {
+	if m == nil {
+		return false
+	}
+	m.receiveMu.Lock()
+	defer m.receiveMu.Unlock()
+
+	type canceledUpload struct {
+		key      string
+		uploadID string
+	}
+	m.mu.Lock()
+	pendingUploads := make([]canceledUpload, 0)
+	for key, receipt := range m.receiver.Receipts {
+		if receipt.State == ImportCanceled && receipt.UploadID != "" {
+			pendingUploads = append(pendingUploads, canceledUpload{key: key, uploadID: receipt.UploadID})
+		}
+	}
+	m.mu.Unlock()
+
+	pending := false
+	for _, upload := range pendingUploads {
+		cancelErr := m.backups.CancelUpload(upload.uploadID)
+		if cancelErr == nil {
+			if _, statusErr := m.backups.UploadStatus(upload.uploadID); statusErr == nil {
+				pending = true
+				continue
+			} else if !errors.Is(statusErr, backup.ErrUploadNotFound) {
+				pending = true
+				continue
+			}
+		}
+		if cancelErr != nil && !errors.Is(cancelErr, backup.ErrUploadNotFound) {
+			pending = true
+			continue
+		}
+
+		m.mu.Lock()
+		receipt, exists := m.receiver.Receipts[upload.key]
+		if !exists || receipt.State != ImportCanceled || receipt.UploadID != upload.uploadID {
+			m.mu.Unlock()
+			continue
+		}
+		previous := receipt
+		receipt.UploadID = ""
+		m.receiver.Receipts[upload.key] = receipt
+		if err := m.saveReceiverLocked(); err != nil {
+			m.receiver.Receipts[upload.key] = previous
+			pending = true
+		}
+		m.mu.Unlock()
+	}
+	return pending
 }
 
 func (m *Manager) authorizedReceipt(rawToken, transferID string) (storedReceipt, error) {
@@ -351,6 +577,13 @@ func (m *Manager) authorizedReceipt(rawToken, transferID string) (storedReceipt,
 		return storedReceipt{}, ErrImportNotFound
 	}
 	return receipt, nil
+}
+
+func (m *Manager) receiptCanceled(tokenID, transferID string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	receipt, ok := m.receiver.Receipts[receiptKey(tokenID, transferID)]
+	return ok && receipt.State == ImportCanceled
 }
 
 func (m *Manager) authenticateTokenLocked(raw, transferID string) (storedReceiveToken, error) {
@@ -443,21 +676,18 @@ func importStatusFromSession(receipt storedReceipt, session backup.UploadSession
 	if session.State == ImportFinalizing {
 		state = ImportFinalizing
 	}
-	ranges := chunkRanges(session.Received)
-	var receivedBytes int64
-	for _, chunk := range session.Received {
-		receivedBytes += chunk.Size
-	}
+	ranges := indexRanges(session.Received)
+	committedBytes := uploadSessionBytes(session)
 	return ImportStatus{
-		TransferID:    receipt.Request.TransferID,
-		State:         state,
-		Size:          session.Size,
-		SHA256:        receipt.Request.SHA256,
-		ChunkSize:     session.ChunkSize,
-		TotalChunks:   session.TotalChunks,
-		Received:      ranges,
-		ReceivedBytes: receivedBytes,
-		ExpiresAt:     session.ExpiresAt,
+		TransferID:     receipt.Request.TransferID,
+		State:          state,
+		Size:           session.Size,
+		SHA256:         receipt.Request.SHA256,
+		RangeSize:      session.ChunkSize,
+		TotalRanges:    session.TotalChunks,
+		Committed:      ranges,
+		CommittedBytes: committedBytes,
+		ExpiresAt:      session.ExpiresAt,
 	}
 }
 
@@ -467,40 +697,56 @@ func importStatusFromReceipt(receipt storedReceipt) ImportStatus {
 		State:      receipt.State,
 		Size:       receipt.Request.Size,
 		SHA256:     receipt.Request.SHA256,
-		ChunkSize:  backup.ChunkSize,
+		RangeSize:  TransferRangeSize,
 	}
-	status.TotalChunks = int((status.Size-1)/status.ChunkSize + 1)
+	status.TotalRanges = int((status.Size-1)/status.RangeSize + 1)
 	if receipt.State == ImportCompleted && receipt.Record != nil {
 		copy := *receipt.Record
 		status.Record = &copy
-		status.ReceivedBytes = status.Size
-		if status.TotalChunks > 0 {
-			status.Received = []ChunkRange{{Start: 0, End: status.TotalChunks - 1}}
+		status.CommittedBytes = status.Size
+		if status.TotalRanges > 0 {
+			status.Committed = []IndexRange{{Start: 0, End: status.TotalRanges - 1}}
 		}
 	}
 	return status
 }
 
-func chunkRanges(chunks []backup.UploadChunk) []ChunkRange {
+func indexRanges(chunks []backup.UploadChunk) []IndexRange {
 	if len(chunks) == 0 {
-		return []ChunkRange{}
+		return []IndexRange{}
 	}
 	indexes := make([]int, 0, len(chunks))
 	for _, chunk := range chunks {
 		indexes = append(indexes, chunk.Index)
 	}
 	sort.Ints(indexes)
-	ranges := make([]ChunkRange, 0, len(indexes))
-	current := ChunkRange{Start: indexes[0], End: indexes[0]}
+	ranges := make([]IndexRange, 0, len(indexes))
+	current := IndexRange{Start: indexes[0], End: indexes[0]}
 	for _, index := range indexes[1:] {
 		if index == current.End+1 {
 			current.End = index
 			continue
 		}
 		ranges = append(ranges, current)
-		current = ChunkRange{Start: index, End: index}
+		current = IndexRange{Start: index, End: index}
 	}
 	return append(ranges, current)
+}
+
+func uploadSessionBytes(session backup.UploadSession) int64 {
+	var total int64
+	for _, chunk := range session.Received {
+		total += chunk.Size
+	}
+	return total
+}
+
+func transferRangeBytes(size int64, index int) int64 {
+	if size <= 0 || index < 0 || int64(index) > (size-1)/TransferRangeSize {
+		return 0
+	}
+	offset := int64(index) * TransferRangeSize
+	return min(TransferRangeSize, size-offset)
 }
 
 func validateImportRequest(request ImportRequest) error {

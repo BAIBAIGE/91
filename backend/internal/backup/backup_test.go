@@ -1460,7 +1460,9 @@ func TestStartupCleanupAndUploadExpiryPreserveCompletedBackups(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := restarted.FinalizeUpload(context.Background(), session.ID); !errors.Is(err, ErrUploadIncomplete) {
+	if _, err := restarted.FinalizeUpload(
+		context.Background(), session.ID, strings.Repeat("0", 64),
+	); !errors.Is(err, ErrUploadIncomplete) {
 		t.Fatalf("incomplete finalize error = %v, want ErrUploadIncomplete", err)
 	}
 	now = now.Add(UploadTTL + time.Second)
@@ -1679,7 +1681,130 @@ func TestVerifyArchiveRejectsManifestAndDatabaseScopeMismatch(t *testing.T) {
 	}
 }
 
-func TestChunkUploadSupportsOutOfOrderRepeatAndRestartResume(t *testing.T) {
+func TestRangeUploadStreamsWithoutPerRangeDigestAndFinalizesWholeArchive(t *testing.T) {
+	env := newTestBackupEnv(t)
+	writeTestFile(t, filepath.Join(env.root, "uploads", "range-source.mp4"), []byte("range-upload"))
+	record := createAndWaitForBackup(t, env.manager)
+	sourcePath, _, err := env.manager.resolveBackup(record.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	archiveBytes, err := os.ReadFile(sourcePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := env.manager.BeginRangeUpload(context.Background(), BeginUploadInput{
+		FileName: "server-transfer.zip",
+		Size:     int64(len(archiveBytes)),
+		SHA256:   sha256Hex(archiveBytes),
+	}, 16<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if session.ChunkSize != 16<<20 {
+		t.Fatalf("server-transfer range size = %d, want %d", session.ChunkSize, int64(16<<20))
+	}
+	var streamed int64
+	updated, wrote, err := env.manager.PutRange(
+		context.Background(),
+		session.ID,
+		0,
+		bytes.NewReader(archiveBytes),
+		func(bytes int64) { streamed += bytes },
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !wrote || streamed != int64(len(archiveBytes)) || len(updated.Received) != 1 {
+		t.Fatalf("range result = wrote %v, streamed %d, session %+v", wrote, streamed, updated)
+	}
+	if _, wrote, err := env.manager.PutRange(
+		context.Background(), session.ID, 0, bytes.NewReader(archiveBytes), nil,
+	); err != nil || wrote {
+		t.Fatalf("idempotent range = wrote %v, err %v", wrote, err)
+	}
+	imported, err := env.manager.FinalizeUpload(
+		context.Background(), session.ID, sha256Hex(archiveBytes),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !imported.Imported || imported.VerificationStatus != "verified" ||
+		!strings.EqualFold(imported.SHA256, record.SHA256) {
+		t.Fatalf("imported record = %+v", imported)
+	}
+}
+
+func TestCancelUploadInterruptsActiveRangeAndRemovesStaging(t *testing.T) {
+	env := newTestBackupEnv(t)
+	session, err := env.manager.BeginRangeUpload(context.Background(), BeginUploadInput{
+		FileName: "cancel-active-range.zip",
+		Size:     16 << 20,
+		SHA256:   strings.Repeat("a", 64),
+	}, 16<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	reader, writer := io.Pipe()
+	t.Cleanup(func() {
+		_ = reader.Close()
+		_ = writer.Close()
+	})
+	type rangeResult struct {
+		wrote bool
+		err   error
+	}
+	result := make(chan rangeResult, 1)
+	started := make(chan struct{}, 1)
+	go func() {
+		_, wrote, putErr := env.manager.PutRange(
+			context.Background(),
+			session.ID,
+			0,
+			reader,
+			func(int64) {
+				select {
+				case started <- struct{}{}:
+				default:
+				}
+			},
+		)
+		result <- rangeResult{wrote: wrote, err: putErr}
+	}()
+	writeResult := make(chan error, 1)
+	go func() {
+		_, writeErr := writer.Write(make([]byte, 1<<20))
+		writeResult <- writeErr
+	}()
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("range writer did not start")
+	}
+
+	if err := env.manager.CancelUpload(session.ID); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case got := <-result:
+		if got.err == nil || got.wrote {
+			t.Fatalf("canceled range = wrote %v, err %v", got.wrote, got.err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("active range did not stop after upload cancellation")
+	}
+	select {
+	case <-writeResult:
+	case <-time.After(5 * time.Second):
+		t.Fatal("range source remained blocked after upload cancellation")
+	}
+	if _, err := env.manager.UploadStatus(session.ID); !errors.Is(err, ErrUploadNotFound) {
+		t.Fatalf("upload status after cancellation = %v, want ErrUploadNotFound", err)
+	}
+}
+
+func TestChunkUploadStreamsWithoutDigestsAndSupportsOutOfOrderRestartResume(t *testing.T) {
 	env := newTestBackupEnv(t)
 	large := bytes.Repeat([]byte{0x5a}, int(ChunkSize)+4096)
 	writeTestFile(t, filepath.Join(env.root, "uploads", "large.mp4"), large)
@@ -1709,34 +1834,28 @@ func TestChunkUploadSupportsOutOfOrderRepeatAndRestartResume(t *testing.T) {
 	if partInfo.Size() != session.Size {
 		t.Fatalf("part size = %d, want %d", partInfo.Size(), session.Size)
 	}
-	put := func(index int, hash string) error {
+	put := func(index int) error {
 		start := int64(index) * session.ChunkSize
 		end := min(start+session.ChunkSize, int64(len(archiveBytes)))
 		_, err := env.manager.PutChunk(
 			context.Background(),
 			session.ID,
 			index,
-			hash,
 			bytes.NewReader(archiveBytes[start:end]),
 		)
 		return err
 	}
 	lastIndex := session.TotalChunks - 1
 	lastStart := int64(lastIndex) * session.ChunkSize
-	lastHash := sha256Hex(archiveBytes[lastStart:])
-	if err := put(lastIndex, strings.Repeat("0", 64)); err == nil {
-		t.Fatal("bad chunk hash was accepted")
-	}
-	firstHash := sha256Hex(archiveBytes[:session.ChunkSize])
 	putErrors := make(chan error, 2)
-	go func() { putErrors <- put(lastIndex, lastHash) }()
-	go func() { putErrors <- put(0, firstHash) }()
+	go func() { putErrors <- put(lastIndex) }()
+	go func() { putErrors <- put(0) }()
 	for range 2 {
 		if err := <-putErrors; err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := put(0, firstHash); err != nil {
+	if err := put(0); err != nil {
 		t.Fatalf("idempotent repeated chunk failed: %v", err)
 	}
 	uploadEntries, err := os.ReadDir(env.manager.uploadDir(session.ID))
@@ -1762,6 +1881,37 @@ func TestChunkUploadSupportsOutOfOrderRepeatAndRestartResume(t *testing.T) {
 	}
 	if !bytes.Equal(lastOnDisk, archiveBytes[lastStart:]) {
 		t.Fatal("out-of-order chunk was not written at its fixed offset")
+	}
+
+	// A deployment can be upgraded while a part-v1 browser upload is still in
+	// progress. Keep accepting its obsolete per-chunk digest fields, but never
+	// use them as validation inputs or expose them again.
+	stored, err := env.manager.loadUpload(session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyJSON, err := json.Marshal(stored)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var legacySidecar map[string]any
+	if err := json.Unmarshal(legacyJSON, &legacySidecar); err != nil {
+		t.Fatal(err)
+	}
+	legacySidecar["storageFormat"] = uploadStoragePartV1
+	received, ok := legacySidecar["received"].(map[string]any)
+	if !ok {
+		t.Fatalf("legacy received sidecar = %#v", legacySidecar["received"])
+	}
+	for key, value := range received {
+		chunk, ok := value.(map[string]any)
+		if !ok {
+			t.Fatalf("legacy chunk %s = %#v", key, value)
+		}
+		chunk["sha256"] = strings.Repeat("a", 64)
+	}
+	if err := writeJSONAtomic(env.manager.uploadSidecar(session.ID), legacySidecar, 0o600); err != nil {
+		t.Fatal(err)
 	}
 
 	env.manager.Close()
@@ -1805,13 +1955,14 @@ func TestChunkUploadSupportsOutOfOrderRepeatAndRestartResume(t *testing.T) {
 			context.Background(),
 			status.ID,
 			index,
-			sha256Hex(chunk),
 			bytes.NewReader(chunk),
 		); err != nil {
 			t.Fatal(err)
 		}
 	}
-	imported, err := resumed.FinalizeUpload(context.Background(), session.ID)
+	imported, err := resumed.FinalizeUpload(
+		context.Background(), session.ID, sha256Hex(archiveBytes),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1835,7 +1986,6 @@ func TestChunkUploadMigratesLegacySessionToSinglePart(t *testing.T) {
 	session, err := env.manager.BeginUpload(context.Background(), BeginUploadInput{
 		FileName: "legacy.zip",
 		Size:     int64(len(archiveBytes)),
-		SHA256:   sha256Hex(archiveBytes),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1854,16 +2004,17 @@ func TestChunkUploadMigratesLegacySessionToSinglePart(t *testing.T) {
 		chunk := archiveBytes[start:end]
 		writeTestFile(t, env.manager.uploadChunkPath(session.ID, index), chunk)
 		stored.Received[index] = UploadChunk{
-			Index:  index,
-			Size:   int64(len(chunk)),
-			SHA256: sha256Hex(chunk),
+			Index: index,
+			Size:  int64(len(chunk)),
 		}
 	}
 	if err := writeJSONAtomic(env.manager.uploadSidecar(session.ID), stored, 0o600); err != nil {
 		t.Fatal(err)
 	}
 
-	imported, err := env.manager.FinalizeUpload(context.Background(), session.ID)
+	imported, err := env.manager.FinalizeUpload(
+		context.Background(), session.ID, sha256Hex(archiveBytes),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1883,9 +2034,13 @@ func TestChunkUploadMigratesLegacySessionToSinglePart(t *testing.T) {
 	}
 }
 
-func TestChunkUploadCorruptPartDropsOnlyFailedChunkForRetry(t *testing.T) {
+func TestChunkUploadWholeHashMismatchClearsAllCheckpointsForRetry(t *testing.T) {
 	env := newTestBackupEnv(t)
-	writeTestFile(t, filepath.Join(env.root, "uploads", "retry.mp4"), []byte("retry-upload"))
+	writeTestFile(
+		t,
+		filepath.Join(env.root, "uploads", "retry.mp4"),
+		bytes.Repeat([]byte("retry-upload"), int(ChunkSize/12)+1),
+	)
 	record := createAndWaitForBackup(t, env.manager)
 	sourcePath, _, err := env.manager.resolveBackup(record.ID)
 	if err != nil {
@@ -1898,19 +2053,21 @@ func TestChunkUploadCorruptPartDropsOnlyFailedChunkForRetry(t *testing.T) {
 	session, err := env.manager.BeginUpload(context.Background(), BeginUploadInput{
 		FileName: "retry.zip",
 		Size:     int64(len(archiveBytes)),
-		SHA256:   sha256Hex(archiveBytes),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if session.TotalChunks != 1 {
-		t.Fatalf("test archive chunks = %d, want 1", session.TotalChunks)
+	if session.TotalChunks < 2 {
+		t.Fatalf("test archive chunks = %d, want at least 2", session.TotalChunks)
 	}
-	chunkHash := sha256Hex(archiveBytes)
-	if _, err := env.manager.PutChunk(
-		context.Background(), session.ID, 0, chunkHash, bytes.NewReader(archiveBytes),
-	); err != nil {
-		t.Fatal(err)
+	for index := 0; index < session.TotalChunks; index++ {
+		start := int64(index) * session.ChunkSize
+		end := min(start+session.ChunkSize, int64(len(archiveBytes)))
+		if _, err := env.manager.PutChunk(
+			context.Background(), session.ID, index, bytes.NewReader(archiveBytes[start:end]),
+		); err != nil {
+			t.Fatal(err)
+		}
 	}
 	part, err := os.OpenFile(env.manager.uploadPartPath(session.ID), os.O_WRONLY, 0o600)
 	if err != nil {
@@ -1927,8 +2084,10 @@ func TestChunkUploadCorruptPartDropsOnlyFailedChunkForRetry(t *testing.T) {
 	if err := part.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := env.manager.FinalizeUpload(context.Background(), session.ID); err == nil ||
-		!strings.Contains(err.Error(), "暂存文件中校验失败") {
+	archiveHash := sha256Hex(archiveBytes)
+	if _, err := env.manager.FinalizeUpload(
+		context.Background(), session.ID, archiveHash,
+	); err == nil || !strings.Contains(err.Error(), "完整备份包 SHA-256 校验失败") {
 		t.Fatalf("corrupt part finalize error = %v", err)
 	}
 	status, err := env.manager.UploadStatus(session.ID)
@@ -1938,12 +2097,16 @@ func TestChunkUploadCorruptPartDropsOnlyFailedChunkForRetry(t *testing.T) {
 	if status.State != "uploading" || len(status.Received) != 0 {
 		t.Fatalf("status after corrupt chunk = %+v", status)
 	}
-	if _, err := env.manager.PutChunk(
-		context.Background(), session.ID, 0, chunkHash, bytes.NewReader(archiveBytes),
-	); err != nil {
-		t.Fatal(err)
+	for index := 0; index < session.TotalChunks; index++ {
+		start := int64(index) * session.ChunkSize
+		end := min(start+session.ChunkSize, int64(len(archiveBytes)))
+		if _, err := env.manager.PutChunk(
+			context.Background(), session.ID, index, bytes.NewReader(archiveBytes[start:end]),
+		); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if _, err := env.manager.FinalizeUpload(context.Background(), session.ID); err != nil {
+	if _, err := env.manager.FinalizeUpload(context.Background(), session.ID, archiveHash); err != nil {
 		t.Fatalf("finalize after retransmitting corrupt chunk: %v", err)
 	}
 }

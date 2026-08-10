@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -32,16 +33,38 @@ type transferTestBackupEnv struct {
 
 type failFirstChunkResponseTransport struct {
 	base          http.RoundTripper
-	chunkRequests atomic.Int32
+	rangeRequests atomic.Int32
 	failed        atomic.Bool
+}
+
+type cancelBlockingBody struct {
+	io.ReadCloser
+	started     chan struct{}
+	released    chan struct{}
+	startedOnce sync.Once
+	releaseOnce sync.Once
+}
+
+func (body *cancelBlockingBody) Read(buffer []byte) (int, error) {
+	read, err := body.ReadCloser.Read(buffer)
+	if read > 0 {
+		body.startedOnce.Do(func() { close(body.started) })
+		<-body.released
+	}
+	return read, err
+}
+
+func (body *cancelBlockingBody) Close() error {
+	body.releaseOnce.Do(func() { close(body.released) })
+	return body.ReadCloser.Close()
 }
 
 func (transport *failFirstChunkResponseTransport) RoundTrip(request *http.Request) (*http.Response, error) {
 	response, err := transport.base.RoundTrip(request)
-	if err != nil || request.Method != http.MethodPut || !strings.Contains(request.URL.Path, "/chunks/") {
+	if err != nil || request.Method != http.MethodPut || !strings.Contains(request.URL.Path, "/ranges/") {
 		return response, err
 	}
-	transport.chunkRequests.Add(1)
+	transport.rangeRequests.Add(1)
 	if !transport.failed.CompareAndSwap(false, true) {
 		return response, nil
 	}
@@ -239,6 +262,218 @@ func TestPeerBackupTransferSupportsPlainHTTP(t *testing.T) {
 		!strings.EqualFold(targetRecord.SHA256, sourceRecord.SHA256) {
 		t.Fatalf("plain HTTP target backup = %+v", targetRecord)
 	}
+	receives := targetTransfers.ListReceiveTransfers(context.Background())
+	if len(receives) != 1 || receives[0].State != backuptransfer.ImportCompleted ||
+		receives[0].ProcessedBytes != sourceRecord.Size || receives[0].BytesPerSecond != 0 {
+		t.Fatalf("target receive telemetry = %+v", receives)
+	}
+}
+
+func TestCancelBackupTransferStopsActiveRangesAndReceiverProgress(t *testing.T) {
+	source := newTransferTestBackupEnv(t)
+	target := newTransferTestBackupEnv(t)
+	sourceRecord := createTransferTestBackup(t, source.backups)
+
+	targetTransfers, err := backuptransfer.New(backuptransfer.Config{
+		Backups: target.backups,
+		RootDir: filepath.Join(target.root, "peer-transfer"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	targetAPI := &AdminServer{
+		Auth:            &auth.Authenticator{Catalog: target.catalog},
+		Backups:         target.backups,
+		BackupTransfers: targetTransfers,
+	}
+	router := chi.NewRouter()
+	targetAPI.Register(router)
+	started := make(chan struct{})
+	targetServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPut && strings.Contains(r.URL.Path, "/ranges/") {
+			r.Body = &cancelBlockingBody{
+				ReadCloser: r.Body,
+				started:    started,
+				released:   make(chan struct{}),
+			}
+		}
+		router.ServeHTTP(w, r)
+	}))
+	defer targetServer.Close()
+
+	receiveToken, err := targetTransfers.GenerateReceiveToken(10 * time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sourceStateRoot := filepath.Join(source.root, "peer-transfer")
+	sourceTransfers, err := backuptransfer.New(backuptransfer.Config{
+		Backups: source.backups,
+		RootDir: sourceStateRoot,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runCtx, stop := context.WithCancel(context.Background())
+	sourceTransfers.Start(runCtx)
+	defer func() {
+		stop()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := sourceTransfers.Shutdown(shutdownCtx); err != nil {
+			t.Errorf("shutdown canceled source transfer: %v", err)
+		}
+	}()
+
+	created, err := sourceTransfers.CreateTransfer(context.Background(), backuptransfer.CreateTransferInput{
+		BackupID:     sourceRecord.ID,
+		TargetURL:    targetServer.URL,
+		ReceiveToken: receiveToken.Token,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-started:
+	case <-time.After(10 * time.Second):
+		t.Fatal("target range writer did not start")
+	}
+	if _, err := sourceTransfers.CancelTransfer(created.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		receives := targetTransfers.ListReceiveTransfers(context.Background())
+		if len(receives) == 1 && receives[0].State == backuptransfer.ImportCanceled {
+			stateBody, readErr := os.ReadFile(
+				filepath.Join(sourceStateRoot, "outgoing", created.ID+".json"),
+			)
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			if !strings.Contains(string(stateBody), receiveToken.Token) &&
+				!strings.Contains(string(stateBody), "cancelRequested") {
+				return
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("receiver did not converge to canceled: %+v", targetTransfers.ListReceiveTransfers(context.Background()))
+}
+
+func TestCancelBackupReceiveStopsActiveRangesAndConvergesSender(t *testing.T) {
+	source := newTransferTestBackupEnv(t)
+	target := newTransferTestBackupEnv(t)
+	sourceRecord := createTransferTestBackup(t, source.backups)
+
+	targetTransfers, err := backuptransfer.New(backuptransfer.Config{
+		Backups: target.backups,
+		RootDir: filepath.Join(target.root, "peer-transfer"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	targetAPI := &AdminServer{
+		Auth:            &auth.Authenticator{Catalog: target.catalog},
+		Backups:         target.backups,
+		BackupTransfers: targetTransfers,
+	}
+	router := chi.NewRouter()
+	targetAPI.Register(router)
+	started := make(chan struct{})
+	targetServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPut && strings.Contains(r.URL.Path, "/ranges/") {
+			r.Body = &cancelBlockingBody{
+				ReadCloser: r.Body,
+				started:    started,
+				released:   make(chan struct{}),
+			}
+		}
+		router.ServeHTTP(w, r)
+	}))
+	defer targetServer.Close()
+
+	receiveToken, err := targetTransfers.GenerateReceiveToken(10 * time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sourceStateRoot := filepath.Join(source.root, "peer-transfer")
+	sourceTransfers, err := backuptransfer.New(backuptransfer.Config{
+		Backups: source.backups,
+		RootDir: sourceStateRoot,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runCtx, stop := context.WithCancel(context.Background())
+	sourceTransfers.Start(runCtx)
+	defer func() {
+		stop()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := sourceTransfers.Shutdown(shutdownCtx); err != nil {
+			t.Errorf("shutdown receiver-canceled source transfer: %v", err)
+		}
+	}()
+
+	created, err := sourceTransfers.CreateTransfer(context.Background(), backuptransfer.CreateTransferInput{
+		BackupID:     sourceRecord.ID,
+		TargetURL:    targetServer.URL,
+		ReceiveToken: receiveToken.Token,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-started:
+	case <-time.After(10 * time.Second):
+		t.Fatal("target range writer did not start")
+	}
+
+	cancelRecorder := httptest.NewRecorder()
+	cancelRequest := requestWithRouteParam(
+		http.MethodDelete,
+		"/admin/api/backup-receives/"+created.ID,
+		"id",
+		created.ID,
+		strings.NewReader(""),
+	)
+	targetAPI.handleCancelBackupReceiveTransfer(cancelRecorder, cancelRequest)
+	if cancelRecorder.Code != http.StatusNoContent {
+		t.Fatalf("admin receive cancellation = %d %s", cancelRecorder.Code, cancelRecorder.Body.String())
+	}
+
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		receives := targetTransfers.ListReceiveTransfers(context.Background())
+		for _, job := range sourceTransfers.ListTransfers() {
+			if job.ID != created.ID || job.State != backuptransfer.TransferCanceled {
+				continue
+			}
+			if job.Error != backuptransfer.ErrImportCanceled.Error() || job.Cancellable || job.Retryable {
+				t.Fatalf("receiver-canceled source job = %+v", job)
+			}
+			if len(receives) != 1 || receives[0].State != backuptransfer.ImportCanceled || receives[0].Cancellable {
+				t.Fatalf("receiver-canceled target job = %+v", receives)
+			}
+			stateBody, readErr := os.ReadFile(
+				filepath.Join(sourceStateRoot, "outgoing", created.ID+".json"),
+			)
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			if strings.Contains(string(stateBody), receiveToken.Token) {
+				t.Fatal("receiver-canceled source retained its receive credential")
+			}
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf(
+		"receiver cancellation did not converge: source=%+v target=%+v",
+		sourceTransfers.ListTransfers(),
+		targetTransfers.ListReceiveTransfers(context.Background()),
+	)
 }
 
 func TestPeerBackupTransferImportsDirectlyAndRecoversIdempotentReceipt(t *testing.T) {
@@ -266,7 +501,7 @@ func TestPeerBackupTransferImportsDirectlyAndRecoversIdempotentReceipt(t *testin
 
 	unauthorizedRequest, err := http.NewRequest(
 		http.MethodGet,
-		targetServer.URL+"/peer/v1/backups/capabilities",
+		targetServer.URL+backuptransfer.PeerBackupPath+"/capabilities",
 		nil,
 	)
 	if err != nil {
@@ -342,8 +577,8 @@ func TestPeerBackupTransferImportsDirectlyAndRecoversIdempotentReceipt(t *testin
 	shutdownCancel()
 
 	// Reload the durable source job while the target already owns the first
-	// chunk. The new worker must trust the target's received ranges and avoid
-	// sending that chunk a second time.
+	// range. The new worker must trust the target's committed ranges and avoid
+	// sending that range a second time.
 	resumedSourceTransfers, err := backuptransfer.New(sourceTransferConfig)
 	if err != nil {
 		t.Fatal(err)
@@ -362,11 +597,11 @@ func TestPeerBackupTransferImportsDirectlyAndRecoversIdempotentReceipt(t *testin
 	if completed.ProcessedBytes != sourceRecord.Size || completed.TargetBackupID == "" {
 		t.Fatalf("completed transfer = %+v", completed)
 	}
-	if completed.Attempts != 1 || flakyTransport.chunkRequests.Load() != 1 {
+	if completed.Attempts != 1 || flakyTransport.rangeRequests.Load() != 1 {
 		t.Fatalf(
-			"resume attempts = %d, chunk requests = %d; want one lost response without retransmission",
+			"resume attempts = %d, range requests = %d; want one lost response without retransmission",
 			completed.Attempts,
-			flakyTransport.chunkRequests.Load(),
+			flakyTransport.rangeRequests.Load(),
 		)
 	}
 	targetRecord, err := target.backups.BackupRecord(completed.TargetBackupID)

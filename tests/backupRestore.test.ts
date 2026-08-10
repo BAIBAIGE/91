@@ -11,6 +11,10 @@ const page = readFileSync(
   new URL("../src/admin/BackupPage.tsx", import.meta.url),
   "utf8"
 );
+const fileIcon = readFileSync(
+  new URL("../src/components/icons/FileIcon.tsx", import.meta.url),
+  "utf8"
+);
 const sha256 = readFileSync(
   new URL("../src/lib/sha256.ts", import.meta.url),
   "utf8"
@@ -30,6 +34,10 @@ const backupTransferApi = readFileSync(
 );
 const backupTransferSender = readFileSync(
   new URL("../backend/internal/backuptransfer/outgoing.go", import.meta.url),
+  "utf8"
+);
+const backupTransferTypes = readFileSync(
+  new URL("../backend/internal/backuptransfer/types.go", import.meta.url),
   "utf8"
 );
 const viteConfig = readFileSync(
@@ -317,66 +325,98 @@ test("backup loading keeps the fixed page shell and leaves backend data blank", 
   );
 });
 
-test("migration upload uses resumable 16 MiB server chunks with HTTP-compatible hashes", () => {
-  assert.match(api, /X-Chunk-SHA256/);
+test("migration upload uses resumable checkpoints and one whole-archive hash", () => {
+  assert.doesNotMatch(api, /Content-Digest|X-Chunk-SHA256/);
   assert.match(api, /\/backup-uploads\/\$\{encodeURIComponent\(id\)\}\/chunks\/\$\{index\}/);
-  assert.match(page, /sha256Blob\(blob\)/);
-  assert.match(sha256, /globalThis\.crypto\?\.subtle \?\? null/);
-  assert.match(sha256, /subtle\.digest\("SHA-256", buffer\)/);
+  assert.match(page, /sha256Blob\(selectedFile, hashController\.signal\)/);
+  assert.doesNotMatch(page, /sha256Blob\(blob/);
+  assert.match(page, /finalizeBackupUpload\(session\.id, archiveHash\)/);
+  assert.match(api, /JSON\.stringify\(\{ sha256 \}\)/);
+  assert.doesNotMatch(backupApiHandler, /Content-Digest|X-Chunk-SHA256/);
+  assert.match(backupApiHandler, /Backups\.PutChunk\([\s\S]*?http\.MaxBytesReader/);
   assert.match(sha256, /import\("@noble\/hashes\/sha2\.js"\)/);
+  assert.match(sha256, /sha256\.create\(\)/);
+  assert.match(sha256, /8 \* 1024 \* 1024/);
+  assert.doesNotMatch(sha256, /subtle\.digest|blob\.arrayBuffer\(\)/);
   assert.match(page, /localStorage\.setItem\(RESUME_KEY/);
-  assert.match(page, /继续上传/);
+  assert.match(page, /void handleUpload\(next\)/);
+  assert.match(page, /file && upload[\s\S]{0,100}?void handleUpload\(file\)/);
   assert.match(page, /handlePause/);
   assert.match(page, /校验并入库/);
   assert.doesNotMatch(page, /正在合并并完整校验/);
 });
 
-test("server transfer supports HTTP and HTTPS with scoped tokens and no automatic restore", () => {
+test("server transfer uses parallel range streaming with scoped tokens and no automatic restore", () => {
   assert.match(api, /createBackupTransfer/);
   assert.match(api, /createBackupReceiveToken/);
   assert.match(page, /从服务器接收/);
   assert.match(page, /发送到其它服务器/);
-  assert.match(page, /目标端只会校验并加入备份列表，不会自动恢复/);
-  assert.match(backupTransferRoutes, /r\.Route\("\/peer\/v1\/backups"/);
+  assert.doesNotMatch(page, /<Send size=\{14\} \/>\s*发送/);
+  assert.match(page, /onClick=\{handleSendBackup\}[\s\S]{0,180}?确认/);
+  assert.doesNotMatch(page, /开始发送/);
+  assert.doesNotMatch(page, /支持 HTTP 的 IP\+端口地址和 HTTPS 地址/);
+  assert.match(backupTransferRoutes, /r\.Route\(backuptransfer\.PeerBackupPath/);
+  assert.match(backupTransferTypes, /PeerBackupPath\s+=\s+"\/peer\/backups"/);
+  assert.doesNotMatch(backupTransferTypes, /\/peer\/v\d+\/backups/);
   assert.match(backupTransferApi, /peerBearerToken\(r\)/);
-  assert.match(backupTransferApi, /Content-Digest/);
+  assert.match(backupTransferApi, /Content-Range/);
+  assert.doesNotMatch(backupTransferApi, /Content-Digest|X-Chunk-SHA256/);
   assert.match(backupTransferSender, /scheme != "http" && scheme != "https"/);
   assert.match(backupTransferSender, /目标服务器仅支持 HTTP 或 HTTPS/);
   assert.doesNotMatch(backupTransferSender, /allowInsecure/);
-  assert.match(backupTransferSender, /receivedChunks\(status\)/);
+  assert.match(backupTransferSender, /uploadRanges\(/);
+  assert.match(backupTransferSender, /min\(ParallelStreams, capabilities\.ParallelStreams\)/);
+  assert.match(backupTransferSender, /committedRanges\(status\)/);
   assert.match(viteConfig, /"\/peer": \{ target: backendTarget, xfwd: true \}/);
   assert.match(page, /http:\/\/192\.168\.1\.10:9191 或 https:\/\/target\.example\.com/);
   assert.match(page, /HTTP 会明文传输接收码和完整备份包/);
+  assert.match(page, /<h2>服务器接收<\/h2>/);
+  assert.match(page, /将这个一次性接收码给到发送方/);
+  assert.doesNotMatch(page, /将这个一次性接收码复制到源服务器/);
+  assert.doesNotMatch(page, /title="从其它服务器接收"[\s\S]{0,500}?footer=/);
+  assert.match(page, /未使用时有效至 \{formatTime\(receiveToken\?\.expiresAt\)\}，一个接收码只展示一次/);
+  assert.doesNotMatch(page, /接收码只展示这一次|请勿通过不可信渠道传递/);
+  assert.match(page, /下载 \{formatBytes\(transfer\.bytesPerSecond\)\}\/s/);
+  assert.match(page, /上传 \{formatBytes\(transfer\.bytesPerSecond\)\}\/s/);
+  assert.match(api, /listBackupReceiveTransfers/);
+  assert.match(api, /cancelBackupReceiveTransfer[\s\S]*?\/backup-receives\/\$\{encodeURIComponent\(id\)\}[\s\S]*?method: "DELETE"/);
+  assert.match(backupTransferRoutes, /r\.Delete\("\/backup-receives\/\{id\}", a\.handleCancelBackupReceiveTransfer\)/);
+  assert.match(page, /handleCancelReceiveTransfer[\s\S]*?api\.cancelBackupReceiveTransfer\(id\)/);
+  assert.match(page, /transfer\.cancellable[\s\S]{0,500}?handleCancelReceiveTransfer\(transfer\.id\)/);
+  assert.match(page, /服务器接收已取消，临时文件正在清理/);
+  assert.match(page, /visibleProgressTransfers\(transfers, transferActive\)/);
+  assert.match(page, /visibleProgressTransfers\(receiveTransfers, receiveTransferActive\)/);
+  assert.match(page, /filter\(\(transfer\) => transfer\.state === "failed"\)/);
+  assert.doesNotMatch(page, /recentFinished/);
 });
 
-test("backup upload aligns its picker with an ordinary compact upload button", () => {
+test("backup upload card keeps one server and one local entry action", () => {
   assert.match(
     page,
-    /className="backup-file-picker"[\s\S]*?<div className="backup-upload-actions">[\s\S]*?className="admin-btn backup-upload-submit"[\s\S]*?开始上传/
+    /className="backup-upload-entry-actions"[\s\S]*?onClick=\{handleCreateReceiveToken\}[\s\S]*?从服务器接收[\s\S]*?onClick=\{handleLocalUploadEntry\}[\s\S]*?从本地上传/
   );
-  assert.doesNotMatch(
-    page,
-    /className="admin-btn is-primary"[\s\S]{0,180}?\{upload\?\.received\.length \? "继续上传" : "开始上传"\}/
+  assert.match(page, /ref=\{localFileInput\}[\s\S]{0,120}?type="file"[\s\S]{0,180}?hidden/);
+  assert.match(page, /<FileIcon size=\{14\} \/>\s*从本地上传/);
+  assert.match(fileIcon, /viewBox="0 0 384 512"/);
+  assert.match(fileIcon, /M64 0C28\.7 0 0 28\.7 0 64L0 448/);
+  assert.doesNotMatch(page, /16 MiB 分片上传，支持暂停与断点续传/);
+  assert.doesNotMatch(page, /backup-file-picker|backup-upload-submit|选择 ZIP 备份包|开始上传|继续上传/);
+  assert.match(
+    css,
+    /\.backup-upload-entry-actions\s*\{[^}]*display:\s*grid;[^}]*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\);/s
   );
   assert.match(
     css,
-    /\.backup-upload-controls\s*\{[^}]*display:\s*grid;[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\) auto;[^}]*align-items:\s*stretch;/s
-  );
-  assert.match(
-    css,
-    /\.backup-file-picker\s*\{[^}]*width:\s*auto;[^}]*min-height:\s*40px;[^}]*padding:\s*8px 12px;/s
+    /\.backup-upload-entry-actions \.admin-btn\s*\{[^}]*width:\s*100%;[^}]*min-height:\s*40px;/s
   );
   assert.match(
     css,
     /\.backup-upload-actions \.admin-btn\s*\{[^}]*flex:\s*0 0 auto;[^}]*min-height:\s*40px;[^}]*padding-inline:\s*14px;/s
   );
-  assert.doesNotMatch(
-    css,
-    /\.backup-upload-submit\s*\{[^}]*min-width:/s
-  );
+  assert.doesNotMatch(css, /\.backup-file-picker|\.backup-upload-controls|\.backup-upload-submit/);
   assert.match(
     css,
-    /@media \(max-width: 600px\)[\s\S]*?\.backup-upload-controls\s*\{[^}]*grid-template-columns:\s*1fr;/s
+    /@media \(max-width: 600px\)[\s\S]*?\.backup-upload-entry-actions\s*\{[^}]*grid-template-columns:\s*1fr;/s
   );
 });
 
@@ -446,7 +486,7 @@ test("active backup cancellation uses the transparent ordinary button style", ()
 
 test("backup layout collapses safely on narrow screens", () => {
   assert.match(css, /@media \(max-width: 600px\)[\s\S]*?\.backup-stat/);
-  assert.match(css, /@media \(max-width: 600px\)[\s\S]*?\.backup-file-picker/);
+  assert.match(css, /@media \(max-width: 600px\)[\s\S]*?\.backup-upload-entry-actions/);
   assert.match(css, /\.backup-record__actions \.admin-btn[\s\S]*?flex: 1 1 110px/);
   assert.match(css, /\.admin-modal\.admin-modal--backup-restore[\s\S]*?width: min\(620px, 100%\)/);
 });
