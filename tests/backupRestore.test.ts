@@ -127,19 +127,21 @@ test("restore confirmation input uses the shared theme-aware field palette", () 
 test("backup creation uses credential-neutral backup wording", () => {
   assert.match(
     page,
-    /className="admin-btn is-transparent"\s+onClick=\{handleCreate\}[\s\S]*?创建备份/
+    /ref=\{floatingActionPageRef\}[\s\S]{0,160}?className="admin-page admin-page--with-floating-actions backup-page"/
   );
-  assert.match(page, /创建备份\n\s*<\/button>/);
+  assert.match(
+    page,
+    /data-admin-floating-actions\s+type="button"\s+className="admin-btn admin-create-fab"\s+onClick=\{handleCreate\}[\s\S]*?<Plus size="1em" aria-hidden="true" \/>[\s\S]*?创建备份/
+  );
+  assert.match(page, /useAdminFloatingActionSpace<HTMLDivElement>\(\)/);
+  assert.doesNotMatch(page, /<h2>备份列表<\/h2>/);
   assert.match(page, /show\("备份任务已开始", "success"\)/);
   assert.match(page, /<span>当前没有备份包<\/span>/);
   assert.doesNotMatch(
     page,
     /className="admin-btn is-primary"[\s\S]{0,240}?创建备份/
   );
-  assert.match(
-    css,
-    /\.admin-btn\.is-transparent,\s*\.admin-btn\.is-transparent:hover:not\(:disabled\)\s*\{[^}]*background:\s*transparent;/s
-  );
+  assert.match(css, /\.admin-create-fab\s*\{[^}]*position:\s*fixed;[^}]*right:\s*var\(--space-7\);[^}]*bottom:\s*var\(--space-5\);/s);
   assert.doesNotMatch(page, /创建完整备份|完整备份任务已开始|还没有完整备份/);
 });
 
@@ -173,9 +175,35 @@ test("backup creation starts with every scope unchecked", () => {
   assert.doesNotMatch(page, /FULL_BACKUP_SELECTION/);
 });
 
-test("backup scope stays visible when choosing and confirming a restore", () => {
+test("backup cards disclose scope in a crawler-style inline panel", () => {
   assert.match(page, /function backupSelectionLabels/);
   assert.match(page, /backupSelectionLabels\(record\.selection\)/);
+  assert.match(page, /const \[expandedBackupId, setExpandedBackupId\] = useState\(""\)/);
+  assert.match(
+    page,
+    /className=\{`backup-record\$\{expanded \? " is-expanded" : ""\}`\}[\s\S]*?className="backup-record__main"[\s\S]*?aria-expanded=\{expanded\}/
+  );
+  assert.match(
+    page,
+    /className="backup-record__scope-trigger">[\s\S]*?\{scopeLabels\.length\} 项备份内容[\s\S]*?<ChevronDown size=\{14\} aria-hidden="true" \/>/
+  );
+  assert.match(
+    page,
+    /\{expanded && \([\s\S]*?className="backup-record__detail" aria-label="备份内容"[\s\S]*?className="backup-record__detail-scopes"[\s\S]*?scopeLabels\.map/
+  );
+  assert.doesNotMatch(page, /className="backup-scope-list" aria-label="备份范围"/);
+  assert.match(
+    css,
+    /\.backup-record__detail\s*\{[^}]*display:\s*grid;[^}]*border-top:\s*1px dashed var\(--border-subtle\);[^}]*background:\s*var\(--bg-sunken\);/s
+  );
+  assert.match(
+    css,
+    /\.backup-record__detail-scopes\s*\{[^}]*grid-template-columns:\s*repeat\(auto-fit,\s*minmax\(220px,\s*1fr\)\);/s
+  );
+  assert.doesNotMatch(css, /\.backup-record__detail-scope\s*\{[^}]*border(?:-radius)?:/s);
+});
+
+test("backup scope stays visible when choosing and confirming a restore", () => {
   assert.match(
     page,
     /<dt>恢复内容<\/dt>[\s\S]*?backupSelectionLabels\(restoreTarget\.selection\)/
@@ -304,7 +332,7 @@ test("backup loading keeps the fixed page shell and leaves backend data blank", 
   assert.doesNotMatch(page, /if \(loading && !data\)/);
   assert.match(
     page,
-    /className="admin-page backup-page"\s+aria-busy=\{loading \|\| undefined\}/
+    /ref=\{floatingActionPageRef\}\s+className="admin-page admin-page--with-floating-actions backup-page"\s+aria-busy=\{loading \|\| undefined\}/
   );
   assert.match(
     page,
@@ -352,7 +380,8 @@ test("server transfer uses parallel range streaming with scoped tokens and no au
   assert.match(page, /从服务器接收/);
   assert.match(page, /发送到其它服务器/);
   assert.doesNotMatch(page, /<Send size=\{14\} \/>\s*发送/);
-  assert.match(page, /onClick=\{handleSendBackup\}[\s\S]{0,180}?确认/);
+  assert.match(page, /onClick=\{handleSendBackup\}\s*>\s*确认\s*<\/button>/);
+  assert.doesNotMatch(page, /onClick=\{handleSendBackup\}\s*>\s*<(?:Send|Loader2)/);
   assert.doesNotMatch(page, /开始发送/);
   assert.doesNotMatch(page, /支持 HTTP 的 IP\+端口地址和 HTTPS 地址/);
   assert.match(backupTransferRoutes, /r\.Route\(backuptransfer\.PeerBackupPath/);
@@ -369,12 +398,18 @@ test("server transfer uses parallel range streaming with scoped tokens and no au
   assert.match(backupTransferSender, /committedRanges\(status\)/);
   assert.match(viteConfig, /"\/peer": \{ target: backendTarget, xfwd: true \}/);
   assert.match(page, /http:\/\/192\.168\.1\.10:9191 或 https:\/\/target\.example\.com/);
-  assert.match(page, /HTTP 会明文传输接收码和完整备份包/);
+  assert.match(
+    page,
+    /HTTP 会明文传输接收码和完整备份包，请确认两台服务器之间的网络链路可信\s*<\/span>/
+  );
   assert.match(page, /<h2>服务器接收<\/h2>/);
-  assert.match(page, /将这个一次性接收码给到发送方/);
+  assert.match(
+    page,
+    /将这个一次性接收码给到发送方[\s\S]*?当前接收码有效至 \{formatTime\(receiveToken\?\.expiresAt\)\}，一个接收码只展示一次[\s\S]*?backup-receive-code__value/
+  );
   assert.doesNotMatch(page, /将这个一次性接收码复制到源服务器/);
   assert.doesNotMatch(page, /title="从其它服务器接收"[\s\S]{0,500}?footer=/);
-  assert.match(page, /未使用时有效至 \{formatTime\(receiveToken\?\.expiresAt\)\}，一个接收码只展示一次/);
+  assert.doesNotMatch(page, /未使用时有效至/);
   assert.doesNotMatch(page, /接收码只展示这一次|请勿通过不可信渠道传递/);
   assert.match(page, /下载 \{formatBytes\(transfer\.bytesPerSecond\)\}\/s/);
   assert.match(page, /上传 \{formatBytes\(transfer\.bytesPerSecond\)\}\/s/);
@@ -487,6 +522,8 @@ test("active backup cancellation uses the transparent ordinary button style", ()
 test("backup layout collapses safely on narrow screens", () => {
   assert.match(css, /@media \(max-width: 600px\)[\s\S]*?\.backup-stat/);
   assert.match(css, /@media \(max-width: 600px\)[\s\S]*?\.backup-upload-entry-actions/);
+  assert.match(css, /@media \(max-width: 840px\)[\s\S]*?\.backup-record__line\s*\{[^}]*grid-template-columns:\s*1fr;/s);
+  assert.match(css, /@media \(max-width: 600px\)[\s\S]*?\.backup-record__detail-scopes\s*\{[^}]*grid-template-columns:\s*1fr;/s);
   assert.match(css, /\.backup-record__actions \.admin-btn[\s\S]*?flex: 1 1 110px/);
   assert.match(css, /\.admin-modal\.admin-modal--backup-restore[\s\S]*?width: min\(620px, 100%\)/);
 });

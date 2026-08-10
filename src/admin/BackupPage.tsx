@@ -9,10 +9,11 @@ import { useNavigate } from "react-router";
 import {
   Archive,
   Check,
+  ChevronDown,
   CircleAlert,
   Copy,
   Loader2,
-  Send,
+  Plus,
 } from "lucide-react";
 import { FileIcon } from "@/components/icons/FileIcon";
 import { ServerIcon } from "@/components/icons/ServerIcon";
@@ -24,6 +25,7 @@ import { ConfirmModal } from "./ConfirmModal";
 import { Modal } from "./Modal";
 import { useToast } from "./ToastContext";
 import { useAdminRouteActive } from "./AdminRouteCache";
+import { useAdminFloatingActionSpace } from "./useAdminFloatingActionSpace";
 
 const RESUME_KEY = "video-site-91-backup-upload-v1";
 const RESTORE_CONFIRMATION_GRACE_MS = 30_000;
@@ -300,6 +302,7 @@ function readResumeState(): ResumeState | null {
 }
 
 export function BackupPage() {
+  const floatingActionPageRef = useAdminFloatingActionSpace<HTMLDivElement>();
   const navigate = useNavigate();
   const routeActive = useAdminRouteActive();
   const { invalidateSession } = useAuth();
@@ -316,6 +319,7 @@ export function BackupPage() {
   const [backupSelection, setBackupSelection] = useState<api.BackupSelection>(
     EMPTY_BACKUP_SELECTION
   );
+  const [expandedBackupId, setExpandedBackupId] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<api.BackupRecord | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [restoreTarget, setRestoreTarget] = useState<api.BackupRecord | null>(null);
@@ -544,6 +548,7 @@ export function BackupPage() {
     try {
       await api.deleteBackup(deleteTarget.id);
       show("备份已删除", "success");
+      setExpandedBackupId((current) => (current === deleteTarget.id ? "" : current));
       setDeleteTarget(null);
       await refresh(true);
     } catch (error) {
@@ -893,7 +898,8 @@ export function BackupPage() {
 
   return (
     <div
-      className="admin-page backup-page"
+      ref={floatingActionPageRef}
+      className="admin-page admin-page--with-floating-actions backup-page"
       aria-busy={loading || undefined}
     >
       <section className="backup-overview" aria-label="备份空间概览">
@@ -1156,90 +1162,109 @@ export function BackupPage() {
         </section>
 
         <section className="backup-list-section">
-          <div className="backup-section-heading">
-            <h2>备份列表</h2>
-            <button
-              type="button"
-              className="admin-btn is-transparent"
-              onClick={handleCreate}
-              disabled={!data || creating || taskActive(current) || data.pendingRestore}
-            >
-              {creating ? <Loader2 size={15} className="admin-spin" /> : null}
-              创建备份
-            </button>
-          </div>
           {data?.backups.length ? (
             <div className="backup-list">
-              {data.backups.map((record) => (
-                <article className="backup-record" key={record.id}>
-                  <div className="backup-record__icon">
-                    <Archive size={21} />
-                  </div>
-                  <div className="backup-record__body">
-                    <div className="backup-record__name">{record.name}</div>
-                    <div className="backup-record__meta">
-                      <span>{formatBytes(record.size)}</span>
-                      <span>{formatTime(record.createdAt)}</span>
-                      {record.imported && <span className="backup-badge">迁移</span>}
-                      <span className={`backup-verify is-${record.verificationStatus}`}>
-                        {record.verificationStatus === "verified"
-                          ? "已校验"
-                          : record.verificationStatus === "invalid"
-                            ? "校验失败"
-                            : "待校验"}
-                      </span>
+              {data.backups.map((record) => {
+                const scopeLabels = backupSelectionLabels(record.selection);
+                const expanded = expandedBackupId === record.id;
+                return (
+                  <article
+                    className={`backup-record${expanded ? " is-expanded" : ""}`}
+                    key={record.id}
+                  >
+                    <div className="backup-record__line">
+                      <button
+                        type="button"
+                        className="backup-record__main"
+                        onClick={() => setExpandedBackupId((current) => (
+                          current === record.id ? "" : record.id
+                        ))}
+                        aria-expanded={expanded}
+                        title={expanded ? "收起备份内容" : "展开备份内容"}
+                      >
+                        <span className="backup-record__icon">
+                          <Archive size={21} />
+                        </span>
+                        <span className="backup-record__body">
+                          <span className="backup-record__name">{record.name}</span>
+                          <span className="backup-record__meta">
+                            <span>{formatBytes(record.size)}</span>
+                            <span>{formatTime(record.createdAt)}</span>
+                            {record.imported && <span className="backup-badge">迁移</span>}
+                            <span className={`backup-verify is-${record.verificationStatus}`}>
+                              {record.verificationStatus === "verified"
+                                ? "已校验"
+                                : record.verificationStatus === "invalid"
+                                  ? "校验失败"
+                                  : "待校验"}
+                            </span>
+                            <span className="backup-record__scope-trigger">
+                              {scopeLabels.length} 项备份内容
+                              <ChevronDown size={14} aria-hidden="true" />
+                            </span>
+                          </span>
+                          {record.verificationError && (
+                            <span className="backup-record__error">{record.verificationError}</span>
+                          )}
+                        </span>
+                      </button>
+                      <div className="backup-record__actions">
+                        <a className="admin-btn" href={api.backupDownloadURL(record.id)}>
+                          下载
+                        </a>
+                        <button
+                          type="button"
+                          className="admin-btn"
+                          onClick={() => {
+                            setSendTarget(record);
+                            setSendURL("");
+                            setSendToken("");
+                          }}
+                          disabled={
+                            record.verificationStatus !== "verified" ||
+                            data.pendingRestore ||
+                            transfers.some(transferActive)
+                          }
+                        >
+                          发送
+                        </button>
+                        <button
+                          type="button"
+                          className="admin-btn"
+                          onClick={() => {
+                            setRestoreReport(null);
+                            setRestoreTarget(record);
+                          }}
+                          disabled={record.verificationStatus === "invalid" || data.pendingRestore}
+                        >
+                          恢复
+                        </button>
+                        <button
+                          type="button"
+                          className="admin-btn is-danger"
+                          onClick={() => setDeleteTarget(record)}
+                          disabled={data.pendingRestore}
+                        >
+                          删除
+                        </button>
+                      </div>
                     </div>
-                    <div className="backup-scope-list" aria-label="备份范围">
-                      {backupSelectionLabels(record.selection).map((label) => (
-                        <span className="backup-scope" key={label}>{label}</span>
-                      ))}
-                    </div>
-                    {record.verificationError && (
-                      <div className="backup-record__error">{record.verificationError}</div>
+                    {expanded && (
+                      <div className="backup-record__detail" aria-label="备份内容">
+                        <span className="backup-record__detail-title">备份内容</span>
+                        <div className="backup-record__detail-scopes">
+                          {scopeLabels.map((label) => (
+                            <span className="backup-record__detail-scope" key={label}>
+                              <Check size={14} aria-hidden="true" />
+                              <span>{label}</span>
+                            </span>
+                          ))}
+                        </div>
+                      </div>
                     )}
-                  </div>
-                  <div className="backup-record__actions">
-                    <a className="admin-btn" href={api.backupDownloadURL(record.id)}>
-                      下载
-                    </a>
-                    <button
-                      type="button"
-                      className="admin-btn"
-                      onClick={() => {
-                        setSendTarget(record);
-                        setSendURL("");
-                        setSendToken("");
-                      }}
-                      disabled={
-                        record.verificationStatus !== "verified" ||
-                        data.pendingRestore ||
-                        transfers.some(transferActive)
-                      }
-                    >
-                      发送
-                    </button>
-                    <button
-                      type="button"
-                      className="admin-btn"
-                      onClick={() => {
-                        setRestoreReport(null);
-                        setRestoreTarget(record);
-                      }}
-                      disabled={record.verificationStatus === "invalid" || data.pendingRestore}
-                    >
-                      恢复
-                    </button>
-                    <button
-                      type="button"
-                      className="admin-btn is-danger"
-                      onClick={() => setDeleteTarget(record)}
-                      disabled={data.pendingRestore}
-                    >
-                      删除
-                    </button>
-                  </div>
-                </article>
-              ))}
+                  </article>
+                );
+              })}
             </div>
           ) : data ? (
             <div className="backup-empty">
@@ -1249,6 +1274,17 @@ export function BackupPage() {
           ) : null}
         </section>
       </div>
+
+      <button
+        data-admin-floating-actions
+        type="button"
+        className="admin-btn admin-create-fab"
+        onClick={handleCreate}
+        disabled={!data || creating || taskActive(current) || data.pendingRestore}
+      >
+        <Plus size="1em" aria-hidden="true" />
+        创建备份
+      </button>
 
       <ConfirmModal
         open={deleteTarget !== null}
@@ -1335,7 +1371,6 @@ export function BackupPage() {
               disabled={sending || !sendURL.trim() || !sendToken.trim()}
               onClick={handleSendBackup}
             >
-              {sending ? <Loader2 size={14} className="admin-spin" /> : <Send size={14} />}
               确认
             </button>
           </>
@@ -1365,7 +1400,7 @@ export function BackupPage() {
             <p className="backup-transfer-transport-warning" role="alert">
               <CircleAlert size={16} />
               <span>
-                HTTP 会明文传输接收码和完整备份包，请确认两台服务器之间的网络链路可信。
+                HTTP 会明文传输接收码和完整备份包，请确认两台服务器之间的网络链路可信
               </span>
             </p>
           ) : null}
@@ -1395,6 +1430,9 @@ export function BackupPage() {
       >
         <div className="backup-receive-code">
           <p>将这个一次性接收码给到发送方</p>
+          <span className="backup-receive-code__expiry">
+            当前接收码有效至 {formatTime(receiveToken?.expiresAt)}，一个接收码只展示一次
+          </span>
           <div className="backup-receive-code__value">
             <code>{receiveToken?.token}</code>
             <button
@@ -1407,9 +1445,6 @@ export function BackupPage() {
               复制
             </button>
           </div>
-          <span className="backup-receive-code__expiry">
-            未使用时有效至 {formatTime(receiveToken?.expiresAt)}，一个接收码只展示一次
-          </span>
         </div>
       </Modal>
 
