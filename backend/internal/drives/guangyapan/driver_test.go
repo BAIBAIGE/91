@@ -1,17 +1,26 @@
 package guangyapan
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/video-site/backend/internal/drives"
 )
+
+type instantOnlyReader struct{}
+
+func (instantOnlyReader) Read([]byte) (int, error) {
+	return 0, errors.New("instant upload body must not be read")
+}
 
 func TestDriverRefreshListAndStream(t *testing.T) {
 	var refreshed bool
@@ -231,10 +240,12 @@ func TestListHTTP429ReturnsRateLimitError(t *testing.T) {
 }
 
 func TestListCode429ReturnsRateLimitError(t *testing.T) {
+	var calls atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/userres/v1/file/get_file_list" {
 			t.Fatalf("unexpected path %s", r.URL.Path)
 		}
+		calls.Add(1)
 		writeTestJSON(w, map[string]any{"code": 429, "msg": "操作频繁，请稍后再试"})
 	}))
 	defer srv.Close()
@@ -252,6 +263,15 @@ func TestListCode429ReturnsRateLimitError(t *testing.T) {
 	var rateLimit *drives.RateLimitError
 	if !errors.As(err, &rateLimit) {
 		t.Fatalf("error = %T %[1]v, want RateLimitError", err)
+	}
+	if rateLimit.RetryAfter < 9*time.Minute {
+		t.Fatalf("retry after = %s, want default provider cooldown", rateLimit.RetryAfter)
+	}
+	if _, err := d.List(context.Background(), ""); err == nil {
+		t.Fatal("follow-up list succeeded during provider cooldown")
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("upstream calls = %d, want 1 while cooldown is active", got)
 	}
 }
 
@@ -278,6 +298,179 @@ func TestListInvalidToken403DoesNotReturnRateLimitError(t *testing.T) {
 	var rateLimit *drives.RateLimitError
 	if errors.As(err, &rateLimit) {
 		t.Fatalf("error = %T %[1]v, want non-rate-limit error", err)
+	}
+}
+
+func TestUploadAcceptsInstantUploadResponses(t *testing.T) {
+	tests := []struct {
+		name string
+		code int
+		msg  string
+	}{
+		{name: "numeric code", code: 156, msg: "provider-specific instant result"},
+		{name: "instant message", code: 0, msg: "秒传成功"},
+		{name: "english message", code: 0, msg: "Upload already completed"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var tokenCalls atomic.Int32
+			var taskCalls atomic.Int32
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/nd.bizuserres.s/v1/get_res_center_token":
+					tokenCalls.Add(1)
+					writeTestJSON(w, map[string]any{
+						"code": tc.code,
+						"msg":  tc.msg,
+						"data": map[string]any{"taskId": "task-instant"},
+					})
+				case "/nd.bizuserres.s/v1/file/get_info_by_task_id":
+					taskCalls.Add(1)
+					writeTestJSON(w, map[string]any{
+						"code": 0,
+						"msg":  "success",
+						"data": map[string]any{"fileId": "file-instant"},
+					})
+				default:
+					http.NotFound(w, r)
+				}
+			}))
+			defer srv.Close()
+
+			d := New(Config{AccessToken: "access", APIBaseURL: srv.URL, AccountBaseURL: srv.URL})
+			d.newOSSBucket = func(uploadTokenData) (guangYaOSSBucket, error) {
+				t.Fatal("instant upload must not create an OSS bucket")
+				return nil, errors.New("unexpected OSS bucket")
+			}
+			fileID, err := d.Upload(context.Background(), "parent", "clip.mp4", instantOnlyReader{}, 4)
+			if err != nil {
+				t.Fatalf("upload: %v", err)
+			}
+			if fileID != "file-instant" || tokenCalls.Load() != 1 || taskCalls.Load() != 1 {
+				t.Fatalf("fileID=%q tokenCalls=%d taskCalls=%d", fileID, tokenCalls.Load(), taskCalls.Load())
+			}
+			entry, err := d.Stat(context.Background(), fileID)
+			if err != nil || entry.Name != "clip.mp4" || entry.ParentID != "parent" {
+				t.Fatalf("cached entry=%#v err=%v", entry, err)
+			}
+		})
+	}
+}
+
+func TestUploadRunsReliableMultipartSession(t *testing.T) {
+	bucket := newFakeGuangYaOSSBucket()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/nd.bizuserres.s/v1/get_res_center_token":
+			writeTestJSON(w, map[string]any{
+				"code": 0,
+				"msg":  "success",
+				"data": map[string]any{
+					"taskId":          "task-upload",
+					"objectPath":      "objects/clip",
+					"bucketName":      "bucket",
+					"endPoint":        "https://oss.example.test",
+					"accessKeyID":     "key",
+					"secretAccessKey": "secret",
+				},
+			})
+		case "/nd.bizuserres.s/v1/file/get_info_by_task_id":
+			writeTestJSON(w, map[string]any{
+				"code": 0,
+				"msg":  "success",
+				"data": map[string]any{"fileId": "file-upload"},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	d := New(Config{AccessToken: "access", APIBaseURL: srv.URL, AccountBaseURL: srv.URL})
+	d.newOSSBucket = func(uploadTokenData) (guangYaOSSBucket, error) { return bucket, nil }
+	fileID, err := d.Upload(context.Background(), "parent", "clip.mp4", bytes.NewReader([]byte("payload")), 7)
+	if err != nil {
+		t.Fatalf("upload: %v", err)
+	}
+	if fileID != "file-upload" || bucket.completes != 1 || bucket.aborts != 0 || bucket.partCalls[1] != 1 {
+		t.Fatalf("fileID=%q completes=%d aborts=%d partCalls=%v", fileID, bucket.completes, bucket.aborts, bucket.partCalls)
+	}
+}
+
+func TestConcurrentUnauthorizedRequestsRefreshOnce(t *testing.T) {
+	var oldRequests atomic.Int32
+	var refreshCalls atomic.Int32
+	releaseOld := make(chan struct{})
+	var releaseOnce sync.Once
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/auth/token":
+			refreshCalls.Add(1)
+			// Some providers rotate refresh credentials while returning the same
+			// access-token value. The generation guard must still deduplicate.
+			writeTestJSON(w, map[string]any{"access_token": "old-access", "refresh_token": "new-refresh"})
+		case "/userres/v1/file/get_file_list", "/nd.bizuserres.s/v1/get_res_download_url":
+			if r.Header.Get("Authorization") == "Bearer old-access" && refreshCalls.Load() == 0 {
+				if oldRequests.Add(1) == 2 {
+					releaseOnce.Do(func() { close(releaseOld) })
+				}
+				select {
+				case <-releaseOld:
+				case <-time.After(2 * time.Second):
+				}
+				w.WriteHeader(http.StatusUnauthorized)
+				writeTestJSON(w, map[string]any{"code": 401, "msg": "expired"})
+				return
+			}
+			if r.Header.Get("Authorization") != "Bearer old-access" {
+				w.WriteHeader(http.StatusUnauthorized)
+				writeTestJSON(w, map[string]any{"code": 401, "msg": "wrong token"})
+				return
+			}
+			if r.URL.Path == "/userres/v1/file/get_file_list" {
+				writeTestJSON(w, listTestResponse(nil))
+			} else {
+				writeTestJSON(w, map[string]any{
+					"code": 0,
+					"msg":  "success",
+					"data": map[string]any{"signedURL": "https://cdn.example.test/video.mp4"},
+				})
+			}
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	d := New(Config{
+		AccessToken:    "old-access",
+		RefreshToken:   "old-refresh",
+		AccountBaseURL: srv.URL,
+		APIBaseURL:     srv.URL,
+	})
+	start := make(chan struct{})
+	errs := make(chan error, 2)
+	go func() {
+		<-start
+		_, err := d.List(context.Background(), "")
+		errs <- err
+	}()
+	go func() {
+		<-start
+		_, err := d.StreamURL(context.Background(), "file-1")
+		errs <- err
+	}()
+	close(start)
+	for i := 0; i < 2; i++ {
+		if err := <-errs; err != nil {
+			t.Fatalf("concurrent request: %v", err)
+		}
+	}
+	if got := refreshCalls.Load(); got != 1 {
+		t.Fatalf("refresh calls = %d, want 1", got)
+	}
+	if got := oldRequests.Load(); got != 2 {
+		t.Fatalf("old-token requests = %d, want 2", got)
 	}
 }
 

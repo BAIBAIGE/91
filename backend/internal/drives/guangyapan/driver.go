@@ -16,7 +16,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/aliyun/aliyun-oss-go-sdk/oss"
 	"github.com/go-resty/resty/v2"
 
 	"github.com/video-site/backend/internal/drives"
@@ -25,11 +24,15 @@ import (
 const (
 	Kind = "guangyapan"
 
-	defaultAccountBaseURL = "https://account.guangyapan.com"
-	defaultAPIBaseURL     = "https://api.guangyapan.com"
-	defaultClientID       = "aMe-8VSlkrbQXpUR"
-	defaultPageSize       = 100
+	defaultAccountBaseURL  = "https://account.guangyapan.com"
+	defaultAPIBaseURL      = "https://api.guangyapan.com"
+	defaultClientID        = "aMe-8VSlkrbQXpUR"
+	defaultPageSize        = 100
+	defaultAPIRateInterval = 500 * time.Millisecond
+	defaultAPICooldown     = 10 * time.Minute
 )
+
+var errGuangYaFolderNotFound = errors.New("guangyapan folder not found")
 
 type Driver struct {
 	id             string
@@ -51,8 +54,24 @@ type Driver struct {
 	apiBaseURL     string
 	accountClient  *resty.Client
 	apiClient      *resty.Client
+	uploadTempDir  string
 
 	onCredentialsUpdate func(map[string]string)
+
+	credentialsMu   sync.RWMutex
+	tokenGeneration uint64
+	refreshMu       sync.Mutex
+	loginMu         sync.Mutex
+	ensureDirMu     sync.Mutex
+	apiRateMu       sync.Mutex
+	apiNext         map[string]time.Time
+	apiCooldown     time.Time
+	apiRateInterval time.Duration
+	uploadGate      chan struct{}
+
+	// newOSSBucket is intentionally unset in production. Tests inject the
+	// narrow OSS interface to exercise retries and aborts without a live bucket.
+	newOSSBucket func(uploadTokenData) (guangYaOSSBucket, error)
 
 	fileMu sync.RWMutex
 	files  map[string]drives.Entry
@@ -76,6 +95,7 @@ type Config struct {
 	SortType       int
 	AccountBaseURL string
 	APIBaseURL     string
+	UploadTempDir  string
 
 	OnCredentialsUpdate func(map[string]string)
 }
@@ -131,8 +151,15 @@ func New(c Config) *Driver {
 		sortType:            sortType,
 		accountBaseURL:      accountBaseURL,
 		apiBaseURL:          apiBaseURL,
+		uploadTempDir:       strings.TrimSpace(c.UploadTempDir),
 		onCredentialsUpdate: c.OnCredentialsUpdate,
+		apiNext:             make(map[string]time.Time),
+		apiRateInterval:     defaultAPIRateInterval,
+		uploadGate:          make(chan struct{}, 1),
 		files:               make(map[string]drives.Entry),
+	}
+	if d.accessToken != "" {
+		d.tokenGeneration = 1
 	}
 	d.accountClient = d.newAccountClient()
 	d.apiClient = d.newAPIClient()
@@ -146,13 +173,14 @@ func (d *Driver) RootID() string { return d.rootID }
 func (d *Driver) Init(ctx context.Context) error {
 	d.saveCredentials()
 
-	if d.accessToken != "" {
+	accessToken, refreshToken := d.tokenSnapshot()
+	if accessToken != "" {
 		if err := d.validateToken(ctx); err == nil {
 			return d.prepareRootFolder(ctx)
 		}
-		d.accessToken = ""
+		d.clearAccessToken(accessToken)
 	}
-	if d.refreshToken != "" {
+	if refreshToken != "" {
 		if err := d.refresh(ctx); err == nil {
 			if err := d.validateToken(ctx); err == nil {
 				return d.prepareRootFolder(ctx)
@@ -249,9 +277,6 @@ func (d *Driver) StreamURL(ctx context.Context, fileID string) (*drives.StreamLi
 }
 
 func (d *Driver) Upload(ctx context.Context, parentID, name string, r io.Reader, size int64) (string, error) {
-	if err := d.ensureAccessToken(ctx); err != nil {
-		return "", err
-	}
 	parentID = strings.TrimSpace(parentID)
 	if parentID == "" {
 		parentID = d.rootID
@@ -263,35 +288,52 @@ func (d *Driver) Upload(ctx context.Context, parentID, name string, r io.Reader,
 	if r == nil {
 		return "", errors.New("guangyapan upload: nil reader")
 	}
-	if size < 0 {
-		return "", errors.New("guangyapan upload: invalid file size")
+	if err := validateGuangYaUploadSize(size); err != nil {
+		return "", err
 	}
-	token, code, err := d.getUploadToken(ctx, parentID, name, size)
+	if err := d.ensureAccessToken(ctx); err != nil {
+		return "", err
+	}
+	release, err := d.acquireUpload(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer release()
+
+	token, _, err := d.getUploadToken(ctx, parentID, name, size)
 	if err != nil {
 		return "", err
 	}
 	taskID := strings.TrimSpace(token.TaskID)
-	if code == 156 {
-		return d.waitUploadTaskInfo(ctx, taskID)
-	}
-	if token.ObjectPath == "" || token.BucketName == "" || token.EndPoint == "" || token.AccessKeyID == "" || token.SecretAccessKey == "" {
-		return "", errors.New("guangyapan upload: incomplete upload token")
-	}
-
-	client, err := oss.New(normalizeOSSEndpoint(token.EndPoint, token.BucketName), token.AccessKeyID, token.SecretAccessKey, oss.SecurityToken(token.SessionToken))
-	if err != nil {
-		return "", fmt.Errorf("guangyapan upload: create oss client: %w", err)
-	}
-	bucket, err := client.Bucket(token.BucketName)
-	if err != nil {
-		return "", fmt.Errorf("guangyapan upload: create oss bucket: %w", err)
-	}
-	if size == 0 {
-		if err := bucket.PutObject(token.ObjectPath, strings.NewReader("")); err != nil {
+	if token.AlreadyDone {
+		fileID, err := d.waitUploadTaskInfo(ctx, taskID)
+		if err != nil {
 			return "", err
 		}
-	} else if err := multipartUploadToOSS(ctx, bucket, token.ObjectPath, r, size); err != nil {
+		d.remember(drives.Entry{ID: fileID, ParentID: parentID, Name: name, Size: size})
+		return fileID, nil
+	}
+	if strings.TrimSpace(token.ObjectPath) == "" || strings.TrimSpace(token.BucketName) == "" || strings.TrimSpace(token.EndPoint) == "" || strings.TrimSpace(token.AccessKeyID) == "" || strings.TrimSpace(token.SecretAccessKey) == "" {
+		return "", errors.New("guangyapan upload: incomplete upload token")
+	}
+	body, err := d.prepareUploadBody(ctx, r, size)
+	if err != nil {
 		return "", err
+	}
+	if body.cleanup != nil {
+		defer body.cleanup()
+	}
+
+	bucket, err := d.openUploadBucket(token)
+	if err != nil {
+		return "", err
+	}
+	if size == 0 {
+		if err := putEmptyGuangYaObject(ctx, bucket, token.ObjectPath); err != nil {
+			return "", d.classifyUploadError(err)
+		}
+	} else if err := uploadGuangYaMultipart(ctx, bucket, token.ObjectPath, body, size); err != nil {
+		return "", d.classifyUploadError(err)
 	}
 	fileID, err := d.waitUploadTaskInfo(ctx, taskID)
 	if err != nil {
@@ -305,6 +347,9 @@ func (d *Driver) EnsureDir(ctx context.Context, pathFromRoot string) (string, er
 	if err := d.ensureAccessToken(ctx); err != nil {
 		return "", err
 	}
+	d.ensureDirMu.Lock()
+	defer d.ensureDirMu.Unlock()
+
 	clean := strings.Trim(strings.ReplaceAll(strings.TrimSpace(pathFromRoot), "\\", "/"), "/")
 	if clean == "" {
 		return d.rootID, nil
@@ -319,6 +364,9 @@ func (d *Driver) EnsureDir(ctx context.Context, pathFromRoot string) (string, er
 		if err == nil {
 			parentID = childID
 			continue
+		}
+		if !errors.Is(err, errGuangYaFolderNotFound) {
+			return "", err
 		}
 		created, err := d.createDir(ctx, parentID, name)
 		if err != nil {
@@ -422,9 +470,9 @@ func (d *Driver) findChildFolderID(ctx context.Context, parentID, name string) (
 		}
 	}
 	if parentID == "" {
-		return "", fmt.Errorf("guangyapan folder %q not found under /", name)
+		return "", fmt.Errorf("%w: %q under /", errGuangYaFolderNotFound, name)
 	}
-	return "", fmt.Errorf("guangyapan folder %q not found under parent %s", name, parentID)
+	return "", fmt.Errorf("%w: %q under parent %s", errGuangYaFolderNotFound, name, parentID)
 }
 
 func (d *Driver) createDir(ctx context.Context, parentID, name string) (string, error) {
@@ -451,23 +499,31 @@ func (d *Driver) createDir(ctx context.Context, parentID, name string) (string, 
 }
 
 func (d *Driver) ensureAccessToken(ctx context.Context) error {
-	if strings.TrimSpace(d.accessToken) != "" {
+	accessToken, refreshToken := d.tokenSnapshot()
+	if accessToken != "" {
 		return nil
 	}
-	if strings.TrimSpace(d.refreshToken) != "" {
+	if refreshToken != "" {
 		return d.refresh(ctx)
 	}
-	if d.phoneNumber != "" && d.verifyCode != "" {
+	d.credentialsMu.RLock()
+	verifyCode := d.verifyCode
+	d.credentialsMu.RUnlock()
+	if d.phoneNumber != "" && verifyCode != "" {
 		return d.loginBySMSCode(ctx)
 	}
 	return errors.New("guangyapan auth: access token is empty; use QR login in admin or provide refresh_token")
 }
 
 func (d *Driver) validateToken(ctx context.Context) error {
+	accessToken, _ := d.tokenSnapshot()
+	if accessToken == "" {
+		return errors.New("guangyapan validate token: access token is empty")
+	}
 	var out userMeResp
 	resp, err := d.accountClient.R().
 		SetContext(ctx).
-		SetHeader("Authorization", "Bearer "+d.accessToken).
+		SetHeader("Authorization", "Bearer "+accessToken).
 		SetResult(&out).
 		Get("/v1/user/me")
 	if err != nil {
@@ -482,9 +538,33 @@ func (d *Driver) validateToken(ctx context.Context) error {
 	return nil
 }
 
-func (d *Driver) refresh(ctx context.Context) error {
-	if strings.TrimSpace(d.refreshToken) == "" {
+type guangYaRejectedToken struct {
+	value      string
+	generation uint64
+}
+
+func (d *Driver) refresh(ctx context.Context, rejectedToken ...guangYaRejectedToken) error {
+	d.refreshMu.Lock()
+	defer d.refreshMu.Unlock()
+
+	accessToken, refreshToken, generation := d.tokenState()
+	if accessToken != "" {
+		// An empty rejectedToken means a concurrent caller only needed any valid
+		// token. With a rejected token, skip refresh when another caller has
+		// already advanced the credential generation while we waited for refreshMu
+		// (even if the provider reused the same access-token string).
+		if len(rejectedToken) == 0 ||
+			accessToken != strings.TrimSpace(rejectedToken[0].value) ||
+			generation != rejectedToken[0].generation {
+			return nil
+		}
+	}
+	if refreshToken == "" {
 		return errors.New("guangyapan refresh: refresh_token is empty")
+	}
+	const refreshPath = "account:/v1/auth/token"
+	if err := d.waitAPIRate(ctx, refreshPath); err != nil {
+		return err
 	}
 	var out tokenResp
 	resp, err := d.accountClient.R().
@@ -492,26 +572,39 @@ func (d *Driver) refresh(ctx context.Context) error {
 		SetBody(map[string]any{
 			"client_id":     d.clientID,
 			"grant_type":    "refresh_token",
-			"refresh_token": d.refreshToken,
+			"refresh_token": refreshToken,
 		}).
 		SetResult(&out).
 		Post("/v1/auth/token")
 	if err != nil {
 		return err
 	}
+	if guangYaPanLooksRateLimited(resp.StatusCode(), out.ErrorCode, out.ErrorDesc) {
+		return d.guangYaPanRateLimitError(refreshPath, resp.Header().Get("Retry-After"), resp.StatusCode(), out.ErrorCode, accountErr(out.ErrorDesc, out.Error, resp))
+	}
 	if resp.IsError() || out.Error != "" || strings.TrimSpace(out.AccessToken) == "" {
 		return fmt.Errorf("guangyapan refresh: %s", accountErr(out.ErrorDesc, out.Error, resp))
 	}
-	d.accessToken = strings.TrimSpace(out.AccessToken)
-	if strings.TrimSpace(out.RefreshToken) != "" {
-		d.refreshToken = strings.TrimSpace(out.RefreshToken)
+	newRefreshToken := strings.TrimSpace(out.RefreshToken)
+	if newRefreshToken == "" {
+		newRefreshToken = refreshToken
 	}
+	d.setTokenPair(strings.TrimSpace(out.AccessToken), newRefreshToken)
 	d.saveCredentials()
 	return nil
 }
 
 func (d *Driver) loginBySMSCode(ctx context.Context) error {
+	d.loginMu.Lock()
+	defer d.loginMu.Unlock()
+	if accessToken, _ := d.tokenSnapshot(); accessToken != "" {
+		return nil
+	}
+
+	d.credentialsMu.RLock()
 	verificationID := strings.TrimSpace(d.verificationID)
+	verifyCode := d.verifyCode
+	d.credentialsMu.RUnlock()
 	if verificationID == "" {
 		var err error
 		verificationID, err = d.requestVerificationID(ctx)
@@ -525,7 +618,7 @@ func (d *Driver) loginBySMSCode(ctx context.Context) error {
 		SetContext(ctx).
 		SetBody(map[string]any{
 			"verification_id":   verificationID,
-			"verification_code": d.verifyCode,
+			"verification_code": verifyCode,
 			"client_id":         d.clientID,
 		}).
 		SetResult(&step2).
@@ -541,7 +634,7 @@ func (d *Driver) loginBySMSCode(ctx context.Context) error {
 	resp, err = d.accountClient.R().
 		SetContext(ctx).
 		SetBody(map[string]any{
-			"verification_code":  d.verifyCode,
+			"verification_code":  verifyCode,
 			"verification_token": step2.VerificationToken,
 			"username":           normalizePhoneE164(d.phoneNumber),
 			"client_id":          d.clientID,
@@ -554,17 +647,22 @@ func (d *Driver) loginBySMSCode(ctx context.Context) error {
 	if resp.IsError() || out.Error != "" || strings.TrimSpace(out.AccessToken) == "" {
 		return fmt.Errorf("guangyapan signin: %s", accountErr(out.ErrorDesc, out.Error, resp))
 	}
+	d.credentialsMu.Lock()
 	d.accessToken = strings.TrimSpace(out.AccessToken)
 	d.refreshToken = strings.TrimSpace(out.RefreshToken)
+	d.tokenGeneration++
 	d.verificationID = ""
 	d.verifyCode = ""
 	d.sendCode = false
+	d.credentialsMu.Unlock()
 	d.saveCredentials()
 	return nil
 }
 
 func (d *Driver) prepareSMSCode(ctx context.Context) error {
+	d.credentialsMu.Lock()
 	d.verificationID = ""
+	d.credentialsMu.Unlock()
 	if err := d.ensureCaptchaToken(ctx, false); err != nil {
 		return err
 	}
@@ -572,15 +670,20 @@ func (d *Driver) prepareSMSCode(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	d.credentialsMu.Lock()
 	d.verificationID = id
 	d.sendCode = false
+	d.credentialsMu.Unlock()
 	d.saveCredentials()
 	return nil
 }
 
 func (d *Driver) requestVerificationID(ctx context.Context) (string, error) {
-	if d.captchaToken != "" {
-		d.accountClient.SetHeader("X-Captcha-Token", d.captchaToken)
+	d.credentialsMu.RLock()
+	captchaToken := d.captchaToken
+	d.credentialsMu.RUnlock()
+	if captchaToken != "" {
+		d.accountClient.SetHeader("X-Captcha-Token", captchaToken)
 	}
 	var out verificationResp
 	resp, err := d.accountClient.R().
@@ -607,8 +710,11 @@ func (d *Driver) requestVerificationID(ctx context.Context) (string, error) {
 }
 
 func (d *Driver) ensureCaptchaToken(ctx context.Context, force bool) error {
-	if !force && d.captchaToken != "" {
-		d.accountClient.SetHeader("X-Captcha-Token", d.captchaToken)
+	d.credentialsMu.RLock()
+	captchaToken := d.captchaToken
+	d.credentialsMu.RUnlock()
+	if !force && captchaToken != "" {
+		d.accountClient.SetHeader("X-Captcha-Token", captchaToken)
 		return nil
 	}
 	var out captchaInitResp
@@ -632,42 +738,58 @@ func (d *Driver) ensureCaptchaToken(ctx context.Context, force bool) error {
 	if resp.IsError() || out.Error != "" || strings.TrimSpace(out.CaptchaToken) == "" {
 		return fmt.Errorf("guangyapan captcha init: %s", accountErr(out.ErrorDesc, out.Error, resp))
 	}
-	d.captchaToken = strings.TrimSpace(out.CaptchaToken)
-	d.accountClient.SetHeader("X-Captcha-Token", d.captchaToken)
+	captchaToken = strings.TrimSpace(out.CaptchaToken)
+	d.credentialsMu.Lock()
+	d.captchaToken = captchaToken
+	d.credentialsMu.Unlock()
+	d.accountClient.SetHeader("X-Captcha-Token", captchaToken)
 	d.saveCredentials()
 	return nil
 }
 
 func (d *Driver) postAPI(ctx context.Context, p string, body any, out any) error {
-	if strings.TrimSpace(d.accessToken) == "" {
-		return errors.New("guangyapan api: access token is empty")
+	if err := d.ensureAccessToken(ctx); err != nil {
+		return err
 	}
-	resp, err := d.apiClient.R().
-		SetContext(ctx).
-		SetHeader("Authorization", "Bearer "+d.accessToken).
-		SetBody(body).
-		SetResult(out).
-		Post(p)
+	accessToken, _, accessGeneration := d.tokenState()
+	request := func(token string) (*resty.Response, error) {
+		if err := d.waitAPIRate(ctx, p); err != nil {
+			return nil, err
+		}
+		// A concurrent request may have refreshed while this call was waiting
+		// for the endpoint limiter. Always send the newest available token.
+		if latestToken, _, latestGeneration := d.tokenState(); latestToken != "" {
+			token = latestToken
+			accessToken = latestToken
+			accessGeneration = latestGeneration
+		}
+		return d.apiClient.R().
+			SetContext(ctx).
+			SetHeader("Authorization", "Bearer "+token).
+			SetBody(body).
+			SetResult(out).
+			Post(p)
+	}
+
+	resp, err := request(accessToken)
 	if err != nil {
 		return err
 	}
 	if resp.StatusCode() == http.StatusUnauthorized || resp.StatusCode() == http.StatusForbidden {
-		if strings.TrimSpace(d.refreshToken) == "" {
+		_, refreshToken := d.tokenSnapshot()
+		if refreshToken == "" {
 			code, msg := guangYaPanResponseCodeMsg(resp, out)
 			if guangYaPanLooksRateLimited(resp.StatusCode(), code, msg) {
-				return guangYaPanRateLimitError(p, resp.Header().Get("Retry-After"), resp.StatusCode(), code, msg)
+				return d.guangYaPanRateLimitError(p, resp.Header().Get("Retry-After"), resp.StatusCode(), code, msg)
 			}
 			return fmt.Errorf("guangyapan api: status=%d body=%s", resp.StatusCode(), resp.String())
 		}
-		if err := d.refresh(ctx); err != nil {
+		if err := d.refresh(ctx, guangYaRejectedToken{value: accessToken, generation: accessGeneration}); err != nil {
 			return err
 		}
-		resp, err = d.apiClient.R().
-			SetContext(ctx).
-			SetHeader("Authorization", "Bearer "+d.accessToken).
-			SetBody(body).
-			SetResult(out).
-			Post(p)
+		accessToken, _, accessGeneration = d.tokenState()
+		resetGuangYaResponse(out)
+		resp, err = request(accessToken)
 		if err != nil {
 			return err
 		}
@@ -675,15 +797,72 @@ func (d *Driver) postAPI(ctx context.Context, p string, body any, out any) error
 	if resp.IsError() {
 		code, msg := guangYaPanResponseCodeMsg(resp, out)
 		if guangYaPanLooksRateLimited(resp.StatusCode(), code, msg) {
-			return guangYaPanRateLimitError(p, resp.Header().Get("Retry-After"), resp.StatusCode(), code, msg)
+			return d.guangYaPanRateLimitError(p, resp.Header().Get("Retry-After"), resp.StatusCode(), code, msg)
 		}
 		return fmt.Errorf("guangyapan api: status=%d body=%s", resp.StatusCode(), resp.String())
 	}
 	code, msg := guangYaPanResponseCodeMsg(resp, out)
 	if guangYaPanLooksRateLimited(resp.StatusCode(), code, msg) {
-		return guangYaPanRateLimitError(p, resp.Header().Get("Retry-After"), resp.StatusCode(), code, msg)
+		return d.guangYaPanRateLimitError(p, resp.Header().Get("Retry-After"), resp.StatusCode(), code, msg)
 	}
 	return nil
+}
+
+func resetGuangYaResponse(out any) {
+	rv := reflect.ValueOf(out)
+	if !rv.IsValid() || rv.Kind() != reflect.Pointer || rv.IsNil() || !rv.Elem().CanSet() {
+		return
+	}
+	rv.Elem().Set(reflect.Zero(rv.Elem().Type()))
+}
+
+// waitAPIRate serializes bursts per endpoint. A provider cooldown, learned
+// from either API or OSS failures, gates every endpoint so separate workers do
+// not immediately amplify an upstream throttle response.
+func (d *Driver) waitAPIRate(ctx context.Context, path string) error {
+	for {
+		d.apiRateMu.Lock()
+		now := time.Now()
+		if d.apiCooldown.After(now) {
+			wait := time.Until(d.apiCooldown)
+			d.apiRateMu.Unlock()
+			return &drives.RateLimitError{
+				Provider:   Kind,
+				RetryAfter: wait,
+				Err:        fmt.Errorf("guangyapan provider cooldown active for %s", wait.Round(time.Second)),
+			}
+		}
+		readyAt := d.apiNext[path]
+		if !readyAt.After(now) {
+			if d.apiRateInterval > 0 {
+				d.apiNext[path] = now.Add(d.apiRateInterval)
+			}
+			d.apiRateMu.Unlock()
+			return nil
+		}
+		d.apiRateMu.Unlock()
+
+		timer := time.NewTimer(time.Until(readyAt))
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
+func (d *Driver) setAPICooldown(wait time.Duration) time.Duration {
+	if wait <= 0 {
+		wait = defaultAPICooldown
+	}
+	until := time.Now().Add(wait)
+	d.apiRateMu.Lock()
+	if until.After(d.apiCooldown) {
+		d.apiCooldown = until
+	}
+	d.apiRateMu.Unlock()
+	return wait
 }
 
 func guangYaPanResponseCodeMsg(resp *resty.Response, out any) (int, string) {
@@ -749,7 +928,7 @@ func guangYaPanLooksRateLimited(status int, code int, _ string) bool {
 	return false
 }
 
-func guangYaPanRateLimitError(step, retryAfter string, status int, code int, message string) error {
+func (d *Driver) guangYaPanRateLimitError(step, retryAfter string, status int, code int, message string) error {
 	message = strings.TrimSpace(message)
 	if message == "" {
 		message = "guangyapan api rate limited"
@@ -757,9 +936,10 @@ func guangYaPanRateLimitError(step, retryAfter string, status int, code int, mes
 	if len(message) > 1024 {
 		message = message[:1024] + "...(truncated)"
 	}
+	wait := d.setAPICooldown(parseRetryAfterHeader(retryAfter))
 	return &drives.RateLimitError{
 		Provider:   Kind,
-		RetryAfter: parseRetryAfterHeader(retryAfter),
+		RetryAfter: wait,
 		Err:        fmt.Errorf("guangyapan api rate limited: step=%s status=%d code=%d msg=%s", step, status, code, message),
 	}
 }
@@ -822,11 +1002,17 @@ func (d *Driver) getUploadToken(ctx context.Context, parentID, name string, size
 	}, &out); err != nil {
 		return nil, 0, err
 	}
-	if strings.TrimSpace(out.Msg) != "" && !successMessage(out.Msg) {
-		return nil, out.Code, fmt.Errorf("guangyapan upload token: %s", strings.TrimSpace(out.Msg))
+	msg := strings.TrimSpace(out.Msg)
+	if out.Code != 156 && msg != "" && !successMessage(msg) && !isUploadAlreadyDone(msg) {
+		return nil, out.Code, fmt.Errorf("guangyapan upload token: %s", msg)
 	}
-	if out.Data.TaskID == "" {
+	if strings.TrimSpace(out.Data.TaskID) == "" {
 		return nil, out.Code, errors.New("guangyapan upload token: empty task id")
+	}
+	// Instant-upload responses intentionally omit OSS credentials. Preserve the
+	// task and let Upload wait for its file ID instead of rejecting the token.
+	if out.Code == 156 || isUploadAlreadyDone(msg) {
+		out.Data.AlreadyDone = true
 	}
 	if out.Data.AccessKeyID == "" {
 		out.Data.AccessKeyID = out.Data.Creds.AccessKeyID
@@ -890,63 +1076,6 @@ func (d *Driver) waitUploadTaskInfo(ctx context.Context, taskID string) (string,
 	return "", fmt.Errorf("guangyapan upload task %s timeout", taskID)
 }
 
-func multipartUploadToOSS(ctx context.Context, bucket *oss.Bucket, objectPath string, r io.Reader, size int64) error {
-	partSize := calcUploadPartSize(size)
-	upload, err := bucket.InitiateMultipartUpload(objectPath, oss.Sequential())
-	if err != nil {
-		return err
-	}
-	partCount := int((size + partSize - 1) / partSize)
-	parts := make([]oss.UploadPart, 0, partCount)
-	uploaded := int64(0)
-	partNumber := 1
-	for uploaded < size {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		cur := partSize
-		if left := size - uploaded; left < cur {
-			cur = left
-		}
-		part, err := bucket.UploadPart(upload, &contextReader{ctx: ctx, r: io.LimitReader(r, cur)}, cur, partNumber)
-		if err != nil {
-			return err
-		}
-		parts = append(parts, part)
-		uploaded += cur
-		partNumber++
-	}
-	_, err = bucket.CompleteMultipartUpload(upload, parts)
-	return err
-}
-
-type contextReader struct {
-	ctx context.Context
-	r   io.Reader
-}
-
-func (r *contextReader) Read(p []byte) (int, error) {
-	if err := r.ctx.Err(); err != nil {
-		return 0, err
-	}
-	return r.r.Read(p)
-}
-
-func calcUploadPartSize(size int64) int64 {
-	const mb = int64(1024 * 1024)
-	const gb = int64(1024 * 1024 * 1024)
-	switch {
-	case size <= 100*mb:
-		return mb
-	case size <= 16*gb:
-		return 2 * mb
-	case size <= 160*gb:
-		return 4 * mb
-	default:
-		return 8 * mb
-	}
-}
-
 func (d *Driver) newAccountClient() *resty.Client {
 	client := resty.New().
 		SetTimeout(30*time.Second).
@@ -985,7 +1114,8 @@ func (d *Driver) saveCredentials() {
 	if d.onCredentialsUpdate == nil {
 		return
 	}
-	d.onCredentialsUpdate(map[string]string{
+	d.credentialsMu.RLock()
+	values := map[string]string{
 		"access_token":    d.accessToken,
 		"refresh_token":   d.refreshToken,
 		"captcha_token":   d.captchaToken,
@@ -994,7 +1124,40 @@ func (d *Driver) saveCredentials() {
 		"verification_id": d.verificationID,
 		"verify_code":     d.verifyCode,
 		"send_code":       strconv.FormatBool(d.sendCode),
-	})
+	}
+	d.credentialsMu.RUnlock()
+	d.onCredentialsUpdate(values)
+}
+
+func (d *Driver) tokenSnapshot() (accessToken, refreshToken string) {
+	accessToken, refreshToken, _ = d.tokenState()
+	return accessToken, refreshToken
+}
+
+func (d *Driver) tokenState() (accessToken, refreshToken string, generation uint64) {
+	d.credentialsMu.RLock()
+	accessToken = strings.TrimSpace(d.accessToken)
+	refreshToken = strings.TrimSpace(d.refreshToken)
+	generation = d.tokenGeneration
+	d.credentialsMu.RUnlock()
+	return accessToken, refreshToken, generation
+}
+
+func (d *Driver) clearAccessToken(expected string) {
+	d.credentialsMu.Lock()
+	if strings.TrimSpace(d.accessToken) == strings.TrimSpace(expected) {
+		d.accessToken = ""
+		d.tokenGeneration++
+	}
+	d.credentialsMu.Unlock()
+}
+
+func (d *Driver) setTokenPair(accessToken, refreshToken string) {
+	d.credentialsMu.Lock()
+	d.accessToken = normalizeAccessToken(accessToken)
+	d.refreshToken = strings.TrimSpace(refreshToken)
+	d.tokenGeneration++
+	d.credentialsMu.Unlock()
 }
 
 func (d *Driver) remember(entry drives.Entry) {
@@ -1040,6 +1203,28 @@ func normalizeGCID(value string) string {
 
 func successMessage(msg string) bool {
 	return strings.EqualFold(strings.TrimSpace(msg), "success")
+}
+
+func isUploadAlreadyDone(msg string) bool {
+	normalized := strings.ToLower(strings.Join(strings.Fields(strings.TrimSpace(msg)), ""))
+	if normalized == "" {
+		return false
+	}
+	for _, marker := range []string{
+		"上传已完成",
+		"上传完成",
+		"秒传成功",
+		"已秒传",
+		"instantuploadsuccess",
+		"alreadyuploaded",
+		"uploadalreadycompleted",
+		"uploadcompleted",
+	} {
+		if strings.Contains(normalized, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func accountErr(desc, short string, resp *resty.Response) string {
@@ -1145,4 +1330,5 @@ func normalizeOSSEndpoint(endpoint, bucket string) string {
 }
 
 var _ drives.Drive = (*Driver)(nil)
+var _ drives.Uploader = (*Driver)(nil)
 var _ drives.Remover = (*Driver)(nil)

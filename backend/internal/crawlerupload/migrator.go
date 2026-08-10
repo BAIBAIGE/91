@@ -626,6 +626,13 @@ func (m *Migrator) run(ctx context.Context, driveID string) {
 		n, err := m.migrateDrive(ctx, plan)
 		if err != nil {
 			log.Printf("[crawlerupload] drive=%s migrate batch error: %v", plan.source.ID(), err)
+			if _, rateLimited := drives.RateLimitRetryAfter(err); rateLimited {
+				migrated += n
+				if migrated > 0 {
+					log.Printf("[crawlerupload] migrated %d video(s)", migrated)
+				}
+				return
+			}
 		}
 		migrated += n
 		if active, _ := m.inCooldown(); active {
@@ -944,6 +951,11 @@ func (m *Migrator) migrateDrive(ctx context.Context, plan migrationPlan) (int, e
 		ok, err := m.migrateOne(ctx, v, plan, uploadParentID)
 		if err != nil {
 			log.Printf("[crawlerupload] %s: %v", v.ID, err)
+			if _, rateLimited := drives.RateLimitRetryAfter(err); rateLimited {
+				// Provider throttling applies to the batch. Retrying the same
+				// operation for every remaining video only deepens the throttle.
+				return migrated, err
+			}
 			// captcha 错误（4002 / 9）说明 PikPak 当前正拒绝我们；继续在
 			// 同一轮里尝试其它文件大概率会拿到同样的 4002，并且每多一次
 			// 失败就多一份"被风控加深"的风险。立即中止当前 batch 并

@@ -113,13 +113,18 @@ func TestTranscodedName(t *testing.T) {
 	for _, tc := range []struct {
 		fileName, title, id, want string
 	}{
-		{"www.98T.la@167.avi", "www.98T.la@167", "p115-1", "www.98T.la@167.mp4"},
-		{"", "标题", "p115-2", "标题.mp4"},
-		{"a/b\\c.wmv", "", "p115-3", "a_b_c.mp4"},
+		{"www.98T.la@167.avi", "www.98T.la@167", "p115-1", "www.98T.la@167-b46098aacac7.mp4"},
+		{"", "标题", "p115-2", "标题-5bf995dcc789.mp4"},
+		{"a/b\\c.wmv", "", "p115-3", "a_b_c-239ebe54846b.mp4"},
 	} {
 		v := &catalog.Video{FileName: tc.fileName, Title: tc.title, ID: tc.id}
 		if got := transcodedName(v); got != tc.want {
 			t.Fatalf("transcodedName(%q,%q,%q) = %q, want %q", tc.fileName, tc.title, tc.id, got, tc.want)
 		}
+	}
+	a := transcodedName(&catalog.Video{ID: "drive-a:file-1", FileName: "video.avi"})
+	b := transcodedName(&catalog.Video{ID: "drive-b:file-2", FileName: "video.avi"})
+	if a == b {
+		t.Fatalf("same basename from different videos collided: %q", a)
 	}
 }

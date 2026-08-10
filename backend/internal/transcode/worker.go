@@ -2,6 +2,8 @@ package transcode
 
 import (
 	"context"
+	"crypto/sha256"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -59,6 +61,8 @@ type Worker struct {
 	targetDirOnce sync.Once
 	targetDirID   string
 	targetDirErr  error
+	targetFiles   map[string]drives.Entry
+	targetLoaded  bool
 }
 
 func NewWorker(cfg Config, cat *catalog.Catalog, drv drives.Drive) *Worker {
@@ -140,6 +144,10 @@ func (w *Worker) Run(ctx context.Context, videos []*catalog.Video) {
 			if uerr := w.cat.UpdateVideoTranscode(context.WithoutCancel(ctx), v.ID, "failed", err.Error(), "", 0); uerr != nil {
 				log.Printf("[transcode] mark failed %s: %v", v.ID, uerr)
 			}
+			if wait, rateLimited := drives.RateLimitRetryAfter(err); rateLimited {
+				log.Printf("[transcode] drive=%s rate limited, stop batch (retry after %s)", w.drv.ID(), wait)
+				return
+			}
 		}
 		w.mu.Lock()
 		w.done++
@@ -214,6 +222,18 @@ func (w *Worker) finish(ctx context.Context, v *catalog.Video, info MediaInfo, l
 		return w.cat.UpdateVideoTranscode(ctx, v.ID, "skipped", "", "", 0)
 	}
 
+	dirID, err := w.ensureTargetDir(ctx)
+	if err != nil {
+		return fmt.Errorf("ensure target dir: %w", err)
+	}
+	name := transcodedName(v)
+	if existing, ok, err := w.findTargetFile(ctx, dirID, name, -1, false); err != nil {
+		return fmt.Errorf("reconcile transcoded file: %w", err)
+	} else if ok {
+		log.Printf("[transcode] drive=%s video=%s reconciled existing file=%s size=%d", w.drv.ID(), v.ID, existing.ID, existing.Size)
+		return w.cat.UpdateVideoTranscode(ctx, v.ID, "ready", "", existing.ID, existing.Size)
+	}
+
 	outPath := filepath.Join(w.cfg.WorkDir, sanitizeFileName(v.ID)+".transcoding.mp4")
 	defer os.Remove(outPath)
 	if err := TranscodeFile(ctx, w.cfg.FFmpegPath, info, localPath, outPath); err != nil {
@@ -224,21 +244,86 @@ func (w *Worker) finish(ctx context.Context, v *catalog.Video, info MediaInfo, l
 		return fmt.Errorf("stat transcoded output: %w", err)
 	}
 
-	dirID, err := w.ensureTargetDir(ctx)
-	if err != nil {
-		return fmt.Errorf("ensure target dir: %w", err)
-	}
-	f, err := os.Open(outPath)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	fileID, err := w.uploader.Upload(ctx, dirID, transcodedName(v), f, stat.Size())
+	fileID, err := w.uploadTranscodedFile(ctx, dirID, name, outPath, stat.Size())
 	if err != nil {
 		return fmt.Errorf("upload transcoded file: %w", err)
 	}
 	log.Printf("[transcode] drive=%s video=%s ready: file=%s size=%d", w.drv.ID(), v.ID, fileID, stat.Size())
 	return w.cat.UpdateVideoTranscode(ctx, v.ID, "ready", "", fileID, stat.Size())
+}
+
+// uploadTranscodedFile closes the remote-write/catalog-write crash window.
+// The destination name is deterministic, so a preflight list can bind a prior
+// successful attempt. If Upload returns an ambiguous error, a forced refresh
+// also recovers the object when the remote commit actually succeeded.
+func (w *Worker) uploadTranscodedFile(ctx context.Context, dirID, name, path string, size int64) (string, error) {
+	if existing, ok, err := w.findTargetFile(ctx, dirID, name, size, true); err != nil {
+		return "", fmt.Errorf("preflight destination: %w", err)
+	} else if ok {
+		return existing.ID, nil
+	}
+
+	f, err := os.Open(path)
+	if err != nil {
+		return "", fmt.Errorf("open transcoded output: %w", err)
+	}
+	fileID, uploadErr := w.uploader.Upload(ctx, dirID, name, f, size)
+	_ = f.Close()
+	if uploadErr == nil && strings.TrimSpace(fileID) == "" {
+		uploadErr = errors.New("transcode uploader returned an empty file id")
+	}
+	if uploadErr == nil {
+		w.rememberTargetFile(name, drives.Entry{ID: fileID, Name: name, Size: size})
+		return fileID, nil
+	}
+	if ctx.Err() != nil {
+		return "", uploadErr
+	}
+	if _, rateLimited := drives.RateLimitRetryAfter(uploadErr); rateLimited {
+		// The next run will reconcile after the provider cooldown. Issuing List
+		// immediately would only add another throttled request.
+		return "", uploadErr
+	}
+
+	existing, ok, reconcileErr := w.findTargetFile(ctx, dirID, name, size, true)
+	if reconcileErr != nil {
+		return "", errors.Join(uploadErr, fmt.Errorf("reconcile destination after upload error: %w", reconcileErr))
+	}
+	if ok {
+		return existing.ID, nil
+	}
+	return "", uploadErr
+}
+
+func (w *Worker) findTargetFile(ctx context.Context, dirID, name string, size int64, force bool) (drives.Entry, bool, error) {
+	if force || !w.targetLoaded {
+		entries, err := w.drv.List(ctx, dirID)
+		if err != nil {
+			return drives.Entry{}, false, err
+		}
+		files := make(map[string]drives.Entry)
+		for _, entry := range entries {
+			if entry.IsDir || strings.TrimSpace(entry.ID) == "" {
+				continue
+			}
+			files[entry.Name] = entry
+		}
+		w.targetFiles = files
+		w.targetLoaded = true
+	}
+	entry, ok := w.targetFiles[name]
+	if !ok || entry.Size <= 0 || (size >= 0 && entry.Size != size) {
+		return drives.Entry{}, false, nil
+	}
+	return entry, true, nil
+}
+
+func (w *Worker) rememberTargetFile(name string, entry drives.Entry) {
+	if w.targetFiles == nil {
+		w.targetFiles = make(map[string]drives.Entry)
+	}
+	w.targetFiles[name] = entry
+	w.targetLoaded = true
 }
 
 // localSourcePath 判断 StreamLink 是否指向本地文件（本地存储盘），是则
@@ -336,7 +421,9 @@ func (w *Worker) addDirToSkipList(ctx context.Context, dirID string) error {
 	return w.cat.SetDriveSkipDirIDs(ctx, w.drv.ID(), append(d.SkipDirIDs, dirID))
 }
 
-// transcodedName 生成产物文件名：原文件名去掉扩展名 + .mp4。
+// transcodedName includes a stable video-ID suffix. Basename alone is not a
+// unique key in the shared target directory and previously caused unrelated
+// videos named e.g. video.avi to overwrite or reconcile to each other.
 func transcodedName(v *catalog.Video) string {
 	base := strings.TrimSpace(v.FileName)
 	if base == "" {
@@ -348,7 +435,12 @@ func transcodedName(v *catalog.Video) string {
 	if ext := filepath.Ext(base); ext != "" {
 		base = strings.TrimSuffix(base, ext)
 	}
-	return sanitizeFileName(base) + ".mp4"
+	identity := strings.TrimSpace(v.ID)
+	if identity == "" {
+		identity = base
+	}
+	sum := sha256.Sum256([]byte(identity))
+	return fmt.Sprintf("%s-%x.mp4", sanitizeFileName(base), sum[:6])
 }
 
 // sanitizeFileName 把路径分隔符等危险字符替换掉，避免拼出意外路径。

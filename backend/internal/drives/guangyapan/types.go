@@ -99,6 +99,7 @@ type uploadTokenResp struct {
 }
 
 type uploadTokenData struct {
+	AlreadyDone     bool   `json:"-"`
 	TaskID          string `json:"taskId"`
 	ObjectPath      string `json:"objectPath"`
 	BucketName      string `json:"bucketName"`

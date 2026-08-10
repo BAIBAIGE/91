@@ -207,6 +207,7 @@ func (a *App) attachDriveUnlocked(ctx context.Context, d *catalog.Drive) error {
 			SortType:       parseIntDefault(strings.TrimSpace(d.Credentials["sort_type"]), 1),
 			AccountBaseURL: d.Credentials["account_base_url"],
 			APIBaseURL:     d.Credentials["api_base_url"],
+			UploadTempDir:  a.uploadWorkDir(guangyapan.Kind),
 			OnCredentialsUpdate: func(updated map[string]string) {
 				a.persistDriveCredentials(d.ID, updated)
 			},
