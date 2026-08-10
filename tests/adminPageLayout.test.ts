@@ -39,7 +39,10 @@ test("all admin routes use the shared flex page contract", () => {
     pageSources.users,
     /className="admin-page admin-page--with-floating-actions"/
   );
-  assert.match(pageSources.backup, /className="admin-page backup-page"/);
+  assert.match(
+    pageSources.backup,
+    /className="admin-page admin-page--with-floating-actions backup-page"/
+  );
   assert.match(pageSources.logs, /className="admin-page admin-logs-page"/);
   assert.match(pageSources.settings, /className="admin-page admin-page--with-floating-actions admin-config-page/);
 });
