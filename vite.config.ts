@@ -5,8 +5,9 @@ import { fileURLToPath } from "node:url";
 const backendTarget = "http://127.0.0.1:9192";
 const backendProxy: Record<string, ProxyOptions> = {
   "/api": { target: backendTarget, xfwd: true },
-  "/p": { target: backendTarget, xfwd: true },
   "/admin/api": { target: backendTarget, xfwd: true },
+  "/peer": { target: backendTarget, xfwd: true },
+  "/p": { target: backendTarget, xfwd: true },
 };
 
 const hashedAssetCacheControl = "public, max-age=31536000, immutable";

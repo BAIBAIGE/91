@@ -32,6 +32,10 @@ const backupTransferSender = readFileSync(
   new URL("../backend/internal/backuptransfer/outgoing.go", import.meta.url),
   "utf8"
 );
+const viteConfig = readFileSync(
+  new URL("../vite.config.ts", import.meta.url),
+  "utf8"
+);
 const backupTypes = readFileSync(
   new URL("../backend/internal/backup/types.go", import.meta.url),
   "utf8"
@@ -327,7 +331,7 @@ test("migration upload uses resumable 16 MiB server chunks with HTTP-compatible 
   assert.doesNotMatch(page, /正在合并并完整校验/);
 });
 
-test("server transfer uses scoped pairing tokens and never auto-restores imports", () => {
+test("server transfer supports HTTP and HTTPS with scoped tokens and no automatic restore", () => {
   assert.match(api, /createBackupTransfer/);
   assert.match(api, /createBackupReceiveToken/);
   assert.match(page, /从服务器接收/);
@@ -336,8 +340,13 @@ test("server transfer uses scoped pairing tokens and never auto-restores imports
   assert.match(backupTransferRoutes, /r\.Route\("\/peer\/v1\/backups"/);
   assert.match(backupTransferApi, /peerBearerToken\(r\)/);
   assert.match(backupTransferApi, /Content-Digest/);
-  assert.match(backupTransferSender, /目标服务器必须使用 HTTPS/);
+  assert.match(backupTransferSender, /scheme != "http" && scheme != "https"/);
+  assert.match(backupTransferSender, /目标服务器仅支持 HTTP 或 HTTPS/);
+  assert.doesNotMatch(backupTransferSender, /allowInsecure/);
   assert.match(backupTransferSender, /receivedChunks\(status\)/);
+  assert.match(viteConfig, /"\/peer": \{ target: backendTarget, xfwd: true \}/);
+  assert.match(page, /http:\/\/192\.168\.1\.10:9191 或 https:\/\/target\.example\.com/);
+  assert.match(page, /HTTP 会明文传输接收码和完整备份包/);
 });
 
 test("backup upload aligns its picker with an ordinary compact upload button", () => {

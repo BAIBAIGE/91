@@ -2,8 +2,10 @@
 // to copy verified backup archives between two application servers.
 //
 // A target administrator creates a short-lived receive token. The source uses
-// that token over HTTPS to negotiate protocol capabilities, create an import,
-// upload independently hashed chunks, and request final verification. The
+// HTTP or HTTPS to negotiate protocol capabilities, create an import, upload
+// independently hashed chunks, and request final verification. HTTPS protects
+// the receive token and archive in transit; HTTP exists for explicitly chosen
+// IP-and-port deployments where transport encryption is unavailable. The
 // target binds the token to the first transfer ID, persists only its hash, and
 // publishes the archive through backup.Manager after full-archive validation.
 // Durable jobs, received chunk ranges, and idempotent final receipts allow

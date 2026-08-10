@@ -9,7 +9,7 @@ go test ./...              # 单元测试；缺 ffmpeg / python3 时相关测试
 go build -o server ./cmd/server
 ```
 
-前端开发在仓库根目录 `npm run dev`，vite 会把 `/api`、`/p`、`/admin/api` 代理到 9192。所有配置项及注释见 [config.example.yaml](config.example.yaml)，正文只在涉及行为时提及个别配置。
+前端开发在仓库根目录 `npm run dev`，vite 会把 `/api`、`/p`、`/admin/api`、`/peer` 代理到 9192。所有配置项及注释见 [config.example.yaml](config.example.yaml)，正文只在涉及行为时提及个别配置。
 
 ## 目录
 

@@ -175,6 +175,72 @@ func waitForTransferState(
 	return backuptransfer.TransferJob{}
 }
 
+func TestPeerBackupTransferSupportsPlainHTTP(t *testing.T) {
+	source := newTransferTestBackupEnv(t)
+	target := newTransferTestBackupEnv(t)
+	sourceRecord := createTransferTestBackup(t, source.backups)
+
+	targetTransfers, err := backuptransfer.New(backuptransfer.Config{
+		Backups: target.backups,
+		RootDir: filepath.Join(target.root, "peer-transfer"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	targetAPI := &AdminServer{
+		Auth:            &auth.Authenticator{Catalog: target.catalog},
+		Backups:         target.backups,
+		BackupTransfers: targetTransfers,
+	}
+	router := chi.NewRouter()
+	targetAPI.Register(router)
+	targetServer := httptest.NewServer(router)
+	defer targetServer.Close()
+
+	receiveToken, err := targetTransfers.GenerateReceiveToken(10 * time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sourceTransfers, err := backuptransfer.New(backuptransfer.Config{
+		Backups: source.backups,
+		RootDir: filepath.Join(source.root, "peer-transfer"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runContext, stopTransfers := context.WithCancel(context.Background())
+	sourceTransfers.Start(runContext)
+	defer func() {
+		stopTransfers()
+		shutdownContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := sourceTransfers.Shutdown(shutdownContext); err != nil {
+			t.Errorf("shutdown HTTP source transfers: %v", err)
+		}
+	}()
+
+	created, err := sourceTransfers.CreateTransfer(context.Background(), backuptransfer.CreateTransferInput{
+		BackupID:     sourceRecord.ID,
+		TargetURL:    targetServer.URL,
+		ReceiveToken: receiveToken.Token,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.TargetURL != targetServer.URL || !strings.HasPrefix(created.TargetURL, "http://") {
+		t.Fatalf("plain HTTP target URL = %q", created.TargetURL)
+	}
+	completed := waitForTransferJob(t, sourceTransfers, created.ID)
+	targetRecord, err := target.backups.BackupRecord(completed.TargetBackupID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !targetRecord.Imported || targetRecord.VerificationStatus != "verified" ||
+		!strings.EqualFold(targetRecord.SHA256, sourceRecord.SHA256) {
+		t.Fatalf("plain HTTP target backup = %+v", targetRecord)
+	}
+}
+
 func TestPeerBackupTransferImportsDirectlyAndRecoversIdempotentReceipt(t *testing.T) {
 	source := newTransferTestBackupEnv(t)
 	target := newTransferTestBackupEnv(t)

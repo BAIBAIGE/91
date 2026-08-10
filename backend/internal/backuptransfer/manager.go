@@ -18,22 +18,20 @@ import (
 )
 
 type Config struct {
-	Backups           *backup.Manager
-	RootDir           string
-	HTTPClient        *http.Client
-	Now               func() time.Time
-	AllowInsecureHTTP bool
+	Backups    *backup.Manager
+	RootDir    string
+	HTTPClient *http.Client
+	Now        func() time.Time
 }
 
 type Manager struct {
-	backups           *backup.Manager
-	rootDir           string
-	outgoingDir       string
-	receiverPath      string
-	identityPath      string
-	client            *http.Client
-	now               func() time.Time
-	allowInsecureHTTP bool
+	backups      *backup.Manager
+	rootDir      string
+	outgoingDir  string
+	receiverPath string
+	identityPath string
+	client       *http.Client
+	now          func() time.Time
 
 	mu       sync.Mutex
 	identity serverIdentity
@@ -60,17 +58,16 @@ func New(cfg Config) (*Manager, error) {
 		return nil, errors.New("backup transfer: state root is invalid")
 	}
 	m := &Manager{
-		backups:           cfg.Backups,
-		rootDir:           rootDir,
-		outgoingDir:       filepath.Join(rootDir, "outgoing"),
-		receiverPath:      filepath.Join(rootDir, "receiver.json"),
-		identityPath:      filepath.Join(rootDir, "identity.json"),
-		client:            cfg.HTTPClient,
-		now:               cfg.Now,
-		allowInsecureHTTP: cfg.AllowInsecureHTTP,
-		jobs:              make(map[string]*storedTransferJob),
-		wake:              make(chan struct{}, 1),
-		done:              make(chan struct{}),
+		backups:      cfg.Backups,
+		rootDir:      rootDir,
+		outgoingDir:  filepath.Join(rootDir, "outgoing"),
+		receiverPath: filepath.Join(rootDir, "receiver.json"),
+		identityPath: filepath.Join(rootDir, "identity.json"),
+		client:       cfg.HTTPClient,
+		now:          cfg.Now,
+		jobs:         make(map[string]*storedTransferJob),
+		wake:         make(chan struct{}, 1),
+		done:         make(chan struct{}),
 	}
 	if m.client == nil {
 		m.client = newPeerHTTPClient()
@@ -367,7 +364,7 @@ func (m *Manager) validateStoredJob(id string, job *storedTransferJob) error {
 		(!job.FinishedAt.IsZero() && job.FinishedAt.Before(job.CreatedAt)) {
 		return fmt.Errorf("backup transfer: outgoing job %s is invalid", id)
 	}
-	normalizedTarget, err := normalizeTargetURL(job.TargetURL, m.allowInsecureHTTP)
+	normalizedTarget, err := normalizeTargetURL(job.TargetURL)
 	if err != nil || normalizedTarget != job.TargetURL {
 		return fmt.Errorf("backup transfer: outgoing job %s has an invalid target", id)
 	}

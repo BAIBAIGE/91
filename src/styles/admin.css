@@ -10236,6 +10236,25 @@ body.admin-logs-fullscreen-active {
   margin: 0;
 }
 
+.backup-transfer-transport-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0;
+  padding: 9px 11px;
+  border: 1px solid color-mix(in srgb, var(--warning) 34%, var(--border-default));
+  border-radius: var(--radius-sm);
+  background: var(--warning-soft);
+  color: var(--warning);
+  font-size: var(--font-xs);
+  line-height: 1.55;
+}
+
+.backup-transfer-transport-warning svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+}
+
 .backup-transfer-token-input {
   min-height: 88px;
   resize: vertical;

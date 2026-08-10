@@ -265,7 +265,9 @@ func isBackendRoute(p string) bool {
 		p == "/admin/api" ||
 		strings.HasPrefix(p, "/admin/api/") ||
 		p == "/p" ||
-		strings.HasPrefix(p, "/p/")
+		strings.HasPrefix(p, "/p/") ||
+		p == "/peer" ||
+		strings.HasPrefix(p, "/peer/")
 }
 
 func parseBoolDefault(raw string, def bool) bool {

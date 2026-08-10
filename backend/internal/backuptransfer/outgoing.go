@@ -40,7 +40,7 @@ func (m *Manager) CreateTransfer(ctx context.Context, input CreateTransferInput)
 	if err := ctx.Err(); err != nil {
 		return TransferJob{}, err
 	}
-	targetURL, err := normalizeTargetURL(input.TargetURL, m.allowInsecureHTTP)
+	targetURL, err := normalizeTargetURL(input.TargetURL)
 	if err != nil {
 		return TransferJob{}, err
 	}
@@ -566,18 +566,18 @@ func publicTransferError(err error) string {
 	return message
 }
 
-func normalizeTargetURL(raw string, allowInsecure bool) (string, error) {
+func normalizeTargetURL(raw string) (string, error) {
 	raw = strings.TrimSpace(raw)
 	if len(raw) > 2048 {
 		return "", errors.New("目标服务器地址过长")
 	}
 	parsed, err := url.Parse(raw)
 	if err != nil || parsed == nil || !parsed.IsAbs() || parsed.Opaque != "" {
-		return "", errors.New("请输入完整的目标服务器 HTTPS 地址")
+		return "", errors.New("请输入完整的目标服务器 HTTP 或 HTTPS 地址")
 	}
 	scheme := strings.ToLower(parsed.Scheme)
-	if scheme != "https" && !(allowInsecure && scheme == "http") {
-		return "", errors.New("目标服务器必须使用 HTTPS")
+	if scheme != "http" && scheme != "https" {
+		return "", errors.New("目标服务器仅支持 HTTP 或 HTTPS")
 	}
 	if parsed.User != nil || parsed.Hostname() == "" || parsed.RawQuery != "" || parsed.Fragment != "" {
 		return "", errors.New("目标服务器地址不能包含凭据、查询参数或片段")

@@ -61,7 +61,12 @@ func TestFrontendHandlerDoesNotSwallowBackendRoutes(t *testing.T) {
 		t.Fatalf("write index: %v", err)
 	}
 
-	for _, target := range []string{"/api/missing", "/admin/api/missing", "/p/missing"} {
+	for _, target := range []string{
+		"/api/missing",
+		"/admin/api/missing",
+		"/p/missing",
+		"/peer/v1/backups/missing",
+	} {
 		req := httptest.NewRequest(http.MethodGet, target, nil)
 		rr := httptest.NewRecorder()
 		frontendHandler(dir).ServeHTTP(rr, req)

@@ -443,6 +443,7 @@ export function BackupPage() {
   }, [restoring, navigate, invalidateSession, show]);
 
   const current = data?.current;
+  const sendUsesPlainHTTP = sendURL.trim().toLowerCase().startsWith("http://");
   const progress = useMemo(() => {
     if (!current?.totalBytes) return 0;
     return Math.min(100, Math.max(0, (current.processedBytes / current.totalBytes) * 100));
@@ -1197,11 +1198,19 @@ export function BackupPage() {
               type="url"
               value={sendURL}
               onChange={(event) => setSendURL(event.target.value)}
-              placeholder="https://target.example.com"
+              placeholder="http://192.168.1.10:9191 或 https://target.example.com"
               autoComplete="url"
               disabled={sending}
             />
           </label>
+          {sendUsesPlainHTTP ? (
+            <p className="backup-transfer-transport-warning" role="alert">
+              <CircleAlert size={16} />
+              <span>
+                HTTP 会明文传输接收码和完整备份包，请确认两台服务器之间的网络链路可信。
+              </span>
+            </p>
+          ) : null}
           <label className="backup-field">
             <span>目标服务器接收码</span>
             <textarea
@@ -1215,7 +1224,7 @@ export function BackupPage() {
             />
           </label>
           <p className="backup-transfer-hint">
-            备份包由本机后端直接发送到目标服务器；目标端只会校验并加入备份列表，不会自动恢复。
+            支持 HTTP 的 IP+端口地址和 HTTPS 地址。备份包由本机后端直接发送；目标端只会校验并加入备份列表，不会自动恢复。
           </p>
         </div>
       </Modal>
