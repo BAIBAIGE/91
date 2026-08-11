@@ -19,6 +19,7 @@ import (
 	"github.com/go-resty/resty/v2"
 
 	"github.com/video-site/backend/internal/drives"
+	"github.com/video-site/backend/internal/scopedproxy"
 )
 
 const (
@@ -1078,6 +1079,7 @@ func (d *Driver) waitUploadTaskInfo(ctx context.Context, taskID string) (string,
 
 func (d *Driver) newAccountClient() *resty.Client {
 	client := resty.New().
+		SetTransport(scopedproxy.NewTransport(nil)).
 		SetTimeout(30*time.Second).
 		SetBaseURL(d.accountBaseURL).
 		SetHeader("Accept", "application/json, text/plain, */*").
@@ -1102,6 +1104,7 @@ func (d *Driver) newAccountClient() *resty.Client {
 
 func (d *Driver) newAPIClient() *resty.Client {
 	return resty.New().
+		SetTransport(scopedproxy.NewTransport(nil)).
 		SetTimeout(30*time.Second).
 		SetBaseURL(d.apiBaseURL).
 		SetHeader("Accept", "application/json, text/plain, */*").

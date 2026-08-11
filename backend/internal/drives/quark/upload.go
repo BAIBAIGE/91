@@ -19,6 +19,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/video-site/backend/internal/scopedproxy"
 )
 
 const (
@@ -509,12 +511,14 @@ func quarkOSSObjectURL(pre uploadPreResp) (*url.URL, error) {
 
 func newQuarkUploadHTTPClient(base *http.Client) *http.Client {
 	client := &http.Client{Timeout: 2 * time.Minute}
+	directTransport := http.RoundTripper(nil)
 	if base != nil {
-		client.Transport = base.Transport
+		directTransport = base.Transport
 		if base.Timeout > 0 {
 			client.Timeout = base.Timeout
 		}
 	}
+	client.Transport = scopedproxy.NewTransport(directTransport)
 	client.CheckRedirect = func(*http.Request, []*http.Request) error {
 		// Authorization is scoped to the exact signed OSS request and must
 		// never be replayed to a redirected host.

@@ -34,6 +34,7 @@ type crawlerDTO struct {
 	ScriptPath                  string           `json:"scriptPath"`
 	ScriptSourceURL             string           `json:"scriptSourceUrl,omitempty"`
 	Proxy                       string           `json:"proxy,omitempty"`
+	UploadProxy                 string           `json:"uploadProxy,omitempty"`
 	TargetNew                   string           `json:"targetNew,omitempty"`
 	UploadDriveID               string           `json:"uploadDriveId,omitempty"`
 	Paused                      bool             `json:"paused"`
@@ -59,13 +60,14 @@ type crawlerDTO struct {
 }
 
 type upsertCrawlerReq struct {
-	ID              string `json:"id"`
-	ScriptPath      string `json:"scriptPath"`
-	ScriptSourceURL string `json:"scriptSourceUrl"`
-	Proxy           string `json:"proxy"`
-	TargetNew       string `json:"targetNew"`
-	UploadDriveID   string `json:"uploadDriveId"`
-	TeaserEnabled   *bool  `json:"teaserEnabled,omitempty"`
+	ID              string  `json:"id"`
+	ScriptPath      string  `json:"scriptPath"`
+	ScriptSourceURL string  `json:"scriptSourceUrl"`
+	Proxy           string  `json:"proxy"`
+	UploadProxy     *string `json:"uploadProxy"`
+	TargetNew       string  `json:"targetNew"`
+	UploadDriveID   string  `json:"uploadDriveId"`
+	TeaserEnabled   *bool   `json:"teaserEnabled,omitempty"`
 }
 
 type crawlerPausedReq struct {
@@ -131,6 +133,7 @@ func (a *AdminServer) crawlerDTOForDrive(d *catalog.Drive, assets catalog.Crawle
 		ScriptPath:                  strings.TrimSpace(d.Credentials["script_path"]),
 		ScriptSourceURL:             strings.TrimSpace(d.Credentials["script_source_url"]),
 		Proxy:                       strings.TrimSpace(d.Credentials["proxy"]),
+		UploadProxy:                 strings.TrimSpace(d.Credentials["upload_proxy"]),
 		TargetNew:                   strings.TrimSpace(d.Credentials["target_new"]),
 		UploadDriveID:               strings.TrimSpace(d.Credentials["upload_drive_id"]),
 		Paused:                      crawlerPaused(d),
@@ -217,6 +220,11 @@ func (a *AdminServer) handleUpsertCrawler(w http.ResponseWriter, r *http.Request
 		"proxy":             strings.TrimSpace(body.Proxy),
 		"target_new":        strings.TrimSpace(body.TargetNew),
 		"upload_drive_id":   strings.TrimSpace(body.UploadDriveID),
+	}
+	// Keep the new field backward-compatible with older admin clients: omitted
+	// means preserve, while an explicit empty string clears the upload proxy.
+	if body.UploadProxy != nil {
+		incoming["upload_proxy"] = strings.TrimSpace(*body.UploadProxy)
 	}
 	for k, v := range incoming {
 		creds[k] = v

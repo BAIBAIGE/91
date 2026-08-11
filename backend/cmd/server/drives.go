@@ -44,6 +44,29 @@ func (a *App) attachDrive(ctx context.Context, d *catalog.Drive) error {
 	return a.attachDriveUnlocked(ctx, d)
 }
 
+// reloadSavedDrive applies persisted configuration to the runtime. Saving is
+// deliberately not a crawler-upload trigger: uploads are started only by the
+// explicit upload action, successful crawl completion, or the nightly pipeline.
+func (a *App) reloadSavedDrive(ctx context.Context, driveID string) error {
+	d, err := a.cat.GetDrive(ctx, driveID)
+	if err != nil {
+		return err
+	}
+	if err := a.attachDrive(ctx, d); err != nil {
+		return err
+	}
+
+	// 本地存储开启 .strm 越root后，之前因 strm 指向目录外而失败的封面/
+	// 预览/指纹应自动重试，省得用户再手动点三个"重试失败"按钮。
+	if d.Kind == localstorage.Kind &&
+		parseBoolDefault(strings.TrimSpace(d.Credentials["strm_allow_outside_root"]), false) {
+		go a.regenFailedThumbnails(ctx, driveID)
+		go a.regenFailedPreviews(ctx, driveID)
+		go a.regenFailedFingerprints(ctx, driveID)
+	}
+	return nil
+}
+
 func (a *App) ensureDriveAttached(ctx context.Context, driveID string) error {
 	if _, ok := a.registry.Get(driveID); ok {
 		return nil

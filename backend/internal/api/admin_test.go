@@ -1324,6 +1324,7 @@ func TestHandleListCrawlersOnlyIncludesCrawlerPageScripts(t *testing.T) {
 			Credentials: map[string]string{
 				"last_crawl_at":   "1800000000",
 				"proxy":           " http://127.0.0.1:7890 ",
+				"upload_proxy":    " socks5h://upload-proxy.example:1080 ",
 				"script_path":     scriptPath,
 				"upload_drive_id": "p115-target",
 				"paused":          "true",
@@ -1412,6 +1413,7 @@ func TestHandleListCrawlersOnlyIncludesCrawlerPageScripts(t *testing.T) {
 		Protocol         string `json:"protocol"`
 		Kind             string `json:"kind"`
 		Proxy            string `json:"proxy"`
+		UploadProxy      string `json:"uploadProxy"`
 		UploadDriveID    string `json:"uploadDriveId"`
 		Paused           bool   `json:"paused"`
 		TeaserEnabled    bool   `json:"teaserEnabled"`
@@ -1431,6 +1433,7 @@ func TestHandleListCrawlersOnlyIncludesCrawlerPageScripts(t *testing.T) {
 		Protocol         string
 		Kind             string
 		Proxy            string
+		UploadProxy      string
 		UploadDriveID    string
 		Paused           bool
 		TeaserEnabled    bool
@@ -1449,6 +1452,7 @@ func TestHandleListCrawlersOnlyIncludesCrawlerPageScripts(t *testing.T) {
 			Protocol:         d.Protocol,
 			Kind:             d.Kind,
 			Proxy:            d.Proxy,
+			UploadProxy:      d.UploadProxy,
 			UploadDriveID:    d.UploadDriveID,
 			Paused:           d.Paused,
 			TeaserEnabled:    d.TeaserEnabled,
@@ -1475,6 +1479,9 @@ func TestHandleListCrawlersOnlyIncludesCrawlerPageScripts(t *testing.T) {
 	}
 	if byID["crawler-main"].Proxy != "http://127.0.0.1:7890" {
 		t.Fatalf("crawler proxy = %q, want trimmed proxy", byID["crawler-main"].Proxy)
+	}
+	if byID["crawler-main"].UploadProxy != "socks5h://upload-proxy.example:1080" {
+		t.Fatalf("crawler upload proxy = %q, want trimmed proxy", byID["crawler-main"].UploadProxy)
 	}
 	if byID["crawler-main"].UploadDriveID != "p115-target" {
 		t.Fatalf("uploadDriveId = %q, want p115-target", byID["crawler-main"].UploadDriveID)
@@ -1683,6 +1690,7 @@ func TestHandleUpsertCrawlerPersistsAndValidatesUploadDrive(t *testing.T) {
 		"id": "crawler-upload",
 		"scriptPath": "`+scriptPath+`",
 		"uploadDriveId": "p115-target",
+		"uploadProxy": "  http://upload-proxy.example:7890  ",
 		"teaserEnabled": false
 	}`))
 	rr := httptest.NewRecorder()
@@ -1696,6 +1704,9 @@ func TestHandleUpsertCrawlerPersistsAndValidatesUploadDrive(t *testing.T) {
 	}
 	if got.Credentials["upload_drive_id"] != "p115-target" {
 		t.Fatalf("upload_drive_id = %q, want p115-target", got.Credentials["upload_drive_id"])
+	}
+	if got.Credentials["upload_proxy"] != "http://upload-proxy.example:7890" {
+		t.Fatalf("upload_proxy = %q, want normalized proxy", got.Credentials["upload_proxy"])
 	}
 	if got.TeaserEnabled {
 		t.Fatal("teaserEnabled = true, want false")
@@ -1720,6 +1731,9 @@ func TestHandleUpsertCrawlerPersistsAndValidatesUploadDrive(t *testing.T) {
 	}
 	if got.Credentials["upload_drive_id"] != "wopan-target" {
 		t.Fatalf("upload_drive_id = %q, want wopan-target", got.Credentials["upload_drive_id"])
+	}
+	if got.Credentials["upload_proxy"] != "http://upload-proxy.example:7890" {
+		t.Fatalf("omitted upload_proxy = %q, want preserved proxy", got.Credentials["upload_proxy"])
 	}
 	if got.TeaserEnabled {
 		t.Fatal("teaserEnabled after edit without field = true, want preserved false")
@@ -1795,6 +1809,18 @@ func TestHandleUpsertCrawlerPersistsAndValidatesUploadDrive(t *testing.T) {
 	srv.handleUpsertCrawler(rr, req)
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("invalid target status = %d, body = %s, want 400", rr.Code, rr.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/admin/api/crawlers", strings.NewReader(`{
+		"id": "crawler-upload",
+		"scriptPath": "`+scriptPath+`",
+		"uploadDriveId": "p115-target",
+		"uploadProxy": "ftp://upload-proxy.example"
+	}`))
+	rr = httptest.NewRecorder()
+	srv.handleUpsertCrawler(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("invalid upload proxy status = %d, body = %s, want 400", rr.Code, rr.Body.String())
 	}
 }
 

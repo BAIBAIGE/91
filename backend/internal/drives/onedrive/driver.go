@@ -20,6 +20,7 @@ import (
 
 	"github.com/go-resty/resty/v2"
 	"github.com/video-site/backend/internal/drives"
+	"github.com/video-site/backend/internal/scopedproxy"
 )
 
 const (
@@ -102,6 +103,7 @@ func New(c Config) *Driver {
 		renewAPIURL:   renewAPIURL,
 		onTokenUpdate: c.OnTokenUpdate,
 		client: resty.New().
+			SetTransport(scopedproxy.NewTransport(nil)).
 			SetTimeout(30*time.Second).
 			SetHeader("Accept", "application/json, text/plain, */*"),
 		listInterval: onedriveListInterval,

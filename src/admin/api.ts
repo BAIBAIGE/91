@@ -619,6 +619,7 @@ export type AdminCrawler = {
   scriptPath: string;
   scriptSourceUrl?: string;
   proxy?: string;
+  uploadProxy?: string;
   targetNew?: string;
   uploadDriveId?: string;
   paused: boolean;
@@ -648,6 +649,7 @@ export type UpsertCrawlerInput = {
   scriptPath: string;
   scriptSourceUrl?: string;
   proxy?: string;
+  uploadProxy?: string;
   targetNew?: string;
   uploadDriveId?: string;
 };

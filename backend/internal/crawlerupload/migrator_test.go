@@ -17,6 +17,7 @@ import (
 	"github.com/video-site/backend/internal/catalog"
 	"github.com/video-site/backend/internal/drives"
 	"github.com/video-site/backend/internal/drives/scriptcrawler"
+	"github.com/video-site/backend/internal/scopedproxy"
 )
 
 const crawlerUploadWebPBase64 = "UklGRrIBAABXRUJQVlA4TKUBAAAvSsAYAA8w//M///MfeJAkbXvaSG7m8Q3GfYSBJekwQztm/IcZlgwnmWImn2BK7aFmBtnVir6q//8VOkFE/xm4baTIu8c48ArEo6+B3zFKYln3pqClSCKX0begFTAXFOLXHSyF8cCNcZEG4OywuA4KVVfJCiArU7GAgJI8+lJP/OKMT/fBAjevg1cYB7YVkFuWga2lyPi5I0HFy5YTpWIHg0RZpkniRVW9odHAKOwosWuOGdxIyn2OvaCDvhg/we6TwadPBPbqBV58MsLmMJ8yZnOWk8SRz4N+QoyPL+MnamzMvcE1rHNEr91F9GKZPVUcS9w7PhhH36suB9qPeYb/oLk6cuTiJ0wOK3m5h1cKjW6EVZCYMK7dxcKCBdgP9HkKr9gkAO2P8GKZGWVdIAatQa+1IDpt6qyorVwdy01xdW8Jkfk6xjEXmVQQ+HQdFr6OKhIN34dXWq0+0qr6EJSCeeVLH9+gvGTLyqM65PQ44ihzlTXxQKjKbAvshXgir7Lil9w4L2bvMycmjQcqXaMCO6BlY28i+FOLzbfI1vEqxAhotocAAA=="
@@ -57,6 +58,8 @@ type fakeUploadDrive struct {
 	gotBodies   map[string][]byte
 	gotParents  map[string]string
 	ensureCalls []string
+	ensureProxy bool
+	uploadProxy bool
 	listCalls   int
 	listEntries []drives.Entry
 }
@@ -92,21 +95,23 @@ func (d *fakeUploadDrive) StreamURL(context.Context, string) (*drives.StreamLink
 func (d *fakeUploadDrive) Upload(context.Context, string, string, io.Reader, int64) (string, error) {
 	return "", drives.ErrNotSupported
 }
-func (d *fakeUploadDrive) EnsureDir(_ context.Context, pathFromRoot string) (string, error) {
+func (d *fakeUploadDrive) EnsureDir(ctx context.Context, pathFromRoot string) (string, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.ensureCalls = append(d.ensureCalls, pathFromRoot)
+	d.ensureProxy = scopedproxy.Configured(ctx)
 	return d.rootID + "/" + pathFromRoot, nil
 }
 func (d *fakeUploadDrive) Rename(context.Context, string, string) error {
 	return nil
 }
-func (d *fakeUploadDrive) UploadAndReportHash(_ context.Context, parentID, name string, r io.Reader, _ int64) (UploadResult, error) {
+func (d *fakeUploadDrive) UploadAndReportHash(ctx context.Context, parentID, name string, r io.Reader, _ int64) (UploadResult, error) {
 	body, _ := io.ReadAll(r)
 	d.mu.Lock()
 	d.uploadCalls++
 	d.gotBodies[name] = body
 	d.gotParents[name] = parentID
+	d.uploadProxy = scopedproxy.Configured(ctx)
 	d.mu.Unlock()
 	return UploadResult{FileID: "remote-" + name, Hash: strings.Repeat("a", 40), Size: int64(len(body))}, nil
 }
@@ -154,11 +159,15 @@ func TestRunOnceUploadsScriptCrawlerLocalVideo(t *testing.T) {
 	reg.Add(target)
 
 	if err := cat.UpsertDrive(ctx, &catalog.Drive{
-		ID:            src.ID(),
-		Kind:          scriptcrawler.Kind,
-		Name:          "Example Crawler",
-		RootID:        "/",
-		Credentials:   map[string]string{"script_path": "/tmp/example.py", "upload_drive_id": target.ID()},
+		ID:     src.ID(),
+		Kind:   scriptcrawler.Kind,
+		Name:   "Example Crawler",
+		RootID: "/",
+		Credentials: map[string]string{
+			"script_path":     "/tmp/example.py",
+			"upload_drive_id": target.ID(),
+			"upload_proxy":    "http://upload-proxy.example:7890",
+		},
 		TeaserEnabled: true,
 	}); err != nil {
 		t.Fatalf("upsert crawler drive: %v", err)
@@ -191,6 +200,12 @@ func TestRunOnceUploadsScriptCrawlerLocalVideo(t *testing.T) {
 	}
 	if len(target.ensureCalls) != 1 || target.ensureCalls[0] != "Script Crawlers/crawler-one" {
 		t.Fatalf("ensure calls = %#v, want crawler upload folder", target.ensureCalls)
+	}
+	if !target.ensureProxy || !target.uploadProxy {
+		t.Fatalf("scoped upload proxy ensure/upload = %v/%v, want true/true", target.ensureProxy, target.uploadProxy)
+	}
+	if scopedproxy.Configured(ctx) {
+		t.Fatal("crawler upload proxy leaked into the caller context")
 	}
 
 	got, err := cat.GetVideo(ctx, videoID)
@@ -235,7 +250,11 @@ func TestStartDriveUploadsOnlySelectedCrawlerWhileRunOnceRemainsGlobal(t *testin
 	for _, src := range []*scriptcrawler.Driver{first, second} {
 		if err := cat.UpsertDrive(ctx, &catalog.Drive{
 			ID: src.ID(), Kind: scriptcrawler.Kind, Name: src.ID(), RootID: "/",
-			Credentials:   map[string]string{"script_path": "/tmp/example.py", "upload_drive_id": target.ID()},
+			Credentials: map[string]string{
+				"script_path":     "/tmp/example.py",
+				"proxy":           "http://crawl-only-proxy.example:7890",
+				"upload_drive_id": target.ID(),
+			},
 			TeaserEnabled: true,
 		}); err != nil {
 			t.Fatalf("upsert crawler %s: %v", src.ID(), err)
@@ -288,6 +307,9 @@ func TestStartDriveUploadsOnlySelectedCrawlerWhileRunOnceRemainsGlobal(t *testin
 	}
 	if reg.allCalls != 1 {
 		t.Fatalf("global migration enumerated all drives %d time(s), want 1", reg.allCalls)
+	}
+	if target.ensureProxy || target.uploadProxy {
+		t.Fatalf("crawl-only proxy leaked into upload ensure/upload = %v/%v", target.ensureProxy, target.uploadProxy)
 	}
 }
 

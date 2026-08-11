@@ -621,6 +621,10 @@ test("crawler management is a separate admin section", () => {
   assert.match(crawlerPageSource, /type="file"/);
   assert.match(crawlerPageSource, /<button className="admin-btn" type="button" onClick=\{importURL\} disabled=\{importing\}>[\s\S]*导入[\s\S]*<\/button>/);
   assert.match(crawlerPageSource, /placeholder="支持http或socks5代理"/);
+  assert.match(crawlerPageSource, /<label htmlFor="crawler-proxy">抓取代理<\/label>/);
+  assert.match(crawlerPageSource, /<label htmlFor="crawler-upload-proxy">上传代理<\/label>/);
+  assert.match(crawlerPageSource, /uploadProxy: form\.uploadProxy\.trim\(\)/);
+  assert.match(crawlerPageSource, /placeholder="仅本地视频上传到网盘时使用"/);
   assert.doesNotMatch(crawlerPageSource, /LinkIcon/);
   assert.match(crawlerPageSource, /<div className="admin-crawler-local-import">\s*<span>本地导入<\/span>[\s\S]*?className=\{`admin-crawler-dropzone/);
   assert.match(crawlerPageSource, /<label htmlFor="crawler-script-url">链接导入<\/label>/);
@@ -707,6 +711,7 @@ test("crawler management is a separate admin section", () => {
   assert.doesNotMatch(crawlerPageSource, /内置 91/);
   assert.match(apiSource, /type AdminCrawler/);
   assert.match(apiSource, /uploadDriveId\?: string/);
+  assert.match(apiSource, /uploadProxy\?: string/);
   assert.match(apiSource, /paused: boolean/);
   assert.match(apiSource, /teaserEnabled: boolean/);
   assert.doesNotMatch(apiSource, /teaserEnabled\?: boolean/);

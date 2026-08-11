@@ -16,6 +16,7 @@ import (
 	sdk "github.com/OpenListTeam/wopan-sdk-go"
 	"github.com/go-resty/resty/v2"
 	"github.com/video-site/backend/internal/drives"
+	"github.com/video-site/backend/internal/scopedproxy"
 )
 
 // Driver 封装联通网盘
@@ -75,7 +76,11 @@ func (d *Driver) RootID() string {
 }
 
 func (d *Driver) Init(ctx context.Context) error {
-	d.client = sdk.DefaultWithRefreshToken(d.refreshToken)
+	d.client = sdk.New(
+		sdk.WithUA(sdk.DefaultUA),
+		sdk.WithClient(scopedproxy.NewHTTPClient(0)),
+		sdk.WithRefreshToken(d.refreshToken),
+	)
 	d.client.SetAccessToken(d.accessToken)
 	d.client.OnRefreshToken(func(access, refresh string) {
 		d.accessToken = access

@@ -13,6 +13,8 @@ import (
 
 	sdk "github.com/SheltonZhu/115driver/pkg/driver"
 	"github.com/aliyun/aliyun-oss-go-sdk/oss"
+
+	"github.com/video-site/backend/internal/scopedproxy"
 )
 
 const (
@@ -355,7 +357,11 @@ func newP115OSSClient(token *sdk.UploadOSSTokenResp, options ...oss.ClientOption
 	if token == nil {
 		return nil, errors.New("p115 OSS client: nil token")
 	}
-	clientOptions := []oss.ClientOption{oss.EnableMD5(true), oss.EnableCRC(true)}
+	clientOptions := []oss.ClientOption{
+		oss.EnableMD5(true),
+		oss.EnableCRC(true),
+		oss.HTTPClient(scopedproxy.NewHTTPClient(0)),
+	}
 	clientOptions = append(clientOptions, options...)
 	return oss.New(sdk.OSSEndpoint, token.AccessKeyID, token.AccessKeySecret, clientOptions...)
 }

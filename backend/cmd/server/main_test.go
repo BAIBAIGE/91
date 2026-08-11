@@ -729,85 +729,56 @@ func TestRunCrawlerMigrationAfterManualCrawlRequiresCrawlerUploadTarget(t *testi
 	}
 }
 
-func TestScheduleCrawlerUploadMigrationRunsForConfiguredCrawler(t *testing.T) {
-	ctx := context.Background()
-	cat, err := catalog.Open(t.TempDir() + "/catalog.db")
+func TestReloadSavedCrawlerDoesNotStartUploadMigration(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	root := t.TempDir()
+	cat, err := catalog.Open(filepath.Join(root, "catalog.db"))
 	if err != nil {
 		t.Fatalf("open catalog: %v", err)
 	}
-	t.Cleanup(func() {
-		if err := cat.Close(); err != nil {
-			t.Fatalf("close catalog: %v", err)
-		}
-	})
+	t.Cleanup(func() { _ = cat.Close() })
+
+	scriptPath := filepath.Join(root, "crawler.py")
+	if err := os.WriteFile(scriptPath, []byte("CRAWLER_NAME = \"Saved Crawler\"\n"), 0o644); err != nil {
+		t.Fatalf("write crawler script: %v", err)
+	}
 	if err := cat.UpsertDrive(ctx, &catalog.Drive{
-		ID:     "crawler-truvaze",
+		ID:     "crawler-saved",
 		Kind:   scriptcrawler.Kind,
-		Name:   "Truvaze",
+		Name:   "Saved Crawler",
 		RootID: "/",
 		Credentials: map[string]string{
-			"script_path":     "/tmp/Truvaze.py",
-			"upload_drive_id": "pikpak",
+			"script_path":     scriptPath,
+			"upload_drive_id": "pikpak-target",
 		},
+		TeaserEnabled: true,
 	}); err != nil {
 		t.Fatalf("seed crawler: %v", err)
 	}
-	registry := proxy.NewRegistry()
-	registry.Set("crawler-truvaze", &serverFakeKindDrive{id: "crawler-truvaze", kind: scriptcrawler.Kind})
+
 	migrator := &serverFakeCrawlerUploadRunner{}
 	app := &App{
-		cat:                cat,
-		registry:           registry,
-		crawlerUploader:    migrator,
-		workers:            map[string]*preview.Worker{},
-		thumbWorkers:       map[string]*preview.ThumbWorker{},
-		fingerprintWorkers: map[string]*fingerprint.Worker{},
+		cfg: &config.Config{
+			Storage: config.Storage{LocalPreviewDir: filepath.Join(root, "previews")},
+		},
+		cat:             cat,
+		registry:        proxy.NewRegistry(),
+		scriptCrawlers:  make(map[string]*scriptcrawler.Crawler),
+		crawlerUploader: migrator,
+	}
+	if err := app.reloadSavedDrive(ctx, "crawler-saved"); err != nil {
+		t.Fatalf("reload saved crawler: %v", err)
+	}
+	if _, ok := app.registry.Get("crawler-saved"); !ok {
+		t.Fatal("saved crawler was not reattached")
 	}
 
-	if !app.scheduleCrawlerUploadMigration(ctx, "crawler-truvaze") {
-		t.Fatal("scheduleCrawlerUploadMigration returned false, want true")
-	}
-	deadline := time.After(time.Second)
-	for migrator.called.Load() == 0 {
-		select {
-		case <-deadline:
-			t.Fatalf("migration calls = %d, want 1", migrator.called.Load())
-		case <-time.After(10 * time.Millisecond):
-		}
-	}
-	if got := migrator.lastDriveID(); got != "crawler-truvaze" {
-		t.Fatalf("migration drive = %q, want crawler-truvaze", got)
-	}
-}
-
-func TestScheduleCrawlerUploadMigrationSkipsWithoutUploadTarget(t *testing.T) {
-	ctx := context.Background()
-	cat, err := catalog.Open(t.TempDir() + "/catalog.db")
-	if err != nil {
-		t.Fatalf("open catalog: %v", err)
-	}
-	t.Cleanup(func() {
-		if err := cat.Close(); err != nil {
-			t.Fatalf("close catalog: %v", err)
-		}
-	})
-	if err := cat.UpsertDrive(ctx, &catalog.Drive{
-		ID:          "crawler-local",
-		Kind:        scriptcrawler.Kind,
-		Name:        "Local Only",
-		RootID:      "/",
-		Credentials: map[string]string{"script_path": "/tmp/local.py"},
-	}); err != nil {
-		t.Fatalf("seed crawler: %v", err)
-	}
-	migrator := &serverFakeCrawlerUploadRunner{}
-	app := &App{cat: cat, registry: proxy.NewRegistry(), crawlerUploader: migrator}
-
-	if app.scheduleCrawlerUploadMigration(ctx, "crawler-local") {
-		t.Fatal("scheduleCrawlerUploadMigration returned true without upload target")
-	}
+	// The old save hook scheduled migration asynchronously. Allow enough time
+	// for such a regression to reach the fake runner before asserting.
+	time.Sleep(100 * time.Millisecond)
 	if migrator.called.Load() != 0 {
-		t.Fatalf("migration calls = %d, want 0", migrator.called.Load())
+		t.Fatalf("saving crawler started %d upload migration(s), want 0", migrator.called.Load())
 	}
 }
 

@@ -5,26 +5,33 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/aliyun/aliyun-oss-go-sdk/oss"
 
 	"github.com/video-site/backend/internal/drives"
+	"github.com/video-site/backend/internal/scopedproxy"
 )
 
 const (
-	guangYaMultipartTargetPartSize int64 = 8 * 1024 * 1024
-	guangYaMultipartTargetParts          = 1000
-	guangYaMultipartMaxParts             = 10000
-	guangYaMultipartPartAttempts         = 3
-	guangYaMultipartAbortTimeout         = 30 * time.Second
+	guangYaMultipartTargetPartSize        int64 = 8 * 1024 * 1024
+	guangYaMultipartTargetParts                 = 1000
+	guangYaMultipartMaxParts                    = 10000
+	guangYaMultipartConcurrency                 = 6
+	guangYaMultipartPartAttempts                = 3
+	guangYaMultipartPartNoProgressTimeout       = 60 * time.Second
+	guangYaMultipartAbortTimeout                = 30 * time.Second
 
 	guangYaMaxMultipartObjectSize int64 = int64(oss.MaxPartSize) * guangYaMultipartMaxParts
 )
+
+var errGuangYaMultipartPartNoProgress = errors.New("guangyapan multipart: part upload made no progress")
 
 // guangYaOSSBucket is the complete OSS session surface used by this driver.
 // Keeping the state machine behind a small interface makes retry, cancellation
@@ -138,6 +145,12 @@ type guangYaMultipartChunk struct {
 	size   int64
 }
 
+type guangYaMultipartResult struct {
+	index int
+	part  oss.UploadPart
+	err   error
+}
+
 // planGuangYaMultipart targets at most about 1000 requests for ordinary files,
 // then grows up to OSS's protocol maximum of 10000 parts for multi-terabyte
 // objects. This avoids the old fixed 4 MiB plan, which crossed the protocol
@@ -187,6 +200,7 @@ func (d *Driver) openUploadBucket(token *uploadTokenData) (guangYaOSSBucket, err
 		token.AccessKeyID,
 		token.SecretAccessKey,
 		oss.SecurityToken(token.SessionToken),
+		oss.HTTPClient(scopedproxy.NewHTTPClient(0)),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("guangyapan upload: create oss client: %w", err)
@@ -231,7 +245,10 @@ func uploadGuangYaMultipart(ctx context.Context, bucket guangYaOSSBucket, object
 		return errors.New("guangyapan multipart: upload body does not support random access")
 	}
 
-	upload, err := bucket.InitiateMultipartUpload(objectPath, append(guangYaOSSOptions(ctx), oss.Sequential())...)
+	// GuangYa issues a standard OSS multipart session. Do not opt into OSS's
+	// sequential mode: independent part numbers are uploaded by the bounded
+	// worker pool below and may finish out of order.
+	upload, err := bucket.InitiateMultipartUpload(objectPath, guangYaOSSOptions(ctx)...)
 	if err != nil {
 		return fmt.Errorf("guangyapan multipart: initiate: %w", err)
 	}
@@ -252,13 +269,64 @@ func uploadGuangYaMultipart(ctx context.Context, bucket guangYaOSSBucket, object
 		}
 	}()
 
-	parts := make([]oss.UploadPart, 0, len(chunks))
+	workerCtx, cancelWorkers := context.WithCancel(ctx)
+	defer cancelWorkers()
+
+	jobs := make(chan guangYaMultipartChunk, len(chunks))
+	results := make(chan guangYaMultipartResult, len(chunks))
 	for _, chunk := range chunks {
-		part, err := uploadGuangYaPart(ctx, bucket, upload, body, chunk, len(chunks))
-		if err != nil {
-			return err
+		jobs <- chunk
+	}
+	close(jobs)
+
+	workerCount := min(guangYaMultipartConcurrency, len(chunks))
+	var workers sync.WaitGroup
+	workers.Add(workerCount)
+	for range workerCount {
+		go func() {
+			defer workers.Done()
+			for {
+				if workerCtx.Err() != nil {
+					return
+				}
+				select {
+				case <-workerCtx.Done():
+					return
+				case chunk, ok := <-jobs:
+					if !ok {
+						return
+					}
+					if workerCtx.Err() != nil {
+						return
+					}
+					part, uploadErr := uploadGuangYaPart(workerCtx, bucket, upload, body, chunk, len(chunks))
+					results <- guangYaMultipartResult{index: chunk.number - 1, part: part, err: uploadErr}
+					if uploadErr != nil {
+						return
+					}
+				}
+			}
+		}()
+	}
+	go func() {
+		workers.Wait()
+		close(results)
+	}()
+
+	parts := make([]oss.UploadPart, len(chunks))
+	var firstErr error
+	for result := range results {
+		if result.err != nil {
+			if firstErr == nil {
+				firstErr = result.err
+				cancelWorkers()
+			}
+			continue
 		}
-		parts = append(parts, part)
+		parts[result.index] = result.part
+	}
+	if firstErr != nil {
+		return firstErr
 	}
 	if err := ctx.Err(); err != nil {
 		return err
@@ -278,6 +346,29 @@ func uploadGuangYaPart(
 	chunk guangYaMultipartChunk,
 	totalParts int,
 ) (oss.UploadPart, error) {
+	return uploadGuangYaPartWithNoProgressTimeout(
+		ctx,
+		bucket,
+		upload,
+		body,
+		chunk,
+		totalParts,
+		guangYaMultipartPartNoProgressTimeout,
+	)
+}
+
+func uploadGuangYaPartWithNoProgressTimeout(
+	ctx context.Context,
+	bucket guangYaOSSBucket,
+	upload oss.InitiateMultipartUploadResult,
+	body guangYaPreparedUploadBody,
+	chunk guangYaMultipartChunk,
+	totalParts int,
+	noProgressTimeout time.Duration,
+) (oss.UploadPart, error) {
+	if noProgressTimeout <= 0 {
+		return oss.UploadPart{}, fmt.Errorf("guangyapan multipart: invalid part no-progress timeout %s", noProgressTimeout)
+	}
 	var lastErr error
 	attemptsMade := 0
 	for attempt := 1; attempt <= guangYaMultipartPartAttempts; attempt++ {
@@ -285,13 +376,13 @@ func uploadGuangYaPart(
 		if err := ctx.Err(); err != nil {
 			return oss.UploadPart{}, err
 		}
-		section := io.NewSectionReader(body.readerAt, body.start+chunk.offset, chunk.size)
-		part, err := bucket.UploadPart(
+		part, err := uploadGuangYaPartAttempt(
+			ctx,
+			bucket,
 			upload,
-			&contextReader{ctx: ctx, r: section},
-			chunk.size,
-			chunk.number,
-			guangYaOSSOptions(ctx)...,
+			body,
+			chunk,
+			noProgressTimeout,
 		)
 		if err == nil && strings.TrimSpace(part.ETag) == "" {
 			err = errors.New("OSS returned an empty part ETag")
@@ -303,7 +394,17 @@ func uploadGuangYaPart(
 		if attempt >= guangYaMultipartPartAttempts || !isRetryableGuangYaUploadError(err) {
 			break
 		}
-		if err := sleepGuangYaUpload(ctx, time.Duration(attempt)*500*time.Millisecond); err != nil {
+		retryDelay := time.Duration(attempt) * 500 * time.Millisecond
+		log.Printf(
+			"[guangyapan] multipart part %d/%d attempt %d/%d failed; retrying in %s: %v",
+			chunk.number,
+			totalParts,
+			attempt,
+			guangYaMultipartPartAttempts,
+			retryDelay,
+			err,
+		)
+		if err := sleepGuangYaUpload(ctx, retryDelay); err != nil {
 			return oss.UploadPart{}, err
 		}
 	}
@@ -314,6 +415,122 @@ func uploadGuangYaPart(
 		attemptsMade,
 		lastErr,
 	)
+}
+
+func uploadGuangYaPartAttempt(
+	ctx context.Context,
+	bucket guangYaOSSBucket,
+	upload oss.InitiateMultipartUploadResult,
+	body guangYaPreparedUploadBody,
+	chunk guangYaMultipartChunk,
+	noProgressTimeout time.Duration,
+) (oss.UploadPart, error) {
+	attemptCtx, reportProgress, stopWatchdog := guangYaPartNoProgressContext(ctx, noProgressTimeout)
+	section := io.NewSectionReader(body.readerAt, body.start+chunk.offset, chunk.size)
+	reader := &guangYaPartProgressReader{reader: section, reportProgress: reportProgress}
+	part, err := bucket.UploadPart(
+		upload,
+		&contextReader{ctx: attemptCtx, r: reader},
+		chunk.size,
+		chunk.number,
+		guangYaOSSOptions(attemptCtx)...,
+	)
+	cause := stopWatchdog()
+	if err == nil {
+		return part, nil
+	}
+	if parentErr := ctx.Err(); parentErr != nil {
+		return oss.UploadPart{}, parentErr
+	}
+	if errors.Is(cause, errGuangYaMultipartPartNoProgress) {
+		return oss.UploadPart{}, fmt.Errorf("%w for %s", errGuangYaMultipartPartNoProgress, noProgressTimeout)
+	}
+	return oss.UploadPart{}, err
+}
+
+type guangYaPartProgressReader struct {
+	reader         io.Reader
+	reportProgress func()
+}
+
+func (r *guangYaPartProgressReader) Read(p []byte) (int, error) {
+	n, err := r.reader.Read(p)
+	if n > 0 {
+		r.reportProgress()
+	}
+	return n, err
+}
+
+// guangYaPartNoProgressContext bounds one UploadPart attempt without imposing
+// a total-duration limit. Each successful body read renews the timer. When the
+// HTTP transport stops consuming the body (for example because a proxy's
+// outbound TCP flow is stuck), canceling the request closes that connection so
+// the existing part retry loop can replay the same byte range on a fresh one.
+func guangYaPartNoProgressContext(
+	parent context.Context,
+	timeout time.Duration,
+) (context.Context, func(), func() error) {
+	attemptCtx, cancel := context.WithCancelCause(parent)
+	progress := make(chan struct{}, 1)
+	stop := make(chan struct{})
+	done := make(chan struct{})
+
+	go func() {
+		defer close(done)
+		timer := time.NewTimer(timeout)
+		defer timer.Stop()
+		for {
+			select {
+			case <-parent.Done():
+				return
+			case <-stop:
+				return
+			case <-progress:
+				resetGuangYaPartNoProgressTimer(timer, timeout)
+			case <-timer.C:
+				// A progress notification queued at the timeout boundary wins over
+				// the timer so an active upload is not canceled by scheduler jitter.
+				select {
+				case <-progress:
+					timer.Reset(timeout)
+					continue
+				default:
+				}
+				cancel(errGuangYaMultipartPartNoProgress)
+				return
+			}
+		}
+	}()
+
+	reportProgress := func() {
+		select {
+		case progress <- struct{}{}:
+		default:
+		}
+	}
+
+	var stopOnce sync.Once
+	var cause error
+	stopWatchdog := func() error {
+		stopOnce.Do(func() {
+			close(stop)
+			<-done
+			cause = context.Cause(attemptCtx)
+			cancel(nil)
+		})
+		return cause
+	}
+	return attemptCtx, reportProgress, stopWatchdog
+}
+
+func resetGuangYaPartNoProgressTimer(timer *time.Timer, timeout time.Duration) {
+	if !timer.Stop() {
+		select {
+		case <-timer.C:
+		default:
+		}
+	}
+	timer.Reset(timeout)
 }
 
 type contextReader struct {
@@ -343,6 +560,9 @@ func sleepGuangYaUpload(ctx context.Context, delay time.Duration) error {
 }
 
 func isRetryableGuangYaUploadError(err error) bool {
+	if errors.Is(err, errGuangYaMultipartPartNoProgress) {
+		return true
+	}
 	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return false
 	}

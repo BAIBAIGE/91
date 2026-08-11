@@ -23,6 +23,7 @@ import (
 	"github.com/go-resty/resty/v2"
 
 	"github.com/video-site/backend/internal/drives"
+	"github.com/video-site/backend/internal/scopedproxy"
 )
 
 const (
@@ -106,10 +107,12 @@ func New(c Config) *Driver {
 		uploadBaseURL: uploadBaseURL,
 		onTokenUpdate: c.OnTokenUpdate,
 		client: resty.New().
+			SetTransport(scopedproxy.NewTransport(nil)).
 			SetTimeout(30*time.Second).
 			SetHeader("Accept", "application/json, text/plain, */*"),
 		httpClient: &http.Client{
-			Timeout: 0,
+			Timeout:   0,
+			Transport: scopedproxy.NewTransport(nil),
 			CheckRedirect: func(*http.Request, []*http.Request) error {
 				return http.ErrUseLastResponse
 			},

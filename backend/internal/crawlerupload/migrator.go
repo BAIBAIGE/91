@@ -41,6 +41,7 @@ import (
 	"github.com/video-site/backend/internal/drives/wopan"
 	"github.com/video-site/backend/internal/mediaasset"
 	"github.com/video-site/backend/internal/persistence"
+	"github.com/video-site/backend/internal/scopedproxy"
 	"github.com/video-site/backend/internal/videoname"
 )
 
@@ -114,6 +115,7 @@ type migrationPlan struct {
 	targetDriveID       string
 	target              uploadTarget
 	uploadDir           string
+	uploadProxyURL      string
 	keepLatestN         int
 	requireAssetsReady  bool
 	requirePreviewReady bool
@@ -752,6 +754,7 @@ func (m *Migrator) migrationPlan(ctx context.Context, d drives.Drive) (migration
 		targetDriveID:       resolvedID,
 		target:              target,
 		uploadDir:           scriptCrawlerUploadDir(row.ID),
+		uploadProxyURL:      strings.TrimSpace(row.Credentials["upload_proxy"]),
 		keepLatestN:         0,
 		requireAssetsReady:  true,
 		requirePreviewReady: row.TeaserEnabled,
@@ -780,6 +783,10 @@ func (m *Migrator) migrateDrive(ctx context.Context, plan migrationPlan) (int, e
 	src := plan.source
 	if src == nil || plan.target == nil || plan.targetDriveID == "" {
 		return 0, nil
+	}
+	uploadCtx, err := scopedproxy.WithURL(ctx, plan.uploadProxyURL)
+	if err != nil {
+		return 0, fmt.Errorf("invalid crawler upload proxy: %w", err)
 	}
 	keepN := plan.keepLatestN
 	if keepN < 0 {
@@ -940,7 +947,7 @@ func (m *Migrator) migrateDrive(ctx context.Context, plan migrationPlan) (int, e
 		}
 
 		if uploadParentID == "" {
-			uploadParentID, err = plan.target.EnsureDir(ctx, plan.uploadDir)
+			uploadParentID, err = plan.target.EnsureDir(uploadCtx, plan.uploadDir)
 			if err != nil {
 				return migrated, fmt.Errorf("%s ensure %q dir: %w", plan.target.Kind(), plan.uploadDir, err)
 			}
@@ -948,7 +955,7 @@ func (m *Migrator) migrateDrive(ctx context.Context, plan migrationPlan) (int, e
 				return migrated, fmt.Errorf("%s ensure %q dir returned empty id", plan.target.Kind(), plan.uploadDir)
 			}
 		}
-		ok, err := m.migrateOne(ctx, v, plan, uploadParentID)
+		ok, err := m.migrateOne(uploadCtx, v, plan, uploadParentID)
 		if err != nil {
 			log.Printf("[crawlerupload] %s: %v", v.ID, err)
 			if _, rateLimited := drives.RateLimitRetryAfter(err); rateLimited {

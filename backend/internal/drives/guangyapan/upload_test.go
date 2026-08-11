@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/aliyun/aliyun-oss-go-sdk/oss"
 )
@@ -27,6 +28,33 @@ type fakeGuangYaOSSBucket struct {
 	completes   int
 	completeErr error
 	completed   []oss.UploadPart
+}
+
+type scriptedGuangYaOSSBucket struct {
+	*fakeGuangYaOSSBucket
+	uploadPart func(reader io.Reader, partNumber int, options []oss.Option) (oss.UploadPart, error)
+}
+
+func (b *scriptedGuangYaOSSBucket) UploadPart(
+	_ oss.InitiateMultipartUploadResult,
+	reader io.Reader,
+	_ int64,
+	partNumber int,
+	options ...oss.Option,
+) (oss.UploadPart, error) {
+	return b.uploadPart(reader, partNumber, options)
+}
+
+func guangYaUploadOptionContext(options []oss.Option) (context.Context, error) {
+	value, err := oss.FindOption(options, "x-context-arg", nil)
+	if err != nil {
+		return nil, err
+	}
+	ctx, ok := value.(context.Context)
+	if !ok || ctx == nil {
+		return nil, fmt.Errorf("upload options contain context %T, want context.Context", value)
+	}
+	return ctx, nil
 }
 
 func newFakeGuangYaOSSBucket() *fakeGuangYaOSSBucket {
@@ -134,6 +162,157 @@ func TestPlanGuangYaMultipartRespectsProtocolLimits(t *testing.T) {
 	}
 }
 
+type concurrentGuangYaOSSBucket struct {
+	mu sync.Mutex
+
+	started        chan int
+	release        chan struct{}
+	releaseOnce    sync.Once
+	active         int
+	maxActive      int
+	initSequential bool
+	aborts         int
+	completes      int
+	completed      []oss.UploadPart
+}
+
+func (b *concurrentGuangYaOSSBucket) releaseWorkers() {
+	b.releaseOnce.Do(func() { close(b.release) })
+}
+
+func newConcurrentGuangYaOSSBucket() *concurrentGuangYaOSSBucket {
+	return &concurrentGuangYaOSSBucket{
+		started: make(chan int, guangYaMultipartConcurrency+1),
+		release: make(chan struct{}),
+	}
+}
+
+func (b *concurrentGuangYaOSSBucket) PutObject(_ string, _ io.Reader, _ ...oss.Option) error {
+	return nil
+}
+
+func (b *concurrentGuangYaOSSBucket) InitiateMultipartUpload(objectKey string, options ...oss.Option) (oss.InitiateMultipartUploadResult, error) {
+	params, err := oss.GetRawParams(options)
+	if err != nil {
+		return oss.InitiateMultipartUploadResult{}, err
+	}
+	_, sequential := params["sequential"]
+	b.mu.Lock()
+	b.initSequential = sequential
+	b.mu.Unlock()
+	return oss.InitiateMultipartUploadResult{Bucket: "bucket", Key: objectKey, UploadID: "upload-concurrent"}, nil
+}
+
+func (b *concurrentGuangYaOSSBucket) UploadPart(
+	_ oss.InitiateMultipartUploadResult,
+	reader io.Reader,
+	_ int64,
+	partNumber int,
+	_ ...oss.Option,
+) (oss.UploadPart, error) {
+	b.mu.Lock()
+	b.active++
+	if b.active > b.maxActive {
+		b.maxActive = b.active
+	}
+	b.mu.Unlock()
+	b.started <- partNumber
+
+	<-b.release
+	_, err := io.Copy(io.Discard, reader)
+	b.mu.Lock()
+	b.active--
+	b.mu.Unlock()
+	if err != nil {
+		return oss.UploadPart{}, err
+	}
+	return oss.UploadPart{PartNumber: partNumber, ETag: fmt.Sprintf("etag-%d", partNumber)}, nil
+}
+
+func (b *concurrentGuangYaOSSBucket) CompleteMultipartUpload(
+	_ oss.InitiateMultipartUploadResult,
+	parts []oss.UploadPart,
+	_ ...oss.Option,
+) (oss.CompleteMultipartUploadResult, error) {
+	b.mu.Lock()
+	b.completes++
+	b.completed = append([]oss.UploadPart(nil), parts...)
+	b.mu.Unlock()
+	return oss.CompleteMultipartUploadResult{}, nil
+}
+
+func (b *concurrentGuangYaOSSBucket) AbortMultipartUpload(_ oss.InitiateMultipartUploadResult, _ ...oss.Option) error {
+	b.mu.Lock()
+	b.aborts++
+	b.mu.Unlock()
+	return nil
+}
+
+type zeroGuangYaReaderAt struct{}
+
+func (zeroGuangYaReaderAt) ReadAt(p []byte, _ int64) (int, error) {
+	clear(p)
+	return len(p), nil
+}
+
+func TestUploadGuangYaMultipartUsesSixWorkersAndCompletesInPartOrder(t *testing.T) {
+	const partCount = guangYaMultipartConcurrency + 1
+	size := int64(partCount) * guangYaMultipartTargetPartSize
+	body := guangYaPreparedUploadBody{readerAt: zeroGuangYaReaderAt{}}
+	bucket := newConcurrentGuangYaOSSBucket()
+	defer bucket.releaseWorkers()
+
+	result := make(chan error, 1)
+	go func() {
+		result <- uploadGuangYaMultipart(context.Background(), bucket, "object", body, size)
+	}()
+
+	startedParts := make(map[int]bool, guangYaMultipartConcurrency)
+	for len(startedParts) < guangYaMultipartConcurrency {
+		select {
+		case number := <-bucket.started:
+			startedParts[number] = true
+		case <-time.After(2 * time.Second):
+			t.Fatalf("only %d multipart workers started, want %d", len(startedParts), guangYaMultipartConcurrency)
+		}
+	}
+	select {
+	case number := <-bucket.started:
+		t.Fatalf("part %d started before one of the six workers was released", number)
+	case <-time.After(100 * time.Millisecond):
+	}
+	bucket.releaseWorkers()
+
+	select {
+	case err := <-result:
+		if err != nil {
+			t.Fatalf("multipart upload: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("multipart upload did not finish after releasing workers")
+	}
+
+	bucket.mu.Lock()
+	defer bucket.mu.Unlock()
+	if bucket.maxActive != guangYaMultipartConcurrency {
+		t.Fatalf("max concurrent parts = %d, want %d", bucket.maxActive, guangYaMultipartConcurrency)
+	}
+	if bucket.initSequential {
+		t.Fatal("multipart upload unexpectedly opted into OSS sequential mode")
+	}
+	if bucket.completes != 1 || bucket.aborts != 0 {
+		t.Fatalf("completes=%d aborts=%d, want 1/0", bucket.completes, bucket.aborts)
+	}
+	if len(bucket.completed) != partCount {
+		t.Fatalf("completed parts = %d, want %d", len(bucket.completed), partCount)
+	}
+	for index, part := range bucket.completed {
+		if part.PartNumber != index+1 {
+			t.Fatalf("completed part %d number = %d, want %d", index, part.PartNumber, index+1)
+		}
+	}
+}
+
 func TestUploadGuangYaMultipartRetriesOnlyFailedPart(t *testing.T) {
 	data := bytes.Repeat([]byte("a"), int(guangYaMultipartTargetPartSize+17))
 	body := guangYaPreparedUploadBody{readerAt: bytes.NewReader(data)}
@@ -159,6 +338,160 @@ func TestUploadGuangYaMultipartRetriesOnlyFailedPart(t *testing.T) {
 	}
 	if bucket.completes != 1 || bucket.aborts != 0 {
 		t.Fatalf("completes=%d aborts=%d, want 1/0", bucket.completes, bucket.aborts)
+	}
+}
+
+func TestUploadGuangYaPartRetriesAfterNoProgressTimeout(t *testing.T) {
+	const noProgressTimeout = 30 * time.Millisecond
+	data := []byte("payload")
+	body := guangYaPreparedUploadBody{readerAt: bytes.NewReader(data)}
+	upload := oss.InitiateMultipartUploadResult{Bucket: "bucket", Key: "object", UploadID: "upload-stall"}
+	chunk := guangYaMultipartChunk{number: 1, size: int64(len(data))}
+	calls := 0
+	var replayed []byte
+	bucket := &scriptedGuangYaOSSBucket{fakeGuangYaOSSBucket: newFakeGuangYaOSSBucket()}
+	bucket.uploadPart = func(reader io.Reader, partNumber int, options []oss.Option) (oss.UploadPart, error) {
+		calls++
+		if calls == 1 {
+			attemptCtx, err := guangYaUploadOptionContext(options)
+			if err != nil {
+				return oss.UploadPart{}, err
+			}
+			<-attemptCtx.Done()
+			return oss.UploadPart{}, attemptCtx.Err()
+		}
+		var err error
+		replayed, err = io.ReadAll(reader)
+		if err != nil {
+			return oss.UploadPart{}, err
+		}
+		return oss.UploadPart{PartNumber: partNumber, ETag: "etag-retry"}, nil
+	}
+
+	started := time.Now()
+	part, err := uploadGuangYaPartWithNoProgressTimeout(
+		context.Background(),
+		bucket,
+		upload,
+		body,
+		chunk,
+		1,
+		noProgressTimeout,
+	)
+	if err != nil {
+		t.Fatalf("upload part: %v", err)
+	}
+	if calls != 2 {
+		t.Fatalf("part calls = %d, want 2", calls)
+	}
+	if part.ETag != "etag-retry" || !bytes.Equal(replayed, data) {
+		t.Fatalf("part=%#v replayed=%q, want retried payload", part, replayed)
+	}
+	if elapsed := time.Since(started); elapsed < noProgressTimeout || elapsed > 2*time.Second {
+		t.Fatalf("retry elapsed = %s, want timeout followed by prompt retry", elapsed)
+	}
+}
+
+func TestUploadGuangYaPartProgressRenewsNoProgressTimeout(t *testing.T) {
+	const (
+		noProgressTimeout = 100 * time.Millisecond
+		readInterval      = 25 * time.Millisecond
+	)
+	data := []byte("progress")
+	body := guangYaPreparedUploadBody{readerAt: bytes.NewReader(data)}
+	upload := oss.InitiateMultipartUploadResult{Bucket: "bucket", Key: "object", UploadID: "upload-progress"}
+	chunk := guangYaMultipartChunk{number: 1, size: int64(len(data))}
+	calls := 0
+	bucket := &scriptedGuangYaOSSBucket{fakeGuangYaOSSBucket: newFakeGuangYaOSSBucket()}
+	bucket.uploadPart = func(reader io.Reader, partNumber int, _ []oss.Option) (oss.UploadPart, error) {
+		calls++
+		buf := make([]byte, 1)
+		for {
+			n, err := reader.Read(buf)
+			if n > 0 {
+				time.Sleep(readInterval)
+			}
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			if err != nil {
+				return oss.UploadPart{}, err
+			}
+		}
+		return oss.UploadPart{PartNumber: partNumber, ETag: "etag-progress"}, nil
+	}
+
+	started := time.Now()
+	part, err := uploadGuangYaPartWithNoProgressTimeout(
+		context.Background(),
+		bucket,
+		upload,
+		body,
+		chunk,
+		1,
+		noProgressTimeout,
+	)
+	if err != nil {
+		t.Fatalf("upload part: %v", err)
+	}
+	if calls != 1 || part.ETag != "etag-progress" {
+		t.Fatalf("calls=%d part=%#v, want one successful attempt", calls, part)
+	}
+	if elapsed := time.Since(started); elapsed <= noProgressTimeout {
+		t.Fatalf("upload elapsed = %s, test did not outlive one idle interval", elapsed)
+	}
+}
+
+func TestUploadGuangYaPartParentCancellationDoesNotRetry(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	data := []byte("payload")
+	body := guangYaPreparedUploadBody{readerAt: bytes.NewReader(data)}
+	upload := oss.InitiateMultipartUploadResult{Bucket: "bucket", Key: "object", UploadID: "upload-cancel"}
+	chunk := guangYaMultipartChunk{number: 1, size: int64(len(data))}
+	started := make(chan struct{})
+	calls := 0
+	bucket := &scriptedGuangYaOSSBucket{fakeGuangYaOSSBucket: newFakeGuangYaOSSBucket()}
+	bucket.uploadPart = func(_ io.Reader, _ int, options []oss.Option) (oss.UploadPart, error) {
+		calls++
+		attemptCtx, err := guangYaUploadOptionContext(options)
+		if err != nil {
+			return oss.UploadPart{}, err
+		}
+		close(started)
+		<-attemptCtx.Done()
+		return oss.UploadPart{}, attemptCtx.Err()
+	}
+
+	result := make(chan error, 1)
+	go func() {
+		_, err := uploadGuangYaPartWithNoProgressTimeout(
+			ctx,
+			bucket,
+			upload,
+			body,
+			chunk,
+			1,
+			time.Second,
+		)
+		result <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("part upload did not start")
+	}
+	cancel()
+	select {
+	case err := <-result:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("error = %v, want context canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("part upload did not stop after parent cancellation")
+	}
+	if calls != 1 {
+		t.Fatalf("part calls = %d, want no retry after parent cancellation", calls)
 	}
 }
 

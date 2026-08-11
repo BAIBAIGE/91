@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/video-site/backend/internal/drives"
+	"github.com/video-site/backend/internal/scopedproxy"
 )
 
 const (
@@ -81,7 +82,8 @@ func New(c Config) *Driver {
 
 func newHTTPClient(timeout time.Duration) *http.Client {
 	return &http.Client{
-		Timeout: timeout,
+		Timeout:   timeout,
+		Transport: scopedproxy.NewTransport(nil),
 		// WebDAV methods must not be rewritten to GET by a 301/302 response, and
 		// credentials must never be forwarded to a different origin implicitly.
 		CheckRedirect: func(*http.Request, []*http.Request) error {

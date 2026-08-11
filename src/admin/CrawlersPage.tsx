@@ -571,6 +571,7 @@ type EditorForm = {
   name: string;
   targetNew: string;
   proxy: string;
+  uploadProxy: string;
   uploadDriveId: string;
 };
 
@@ -581,6 +582,7 @@ function editorFormFromCrawler(crawler: api.AdminCrawler | null): EditorForm {
     name: crawler?.name ?? "",
     targetNew: crawler?.targetNew || "10",
     proxy: crawler?.proxy ?? "",
+    uploadProxy: crawler?.uploadProxy ?? "",
     uploadDriveId: crawler?.uploadDriveId ?? "",
   };
 }
@@ -749,6 +751,7 @@ function CrawlerEditorModal({
         scriptSourceUrl: form.scriptSourceUrl.trim(),
         targetNew: target,
         proxy: form.proxy.trim(),
+        uploadProxy: form.uploadProxy.trim(),
         uploadDriveId: form.uploadDriveId,
       });
       if (resp.warning) {
@@ -959,7 +962,7 @@ function CrawlerEditorModal({
                   />
                 </div>
                 <div className="admin-form__row">
-                  <label htmlFor="crawler-proxy">代理地址</label>
+                  <label htmlFor="crawler-proxy">抓取代理</label>
                   <input
                     id="crawler-proxy"
                     value={form.proxy}
@@ -975,6 +978,15 @@ function CrawlerEditorModal({
                   onChange={(value) => set("uploadDriveId", value)}
                   uploadTargets={uploadTargets}
                 />
+                <div className="admin-form__row">
+                  <label htmlFor="crawler-upload-proxy">上传代理</label>
+                  <input
+                    id="crawler-upload-proxy"
+                    value={form.uploadProxy}
+                    onChange={(e) => set("uploadProxy", e.target.value)}
+                    placeholder="仅本地视频上传到网盘时使用"
+                  />
+                </div>
               </div>
             </section>
           </div>

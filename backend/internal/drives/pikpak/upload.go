@@ -16,6 +16,8 @@ import (
 
 	"github.com/aliyun/aliyun-oss-go-sdk/oss"
 	"github.com/go-resty/resty/v2"
+
+	"github.com/video-site/backend/internal/scopedproxy"
 )
 
 // PikPak 上传协议（参考 OpenList drivers/pikpak）：
@@ -405,6 +407,7 @@ func newPikPakOSSClient(p *s3Params, options ...oss.ClientOption) (*oss.Client, 
 	if isPikPakCNAMEEndpoint(p.Endpoint) {
 		clientOptions = append(clientOptions, oss.UseCname(true))
 	}
+	clientOptions = append(clientOptions, oss.HTTPClient(scopedproxy.NewHTTPClient(0)))
 	clientOptions = append(clientOptions, options...)
 	return oss.New(p.Endpoint, p.AccessKeyID, p.AccessKeySecret, clientOptions...)
 }

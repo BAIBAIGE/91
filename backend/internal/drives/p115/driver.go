@@ -17,6 +17,7 @@ import (
 
 	sdk "github.com/SheltonZhu/115driver/pkg/driver"
 	"github.com/video-site/backend/internal/drives"
+	"github.com/video-site/backend/internal/scopedproxy"
 	"github.com/video-site/backend/internal/streamhttp"
 )
 
@@ -114,7 +115,10 @@ func (d *Driver) Init(ctx context.Context) error {
 	if err := cr.FromCookie(d.cookie); err != nil {
 		return fmt.Errorf("parse cookie: %w", err)
 	}
-	d.client = sdk.New(sdk.UA(d.ua)).ImportCredential(cr)
+	d.client = sdk.New(
+		sdk.WithClient(scopedproxy.NewHTTPClient(0)),
+		sdk.UA(d.ua),
+	).ImportCredential(cr)
 	return d.client.LoginCheck()
 }
 
@@ -818,7 +822,7 @@ func (d *Driver) EnsureDir(ctx context.Context, pathFromRoot string) (string, er
 			return "", err
 		}
 		if childID == "" {
-			id, err := d.client.Mkdir(currentID, name)
+			id, err := d.mkdirContext(ctx, currentID, name)
 			if err != nil {
 				return "", fmt.Errorf("115 mkdir %s: %w", name, err)
 			}
@@ -827,6 +831,26 @@ func (d *Driver) EnsureDir(ctx context.Context, pathFromRoot string) (string, er
 		currentID = childID
 	}
 	return currentID, nil
+}
+
+// mkdirContext mirrors the SDK's Mkdir call while binding it to the caller's
+// context. Besides cancellation, this is what keeps crawler upload proxy scope
+// attached to the directory-creation request.
+func (d *Driver) mkdirContext(ctx context.Context, parentID, name string) (string, error) {
+	if d.client == nil || d.client.Client == nil {
+		return "", errors.New("115 client not initialized")
+	}
+	result := sdk.MkdirResp{}
+	resp, err := d.client.Client.R().
+		SetContext(ctx).
+		SetFormData(map[string]string{"pid": parentID, "cname": name}).
+		SetResult(&result).
+		ForceContentType("application/json;charset=UTF-8").
+		Post(sdk.ApiDirAdd)
+	if err = sdk.CheckErr(err, &result, resp); err != nil {
+		return "", err
+	}
+	return string(result.CategoryID), nil
 }
 
 func (d *Driver) findChildDir(ctx context.Context, parent, name string) (string, error) {

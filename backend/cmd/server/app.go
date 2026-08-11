@@ -70,7 +70,7 @@ type App struct {
 	fingerprintQueueMu  sync.Mutex
 	fingerprintQueueing map[string]bool
 
-	// crawlerUploadRunning 去重"保存上传目标后检查本地未上传文件"的后台任务。
+	// crawlerUploadRunning 去重管理员手动发起的单爬虫上传任务。
 	crawlerUploadMu      sync.Mutex
 	crawlerUploadRunning map[string]bool
 

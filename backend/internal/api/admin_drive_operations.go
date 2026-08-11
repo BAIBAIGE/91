@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -22,6 +21,7 @@ import (
 	"github.com/video-site/backend/internal/drives/quark"
 	"github.com/video-site/backend/internal/drives/scriptcrawler"
 	"github.com/video-site/backend/internal/drives/wopan"
+	"github.com/video-site/backend/internal/scopedproxy"
 )
 
 func isCrawlerDriveKind(kind string) bool {
@@ -132,8 +132,12 @@ func mergeScriptCrawlerCredentials(existing *catalog.Drive, incoming map[string]
 		}
 		value := strings.TrimSpace(v)
 		switch key {
-		case "proxy":
-			proxy, err := normalizeCrawlerProxyURL(value, "脚本爬虫")
+		case "proxy", "upload_proxy":
+			label := "脚本爬虫"
+			if key == "upload_proxy" {
+				label = "脚本爬虫上传"
+			}
+			proxy, err := normalizeCrawlerProxyURL(value, label)
 			if err != nil {
 				return nil, err
 			}
@@ -180,20 +184,14 @@ func mergeScriptCrawlerCredentials(existing *catalog.Drive, incoming map[string]
 }
 
 func normalizeCrawlerProxyURL(raw, label string) (string, error) {
-	proxy := strings.TrimSpace(raw)
-	if proxy == "" {
-		return "", nil
-	}
-	u, err := url.Parse(proxy)
-	if err != nil || u.Scheme == "" || u.Host == "" {
-		return "", fmt.Errorf("%s 代理地址格式无效，请填写类似 http://127.0.0.1:7890 的地址", label)
-	}
-	switch strings.ToLower(u.Scheme) {
-	case "http", "https", "socks5", "socks5h":
+	proxy, err := scopedproxy.Normalize(raw)
+	if err == nil {
 		return proxy, nil
-	default:
+	}
+	if errors.Is(err, scopedproxy.ErrUnsupportedScheme) {
 		return "", fmt.Errorf("%s 代理地址仅支持 http://、https://、socks5:// 或 socks5h://", label)
 	}
+	return "", fmt.Errorf("%s 代理地址格式无效，请填写类似 http://127.0.0.1:7890 的地址", label)
 }
 
 // handleGetDriveCredentials returns the stored values only when an authenticated
