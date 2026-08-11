@@ -12,6 +12,7 @@ import {
 
 export type SettingsDraft = {
   nightlyStartTime: string;
+  nightlyTimezone: string;
   builtinTagsEnabled: boolean;
 };
 
@@ -19,6 +20,7 @@ export type VisualField = keyof SettingsDraft;
 
 export const DEFAULT_DRAFT: SettingsDraft = {
   nightlyStartTime: "01:00",
+  nightlyTimezone: "Etc/UTC",
   builtinTagsEnabled: true,
 };
 
@@ -41,6 +43,16 @@ export function isValidStartTime(value: string) {
   return hour >= 0 && hour <= 23 && minute >= 0 && minute <= 59;
 }
 
+export function isValidTimezone(value: string) {
+  if (value === "Local" || value === "" || value !== value.trim()) return false;
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: value }).format(0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function configDocument(source: string) {
   const document = parseDocument(source, {
     keepSourceTokens: true,
@@ -57,6 +69,15 @@ export function configDocument(source: string) {
 }
 
 function draftFromDocument(document: ReturnType<typeof configDocument>): SettingsDraft {
+  const nightlyNode = document.get("nightly", true);
+  if (
+    nightlyNode !== undefined &&
+    nightlyNode !== null &&
+    !isMap(nightlyNode) &&
+    !(isScalar(nightlyNode) && nightlyNode.value === null)
+  ) {
+    throw new Error("nightly 必须是映射对象");
+  }
   const configuredStart = document.getIn(["nightly", "start_time"]);
   let nightlyStartTime = DEFAULT_DRAFT.nightlyStartTime;
   if (configuredStart !== undefined && configuredStart !== null) {
@@ -69,6 +90,15 @@ function draftFromDocument(document: ReturnType<typeof configDocument>): Setting
     if (typeof legacyHour === "number" && legacyHour >= 1 && legacyHour <= 23) {
       nightlyStartTime = `${String(legacyHour).padStart(2, "0")}:00`;
     }
+  }
+
+  const configuredTimezone = document.getIn(["nightly", "timezone"]);
+  let nightlyTimezone = DEFAULT_DRAFT.nightlyTimezone;
+  if (configuredTimezone !== undefined && configuredTimezone !== null) {
+    if (typeof configuredTimezone !== "string" || !isValidTimezone(configuredTimezone)) {
+      throw new Error("nightly.timezone 必须是有效的 IANA 时区名");
+    }
+    nightlyTimezone = configuredTimezone;
   }
 
   const tagsNode = document.get("tags", true);
@@ -88,7 +118,7 @@ function draftFromDocument(document: ReturnType<typeof configDocument>): Setting
     }
     builtinTagsEnabled = configuredBuiltinTags;
   }
-  return { nightlyStartTime, builtinTagsEnabled };
+  return { nightlyStartTime, nightlyTimezone, builtinTagsEnabled };
 }
 
 export function parseConfig(source: string) {
@@ -167,14 +197,15 @@ function insertLinesAtBoundary(
   };
 }
 
-function replacePairValue(
+function replaceStringPairValue(
   source: string,
   pair: ParsedPair,
-  value: string
+  value: string,
+  path: string
 ): SourceEdit {
   const node = pair.value;
   if (node && !isScalar(node)) {
-    throw new Error("nightly.start_time 必须是字符串值");
+    throw new Error(`${path} 必须是字符串值`);
   }
 
   if (node?.range && node.range[0] < node.range[1]) {
@@ -186,13 +217,13 @@ function replacePairValue(
   }
 
   if (!isScalar(pair.key)) {
-    throw new Error("无法定位 nightly.start_time 的键名");
+    throw new Error(`无法定位 ${path} 的键名`);
   }
-  const keyRange = requiredRange(pair.key, "nightly.start_time");
+  const keyRange = requiredRange(pair.key, path);
   const endOfLine = lineEndIncludingBreak(source, keyRange[1]);
   const colon = source.indexOf(":", keyRange[1]);
   if (colon === -1 || colon >= endOfLine) {
-    throw new Error("无法定位 nightly.start_time 的值");
+    throw new Error(`无法定位 ${path} 的值`);
   }
 
   let whitespaceEnd = colon + 1;
@@ -308,10 +339,11 @@ function insertAfterEmptyMapKey(
   return insertLinesAtBoundary(source, lineEnd, [`${parentIndent}  ${entry}`]);
 }
 
-function addNightlySection(
+function addNightlyStringSection(
   source: string,
   document: ReturnType<typeof configDocument>,
   root: ParsedMap | null,
+  key: "start_time" | "timezone",
   value: string
 ): SourceEdit {
   const renderedValue = yamlString(value);
@@ -319,14 +351,14 @@ function addNightlySection(
     return insertFlowMapEntry(
       source,
       root,
-      `nightly: { start_time: ${renderedValue} }`
+      `nightly: { ${key}: ${renderedValue} }`
     );
   }
 
   const position = root?.range?.[2] ?? document.range?.[1] ?? source.length;
   return insertLinesAtBoundary(source, position, [
     "nightly:",
-    `  start_time: ${renderedValue}`,
+    `  ${key}: ${renderedValue}`,
   ]);
 }
 
@@ -337,7 +369,9 @@ function nightlyStartTimeEdits(
 ): SourceEdit[] {
   const root = isMap(document.contents) ? (document.contents as ParsedMap) : null;
   const nightlyPair = root ? findPair(root, "nightly") : undefined;
-  if (!nightlyPair) return [addNightlySection(source, document, root, value)];
+  if (!nightlyPair) {
+    return [addNightlyStringSection(source, document, root, "start_time", value)];
+  }
 
   const nightlyNode = nightlyPair.value;
   if (
@@ -372,18 +406,72 @@ function nightlyStartTimeEdits(
   const startTimePair = findPair(nightly, "start_time");
   const legacyHourPair = findPair(nightly, "cron_hour");
   if (startTimePair) {
-    const edits = [replacePairValue(source, startTimePair, value)];
+    const edits = [
+      replaceStringPairValue(source, startTimePair, value, "nightly.start_time"),
+    ];
     if (legacyHourPair) edits.push(removeMapPair(source, nightly, legacyHourPair));
     return edits;
   }
   if (legacyHourPair) {
     return [
       replacePairKey(legacyHourPair, "start_time"),
-      replacePairValue(source, legacyHourPair, value),
+      replaceStringPairValue(source, legacyHourPair, value, "nightly.start_time"),
     ];
   }
 
   const entry = `start_time: ${yamlString(value)}`;
+  return [
+    isFlowMap(nightly)
+      ? insertFlowMapEntry(source, nightly, entry)
+      : insertBlockMapEntry(source, nightly, entry),
+  ];
+}
+
+function nightlyTimezoneEdits(
+  source: string,
+  document: ReturnType<typeof configDocument>,
+  value: string
+): SourceEdit[] {
+  const root = isMap(document.contents) ? (document.contents as ParsedMap) : null;
+  const nightlyPair = root ? findPair(root, "nightly") : undefined;
+  if (!nightlyPair) {
+    return [addNightlyStringSection(source, document, root, "timezone", value)];
+  }
+
+  const nightlyNode = nightlyPair.value;
+  if (
+    !nightlyNode ||
+    (isScalar(nightlyNode) &&
+      nightlyNode.value === null &&
+      (!nightlyNode.range || nightlyNode.range[0] === nightlyNode.range[1]))
+  ) {
+    return [
+      insertAfterEmptyMapKey(source, nightlyPair, `timezone: ${yamlString(value)}`),
+    ];
+  }
+  if (isScalar(nightlyNode) && nightlyNode.value === null) {
+    const range = requiredRange(nightlyNode, "nightly");
+    return [
+      {
+        start: range[0],
+        end: range[1],
+        text: `{ timezone: ${yamlString(value)} }`,
+      },
+    ];
+  }
+  if (!isMap(nightlyNode)) {
+    throw new Error("nightly 必须是映射对象");
+  }
+
+  const nightly = nightlyNode as ParsedMap;
+  const timezonePair = findPair(nightly, "timezone");
+  if (timezonePair) {
+    return [
+      replaceStringPairValue(source, timezonePair, value, "nightly.timezone"),
+    ];
+  }
+
+  const entry = `timezone: ${yamlString(value)}`;
   return [
     isFlowMap(nightly)
       ? insertFlowMapEntry(source, nightly, entry)
@@ -540,6 +628,13 @@ export function applyVisualFields(
       nightlyStartTimeEdits(updated, document, draft.nightlyStartTime)
     );
   }
+  if (fields.has("nightlyTimezone")) {
+    const document = configDocument(updated);
+    updated = applySourceEdits(
+      updated,
+      nightlyTimezoneEdits(updated, document, draft.nightlyTimezone)
+    );
+  }
   if (fields.has("builtinTagsEnabled")) {
     const document = configDocument(updated);
     updated = applySourceEdits(
@@ -558,6 +653,9 @@ export function changedVisualFields(saved: SettingsDraft, draft: SettingsDraft) 
   const fields = new Set<VisualField>();
   if (saved.nightlyStartTime !== draft.nightlyStartTime) {
     fields.add("nightlyStartTime");
+  }
+  if (saved.nightlyTimezone !== draft.nightlyTimezone) {
+    fields.add("nightlyTimezone");
   }
   if (saved.builtinTagsEnabled !== draft.builtinTagsEnabled) {
     fields.add("builtinTagsEnabled");

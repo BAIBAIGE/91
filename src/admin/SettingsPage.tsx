@@ -30,6 +30,7 @@ import {
   applyVisualFields,
   changedVisualFields,
   isValidStartTime,
+  isValidTimezone,
   parseConfig,
   type SettingsDraft,
   type VisualField,
@@ -49,6 +50,16 @@ type PendingSave = {
 
 type EditorTab = "visual" | "source";
 type SectionID = "config-automation" | "config-tags";
+
+const NIGHTLY_TIMEZONE_OPTIONS = [
+  "Asia/Shanghai",
+  "Etc/UTC",
+  "Asia/Tokyo",
+  "Asia/Singapore",
+  "Europe/London",
+  "America/New_York",
+  "America/Los_Angeles",
+] as const;
 
 const SECTION_META: Array<{
   id: SectionID;
@@ -95,6 +106,10 @@ export function SettingsPage() {
   const dirtyRef = useRef(dirty);
   dirtyRef.current = dirty;
   const timeValid = isValidStartTime(draft.nightlyStartTime);
+  const timezoneValid = isValidTimezone(draft.nightlyTimezone);
+  const timezoneIsBuiltIn = NIGHTLY_TIMEZONE_OPTIONS.some(
+    (timezone) => timezone === draft.nightlyTimezone
+  );
   const controlsDisabled = loading || saving || loaded === null;
   const statusClass = loading
     ? ""
@@ -197,7 +212,7 @@ export function SettingsPage() {
 
   async function prepareSave(event: FormEvent) {
     event.preventDefault();
-    if (!loaded || !dirty || !timeValid || sourceError || saving) return;
+    if (!loaded || !dirty || !timeValid || !timezoneValid || sourceError || saving) return;
     try {
       parseConfig(workingYAML);
     } catch (error) {
@@ -429,20 +444,23 @@ export function SettingsPage() {
                   index="01"
                   icon={<Clock3 size={16} />}
                   title="定时任务"
-                  description="控制每日扫盘和库内视频维护时间"
+                  description="按指定时区控制每日扫盘和库内视频维护时间"
                 >
                   <SettingsRow
                     label="启动时间"
                     htmlFor="nightly-start-time"
                     layout="inline"
                   >
-                    <div className="admin-config-control admin-config-control--time">
+                    <div className="admin-config-control admin-config-control--picker">
                       <div
-                        className={`admin-config-time-field${
+                        className={`admin-config-picker-field admin-config-picker-field--time${
                           !timeValid ? " is-invalid" : ""
                         }${controlsDisabled ? " is-disabled" : ""}`}
                       >
-                        <span className="admin-config-time-field__value" aria-hidden="true">
+                        <span
+                          className="admin-config-picker-field__value admin-config-picker-field__value--time"
+                          aria-hidden="true"
+                        >
                           {draft.nightlyStartTime || "--:--"}
                         </span>
                         <input
@@ -468,6 +486,49 @@ export function SettingsPage() {
                       {!timeValid && (
                         <span id="nightly-start-time-hint" className="is-error">
                           请选择有效时间
+                        </span>
+                      )}
+                    </div>
+                  </SettingsRow>
+                  <SettingsRow
+                    label="任务时区"
+                    htmlFor="nightly-timezone"
+                    layout="inline"
+                  >
+                    <div className="admin-config-control admin-config-control--picker">
+                      <div
+                        className={`admin-config-picker-field admin-config-picker-field--timezone${
+                          !timezoneValid ? " is-invalid" : ""
+                        }${controlsDisabled ? " is-disabled" : ""}`}
+                      >
+                        <span className="admin-config-picker-field__value" aria-hidden="true">
+                          {draft.nightlyTimezone || "--"}
+                        </span>
+                        <select
+                          id="nightly-timezone"
+                          value={draft.nightlyTimezone}
+                          disabled={controlsDisabled}
+                          aria-invalid={!timezoneValid}
+                          aria-describedby={!timezoneValid ? "nightly-timezone-hint" : undefined}
+                          onChange={(event) =>
+                            updateVisualField("nightlyTimezone", event.target.value)
+                          }
+                        >
+                          {!timezoneIsBuiltIn && (
+                            <option value={draft.nightlyTimezone}>
+                              {draft.nightlyTimezone || "无效时区"}
+                            </option>
+                          )}
+                          {NIGHTLY_TIMEZONE_OPTIONS.map((timezone) => (
+                            <option key={timezone} value={timezone}>
+                              {timezone}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      {!timezoneValid && (
+                        <span id="nightly-timezone-hint" className="is-error">
+                          请输入有效的 IANA 时区名
                         </span>
                       )}
                     </div>
@@ -548,7 +609,13 @@ export function SettingsPage() {
           <button
             type="submit"
             className="admin-config-actions__button"
-            disabled={controlsDisabled || !dirty || !timeValid || Boolean(sourceError)}
+            disabled={
+              controlsDisabled ||
+              !dirty ||
+              !timeValid ||
+              !timezoneValid ||
+              Boolean(sourceError)
+            }
             title="预览并保存配置"
             aria-label="预览并保存配置"
           >

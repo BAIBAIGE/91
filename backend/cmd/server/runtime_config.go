@@ -27,9 +27,9 @@ func (a *App) applyLiveConfig(ctx context.Context, settings config.LiveSettings)
 		return nil
 	}
 	if a.nightlyRunner != nil {
-		// The configuration parser already validated and normalized this value.
-		// Runner validates again at its own boundary as a defensive invariant.
-		if err := a.nightlyRunner.UpdateStartTime(settings.NightlyStartTime); err != nil {
+		// The configuration parser already validated and normalized these values.
+		// Runner validates again and swaps the pair atomically at its own boundary.
+		if err := a.nightlyRunner.UpdateSchedule(settings.NightlyStartTime, settings.NightlyTimezone); err != nil {
 			return fmt.Errorf("update nightly schedule: %w", err)
 		}
 	}

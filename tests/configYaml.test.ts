@@ -11,12 +11,13 @@ import {
 import { buildConfigDiff } from "../src/admin/settings/configDiff";
 
 const nightlyStartTime = new Set<VisualField>(["nightlyStartTime"]);
+const nightlyTimezone = new Set<VisualField>(["nightlyTimezone"]);
 const builtinTagsEnabled = new Set<VisualField>(["builtinTagsEnabled"]);
 
 function updateStartTime(source: string, value = "02:00") {
   return applyVisualFields(
     source,
-    { nightlyStartTime: value, builtinTagsEnabled: true },
+    { nightlyStartTime: value, nightlyTimezone: "Etc/UTC", builtinTagsEnabled: true },
     nightlyStartTime
   );
 }
@@ -24,8 +25,16 @@ function updateStartTime(source: string, value = "02:00") {
 function updateBuiltinTags(source: string, value = false) {
   return applyVisualFields(
     source,
-    { nightlyStartTime: "01:00", builtinTagsEnabled: value },
+    { nightlyStartTime: "01:00", nightlyTimezone: "Etc/UTC", builtinTagsEnabled: value },
     builtinTagsEnabled
+  );
+}
+
+function updateTimezone(source: string, value = "Asia/Shanghai") {
+  return applyVisualFields(
+    source,
+    { nightlyStartTime: "01:00", nightlyTimezone: value, builtinTagsEnabled: true },
+    nightlyTimezone
   );
 }
 
@@ -120,10 +129,41 @@ test("visual config returns the exact source when no visual field is dirty", () 
   assert.equal(
     applyVisualFields(
       source,
-      { nightlyStartTime: "02:00", builtinTagsEnabled: false },
+      { nightlyStartTime: "02:00", nightlyTimezone: "Etc/UTC", builtinTagsEnabled: false },
       new Set()
     ),
     source
+  );
+});
+
+test("visual config reads and validates the explicit nightly timezone", () => {
+  assert.equal(parseConfig("{}\n").draft.nightlyTimezone, "Etc/UTC");
+  assert.equal(
+    parseConfig("nightly:\n  timezone: Asia/Shanghai\n").draft.nightlyTimezone,
+    "Asia/Shanghai"
+  );
+  assert.throws(
+    () => parseConfig("nightly:\n  timezone: Local\n"),
+    /nightly\.timezone 必须是有效的 IANA 时区名/
+  );
+  assert.throws(
+    () => parseConfig("nightly:\n  timezone: Mars\/Olympus\n"),
+    /nightly\.timezone 必须是有效的 IANA 时区名/
+  );
+});
+
+test("visual config edits only the timezone scalar and preserves YAML style", () => {
+  assert.equal(
+    updateTimezone('nightly:\n  timezone: "Etc/UTC" # keep\n'),
+    'nightly:\n  timezone: "Asia/Shanghai" # keep\n'
+  );
+  assert.equal(
+    updateTimezone("nightly: { start_time: 01:00 }\ntail: ok\n"),
+    "nightly: { start_time: 01:00, timezone: Asia/Shanghai }\ntail: ok\n"
+  );
+  assert.equal(
+    updateTimezone("head: ok\n"),
+    "head: ok\nnightly:\n  timezone: Asia/Shanghai\n"
   );
 });
 
@@ -171,23 +211,45 @@ test("visual config inserts the built-in tag field into block, flow, and empty m
 });
 
 test("visual config applies multiple missing YAML fields without overlapping edits", () => {
-  const fields = new Set<VisualField>(["nightlyStartTime", "builtinTagsEnabled"]);
+  const fields = new Set<VisualField>([
+    "nightlyStartTime",
+    "nightlyTimezone",
+    "builtinTagsEnabled",
+  ]);
   assert.equal(
     applyVisualFields(
       "head: ok\n",
-      { nightlyStartTime: "03:30", builtinTagsEnabled: false },
+      {
+        nightlyStartTime: "03:30",
+        nightlyTimezone: "Asia/Shanghai",
+        builtinTagsEnabled: false,
+      },
       fields
     ),
-    "head: ok\nnightly:\n  start_time: 03:30\ntags:\n  builtin_pack_enabled: false\n"
+    "head: ok\nnightly:\n  start_time: 03:30\n  timezone: Asia/Shanghai\ntags:\n  builtin_pack_enabled: false\n"
   );
 });
 
 test("changed visual fields includes the real config.yaml built-in tag field", () => {
   assert.deepEqual(
     changedVisualFields(
-      { nightlyStartTime: "01:00", builtinTagsEnabled: true },
-      { nightlyStartTime: "01:00", builtinTagsEnabled: false }
+      { nightlyStartTime: "01:00", nightlyTimezone: "Etc/UTC", builtinTagsEnabled: true },
+      { nightlyStartTime: "01:00", nightlyTimezone: "Etc/UTC", builtinTagsEnabled: false }
     ),
     new Set<VisualField>(["builtinTagsEnabled"])
+  );
+});
+
+test("changed visual fields includes the nightly timezone", () => {
+  assert.deepEqual(
+    changedVisualFields(
+      { nightlyStartTime: "01:00", nightlyTimezone: "Etc/UTC", builtinTagsEnabled: true },
+      {
+        nightlyStartTime: "01:00",
+        nightlyTimezone: "Asia/Shanghai",
+        builtinTagsEnabled: true,
+      }
+    ),
+    new Set<VisualField>(["nightlyTimezone"])
   );
 });

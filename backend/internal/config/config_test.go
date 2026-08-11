@@ -232,6 +232,9 @@ func TestLoadDefaultNightlyCronHour(t *testing.T) {
 	if cfg.Nightly.StartTime != DefaultNightlyStartTime {
 		t.Fatalf("nightly start time = %q, want %q", cfg.Nightly.StartTime, DefaultNightlyStartTime)
 	}
+	if cfg.Nightly.Timezone != DefaultNightlyTimezone {
+		t.Fatalf("nightly timezone = %q, want %q", cfg.Nightly.Timezone, DefaultNightlyTimezone)
+	}
 }
 
 func TestParseNightlyStartTime(t *testing.T) {
@@ -241,6 +244,19 @@ func TestParseNightlyStartTime(t *testing.T) {
 	}
 	if cfg.Nightly.StartTime != "00:15" {
 		t.Fatalf("start time = %q", cfg.Nightly.StartTime)
+	}
+	if cfg.Nightly.Timezone != DefaultNightlyTimezone {
+		t.Fatalf("default timezone = %q", cfg.Nightly.Timezone)
+	}
+}
+
+func TestParseNightlyTimezone(t *testing.T) {
+	cfg, err := Parse([]byte("nightly:\n  timezone: Asia/Shanghai\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Nightly.Timezone != "Asia/Shanghai" {
+		t.Fatalf("timezone = %q", cfg.Nightly.Timezone)
 	}
 }
 
@@ -270,6 +286,17 @@ func TestParseRejectsInvalidNightlyStartTime(t *testing.T) {
 	_, err := Parse([]byte("nightly:\n  start_time: \"24:00\"\n"))
 	if !errors.Is(err, ErrInvalidNightlyStartTime) {
 		t.Fatalf("error = %v, want ErrInvalidNightlyStartTime", err)
+	}
+}
+
+func TestParseRejectsInvalidNightlyTimezone(t *testing.T) {
+	for _, timezone := range []string{"Local", "Mars/Olympus"} {
+		t.Run(timezone, func(t *testing.T) {
+			_, err := Parse([]byte("nightly:\n  timezone: \"" + timezone + "\"\n"))
+			if !errors.Is(err, ErrInvalidNightlyTimezone) {
+				t.Fatalf("error = %v, want ErrInvalidNightlyTimezone", err)
+			}
+		})
 	}
 }
 

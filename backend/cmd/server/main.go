@@ -468,7 +468,7 @@ func main() {
 	adminServer.Register(r)
 	mountFrontend(r)
 
-	// 凌晨流水线：每天按后台可热更新的 HH:mm 触发一次，串行跑
+	// 凌晨流水线：每天按后台可热更新的 HH:mm + IANA 时区触发一次，串行跑
 	//   Phase 1 扫所有非爬虫 / localupload 网盘 + 删除检测 + 入队封面/预览视频
 	//   Phase 2 脚本爬虫 + 入队预览视频
 	//   Phase 3 爬虫本地视频 → 云盘上传
@@ -477,9 +477,11 @@ func main() {
 	// 标签匹配不在夜间流水线中全库重算；新视频入库和管理员修改标签规则时按事件刷新。
 	// admin "扫描所有网盘" 使用同一个 Runner 的独立 scan-all 模式，只运行
 	// Phase 1 和 Phase 5，不触发爬虫、迁移或恢复，也不占用当天的定时执行标记。
+	liveSettings := app.liveConfigSettings()
 	app.nightlyRunner = nightly.New(nightly.Config{
 		Settings:              cat,
-		StartTime:             app.liveConfigSettings().NightlyStartTime,
+		StartTime:             liveSettings.NightlyStartTime,
+		Timezone:              liveSettings.NightlyTimezone,
 		ListScanTargets:       app.listScanTargetIDs,
 		RunScan:               app.runScan,
 		ListCrawlerDrives:     app.listCrawlerDriveIDs,

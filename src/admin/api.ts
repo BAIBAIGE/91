@@ -1256,6 +1256,7 @@ export type ConfigSaveResult = {
   restartRequired: boolean;
   settings: {
     nightlyStartTime: string;
+    nightlyTimezone: string;
     builtinTagsEnabled: boolean;
   };
 };

@@ -34,6 +34,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/video-site/backend/internal/schedule"
 )
 
 const (
@@ -69,6 +71,9 @@ type Config struct {
 	// StartTime is the preferred daily schedule in 24-hour HH:mm form. It can
 	// represent midnight and takes precedence over CronHour/CronMinute.
 	StartTime string
+	// Timezone is the explicit IANA timezone used to interpret StartTime and
+	// the persisted last-run calendar date. It never changes the host timezone.
+	Timezone string
 
 	// ListScanTargets returns the drive IDs to run Phase 1 on, in deterministic
 	// order. Should exclude crawler and localupload drives.
@@ -126,7 +131,8 @@ type Runner struct {
 	trigger         chan runMode  // buffered(1); mutually exclusive manual requests
 	scheduleChanged chan struct{} // buffered(1); wake the natural scheduler
 	runMu           sync.Mutex    // prevents overlapping pipeline runs
-	scheduleMu      sync.RWMutex  // protects cfg CronHour/CronMinute/StartTime
+	scheduleMu      sync.RWMutex  // protects schedule fields and location
+	location        *time.Location
 
 	stateMu        sync.Mutex
 	running        bool
@@ -161,8 +167,18 @@ func New(cfg Config) *Runner {
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
+	timezone := strings.TrimSpace(cfg.Timezone)
+	if timezone == "" {
+		timezone = schedule.DefaultTimezone
+	}
+	timezone, location, err := schedule.LoadTimezone(timezone)
+	if err != nil {
+		timezone, location, _ = schedule.LoadTimezone(schedule.DefaultTimezone)
+	}
+	cfg.Timezone = timezone
 	return &Runner{
 		cfg:             cfg,
+		location:        location,
 		trigger:         make(chan runMode, 1),
 		scheduleChanged: make(chan struct{}, 1),
 	}
@@ -174,7 +190,8 @@ func New(cfg Config) *Runner {
 func (r *Runner) Run(ctx context.Context) {
 	t := time.NewTicker(pollInterval)
 	defer t.Stop()
-	log.Printf("[nightly] runner started; start_time=%s", r.StartTime())
+	startTime, timezone := r.Schedule()
+	log.Printf("[nightly] runner started; start_time=%s timezone=%s", startTime, timezone)
 	for {
 		select {
 		case <-ctx.Done():
@@ -183,7 +200,8 @@ func (r *Runner) Run(ctx context.Context) {
 		case <-t.C:
 			r.tryNaturalRun(ctx)
 		case <-r.scheduleChanged:
-			log.Printf("[nightly] schedule updated; start_time=%s", r.StartTime())
+			startTime, timezone := r.Schedule()
+			log.Printf("[nightly] schedule updated; start_time=%s timezone=%s", startTime, timezone)
 			// Re-evaluate immediately so saving the current minute does not have
 			// to wait for the next heartbeat and accidentally miss today's run.
 			r.tryNaturalRun(ctx)
@@ -207,11 +225,40 @@ func (r *Runner) UpdateStartTime(value string) error {
 	r.cfg.StartTime = normalized
 	r.scheduleMu.Unlock()
 
+	r.signalScheduleChanged()
+	return nil
+}
+
+// UpdateSchedule atomically changes both components of the natural daily
+// schedule. Validation completes before the lock is acquired, so a rejected
+// update cannot leave a mixed start-time/timezone pair behind.
+func (r *Runner) UpdateSchedule(startTime, timezone string) error {
+	hour, minute, normalizedStartTime, err := parseStartTime(startTime)
+	if err != nil {
+		return err
+	}
+	normalizedTimezone, location, err := schedule.LoadTimezone(timezone)
+	if err != nil {
+		return fmt.Errorf("invalid nightly timezone %q: %w", timezone, err)
+	}
+
+	r.scheduleMu.Lock()
+	r.cfg.CronHour = hour
+	r.cfg.CronMinute = minute
+	r.cfg.StartTime = normalizedStartTime
+	r.cfg.Timezone = normalizedTimezone
+	r.location = location
+	r.scheduleMu.Unlock()
+
+	r.signalScheduleChanged()
+	return nil
+}
+
+func (r *Runner) signalScheduleChanged() {
 	select {
 	case r.scheduleChanged <- struct{}{}:
 	default:
 	}
-	return nil
 }
 
 // StartTime returns the current canonical HH:mm schedule.
@@ -219,6 +266,20 @@ func (r *Runner) StartTime() string {
 	r.scheduleMu.RLock()
 	defer r.scheduleMu.RUnlock()
 	return r.cfg.StartTime
+}
+
+// Timezone returns the current explicit IANA schedule timezone.
+func (r *Runner) Timezone() string {
+	r.scheduleMu.RLock()
+	defer r.scheduleMu.RUnlock()
+	return r.cfg.Timezone
+}
+
+// Schedule returns a consistent start-time/timezone pair.
+func (r *Runner) Schedule() (string, string) {
+	r.scheduleMu.RLock()
+	defer r.scheduleMu.RUnlock()
+	return r.cfg.StartTime, r.cfg.Timezone
 }
 
 // TriggerScanAll asks the runner to scan every configured non-crawler cloud
@@ -300,10 +361,12 @@ func (r *Runner) Status() Status {
 
 // tryNaturalRun checks the cron decision and runs the pipeline if due today.
 func (r *Runner) tryNaturalRun(ctx context.Context) {
-	now := r.cfg.Now()
+	instant := r.cfg.Now()
 	r.scheduleMu.RLock()
+	location := r.location
 	hour, minute := r.cfg.CronHour, r.cfg.CronMinute
 	r.scheduleMu.RUnlock()
+	now := instant.In(location)
 	if now.Hour() != hour || now.Minute() != minute {
 		return
 	}
@@ -316,7 +379,7 @@ func (r *Runner) tryNaturalRun(ctx context.Context) {
 		return
 	}
 	log.Printf("[nightly] natural cron trigger at %s", now.Format(time.RFC3339))
-	r.runModeLocked(ctx, runModeScheduled)
+	r.runModeLockedForDate(ctx, runModeScheduled, now.Format(dateLayout))
 }
 
 func parseStartTime(value string) (hour, minute int, normalized string, err error) {
@@ -336,6 +399,10 @@ func shouldRun(now time.Time, lastRunDate string) bool {
 // runModeLocked guards both execution modes against overlap. Runs have no
 // fixed duration limit and stop only when canceled or their phases complete.
 func (r *Runner) runModeLocked(ctx context.Context, mode runMode) {
+	r.runModeLockedForDate(ctx, mode, "")
+}
+
+func (r *Runner) runModeLockedForDate(ctx context.Context, mode runMode, scheduledDate string) {
 	component := "nightly"
 	execution := "scheduled"
 	if mode == runModeScanAll {
@@ -358,6 +425,11 @@ func (r *Runner) runModeLocked(ctx context.Context, mode runMode) {
 	}
 
 	started := r.cfg.Now()
+	if mode == runModeScheduled && scheduledDate == "" {
+		r.scheduleMu.RLock()
+		scheduledDate = started.In(r.location).Format(dateLayout)
+		r.scheduleMu.RUnlock()
+	}
 	runCtx, cancel := context.WithCancel(ctx)
 	r.markStarted(started, cancel)
 	defer func() {
@@ -384,8 +456,7 @@ func (r *Runner) runModeLocked(ctx context.Context, mode runMode) {
 	// Mark today as processed regardless of success/error. This is intentional:
 	// a partial / failing full pipeline should not automatically trigger again
 	// during the same scheduled minute. Scan-all returns above and never writes it.
-	dateStr := started.Format(dateLayout)
-	if err := r.cfg.Settings.SetSetting(ctx, settingLastRunDate, dateStr); err != nil {
+	if err := r.cfg.Settings.SetSetting(ctx, settingLastRunDate, scheduledDate); err != nil {
 		log.Printf("[nightly] persist last_run_date: %v", err)
 	}
 }

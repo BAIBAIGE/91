@@ -6,6 +6,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/video-site/backend/internal/schedule"
 )
 
 // stubSettings is an in-memory SettingStore for tests.
@@ -50,6 +52,9 @@ func TestNewAppliesDefaults(t *testing.T) {
 	if r.cfg.CronHour != 1 {
 		t.Errorf("CronHour zero-value should fall back to 1, got %d", r.cfg.CronHour)
 	}
+	if got := r.Timezone(); got != schedule.DefaultTimezone {
+		t.Errorf("Timezone zero-value = %q, want %q", got, schedule.DefaultTimezone)
+	}
 }
 
 func TestNewRejectsInvalidCronHour(t *testing.T) {
@@ -79,7 +84,7 @@ func TestNewPrefersExplicitStartTimeAndSupportsMidnight(t *testing.T) {
 
 func TestNaturalRunMatchesHourAndMinute(t *testing.T) {
 	settings := newStubSettings()
-	now := time.Date(2026, 5, 27, 0, 14, 0, 0, time.Local)
+	now := time.Date(2026, 5, 27, 0, 14, 0, 0, time.UTC)
 	var runs atomic.Int32
 	r := New(Config{
 		Settings:  settings,
@@ -104,7 +109,7 @@ func TestNaturalRunMatchesHourAndMinute(t *testing.T) {
 
 func TestUpdateStartTimeChangesNaturalSchedule(t *testing.T) {
 	settings := newStubSettings()
-	now := time.Date(2026, 5, 27, 23, 45, 0, 0, time.Local)
+	now := time.Date(2026, 5, 27, 23, 45, 0, 0, time.UTC)
 	var runs atomic.Int32
 	r := New(Config{
 		Settings:  settings,
@@ -132,6 +137,51 @@ func TestUpdateStartTimeChangesNaturalSchedule(t *testing.T) {
 	}
 	if got := r.StartTime(); got != "23:45" {
 		t.Fatalf("invalid update changed StartTime to %q", got)
+	}
+}
+
+func TestNaturalRunUsesConfiguredTimezoneAndPersistsItsCalendarDate(t *testing.T) {
+	settings := newStubSettings()
+	now := time.Date(2026, 5, 26, 18, 15, 0, 0, time.UTC)
+	var runs atomic.Int32
+	r := New(Config{
+		Settings:  settings,
+		StartTime: "02:15",
+		Timezone:  "Asia/Shanghai",
+		Now:       func() time.Time { return now },
+		ListScanTargets: func(context.Context) []string {
+			runs.Add(1)
+			return nil
+		},
+	})
+
+	r.tryNaturalRun(context.Background())
+	if got := runs.Load(); got != 1 {
+		t.Fatalf("runs at 02:15 Asia/Shanghai = %d, want 1", got)
+	}
+	if got, _ := settings.GetSetting(context.Background(), settingLastRunDate, ""); got != "2026-05-27" {
+		t.Fatalf("last_run_date = %q, want schedule-local date 2026-05-27", got)
+	}
+}
+
+func TestUpdateScheduleIsAtomicAndRejectsInvalidTimezone(t *testing.T) {
+	r := New(Config{
+		Settings:  newStubSettings(),
+		StartTime: "01:00",
+		Timezone:  "Etc/UTC",
+	})
+	if err := r.UpdateSchedule("02:30", "Asia/Shanghai"); err != nil {
+		t.Fatalf("update schedule: %v", err)
+	}
+	if startTime, timezone := r.Schedule(); startTime != "02:30" || timezone != "Asia/Shanghai" {
+		t.Fatalf("schedule = %s %s, want 02:30 Asia/Shanghai", startTime, timezone)
+	}
+
+	if err := r.UpdateSchedule("03:45", "Mars/Olympus"); err == nil {
+		t.Fatal("invalid timezone update unexpectedly succeeded")
+	}
+	if startTime, timezone := r.Schedule(); startTime != "02:30" || timezone != "Asia/Shanghai" {
+		t.Fatalf("rejected update partially changed schedule to %s %s", startTime, timezone)
 	}
 }
 

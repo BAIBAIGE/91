@@ -60,8 +60,20 @@ test("configuration panel is a dedicated protected admin route", () => {
 
 test("configuration panel groups typed fields from the real YAML document", () => {
   assert.match(pageSource, /title="定时任务"/);
-  assert.match(pageSource, /description="控制每日扫盘和库内视频维护时间"/);
+  assert.match(pageSource, /description="按指定时区控制每日扫盘和库内视频维护时间"/);
   assert.match(pageSource, /label="启动时间"/);
+  assert.match(pageSource, /label="任务时区"/);
+  assert.doesNotMatch(pageSource, /label="任务时区"\s+description=/);
+  assert.match(pageSource, /label="任务时区"[\s\S]*?layout="inline"/);
+  assert.match(pageSource, /<select[\s\S]*?id="nightly-timezone"/);
+  assert.match(
+    pageSource,
+    /admin-config-picker-field__value[\s\S]*?draft\.nightlyTimezone \|\| "--"/
+  );
+  assert.doesNotMatch(pageSource, /北京时间/);
+  assert.match(pageSource, /"Asia\/Shanghai"/);
+  assert.match(pageSource, /America\/Los_Angeles/);
+  assert.match(pageSource, /updateVisualField\("nightlyTimezone", event\.target\.value\)/);
   assert.doesNotMatch(pageSource, /24 小时制 · HH:mm/);
   assert.doesNotMatch(
     pageSource,
@@ -73,6 +85,9 @@ test("configuration panel groups typed fields from the real YAML document", () =
   assert.match(pageSource, /applyVisualFields/);
   assert.match(configYamlSource, /parseDocument/);
   assert.match(configYamlSource, /nightlyStartTimeEdits/);
+  assert.match(configYamlSource, /nightlyTimezoneEdits/);
+  assert.match(configYamlSource, /nightlyTimezone: string/);
+  assert.match(configYamlSource, /\["nightly", "timezone"\]/);
   assert.doesNotMatch(configYamlSource, /document\.toString/);
   assert.match(pageSource, /api\.getConfigYAML\(\)/);
   assert.match(pageSource, /api\.updateConfigYAML\(pendingSave\.after, pendingSave\.version\)/);
@@ -80,6 +95,7 @@ test("configuration panel groups typed fields from the real YAML document", () =
   assert.doesNotMatch(pageSource, /重复复核|duplicateReviewEnabled|duplicate_review_enabled/);
   assert.match(apiSource, /If-Match/);
   assert.match(apiSource, /ConfigConflictError/);
+  assert.match(apiSource, /nightlyTimezone: string/);
 });
 
 test("built-in tag changes use the configuration draft and shared save review", () => {
@@ -224,15 +240,39 @@ test("configuration panel follows the CLIProxy configuration workspace UI", () =
   );
   assert.match(
     adminCss,
-    /\.admin-config-time-field\s*\{[^}]*width:\s*72px;[^}]*min-height:\s*38px;[^}]*padding:\s*0 9px;/s
+    /\.admin-config-row__copy label\s*\{[^}]*align-self:\s*flex-start;[^}]*width:\s*fit-content;[^}]*max-width:\s*100%;/s
   );
   assert.match(
     adminCss,
-    /\.admin-config-time-field input\s*\{[^}]*position:\s*absolute;[^}]*inset:\s*0;[^}]*opacity:\s*0;/s
+    /\.admin-config-picker-field\s*\{[^}]*min-height:\s*38px;[^}]*border:\s*1px solid var\(--border-default\);/s
+  );
+  assert.match(
+    adminCss,
+    /\.admin-config-picker-field--time\s*\{[^}]*width:\s*72px;[^}]*padding:\s*0 9px;/s
+  );
+  assert.match(
+    adminCss,
+    /\.admin-config-picker-field--timezone\s*\{[^}]*width:\s*160px;[^}]*padding:\s*0 8px;/s
+  );
+  assert.match(
+    adminCss,
+    /\.admin-config-picker-field__value\s*\{[^}]*overflow:\s*hidden;[^}]*line-height:\s*1\.4;/s
+  );
+  assert.match(
+    adminCss,
+    /\.admin-config-picker-field > :is\(input, select\)\s*\{[^}]*position:\s*absolute;[^}]*inset:\s*0;[^}]*color-scheme:\s*dark;[^}]*opacity:\s*0;/s
+  );
+  assert.match(
+    adminCss,
+    /\.admin-config-picker-field select option\s*\{[^}]*background:\s*var\(--bg-elevated\);[^}]*color:\s*var\(--text-strong\);/s
+  );
+  assert.match(
+    adminCss,
+    /:root\[data-theme="pink"\][\s\S]*?\.admin-config-picker-field > :is\(input, select\)[\s\S]*?color-scheme:\s*light;/s
   );
   assert.match(
     pageSource,
-    /className="admin-config-time-field__value"[\s\S]*?draft\.nightlyStartTime \|\| "--:--"[\s\S]*?event\.currentTarget\.showPicker\(\)/
+    /admin-config-picker-field__value--time[\s\S]*?draft\.nightlyStartTime \|\| "--:--"[\s\S]*?event\.currentTarget\.showPicker\(\)/
   );
   assert.doesNotMatch(adminCss, /calendar-picker-indicator/);
   assert.match(
@@ -318,7 +358,7 @@ test("compact configuration rows stay inline on mobile", () => {
   );
   assert.match(
     adminCss,
-    /\.admin-config-row--inline \.admin-config-control--time\s*\{[^}]*justify-items:\s*end;/s
+    /\.admin-config-row--inline \.admin-config-control--picker\s*\{[^}]*justify-items:\s*end;/s
   );
   assert.match(
     adminCss,

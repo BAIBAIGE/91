@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/video-site/backend/internal/localpath"
+	"github.com/video-site/backend/internal/schedule"
 	"gopkg.in/yaml.v3"
 )
 
@@ -17,10 +18,12 @@ const (
 	DefaultAdminUsername      = "admin"
 	DefaultAdminPassword      = "admin123"
 	DefaultNightlyStartTime   = "01:00"
+	DefaultNightlyTimezone    = schedule.DefaultTimezone
 	DefaultBuiltinTagsEnabled = true
 )
 
 var ErrInvalidNightlyStartTime = errors.New("nightly start time must use HH:mm")
+var ErrInvalidNightlyTimezone = schedule.ErrInvalidTimezone
 
 var (
 	legacyDefaultVideoExtensions = []string{".mp4", ".mkv", ".mov", ".webm", ".avi"}
@@ -286,6 +289,9 @@ type Nightly struct {
 	// StartTime 是每日触发时间，采用严格的 24 小时 HH:mm 格式。该字段可在
 	// 管理后台热更新；配置面板与源码编辑器都直接读写 config.yaml。
 	StartTime string `yaml:"start_time,omitempty"`
+	// Timezone 是独立于宿主机系统时区的 IANA 时区名。调度时间和每日去重
+	// 日期均按该时区计算；修改它不会修改操作系统时区。
+	Timezone string `yaml:"timezone,omitempty"`
 	// CronHour 仅用于读取旧版配置。启动迁移会把它转换为 start_time。
 	CronHour int `yaml:"cron_hour,omitempty"`
 }
@@ -307,6 +313,14 @@ func NormalizeNightlyStartTime(value string) (string, error) {
 		return "", ErrInvalidNightlyStartTime
 	}
 	return parsed.Format("15:04"), nil
+}
+
+func NormalizeNightlyTimezone(value string) (string, error) {
+	normalized, _, err := schedule.LoadTimezone(value)
+	if err != nil {
+		return "", ErrInvalidNightlyTimezone
+	}
+	return normalized, nil
 }
 
 type RemoteUpload struct {
@@ -423,6 +437,15 @@ func (c *Config) applyDefaults() error {
 			return fmt.Errorf("nightly.start_time: %w", err)
 		}
 		c.Nightly.StartTime = startTime
+	}
+	if strings.TrimSpace(c.Nightly.Timezone) == "" {
+		c.Nightly.Timezone = DefaultNightlyTimezone
+	} else {
+		timezone, err := NormalizeNightlyTimezone(c.Nightly.Timezone)
+		if err != nil {
+			return fmt.Errorf("nightly.timezone: %w", err)
+		}
+		c.Nightly.Timezone = timezone
 	}
 	if c.Tags.BuiltinPackEnabled == nil {
 		enabled := DefaultBuiltinTagsEnabled

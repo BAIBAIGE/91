@@ -25,6 +25,7 @@ var ErrVersionConflict = errors.New("config.yaml changed since it was loaded")
 // safely apply without rebuilding its long-lived dependencies.
 type LiveSettings struct {
 	NightlyStartTime   string `json:"nightlyStartTime"`
+	NightlyTimezone    string `json:"nightlyTimezone"`
 	BuiltinTagsEnabled bool   `json:"builtinTagsEnabled"`
 }
 
@@ -77,6 +78,7 @@ func NewManager(path string) (*Manager, error) {
 func DefaultLiveSettings() LiveSettings {
 	return LiveSettings{
 		NightlyStartTime:   DefaultNightlyStartTime,
+		NightlyTimezone:    DefaultNightlyTimezone,
 		BuiltinTagsEnabled: DefaultBuiltinTagsEnabled,
 	}
 }
@@ -87,6 +89,7 @@ func liveSettingsFromConfig(cfg *Config) LiveSettings {
 	}
 	return LiveSettings{
 		NightlyStartTime:   cfg.Nightly.StartTime,
+		NightlyTimezone:    cfg.Nightly.Timezone,
 		BuiltinTagsEnabled: cfg.Tags.IsBuiltinPackEnabled(),
 	}
 }
@@ -225,10 +228,11 @@ func (m *Manager) UpdateAdminCredentials(username, password string) error {
 // MigrateLegacyRuntimeSettings performs a one-time schema migration into the
 // real YAML document. Existing YAML values always win over SQLite values;
 // cron_hour is converted to start_time and then removed to avoid two competing
-// fields. The built-in tag switch is migrated from SQLite when the YAML field
-// is absent. The retired duplicate-review switch is removed at the same
-// boundary; comments and unrelated unknown nodes are retained by yaml.Node
-// encoding.
+// fields. Missing timezone values are made explicit so future scheduling no
+// longer depends on the host. The built-in tag switch is migrated from SQLite
+// when the YAML field is absent. The retired duplicate-review switch is removed
+// at the same boundary; comments and unrelated unknown nodes are retained by
+// yaml.Node encoding.
 func (m *Manager) MigrateLegacyRuntimeSettings(legacy LegacyRuntimeSettings) (bool, error) {
 	if m == nil {
 		return false, errors.New("configuration manager is unavailable")
@@ -264,6 +268,10 @@ func (m *Manager) MigrateLegacyRuntimeSettings(legacy LegacyRuntimeSettings) (bo
 		changed = true
 	}
 	if deleteMappingValue(nightly, "cron_hour") {
+		changed = true
+	}
+	if _, exists := mappingValue(nightly, "timezone"); !exists {
+		setScalarValue(nightly, "timezone", parsed.Nightly.Timezone)
 		changed = true
 	}
 	tags, tagsExist := mappingValue(document, "tags")
@@ -454,6 +462,7 @@ func removeLiveDocumentValues(document any) {
 	}
 	removeNestedValue(root, "nightly", "start_time")
 	removeNestedValue(root, "nightly", "cron_hour")
+	removeNestedValue(root, "nightly", "timezone")
 	removeNestedValue(root, "tags", "builtin_pack_enabled")
 }
 

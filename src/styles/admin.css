@@ -5970,6 +5970,12 @@ body.admin-mobile-nav-open {
   line-height: 1.25;
 }
 
+.admin-config-row__copy label {
+  align-self: flex-start;
+  width: fit-content;
+  max-width: 100%;
+}
+
 .admin-config-row__copy p {
   max-width: 72ch;
   margin: 0;
@@ -6010,20 +6016,18 @@ body.admin-mobile-nav-open {
   color: var(--text-strong);
 }
 
-.admin-config-control--time {
+.admin-config-control--picker {
   display: grid;
   justify-items: end;
   gap: 7px;
 }
 
-.admin-config-time-field {
+.admin-config-picker-field {
   position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 72px;
   min-height: 38px;
-  padding: 0 9px;
   border: 1px solid var(--border-default);
   border-radius: 7px;
   background: color-mix(in srgb, var(--bg-elevated) 84%, transparent);
@@ -6035,37 +6039,54 @@ body.admin-mobile-nav-open {
     box-shadow 150ms ease;
 }
 
-.admin-config-time-field:not(.is-disabled):hover {
+.admin-config-picker-field--time {
+  width: 72px;
+  padding: 0 9px;
+}
+
+.admin-config-picker-field--timezone {
+  width: 160px;
+  padding: 0 8px;
+}
+
+.admin-config-picker-field:not(.is-disabled):hover {
   border-color: color-mix(in srgb, var(--text-strong) 38%, var(--border-default));
   background: var(--bg-surface);
 }
 
-.admin-config-time-field:focus-within {
+.admin-config-picker-field:focus-within {
   border-color: var(--text-strong);
   background: var(--bg-surface);
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--text-strong) 12%, transparent);
 }
 
-.admin-config-time-field.is-invalid {
+.admin-config-picker-field.is-invalid {
   border-color: var(--danger);
 }
 
-.admin-config-time-field.is-disabled {
+.admin-config-picker-field.is-disabled {
   cursor: not-allowed;
   opacity: 0.58;
 }
 
-.admin-config-time-field__value {
+.admin-config-picker-field__value {
+  min-width: 0;
+  overflow: hidden;
   color: var(--text-strong);
   font-size: 13px;
   font-weight: var(--weight-semibold);
-  font-variant-numeric: tabular-nums;
-  letter-spacing: 0.02em;
-  line-height: 1;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   pointer-events: none;
 }
 
-.admin-config-time-field input {
+.admin-config-picker-field__value--time {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+}
+
+.admin-config-picker-field > :is(input, select) {
   position: absolute;
   inset: 0;
   width: 100%;
@@ -6073,15 +6094,34 @@ body.admin-mobile-nav-open {
   margin: 0;
   padding: 0;
   border: 0;
+  background: var(--bg-elevated);
+  color: var(--text-strong);
+  color-scheme: dark;
+  font: inherit;
   cursor: pointer;
   opacity: 0;
 }
 
-.admin-config-time-field input:disabled {
+.admin-config-picker-field select option {
+  background: var(--bg-elevated);
+  color: var(--text-strong);
+}
+
+.admin-config-picker-field select option:checked {
+  background: var(--bg-surface);
+  color: var(--text-strong);
+}
+
+:root[data-theme="pink"] .admin-config-picker-field > :is(input, select),
+:root[data-theme="sky"] .admin-config-picker-field > :is(input, select) {
+  color-scheme: light;
+}
+
+.admin-config-picker-field > :is(input, select):disabled {
   cursor: not-allowed;
 }
 
-.admin-config-control--time > span.is-error {
+.admin-config-control--picker > span.is-error {
   color: var(--danger);
   font-size: 11px;
 }
@@ -6653,11 +6693,11 @@ body.admin-mobile-nav-open {
     align-items: center;
   }
 
-  .admin-config-control--time {
+  .admin-config-control--picker {
     justify-items: start;
   }
 
-  .admin-config-row--inline .admin-config-control--time {
+  .admin-config-row--inline .admin-config-control--picker {
     justify-items: end;
   }
 

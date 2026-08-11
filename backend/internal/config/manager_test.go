@@ -56,13 +56,16 @@ future_section:
 	if strings.Contains(text, "cron_hour:") || !strings.Contains(text, "start_time: 04:25") {
 		t.Fatalf("nightly schema was not migrated:\n%s", text)
 	}
+	if !strings.Contains(text, "timezone: Etc/UTC") {
+		t.Fatalf("nightly timezone was not made explicit:\n%s", text)
+	}
 	if strings.Contains(text, "duplicate_review_enabled") || strings.Contains(text, "dedupe:") {
 		t.Fatalf("retired duplicate-review setting remains:\n%s", text)
 	}
 	if !strings.Contains(text, "builtin_pack_enabled: false") {
 		t.Fatalf("built-in tag setting was not migrated:\n%s", text)
 	}
-	want := LiveSettings{NightlyStartTime: "04:25", BuiltinTagsEnabled: false}
+	want := LiveSettings{NightlyStartTime: "04:25", NightlyTimezone: "Etc/UTC", BuiltinTagsEnabled: false}
 	if got := manager.LiveSettings(); got != want {
 		t.Fatalf("live settings = %#v, want %#v", got, want)
 	}
@@ -79,7 +82,7 @@ func TestManagerYAMLValuesWinOverLegacySQLiteValues(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := LiveSettings{NightlyStartTime: "02:10", BuiltinTagsEnabled: true}
+	want := LiveSettings{NightlyStartTime: "02:10", NightlyTimezone: "Etc/UTC", BuiltinTagsEnabled: true}
 	if got := manager.LiveSettings(); got != want {
 		t.Fatalf("live settings = %#v, want YAML %#v", got, want)
 	}
@@ -118,7 +121,7 @@ func TestManagerReloadPublishesExternalValidChangeAndKeepsLastGoodOnError(t *tes
 	if err != nil || !changed {
 		t.Fatalf("reload changed=%v err=%v", changed, err)
 	}
-	want := LiveSettings{NightlyStartTime: "06:30", BuiltinTagsEnabled: true}
+	want := LiveSettings{NightlyStartTime: "06:30", NightlyTimezone: "Etc/UTC", BuiltinTagsEnabled: true}
 	if got := manager.LiveSettings(); got != want {
 		t.Fatalf("settings = %#v, want %#v", got, want)
 	}
@@ -138,7 +141,7 @@ func TestManagerReloadPublishesExternalValidChangeAndKeepsLastGoodOnError(t *tes
 
 func TestRestartRequiredComparisonIgnoresOnlyLivePaths(t *testing.T) {
 	before := []byte("nightly:\n  start_time: \"01:00\"\nfuture:\n  value: one\n")
-	liveOnly := []byte("nightly:\n  start_time: \"03:15\"\ntags:\n  builtin_pack_enabled: false\nfuture:\n  value: one\n")
+	liveOnly := []byte("nightly:\n  start_time: \"03:15\"\n  timezone: Asia/Shanghai\ntags:\n  builtin_pack_enabled: false\nfuture:\n  value: one\n")
 	if hasRestartRequiredChange(before, liveOnly) {
 		t.Fatal("live-only values were reported as restart-required")
 	}
