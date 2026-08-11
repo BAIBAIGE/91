@@ -6,9 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
+	"net/http/httptrace"
 	"strings"
+	"sync"
 	"time"
 
 	sdk "github.com/SheltonZhu/115driver/pkg/driver"
@@ -18,15 +21,18 @@ import (
 )
 
 const (
-	p115MultipartThreshold      int64 = 10 * 1024 * 1024
-	p115MultipartTargetPartSize int64 = 8 * 1024 * 1024
-	p115MultipartMaxParts             = 10000
-	p115MultipartPartAttempts         = 3
-	p115MultipartAbortTimeout         = 30 * time.Second
-	p115OSSTokenRefreshBefore         = 10 * time.Minute
+	p115MultipartThreshold             int64 = 10 * 1024 * 1024
+	p115MultipartTargetPartSize        int64 = 8 * 1024 * 1024
+	p115MultipartMaxParts                    = 10000
+	p115MultipartPartAttempts                = 3
+	p115MultipartPartNoProgressTimeout       = 60 * time.Second
+	p115MultipartAbortTimeout                = 30 * time.Second
+	p115OSSTokenRefreshBefore                = 10 * time.Minute
 
 	p115MaxMultipartObjectSize int64 = int64(oss.MaxPartSize) * p115MultipartMaxParts
 )
+
+var errP115MultipartPartNoProgress = errors.New("p115 multipart: part upload made no progress")
 
 // p115OSSBucket is deliberately smaller than *oss.Bucket. It makes the 115
 // protocol state machine testable without live credentials and prevents the
@@ -276,6 +282,31 @@ func uploadP115Part(
 	chunk p115MultipartChunk,
 	totalParts int,
 ) (oss.UploadPart, error) {
+	return uploadP115PartWithNoProgressTimeout(
+		ctx,
+		provider,
+		access,
+		imur,
+		body,
+		chunk,
+		totalParts,
+		p115MultipartPartNoProgressTimeout,
+	)
+}
+
+func uploadP115PartWithNoProgressTimeout(
+	ctx context.Context,
+	provider p115OSSAccessProvider,
+	access *p115OSSAccess,
+	imur oss.InitiateMultipartUploadResult,
+	body p115PreparedUploadBody,
+	chunk p115MultipartChunk,
+	totalParts int,
+	noProgressTimeout time.Duration,
+) (oss.UploadPart, error) {
+	if noProgressTimeout <= 0 {
+		return oss.UploadPart{}, fmt.Errorf("p115 multipart: invalid part no-progress timeout %s", noProgressTimeout)
+	}
 	var lastErr error
 	for attempt := 1; attempt <= p115MultipartPartAttempts; attempt++ {
 		if err := ctx.Err(); err != nil {
@@ -289,13 +320,13 @@ func uploadP115Part(
 			*access = refreshed
 		}
 
-		section := io.NewSectionReader(body.readerAt, body.start+chunk.offset, chunk.size)
-		part, err := access.bucket.UploadPart(
+		part, err := uploadP115PartAttempt(
+			ctx,
+			*access,
 			imur,
-			&p115ReaderWithContext{ctx: ctx, reader: section, remaining: chunk.size},
-			chunk.size,
-			chunk.number,
-			p115OSSRequestOptions(ctx, &access.token)...,
+			body,
+			chunk,
+			noProgressTimeout,
 		)
 		if err == nil && strings.TrimSpace(part.ETag) == "" {
 			err = errors.New("OSS returned an empty part ETag")
@@ -307,11 +338,179 @@ func uploadP115Part(
 		if attempt >= p115MultipartPartAttempts || (!isRetryableP115UploadError(err) && !isP115OSSCredentialError(err)) {
 			return oss.UploadPart{}, fmt.Errorf("upload part %d/%d after %d attempt(s): %w", chunk.number, totalParts, attempt, err)
 		}
-		if err := sleepContext(ctx, time.Duration(attempt)*time.Second); err != nil {
+		retryDelay := time.Duration(attempt) * time.Second
+		if errors.Is(err, errP115MultipartPartNoProgress) {
+			log.Printf(
+				"[p115] multipart part %d/%d attempt %d/%d made no progress for %s; canceled its connection and retrying the same multipart session in %s",
+				chunk.number,
+				totalParts,
+				attempt,
+				p115MultipartPartAttempts,
+				noProgressTimeout,
+				retryDelay,
+			)
+		}
+		if err := sleepContext(ctx, retryDelay); err != nil {
 			return oss.UploadPart{}, err
 		}
 	}
 	return oss.UploadPart{}, fmt.Errorf("upload part %d/%d: %w", chunk.number, totalParts, lastErr)
+}
+
+func uploadP115PartAttempt(
+	ctx context.Context,
+	access p115OSSAccess,
+	imur oss.InitiateMultipartUploadResult,
+	body p115PreparedUploadBody,
+	chunk p115MultipartChunk,
+	noProgressTimeout time.Duration,
+) (oss.UploadPart, error) {
+	connection := &p115PartConnectionTracker{}
+	watchdogCtx, reportProgress, stopWatchdog := p115PartNoProgressContext(ctx, noProgressTimeout, connection.close)
+	attemptCtx := httptrace.WithClientTrace(watchdogCtx, &httptrace.ClientTrace{GotConn: connection.gotConn})
+	section := io.NewSectionReader(body.readerAt, body.start+chunk.offset, chunk.size)
+	reader := &p115PartProgressReader{reader: section, reportProgress: reportProgress}
+	part, err := access.bucket.UploadPart(
+		imur,
+		&p115ReaderWithContext{ctx: attemptCtx, reader: reader, remaining: chunk.size},
+		chunk.size,
+		chunk.number,
+		p115OSSRequestOptions(attemptCtx, &access.token)...,
+	)
+	cause := stopWatchdog()
+	if err == nil {
+		return part, nil
+	}
+	if parentErr := ctx.Err(); parentErr != nil {
+		return oss.UploadPart{}, parentErr
+	}
+	if errors.Is(cause, errP115MultipartPartNoProgress) {
+		return oss.UploadPart{}, fmt.Errorf("%w for %s", errP115MultipartPartNoProgress, noProgressTimeout)
+	}
+	return oss.UploadPart{}, err
+}
+
+type p115PartConnectionTracker struct {
+	mu     sync.Mutex
+	conn   net.Conn
+	closed bool
+}
+
+func (t *p115PartConnectionTracker) gotConn(info httptrace.GotConnInfo) {
+	if info.Conn == nil {
+		return
+	}
+	t.mu.Lock()
+	if t.closed {
+		t.mu.Unlock()
+		_ = info.Conn.Close()
+		return
+	}
+	t.conn = info.Conn
+	t.mu.Unlock()
+}
+
+func (t *p115PartConnectionTracker) close() {
+	t.mu.Lock()
+	t.closed = true
+	conn := t.conn
+	t.conn = nil
+	t.mu.Unlock()
+	if conn != nil {
+		_ = conn.Close()
+	}
+}
+
+type p115PartProgressReader struct {
+	reader         io.Reader
+	reportProgress func()
+}
+
+func (r *p115PartProgressReader) Read(p []byte) (int, error) {
+	n, err := r.reader.Read(p)
+	if n > 0 {
+		r.reportProgress()
+	}
+	return n, err
+}
+
+// p115PartNoProgressContext bounds one UploadPart attempt without imposing a
+// total-duration limit. Each successful body read renews the timer. On expiry,
+// the caller first closes the exact connection reported by net/http/httptrace,
+// then this watchdog cancels only the attempt context. The parent upload and
+// its OSS UploadID stay alive for the existing retry loop.
+func p115PartNoProgressContext(
+	parent context.Context,
+	timeout time.Duration,
+	closeConnection func(),
+) (context.Context, func(), func() error) {
+	attemptCtx, cancel := context.WithCancelCause(parent)
+	progress := make(chan struct{}, 1)
+	stop := make(chan struct{})
+	done := make(chan struct{})
+
+	go func() {
+		defer close(done)
+		timer := time.NewTimer(timeout)
+		defer timer.Stop()
+		for {
+			select {
+			case <-parent.Done():
+				if closeConnection != nil {
+					closeConnection()
+				}
+				return
+			case <-stop:
+				return
+			case <-progress:
+				resetP115PartNoProgressTimer(timer, timeout)
+			case <-timer.C:
+				// Progress queued at the timeout boundary wins over the timer so
+				// scheduler jitter cannot cancel a connection that is still moving.
+				select {
+				case <-progress:
+					timer.Reset(timeout)
+					continue
+				default:
+				}
+				if closeConnection != nil {
+					closeConnection()
+				}
+				cancel(errP115MultipartPartNoProgress)
+				return
+			}
+		}
+	}()
+
+	reportProgress := func() {
+		select {
+		case progress <- struct{}{}:
+		default:
+		}
+	}
+
+	var stopOnce sync.Once
+	var cause error
+	stopWatchdog := func() error {
+		stopOnce.Do(func() {
+			close(stop)
+			<-done
+			cause = context.Cause(attemptCtx)
+			cancel(nil)
+		})
+		return cause
+	}
+	return attemptCtx, reportProgress, stopWatchdog
+}
+
+func resetP115PartNoProgressTimer(timer *time.Timer, timeout time.Duration) {
+	if !timer.Stop() {
+		select {
+		case <-timer.C:
+		default:
+		}
+	}
+	timer.Reset(timeout)
 }
 
 func (d *Driver) p115OSSAccessProvider(params *sdk.UploadOSSParams) p115OSSAccessProvider {
@@ -418,6 +617,9 @@ func isP115OSSCredentialError(err error) bool {
 }
 
 func isRetryableP115UploadError(err error) bool {
+	if errors.Is(err, errP115MultipartPartNoProgress) {
+		return true
+	}
 	if err == nil {
 		return false
 	}

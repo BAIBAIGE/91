@@ -98,6 +98,18 @@ func setP115CallbackResult(options []oss.Option, body []byte) error {
 	return nil
 }
 
+func p115UploadOptionContext(options []oss.Option) (context.Context, error) {
+	value, err := oss.FindOption(options, "x-context-arg", nil)
+	if err != nil {
+		return nil, err
+	}
+	ctx, ok := value.(context.Context)
+	if !ok || ctx == nil {
+		return nil, fmt.Errorf("upload options contain context %T, want context.Context", value)
+	}
+	return ctx, nil
+}
+
 func staticP115OSSProvider(bucket p115OSSBucket) p115OSSAccessProvider {
 	return func(context.Context) (p115OSSAccess, error) {
 		return p115OSSAccess{
@@ -322,6 +334,179 @@ func TestUploadP115MultipartRetriesOnlyFailedPart(t *testing.T) {
 	}
 }
 
+func TestUploadP115PartRetriesAfterNoProgressTimeoutWithSameUploadID(t *testing.T) {
+	const noProgressTimeout = 30 * time.Millisecond
+	data := []byte("same multipart part payload")
+	body := preparedP115Bytes(data)
+	upload := oss.InitiateMultipartUploadResult{Bucket: "bucket", Key: "object", UploadID: "upload-stall"}
+	chunk := p115MultipartChunk{number: 7, offset: 0, size: int64(len(data))}
+	var (
+		calls       int
+		uploadIDs   []string
+		partNumbers []int
+		replayed    []byte
+	)
+	bucket := &fakeP115OSSBucket{
+		uploadPartFn: func(imur oss.InitiateMultipartUploadResult, source io.Reader, _ int64, number int, options ...oss.Option) (oss.UploadPart, error) {
+			calls++
+			uploadIDs = append(uploadIDs, imur.UploadID)
+			partNumbers = append(partNumbers, number)
+			if calls == 1 {
+				attemptCtx, err := p115UploadOptionContext(options)
+				if err != nil {
+					return oss.UploadPart{}, err
+				}
+				<-attemptCtx.Done()
+				return oss.UploadPart{}, attemptCtx.Err()
+			}
+			var err error
+			replayed, err = io.ReadAll(source)
+			if err != nil {
+				return oss.UploadPart{}, err
+			}
+			return oss.UploadPart{PartNumber: number, ETag: "etag-retry"}, nil
+		},
+	}
+	provider := staticP115OSSProvider(bucket)
+	access, err := provider(context.Background())
+	if err != nil {
+		t.Fatalf("get access: %v", err)
+	}
+
+	started := time.Now()
+	part, err := uploadP115PartWithNoProgressTimeout(
+		context.Background(),
+		provider,
+		&access,
+		upload,
+		body,
+		chunk,
+		9,
+		noProgressTimeout,
+	)
+	if err != nil {
+		t.Fatalf("upload part: %v", err)
+	}
+	if calls != 2 {
+		t.Fatalf("part calls = %d, want 2", calls)
+	}
+	if part.PartNumber != chunk.number || part.ETag != "etag-retry" {
+		t.Fatalf("part = %#v, want retried part %d", part, chunk.number)
+	}
+	if !bytes.Equal(replayed, data) {
+		t.Fatalf("replayed = %q, want %q", replayed, data)
+	}
+	for index := range uploadIDs {
+		if uploadIDs[index] != upload.UploadID || partNumbers[index] != chunk.number {
+			t.Fatalf("attempt %d uploadID=%q part=%d, want %q/%d", index+1, uploadIDs[index], partNumbers[index], upload.UploadID, chunk.number)
+		}
+	}
+	if elapsed := time.Since(started); elapsed < noProgressTimeout || elapsed > 2*time.Second {
+		t.Fatalf("retry elapsed = %s, want timeout followed by prompt retry", elapsed)
+	}
+}
+
+func TestUploadP115PartProgressRenewsNoProgressTimeout(t *testing.T) {
+	const (
+		noProgressTimeout = 100 * time.Millisecond
+		readInterval      = 25 * time.Millisecond
+	)
+	data := []byte("progress")
+	body := preparedP115Bytes(data)
+	upload := oss.InitiateMultipartUploadResult{Bucket: "bucket", Key: "object", UploadID: "upload-progress"}
+	chunk := p115MultipartChunk{number: 1, size: int64(len(data))}
+	calls := 0
+	bucket := &fakeP115OSSBucket{
+		uploadPartFn: func(_ oss.InitiateMultipartUploadResult, source io.Reader, _ int64, number int, _ ...oss.Option) (oss.UploadPart, error) {
+			calls++
+			buffer := make([]byte, 1)
+			for {
+				n, err := source.Read(buffer)
+				if n > 0 {
+					time.Sleep(readInterval)
+				}
+				if errors.Is(err, io.EOF) {
+					break
+				}
+				if err != nil {
+					return oss.UploadPart{}, err
+				}
+			}
+			return oss.UploadPart{PartNumber: number, ETag: "etag-progress"}, nil
+		},
+	}
+	provider := staticP115OSSProvider(bucket)
+	access, err := provider(context.Background())
+	if err != nil {
+		t.Fatalf("get access: %v", err)
+	}
+
+	started := time.Now()
+	part, err := uploadP115PartWithNoProgressTimeout(
+		context.Background(), provider, &access, upload, body, chunk, 1, noProgressTimeout,
+	)
+	if err != nil {
+		t.Fatalf("upload part: %v", err)
+	}
+	if calls != 1 || part.ETag != "etag-progress" {
+		t.Fatalf("calls=%d part=%#v, want one successful attempt", calls, part)
+	}
+	if elapsed := time.Since(started); elapsed <= noProgressTimeout {
+		t.Fatalf("upload elapsed = %s, test did not outlive one idle interval", elapsed)
+	}
+}
+
+func TestUploadP115PartParentCancellationDoesNotRetry(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	body := preparedP115Bytes([]byte("payload"))
+	upload := oss.InitiateMultipartUploadResult{Bucket: "bucket", Key: "object", UploadID: "upload-cancel"}
+	chunk := p115MultipartChunk{number: 1, size: int64(len("payload"))}
+	started := make(chan struct{})
+	calls := 0
+	bucket := &fakeP115OSSBucket{
+		uploadPartFn: func(_ oss.InitiateMultipartUploadResult, _ io.Reader, _ int64, _ int, options ...oss.Option) (oss.UploadPart, error) {
+			calls++
+			attemptCtx, err := p115UploadOptionContext(options)
+			if err != nil {
+				return oss.UploadPart{}, err
+			}
+			close(started)
+			<-attemptCtx.Done()
+			return oss.UploadPart{}, attemptCtx.Err()
+		},
+	}
+	provider := staticP115OSSProvider(bucket)
+	access, err := provider(ctx)
+	if err != nil {
+		t.Fatalf("get access: %v", err)
+	}
+	result := make(chan error, 1)
+	go func() {
+		_, err := uploadP115PartWithNoProgressTimeout(
+			ctx, provider, &access, upload, body, chunk, 1, time.Second,
+		)
+		result <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("part upload did not start")
+	}
+	cancel()
+	select {
+	case err := <-result:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("error = %v, want context canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("part upload did not stop after parent cancellation")
+	}
+	if calls != 1 {
+		t.Fatalf("part calls = %d, want no retry after parent cancellation", calls)
+	}
+}
+
 func TestUploadP115MultipartAbortsOnPermanentPartFailure(t *testing.T) {
 	payload := bytes.Repeat([]byte{0x4f}, int(p115MultipartThreshold+1))
 	var abortCalls, completeCalls int
@@ -410,6 +595,141 @@ func (t *p115RewritingTransport) RoundTrip(request *http.Request) (*http.Respons
 		request.URL.Host = t.target
 	}
 	return t.base.RoundTrip(request)
+}
+
+func TestUploadP115PartNoProgressClosesConnectionBeforeSameSessionRetry(t *testing.T) {
+	const noProgressTimeout = 30 * time.Millisecond
+	data := []byte("connection retry payload")
+	var (
+		mu          sync.Mutex
+		remoteAddrs []string
+		uploadIDs   []string
+		partNumbers []string
+	)
+	firstConnectionClosed := make(chan error, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		mu.Lock()
+		remoteAddrs = append(remoteAddrs, request.RemoteAddr)
+		uploadIDs = append(uploadIDs, request.URL.Query().Get("uploadId"))
+		partNumbers = append(partNumbers, request.URL.Query().Get("partNumber"))
+		call := len(remoteAddrs)
+		mu.Unlock()
+
+		if request.Method != http.MethodPut {
+			http.Error(w, "unexpected method", http.StatusMethodNotAllowed)
+			return
+		}
+		if call == 1 {
+			// Simulate an established connection that accepts the complete body but
+			// never returns an HTTP response. Hijacking lets the test directly observe
+			// the client-side socket close instead of relying on server Context
+			// cancellation, which net/http may defer after the body reaches EOF.
+			if _, err := io.Copy(io.Discard, request.Body); err != nil {
+				firstConnectionClosed <- err
+				return
+			}
+			hijacker, ok := w.(http.Hijacker)
+			if !ok {
+				firstConnectionClosed <- errors.New("test server does not support hijacking")
+				return
+			}
+			conn, _, err := hijacker.Hijack()
+			if err != nil {
+				firstConnectionClosed <- err
+				return
+			}
+			defer conn.Close()
+			_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+			_, err = conn.Read(make([]byte, 1))
+			firstConnectionClosed <- err
+			return
+		}
+		if call != 2 {
+			http.Error(w, "unexpected extra retry", http.StatusInternalServerError)
+			return
+		}
+		body, err := io.ReadAll(request.Body)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if !bytes.Equal(body, data) {
+			http.Error(w, "retried payload mismatch", http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("ETag", "etag-fresh-connection")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	token := sdk.UploadOSSTokenResp{
+		AccessKeyID:     "access-key",
+		AccessKeySecret: "access-secret",
+		SecurityToken:   "security-token",
+	}
+	baseTransport := &http.Transport{}
+	defer baseTransport.CloseIdleConnections()
+	httpClient := &http.Client{Transport: &p115RewritingTransport{base: baseTransport, target: server.Listener.Addr().String()}}
+	client, err := newP115OSSClient(&token, oss.HTTPClient(httpClient))
+	if err != nil {
+		t.Fatalf("new OSS client: %v", err)
+	}
+	bucket, err := client.Bucket("bucket")
+	if err != nil {
+		t.Fatalf("open bucket: %v", err)
+	}
+	provider := staticP115OSSProvider(bucket)
+	access, err := provider(context.Background())
+	if err != nil {
+		t.Fatalf("get access: %v", err)
+	}
+	upload := oss.InitiateMultipartUploadResult{Bucket: "bucket", Key: "object-key", UploadID: "upload-same-session"}
+	chunk := p115MultipartChunk{number: 4, size: int64(len(data))}
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+
+	part, err := uploadP115PartWithNoProgressTimeout(
+		ctx,
+		provider,
+		&access,
+		upload,
+		preparedP115Bytes(data),
+		chunk,
+		8,
+		noProgressTimeout,
+	)
+	if err != nil {
+		t.Fatalf("upload part: %v", err)
+	}
+	if part.PartNumber != chunk.number || part.ETag != "etag-fresh-connection" {
+		t.Fatalf("part = %#v, want successful retry", part)
+	}
+	select {
+	case closeErr := <-firstConnectionClosed:
+		if closeErr == nil {
+			t.Fatal("stalled connection remained open and carried more request data")
+		}
+		var networkErr net.Error
+		if errors.As(closeErr, &networkErr) && networkErr.Timeout() {
+			t.Fatalf("stalled HTTP connection was not closed: %v", closeErr)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("stalled HTTP connection did not report closure")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(remoteAddrs) != 2 {
+		t.Fatalf("HTTP requests = %d, want 2", len(remoteAddrs))
+	}
+	if remoteAddrs[0] == remoteAddrs[1] {
+		t.Fatalf("retry reused stalled connection %q", remoteAddrs[0])
+	}
+	for index := range uploadIDs {
+		if uploadIDs[index] != upload.UploadID || partNumbers[index] != strconv.Itoa(chunk.number) {
+			t.Fatalf("request %d uploadID=%q part=%q, want %q/%d", index+1, uploadIDs[index], partNumbers[index], upload.UploadID, chunk.number)
+		}
+	}
 }
 
 func TestUploadP115MultipartThroughAliyunSDK(t *testing.T) {
