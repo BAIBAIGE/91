@@ -955,6 +955,112 @@ func TestHandleUpsertDriveReplacesExistingCredentialsWhenProvided(t *testing.T) 
 	}
 }
 
+func TestHandleUpsertPikPakPatchesCredentials(t *testing.T) {
+	ctx := context.Background()
+	cat, err := catalog.Open(t.TempDir() + "/catalog.db")
+	if err != nil {
+		t.Fatalf("open catalog: %v", err)
+	}
+	t.Cleanup(func() { _ = cat.Close() })
+
+	if err := cat.UpsertDrive(ctx, &catalog.Drive{
+		ID:     "pikpak-main",
+		Kind:   "pikpak",
+		Name:   "PikPak",
+		RootID: "",
+		Credentials: map[string]string{
+			"username":      "old-user",
+			"password":      "old-password",
+			"access_token":  "runtime-access",
+			"refresh_token": "runtime-refresh",
+			"captcha_token": "runtime-captcha",
+			"device_id":     "runtime-device",
+		},
+		Status: "ok",
+	}); err != nil {
+		t.Fatalf("seed drive: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/drives", bytes.NewBufferString(`{
+		"id": "pikpak-main",
+		"kind": "pikpak",
+		"name": "Renamed PikPak",
+		"rootId": "",
+		"credentials": {"username": "new-user"}
+	}`))
+	rr := httptest.NewRecorder()
+
+	(&AdminServer{Catalog: cat}).handleUpsertDrive(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rr.Code, rr.Body.String())
+	}
+	got, err := cat.GetDrive(ctx, "pikpak-main")
+	if err != nil {
+		t.Fatalf("get drive: %v", err)
+	}
+	if got.Name != "Renamed PikPak" || got.Credentials["username"] != "new-user" {
+		t.Fatalf("editable fields not updated: %+v", got)
+	}
+	for key, want := range map[string]string{
+		"password":      "old-password",
+		"access_token":  "runtime-access",
+		"refresh_token": "runtime-refresh",
+		"captcha_token": "runtime-captcha",
+		"device_id":     "runtime-device",
+	} {
+		if got.Credentials[key] != want {
+			t.Fatalf("credential %s = %q, want %q; all=%#v", key, got.Credentials[key], want, got.Credentials)
+		}
+	}
+}
+
+func TestHandleUpsertPikPakDoesNotInheritCredentialsFromAnotherKind(t *testing.T) {
+	ctx := context.Background()
+	cat, err := catalog.Open(t.TempDir() + "/catalog.db")
+	if err != nil {
+		t.Fatalf("open catalog: %v", err)
+	}
+	t.Cleanup(func() { _ = cat.Close() })
+
+	if err := cat.UpsertDrive(ctx, &catalog.Drive{
+		ID:     "drive-main",
+		Kind:   "quark",
+		Name:   "Quark",
+		RootID: "0",
+		Credentials: map[string]string{
+			"cookie": "old-quark-cookie",
+		},
+	}); err != nil {
+		t.Fatalf("seed drive: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/drives", bytes.NewBufferString(`{
+		"id": "drive-main",
+		"kind": "pikpak",
+		"name": "PikPak",
+		"rootId": "",
+		"credentials": {"refresh_token": "pikpak-refresh"}
+	}`))
+	rr := httptest.NewRecorder()
+
+	(&AdminServer{Catalog: cat}).handleUpsertDrive(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rr.Code, rr.Body.String())
+	}
+	got, err := cat.GetDrive(ctx, "drive-main")
+	if err != nil {
+		t.Fatalf("get drive: %v", err)
+	}
+	if got.Kind != "pikpak" || got.Credentials["refresh_token"] != "pikpak-refresh" {
+		t.Fatalf("pikpak fields not saved: %+v", got)
+	}
+	if _, ok := got.Credentials["cookie"]; ok {
+		t.Fatalf("credentials retained from prior drive kind: %#v", got.Credentials)
+	}
+}
+
 func TestHandleUpsertGoogleDriveMergesOAuthCredentials(t *testing.T) {
 	ctx := context.Background()
 	cat, err := catalog.Open(t.TempDir() + "/catalog.db")

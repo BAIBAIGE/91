@@ -179,6 +179,7 @@ export type CredentialField = {
   key: string;
   label: string;
   placeholder: string;
+  methodLabel?: "方式一" | "方式二";
   type?: "text" | "select";
   options?: Array<{ value: string; label: string }>;
   multiline?: boolean;
@@ -194,6 +195,7 @@ export function credentialFields(kind: Kind): CredentialField[] {
           key: "cookie",
           label: "Cookie",
           placeholder: "__pus=...; __puus=...; ...",
+          methodLabel: "方式二",
           multiline: true,
           required: true,
         },
@@ -204,6 +206,7 @@ export function credentialFields(kind: Kind): CredentialField[] {
           key: "cookie",
           label: "Cookie",
           placeholder: "UID=xxx; CID=xxx; SEID=xxx; KID=xxx",
+          methodLabel: "方式二",
           multiline: true,
           required: true,
         },
@@ -214,6 +217,7 @@ export function credentialFields(kind: Kind): CredentialField[] {
           key: "username",
           label: "手机号/邮箱",
           placeholder: "手机号或邮箱",
+          methodLabel: "方式二",
         },
         {
           key: "password",
@@ -225,15 +229,20 @@ export function credentialFields(kind: Kind): CredentialField[] {
       return [
         {
           key: "username",
-          label: "用户名 / 邮箱",
+          label: "邮箱",
           placeholder: "user@example.com",
-          required: true,
+          methodLabel: "方式一",
         },
         {
           key: "password",
           label: "密码",
           placeholder: "PikPak 密码",
-          required: true,
+        },
+        {
+          key: "refresh_token",
+          label: "refresh_token",
+          placeholder: "邮箱密码登录不可用时填写",
+          methodLabel: "方式二",
         },
       ];
     case "wopan":

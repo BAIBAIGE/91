@@ -147,6 +147,64 @@ func TestPatchDriveCredentialsPreservesSettingsChangedAfterAttach(t *testing.T) 
 	}
 }
 
+func TestUpsertDrivePatchingCredentialsUsesLatestStoredTokens(t *testing.T) {
+	ctx := context.Background()
+	cat, err := Open(t.TempDir() + "/catalog.db")
+	if err != nil {
+		t.Fatalf("open catalog: %v", err)
+	}
+	t.Cleanup(func() { _ = cat.Close() })
+
+	if err := cat.UpsertDrive(ctx, &Drive{
+		ID:     "pikpak-main",
+		Kind:   "pikpak",
+		Name:   "PikPak",
+		RootID: "",
+		Credentials: map[string]string{
+			"username":      "old-user",
+			"password":      "old-password",
+			"access_token":  "old-access",
+			"refresh_token": "old-refresh",
+			"captcha_token": "old-captcha",
+			"device_id":     "device",
+		},
+	}); err != nil {
+		t.Fatalf("seed drive: %v", err)
+	}
+	if err := cat.PatchDriveCredentials(ctx, "pikpak-main", map[string]string{
+		"access_token":  "latest-access",
+		"refresh_token": "latest-refresh",
+		"captcha_token": "latest-captcha",
+	}); err != nil {
+		t.Fatalf("persist runtime token refresh: %v", err)
+	}
+
+	if err := cat.UpsertDrivePatchingCredentials(ctx, &Drive{
+		ID:          "pikpak-main",
+		Kind:        "pikpak",
+		Name:        "Renamed PikPak",
+		RootID:      "",
+		Credentials: map[string]string{"username": "new-user"},
+	}); err != nil {
+		t.Fatalf("patching upsert: %v", err)
+	}
+
+	got, err := cat.GetDrive(ctx, "pikpak-main")
+	if err != nil {
+		t.Fatalf("get drive: %v", err)
+	}
+	if got.Name != "Renamed PikPak" || got.Credentials["username"] != "new-user" {
+		t.Fatalf("editable settings not updated: %+v", got)
+	}
+	if got.Credentials["password"] != "old-password" ||
+		got.Credentials["access_token"] != "latest-access" ||
+		got.Credentials["refresh_token"] != "latest-refresh" ||
+		got.Credentials["captcha_token"] != "latest-captcha" ||
+		got.Credentials["device_id"] != "device" {
+		t.Fatalf("credentials = %#v, want latest runtime values preserved", got.Credentials)
+	}
+}
+
 func TestUpsertDriveDefaultsRootIDByKind(t *testing.T) {
 	ctx := context.Background()
 	cat, err := Open(t.TempDir() + "/catalog.db")

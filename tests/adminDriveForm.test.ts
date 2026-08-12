@@ -74,6 +74,10 @@ const constantsSource = readFileSync(
   new URL("../src/admin/drive/constants.ts", import.meta.url),
   "utf8"
 );
+const credentialsSource = readFileSync(
+  new URL("../src/admin/drive/credentials.ts", import.meta.url),
+  "utf8"
+);
 const p123QRCodeLoginSource = readFileSync(
   new URL("../src/admin/drive/P123QRCodeLogin.tsx", import.meta.url),
   "utf8"
@@ -95,7 +99,7 @@ const qrLoginSources = [
 ]
   .join("\n");
 
-const combinedSource = drivesPageSource + "\n" + driveFormSource + "\n" + constantsSource + "\n" + crawlerUploadTargetSource;
+const combinedSource = drivesPageSource + "\n" + driveFormSource + "\n" + constantsSource + "\n" + credentialsSource + "\n" + crawlerUploadTargetSource;
 const driveIconKinds = [
   "p115",
   "p123",
@@ -242,7 +246,7 @@ test("webdav drive form asks for a standard endpoint and basic auth credentials"
   assert.doesNotMatch(fields, /encrypt|crypt|302/i);
 });
 
-test("pikpak drive form only exposes account login fields", () => {
+test("pikpak drive form presents email login before refresh token fallback", () => {
   const match =
     /case "pikpak":\s*return \[([\s\S]*?)\];\s*case "wopan":/.exec(
       combinedSource
@@ -250,13 +254,25 @@ test("pikpak drive form only exposes account login fields", () => {
   assert.ok(match, "pikpak credential field block should be present");
   const fields = match[1];
 
-  assert.match(fields, /key: "username"/);
-  assert.match(fields, /key: "password"/);
+  assert.match(
+    fields,
+    /key: "username"[\s\S]*?label: "邮箱"[\s\S]*?methodLabel: "方式一"[\s\S]*?key: "password"[\s\S]*?key: "refresh_token"[\s\S]*?label: "refresh_token"[\s\S]*?methodLabel: "方式二"/
+  );
   assert.doesNotMatch(fields, /key: "platform"/);
-  assert.doesNotMatch(fields, /key: "refresh_token"/);
   assert.doesNotMatch(fields, /key: "captcha_token"/);
   assert.doesNotMatch(fields, /key: "device_id"/);
   assert.doesNotMatch(fields, /key: "disable_media_link"/);
+  assert.doesNotMatch(fields, /推荐/);
+  assert.doesNotMatch(
+    driveFormSource,
+    /优先填写 refresh_token；没有时请同时填写用户名和密码/
+  );
+  assert.match(
+    driveFormSource,
+    /className="admin-form__method-label">\{f\.methodLabel\}<\/div>/
+  );
+  assert.match(drivesPageSource, /newDriveCredentialError\(form\.kind, form\.creds\)/);
+  assert.match(drivesPageSource, /changedCredentialValues\(/);
 });
 
 test("wopan drive form omits the optional family space field", () => {
@@ -287,6 +303,7 @@ test("p115 drive form supports qr login and manual cookie fallback", () => {
   assert.ok(match, "p115 credential field block should be present");
   assert.match(match[1], /key: "cookie"/);
   assert.match(match[1], /UID=xxx; CID=xxx; SEID=xxx; KID=xxx/);
+  assert.match(match[1], /methodLabel: "方式二"/);
 });
 
 test("quark drive form supports qr login and manual cookie fallback", () => {
@@ -307,6 +324,7 @@ test("quark drive form supports qr login and manual cookie fallback", () => {
     );
   assert.ok(match, "quark credential field block should be present");
   assert.match(match[1], /key: "cookie"/);
+  assert.match(match[1], /methodLabel: "方式二"/);
   assert.match(match[1], /__pus=\.\.\.; __puus=\.\.\.; \.\.\./);
   assert.doesNotMatch(match[1], /use_transcoding_address|客户端 302/);
 });
@@ -315,11 +333,11 @@ test("p123 drive form exposes qr login and phone or email password login", () =>
   assertDriveTypeOption("p123", "123网盘");
   assert.match(driveFormSource, /P123QRCodeLogin/);
   assert.match(p123QRCodeLoginSource, /<label>方式一<\/label>/);
-  assert.match(driveFormSource, /className="admin-form__method-label">方式二<\/div>/);
+  assert.match(driveFormSource, /className="admin-form__method-label">\{f\.methodLabel\}<\/div>/);
   assert.doesNotMatch(p123QRCodeLoginSource, /方式一：扫码登录/);
   assert.doesNotMatch(driveFormSource, /方式二：手机号密码登录/);
-  assert.match(drivesPageSource, /hasScannedToken/);
-  assert.match(drivesPageSource, /请使用方式一扫码登录，或填写方式二的手机号\/邮箱和密码/);
+  assert.match(credentialsSource, /hasScannedToken/);
+  assert.match(credentialsSource, /请使用方式一扫码登录，或填写方式二的手机号\/邮箱和密码/);
 
   const match =
     /case "p123":\s*return \[([\s\S]*?)\];\s*case "pikpak":/.exec(
@@ -330,6 +348,7 @@ test("p123 drive form exposes qr login and phone or email password login", () =>
 
   assert.match(fields, /key: "username"/);
   assert.match(fields, /label: "手机号\/邮箱"/);
+  assert.match(fields, /methodLabel: "方式二"/);
   assert.match(fields, /key: "password"/);
   assert.match(fields, /label: "密码"/);
   assert.doesNotMatch(fields, /key: "access_token"/);

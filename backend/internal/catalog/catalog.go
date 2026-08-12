@@ -2655,7 +2655,7 @@ type Drive struct {
 }
 
 func (c *Catalog) UpsertDrive(ctx context.Context, d *Drive) error {
-	return c.upsertDrive(ctx, d, true)
+	return c.upsertDrive(ctx, d, true, false)
 }
 
 // UpsertDrivePreservingSkipDirIDs writes the authoritative drive fields while
@@ -2664,10 +2664,24 @@ func (c *Catalog) UpsertDrive(ctx context.Context, d *Drive) error {
 // value in SQL avoids a read-then-write race with the dedicated skip-dir API.
 // New rows still receive the normalized value from d (normally an empty list).
 func (c *Catalog) UpsertDrivePreservingSkipDirIDs(ctx context.Context, d *Drive) error {
-	return c.upsertDrive(ctx, d, false)
+	return c.upsertDrive(ctx, d, false, false)
 }
 
-func (c *Catalog) upsertDrive(ctx context.Context, d *Drive, replaceSkipDirIDs bool) error {
+// UpsertDrivePatchingCredentials updates drive metadata while atomically
+// applying d.Credentials as a JSON merge patch to the latest stored
+// credentials. This prevents an admin edit from rolling back tokens refreshed
+// after the edit form was opened.
+func (c *Catalog) UpsertDrivePatchingCredentials(ctx context.Context, d *Drive) error {
+	return c.upsertDrive(ctx, d, true, true)
+}
+
+// UpsertDrivePatchingCredentialsPreservingSkipDirIDs combines credential patch
+// semantics with the omitted-skipDirIds behavior used by the admin form.
+func (c *Catalog) UpsertDrivePatchingCredentialsPreservingSkipDirIDs(ctx context.Context, d *Drive) error {
+	return c.upsertDrive(ctx, d, false, true)
+}
+
+func (c *Catalog) upsertDrive(ctx context.Context, d *Drive, replaceSkipDirIDs, patchCredentials bool) error {
 	normalizeDriveRootFields(d)
 	cred, _ := json.Marshal(d.Credentials)
 	skipDirs := d.SkipDirIDs
@@ -2688,14 +2702,20 @@ ON CONFLICT(id) DO UPDATE SET
   name           = excluded.name,
   root_id        = excluded.root_id,
   scan_root_id   = excluded.scan_root_id,
-  credentials    = excluded.credentials,
+  credentials    = CASE
+                     WHEN ? != 0 THEN json_patch(
+                       CASE WHEN json_valid(COALESCE(drives.credentials, '')) THEN drives.credentials ELSE '{}' END,
+                       excluded.credentials
+                     )
+                     ELSE excluded.credentials
+                   END,
   status         = excluded.status,
   last_error     = excluded.last_error,
   teaser_enabled = excluded.teaser_enabled,
   skip_dir_ids   = CASE WHEN ? != 0 THEN excluded.skip_dir_ids ELSE drives.skip_dir_ids END,
   updated_at     = excluded.updated_at
 `, d.ID, d.Kind, d.Name, d.RootID, d.ScanRootID, string(cred), d.Status, d.LastError, boolToInt(d.TeaserEnabled), string(skipDirsJSON),
-		d.CreatedAt.UnixMilli(), d.UpdatedAt.UnixMilli(), boolToInt(replaceSkipDirIDs))
+		d.CreatedAt.UnixMilli(), d.UpdatedAt.UnixMilli(), boolToInt(patchCredentials), boolToInt(replaceSkipDirIDs))
 	return err
 }
 

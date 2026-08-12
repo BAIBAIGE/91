@@ -1,4 +1,4 @@
-import { useId, useMemo, useState } from "react";
+import { Fragment, useId, useMemo, useState } from "react";
 import { ChevronDown } from "lucide-react";
 import { PasswordInput } from "../PasswordInput";
 import { QuarkQRCodeLogin } from "./QuarkQRCodeLogin";
@@ -196,72 +196,65 @@ export function DriveForm({
             />
           )}
 
-          {form.kind === "p123" && fields.length > 0 && (
-            <div className="admin-form__method-label">方式二</div>
-          )}
-
-          {form.kind === "p115" && fields.length > 0 && (
-            <div className="admin-form__method-label">方式二</div>
-          )}
-
-          {form.kind === "quark" && fields.length > 0 && (
-            <div className="admin-form__method-label">方式二</div>
-          )}
-
           {fields.map((f) => (
-            <div key={f.key} className="admin-form__row">
-              {f.type === "select" ? (
-                <>
-                  <label htmlFor={`${idPrefix}-credential-${f.key}`}>
-                    {f.label}
-                  </label>
-                  <div className="admin-form-select-wrap">
-                    <select
-                      id={`${idPrefix}-credential-${f.key}`}
-                      className="admin-form-select"
-                      value={form.creds[f.key] ?? f.defaultValue ?? ""}
-                      onChange={(e) => setCred(f.key, e.target.value)}
-                    >
-                      {(f.options ?? []).map((option) => (
-                        <option key={option.value} value={option.value}>
-                          {option.label}
-                        </option>
-                      ))}
-                    </select>
-                    <ChevronDown size={15} className="admin-form-select__icon" aria-hidden="true" />
-                  </div>
-                </>
-              ) : (
-                <>
-                  <label htmlFor={`${idPrefix}-credential-${f.key}`}>
-                    {f.label}
-                  </label>
-                  {f.multiline ? (
-                    <textarea
-                      id={`${idPrefix}-credential-${f.key}`}
-                      value={form.creds[f.key] ?? ""}
-                      onChange={(e) => setCred(f.key, e.target.value)}
-                      required={f.required && !isEdit}
-                    />
-                  ) : isSecretCredential(f.key) ? (
-                    <PasswordInput
-                      id={`${idPrefix}-credential-${f.key}`}
-                      value={form.creds[f.key] ?? ""}
-                      onChange={(e) => setCred(f.key, e.target.value)}
-                      required={f.required && !isEdit}
-                    />
-                  ) : (
-                    <input
-                      id={`${idPrefix}-credential-${f.key}`}
-                      type="text"
-                      value={form.creds[f.key] ?? ""}
-                      onChange={(e) => setCred(f.key, e.target.value)}
-                      required={f.required && !isEdit}
-                    />
-                  )}
-                </>
+            <Fragment key={f.key}>
+              {f.methodLabel && (
+                <div className="admin-form__method-label">{f.methodLabel}</div>
               )}
-            </div>
+              <div className="admin-form__row">
+                {f.type === "select" ? (
+                  <>
+                    <label htmlFor={`${idPrefix}-credential-${f.key}`}>
+                      {f.label}
+                    </label>
+                    <div className="admin-form-select-wrap">
+                      <select
+                        id={`${idPrefix}-credential-${f.key}`}
+                        className="admin-form-select"
+                        value={form.creds[f.key] ?? f.defaultValue ?? ""}
+                        onChange={(e) => setCred(f.key, e.target.value)}
+                      >
+                        {(f.options ?? []).map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                      <ChevronDown size={15} className="admin-form-select__icon" aria-hidden="true" />
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <label htmlFor={`${idPrefix}-credential-${f.key}`}>
+                      {f.label}
+                    </label>
+                    {f.multiline ? (
+                      <textarea
+                        id={`${idPrefix}-credential-${f.key}`}
+                        value={form.creds[f.key] ?? ""}
+                        onChange={(e) => setCred(f.key, e.target.value)}
+                        required={f.required && !isEdit}
+                      />
+                    ) : isSecretCredential(f.key) ? (
+                      <PasswordInput
+                        id={`${idPrefix}-credential-${f.key}`}
+                        value={form.creds[f.key] ?? ""}
+                        onChange={(e) => setCred(f.key, e.target.value)}
+                        required={f.required && !isEdit}
+                      />
+                    ) : (
+                      <input
+                        id={`${idPrefix}-credential-${f.key}`}
+                        type="text"
+                        value={form.creds[f.key] ?? ""}
+                        onChange={(e) => setCred(f.key, e.target.value)}
+                        required={f.required && !isEdit}
+                      />
+                    )}
+                  </>
+                )}
+              </div>
+            </Fragment>
           ))}
         </div>
       )}

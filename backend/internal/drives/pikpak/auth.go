@@ -85,12 +85,32 @@ func (d *Driver) login(ctx context.Context) error {
 	if d.username == "" || d.password == "" {
 		return fmt.Errorf("pikpak username or password is empty")
 	}
+	action := getAction(http.MethodPost, signinURL)
 	if d.captchaToken == "" {
-		if err := d.refreshCaptchaTokenInLogin(ctx, getAction(http.MethodPost, signinURL), d.username); err != nil {
+		if err := d.refreshCaptchaTokenInLogin(ctx, action, d.username); err != nil {
 			return err
 		}
 	}
+	if err := d.signinOnce(ctx); err != nil {
+		if !IsCaptchaError(err) {
+			return err
+		}
+		// captcha_token is short-lived, but it is persisted so the same device can
+		// resume after restart. If signin rejects that stored token, clear and
+		// persist the cleared state before acquiring a replacement. Retry signin
+		// exactly once so a provider-side captcha outage cannot become a loop.
+		d.clearCaptchaToken()
+		if refreshErr := d.refreshCaptchaTokenInLogin(ctx, action, d.username); refreshErr != nil {
+			return fmt.Errorf("pikpak signin captcha recovery: %w", refreshErr)
+		}
+		if retryErr := d.signinOnce(ctx); retryErr != nil {
+			return fmt.Errorf("pikpak signin after captcha refresh: %w", retryErr)
+		}
+	}
+	return nil
+}
 
+func (d *Driver) signinOnce(ctx context.Context) error {
 	var out authResp
 	var e errResp
 	res, err := d.client.R().
@@ -110,6 +130,9 @@ func (d *Driver) login(ctx context.Context) error {
 		return err
 	}
 	if e.isError() {
+		if e.ErrorCode == 4126 {
+			return fmt.Errorf("pikpak login: 密码登录被 PikPak 风控拦截，请配置 refresh_token 或改用 WebDAV: %w", &e)
+		}
 		return &e
 	}
 	if res.IsError() {
@@ -168,6 +191,14 @@ func (d *Driver) persistTokens() {
 	if d.onTokenUpdate != nil {
 		d.onTokenUpdate(d.accessToken, d.refreshToken, d.captchaToken, d.deviceID)
 	}
+}
+
+func (d *Driver) clearCaptchaToken() {
+	if d.captchaToken == "" {
+		return
+	}
+	d.captchaToken = ""
+	d.persistTokens()
 }
 
 func (d *Driver) refreshCaptchaTokenAtLogin(ctx context.Context, action, userID string) error {

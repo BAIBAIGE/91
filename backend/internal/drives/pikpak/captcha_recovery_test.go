@@ -3,8 +3,10 @@ package pikpak
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -177,6 +179,146 @@ func TestRefreshCaptchaTokenDoesNotLoopOn4002WithEmptyToken(t *testing.T) {
 	}
 	if got := atomic.LoadInt32(&calls); got != 1 {
 		t.Fatalf("captcha init called %d times, want 1 (no retry when token already empty)", got)
+	}
+}
+
+func TestLoginRecoversFromRejectedPersistedCaptchaToken(t *testing.T) {
+	for _, errorCode := range []int{4002, 9} {
+		t.Run(fmt.Sprintf("error_code_%d", errorCode), func(t *testing.T) {
+			var (
+				signinCalls  int32
+				captchaCalls int32
+				signinTokens []string
+				persisted    []string
+			)
+
+			mux := http.NewServeMux()
+			mux.HandleFunc("/v1/auth/signin", func(w http.ResponseWriter, r *http.Request) {
+				atomic.AddInt32(&signinCalls, 1)
+				var body struct {
+					CaptchaToken string `json:"captcha_token"`
+				}
+				_ = json.NewDecoder(r.Body).Decode(&body)
+				signinTokens = append(signinTokens, body.CaptchaToken)
+				if len(signinTokens) == 1 {
+					writeErrorJSON(w, fmt.Sprintf(`{
+						"error_code": %d,
+						"error": "captcha_invalid",
+						"error_description": "captcha token rejected"
+					}`, errorCode))
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{
+					"access_token": "fresh-access",
+					"refresh_token": "fresh-refresh",
+					"sub": "user-1"
+				}`))
+			})
+			mux.HandleFunc("/v1/shield/captcha/init", func(w http.ResponseWriter, r *http.Request) {
+				atomic.AddInt32(&captchaCalls, 1)
+				var body captchaTokenRequest
+				_ = json.NewDecoder(r.Body).Decode(&body)
+				if body.CaptchaToken != "" {
+					t.Errorf("captcha init token = %q, want empty after signin rejection", body.CaptchaToken)
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"captcha_token":"fresh-login-captcha","expires_in":300}`))
+			})
+			server := httptest.NewServer(mux)
+			defer server.Close()
+
+			d := newTestDriver(t, server)
+			d.captchaToken = "persisted-stale-captcha"
+			d.onTokenUpdate = func(_, _, captcha, _ string) {
+				persisted = append(persisted, captcha)
+			}
+
+			if err := d.login(context.Background()); err != nil {
+				t.Fatalf("login: %v", err)
+			}
+
+			if got := atomic.LoadInt32(&signinCalls); got != 2 {
+				t.Fatalf("signin calls = %d, want 2", got)
+			}
+			if got := atomic.LoadInt32(&captchaCalls); got != 1 {
+				t.Fatalf("captcha init calls = %d, want 1", got)
+			}
+			if len(signinTokens) != 2 || signinTokens[0] != "persisted-stale-captcha" || signinTokens[1] != "fresh-login-captcha" {
+				t.Fatalf("signin captcha tokens = %#v", signinTokens)
+			}
+			if len(persisted) < 3 || persisted[0] != "" || persisted[1] != "fresh-login-captcha" {
+				t.Fatalf("persisted captcha sequence = %#v, want clear then fresh token", persisted)
+			}
+		})
+	}
+}
+
+func TestLoginStopsAfterSingleCaptchaRecoveryAttempt(t *testing.T) {
+	var signinCalls, captchaCalls int32
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/auth/signin", func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&signinCalls, 1)
+		writeErrorJSON(w, `{"error_code":4002,"error":"captcha_invalid"}`)
+	})
+	mux.HandleFunc("/v1/shield/captcha/init", func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&captchaCalls, 1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"captcha_token":"fresh-login-captcha","expires_in":300}`))
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	d := newTestDriver(t, server)
+	d.captchaToken = "persisted-stale-captcha"
+
+	err := d.login(context.Background())
+	if err == nil || !IsCaptchaError(err) {
+		t.Fatalf("login error = %v, want captcha error", err)
+	}
+	if got := atomic.LoadInt32(&signinCalls); got != 2 {
+		t.Fatalf("signin calls = %d, want exactly 2", got)
+	}
+	if got := atomic.LoadInt32(&captchaCalls); got != 1 {
+		t.Fatalf("captcha init calls = %d, want exactly 1", got)
+	}
+}
+
+func TestLoginAccessProhibitedExplainsSupportedAlternatives(t *testing.T) {
+	var signinCalls, captchaCalls int32
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/auth/signin", func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&signinCalls, 1)
+		writeErrorJSON(w, `{
+			"error_code":4126,
+			"error":"invalid_grant",
+			"error_description":"AccessProhibited"
+		}`)
+	})
+	mux.HandleFunc("/v1/shield/captcha/init", func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&captchaCalls, 1)
+		t.Fatal("4126 must not trigger captcha refresh")
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	d := newTestDriver(t, server)
+	d.captchaToken = "fresh-captcha"
+
+	err := d.login(context.Background())
+	if err == nil {
+		t.Fatal("login succeeded, want AccessProhibited error")
+	}
+	for _, want := range []string{"4126", "refresh_token", "WebDAV"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("login error = %q, want %q guidance", err, want)
+		}
+	}
+	if got := atomic.LoadInt32(&signinCalls); got != 1 {
+		t.Fatalf("signin calls = %d, want 1", got)
+	}
+	if got := atomic.LoadInt32(&captchaCalls); got != 0 {
+		t.Fatalf("captcha init calls = %d, want 0", got)
 	}
 }
 

@@ -104,6 +104,14 @@ func mergeNonEmptyCredentials(existing *catalog.Drive, incoming map[string]strin
 			merged[k] = v
 		}
 	}
+	for k, v := range nonEmptyCredentials(incoming) {
+		merged[k] = v
+	}
+	return merged
+}
+
+func nonEmptyCredentials(incoming map[string]string) map[string]string {
+	cleaned := map[string]string{}
 	for k, v := range incoming {
 		key := strings.TrimSpace(k)
 		if key == "" {
@@ -113,9 +121,9 @@ func mergeNonEmptyCredentials(existing *catalog.Drive, incoming map[string]strin
 		if value == "" {
 			continue
 		}
-		merged[key] = value
+		cleaned[key] = value
 	}
-	return merged
+	return cleaned
 }
 
 func mergeScriptCrawlerCredentials(existing *catalog.Drive, incoming map[string]string) (map[string]string, error) {

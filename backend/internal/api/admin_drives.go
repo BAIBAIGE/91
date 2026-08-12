@@ -197,6 +197,7 @@ func (a *AdminServer) handleUpsertDrive(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "unsupported drive kind", http.StatusBadRequest)
 		return
 	}
+	patchPikPakCredentials := body.Kind == "pikpak" && existing != nil && existing.Kind == "pikpak"
 	if body.Kind == scriptcrawler.Kind {
 		credentials, err := mergeScriptCrawlerCredentials(existing, body.Credentials)
 		if err != nil {
@@ -206,6 +207,11 @@ func (a *AdminServer) handleUpsertDrive(w http.ResponseWriter, r *http.Request) 
 		body.Credentials = credentials
 	} else if body.Kind == "googledrive" {
 		body.Credentials = mergeGoogleDriveCredentials(existing, body.Credentials)
+	} else if body.Kind == "pikpak" {
+		// PikPak's access/captcha/device tokens are refreshed at runtime. Treat the
+		// submitted values as a patch so an edit cannot replace those hidden keys
+		// with a stale form snapshot.
+		body.Credentials = nonEmptyCredentials(body.Credentials)
 	} else if body.Kind == "quark" || body.Kind == "localstorage" || body.Kind == "guangyapan" || body.Kind == "webdav" {
 		// 按键合并、空值沿用旧值：这些网盘的编辑表单允许只改某几个字段，
 		// 其它 token / 路径 / 开关字段应保留旧值。
@@ -244,7 +250,11 @@ func (a *AdminServer) handleUpsertDrive(w http.ResponseWriter, r *http.Request) 
 		SkipDirIDs:    skipDirIDs,
 	}
 	var saveErr error
-	if body.SkipDirIDs == nil {
+	if patchPikPakCredentials && body.SkipDirIDs == nil {
+		saveErr = a.Catalog.UpsertDrivePatchingCredentialsPreservingSkipDirIDs(r.Context(), d)
+	} else if patchPikPakCredentials {
+		saveErr = a.Catalog.UpsertDrivePatchingCredentials(r.Context(), d)
+	} else if body.SkipDirIDs == nil {
 		saveErr = a.Catalog.UpsertDrivePreservingSkipDirIDs(r.Context(), d)
 	} else {
 		saveErr = a.Catalog.UpsertDrive(r.Context(), d)

@@ -133,20 +133,12 @@ func (d *Driver) ID() string     { return d.id }
 func (d *Driver) RootID() string { return d.rootID }
 
 func (d *Driver) Init(ctx context.Context) error {
-	clearPersistedCaptcha := func() {
-		if d.captchaToken == "" {
-			return
-		}
-		d.captchaToken = ""
-		d.persistTokens()
-	}
-
 	if d.refreshToken != "" {
 		if err := d.refresh(ctx, d.refreshToken); err != nil {
 			if !IsCaptchaError(err) || d.username == "" || d.password == "" {
 				return err
 			}
-			clearPersistedCaptcha()
+			d.clearCaptchaToken()
 			if err := d.login(ctx); err != nil {
 				return fmt.Errorf("pikpak refresh captcha recovery login: %w", err)
 			}
@@ -154,7 +146,7 @@ func (d *Driver) Init(ctx context.Context) error {
 			// Persisted captcha tokens are short-lived. With a refresh token we can
 			// safely request a fresh captcha token after auth, and avoiding the
 			// stored value prevents known-stale tokens from poisoning startup.
-			clearPersistedCaptcha()
+			d.clearCaptchaToken()
 		}
 	} else {
 		if err := d.login(ctx); err != nil {

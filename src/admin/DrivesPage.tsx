@@ -39,6 +39,10 @@ import {
 import { StorageSummary } from "./drive/StorageSummary";
 import { DriveDetailLoading, DriveListSkeleton } from "./DrivesPageLoading";
 import { DriveForm } from "./drive/DriveForm";
+import {
+  changedCredentialValues,
+  newDriveCredentialError,
+} from "./drive/credentials";
 import { DeleteDriveModal } from "./drive/DeleteDriveModal";
 import { SkipDirsPanel } from "./drive/SkipDirsPanel";
 import { AdminEmptyVisual } from "./AdminEmptyVisual";
@@ -269,14 +273,10 @@ export function DrivesPage() {
       return;
     }
     if (!form.id) {
-      if (form.kind === "p123") {
-        const hasScannedToken = Boolean((form.creds.access_token ?? "").trim());
-        const hasUsername = Boolean((form.creds.username ?? "").trim());
-        const hasPassword = Boolean((form.creds.password ?? "").trim());
-        if (!hasScannedToken && (!hasUsername || !hasPassword)) {
-          show("请使用方式一扫码登录，或填写方式二的手机号/邮箱和密码", "error");
-          return;
-        }
+      const credentialError = newDriveCredentialError(form.kind, form.creds);
+      if (credentialError) {
+        show(credentialError, "error");
+        return;
       }
       const missingField = credentialFields(form.kind).find(
         (field) =>
@@ -292,6 +292,13 @@ export function DrivesPage() {
     const driveID = existing
       ? form.id
       : makeUniqueDriveId(form.kind, name, list);
+    const credentials = existing && form.kind === "pikpak"
+      ? changedCredentialValues(
+          form.creds,
+          initialForm.creds,
+          credentialFields(form.kind).map((field) => field.key)
+        )
+      : form.creds;
     const rootId = usesRootDirectoryID(form.kind)
       ? form.rootId.trim() || defaultRootId(form.kind)
       : defaultRootId(form.kind);
@@ -302,7 +309,7 @@ export function DrivesPage() {
         kind: form.kind,
         name,
         rootId,
-        credentials: form.creds,
+        credentials,
       });
 
       if (resp.warning) {

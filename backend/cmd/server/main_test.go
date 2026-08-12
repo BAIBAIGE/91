@@ -188,6 +188,72 @@ func TestListDriveDirChildrenPersistsFailureAndRecovery(t *testing.T) {
 	}
 }
 
+func TestListDriveDirChildrenPreservesOriginalAttachFailure(t *testing.T) {
+	ctx := context.Background()
+	cat, err := catalog.Open(filepath.Join(t.TempDir(), "catalog.db"))
+	if err != nil {
+		t.Fatalf("open catalog: %v", err)
+	}
+	t.Cleanup(func() { _ = cat.Close() })
+
+	const attachError = "pikpak error_code=4126 error=invalid_grant description=AccessProhibited"
+	if err := cat.UpsertDrive(ctx, &catalog.Drive{
+		ID:        "pikpak-main",
+		Kind:      "pikpak",
+		Name:      "PikPak",
+		RootID:    "",
+		Status:    "error",
+		LastError: attachError,
+	}); err != nil {
+		t.Fatalf("seed drive: %v", err)
+	}
+
+	app := &App{cat: cat, registry: proxy.NewRegistry()}
+	if _, err := app.listDriveDirChildren(ctx, "pikpak-main", ""); err == nil || !strings.Contains(err.Error(), attachError) {
+		t.Fatalf("dirtree error = %v, want original attach failure", err)
+	}
+
+	got, err := cat.GetDrive(ctx, "pikpak-main")
+	if err != nil {
+		t.Fatalf("get drive: %v", err)
+	}
+	if got.Status != "error" || got.LastError != attachError {
+		t.Fatalf("status=%q lastError=%q, want original attach failure preserved", got.Status, got.LastError)
+	}
+}
+
+func TestListDriveDirChildrenRecordsMissingAttachWithoutOriginalFailure(t *testing.T) {
+	ctx := context.Background()
+	cat, err := catalog.Open(filepath.Join(t.TempDir(), "catalog.db"))
+	if err != nil {
+		t.Fatalf("open catalog: %v", err)
+	}
+	t.Cleanup(func() { _ = cat.Close() })
+
+	if err := cat.UpsertDrive(ctx, &catalog.Drive{
+		ID:     "drive-id",
+		Kind:   "pikpak",
+		Name:   "PikPak",
+		RootID: "",
+		Status: "disconnected",
+	}); err != nil {
+		t.Fatalf("seed drive: %v", err)
+	}
+
+	app := &App{cat: cat, registry: proxy.NewRegistry()}
+	if _, err := app.listDriveDirChildren(ctx, "drive-id", ""); err == nil {
+		t.Fatal("list directory succeeded, want missing-attach error")
+	}
+
+	got, err := cat.GetDrive(ctx, "drive-id")
+	if err != nil {
+		t.Fatalf("get drive: %v", err)
+	}
+	if got.Status != "error" || !strings.Contains(got.LastError, "drive drive-id not attached") {
+		t.Fatalf("status=%q lastError=%q, want missing-attach failure recorded", got.Status, got.LastError)
+	}
+}
+
 func TestEnsureConfigAdminUserMigratesCustomConfigAdmin(t *testing.T) {
 	ctx := context.Background()
 	cat, err := catalog.Open(t.TempDir() + "/catalog.db")

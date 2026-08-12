@@ -1105,11 +1105,41 @@ func (a *App) detachDrive(id string) {
 // 走标准 List + IsDir 过滤 —— 它们的根目录通常不会有几万个文件。
 //
 // drive 未挂载（如凭证错误未通过 Init）时返回 error；前端展示 5xx 给用户。
+type driveNotAttachedError struct {
+	driveID   string
+	lastError string
+}
+
+func (e *driveNotAttachedError) Error() string {
+	message := fmt.Sprintf("drive %s not attached", e.driveID)
+	if e.lastError != "" {
+		message += ": " + e.lastError
+	}
+	return message
+}
+
+func (a *App) currentDriveNotAttachedError(ctx context.Context, driveID string) error {
+	err := &driveNotAttachedError{driveID: driveID}
+	if a != nil && a.cat != nil {
+		if d, getErr := a.cat.GetDrive(ctx, driveID); getErr == nil && d != nil {
+			err.lastError = strings.TrimSpace(d.LastError)
+		}
+	}
+	return err
+}
+
 func (a *App) listDriveDirChildren(ctx context.Context, driveID, parentID string) (children []api.DriveDirEntry, resultErr error) {
 	defer func() {
 		// Closing the directory picker (or navigating away) cancels its request;
 		// that says nothing about the provider's connection state.
 		if errors.Is(resultErr, context.Canceled) {
+			return
+		}
+		var notAttached *driveNotAttachedError
+		if errors.As(resultErr, &notAttached) && notAttached.lastError != "" {
+			// The attach path already persisted the provider's root cause. A
+			// directory picker cannot add new information while no driver exists,
+			// so do not replace that cause with a generic secondary error.
 			return
 		}
 		if resultErr != nil {
@@ -1121,7 +1151,7 @@ func (a *App) listDriveDirChildren(ctx context.Context, driveID, parentID string
 
 	drv, ok := a.registry.Get(driveID)
 	if !ok {
-		return nil, fmt.Errorf("drive %s not attached", driveID)
+		return nil, a.currentDriveNotAttachedError(ctx, driveID)
 	}
 	if parentID == "" {
 		parentID = drv.RootID()
