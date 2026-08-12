@@ -1,4 +1,5 @@
 import type { CSSProperties } from "react";
+import { useCurrentTheme } from "@/lib/useCurrentTheme";
 
 /**
  * 星空蓝主题专属：视口级星星贴纸层。
@@ -9,7 +10,7 @@ import type { CSSProperties } from "react";
  *
  * - 资源在 public/stickers/star-*.gif，会被打包到 dist/stickers/
  * - 渲染在 App 根节点，主站和后台都看得到
- * - data-theme!=="sky" 时 CSS display: none，不占布局
+ * - data-theme!=="sky" 时不创建图片节点，避免下载仅 sky 主题使用的 GIF
  * - aria-hidden + pointer-events: none，对可访问性和点击都透明
  * - 加 / 减 / 调星只动 DESKTOP_STARS / MOBILE_STARS 数组
  */
@@ -69,6 +70,12 @@ const MOBILE_STARS: StarSpec[] = [
 ];
 
 export function SkyStarfield() {
+  const theme = useCurrentTheme();
+
+  if (theme !== "sky") {
+    return null;
+  }
+
   return (
     <div className="sky-starfield" aria-hidden="true">
       {DESKTOP_STARS.map((s, i) => {

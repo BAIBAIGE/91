@@ -2341,6 +2341,7 @@
  * One-time public share page
  * ========================================================= */
 .share-page {
+  --share-page-content-max: 1040px;
   min-height: 100vh;
   min-height: 100dvh;
   display: flex;
@@ -2350,6 +2351,7 @@
 .share-page__header {
   position: relative;
   z-index: 2;
+  padding-top: env(safe-area-inset-top, 0px);
   border-bottom: 1px solid var(--border-subtle);
   background: var(--glass-nav);
   backdrop-filter: blur(16px);
@@ -2357,6 +2359,7 @@
 }
 
 .share-page__header-inner {
+  max-width: var(--share-page-content-max);
   min-height: 64px;
   display: flex;
   align-items: center;
@@ -2397,7 +2400,7 @@
 
 .share-page__main {
   width: 100%;
-  max-width: 1040px;
+  max-width: var(--share-page-content-max);
   flex: 1;
   padding-top: var(--space-7);
   padding-bottom: var(--space-9);

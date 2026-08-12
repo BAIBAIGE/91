@@ -215,19 +215,26 @@ export default function ShortsPage() {
   // 同一个真实 <video>，滑动时只移动节点并更换 src。
   const useIOSSharedVideo = shouldUseIOSSharedVideo();
 
-  const handleBackToHomeClick = useCallback(
-    (event: React.MouseEvent<HTMLAnchorElement>) => {
-      // 主页导航点击 documentElement 后进入的是“文档全屏”，SPA 路由切换
-      // 不会自动退出。先等待 Fullscreen API 完成，再渲染首页，避免首页继承
-      // 短视频的全屏状态或先以全屏闪现。
+  const handleShortsRouteClick = useCallback(
+    (event: React.MouseEvent<HTMLAnchorElement>, destination: string) => {
+      // 主导航点击 documentElement 后进入的是“文档全屏”，SPA 路由切换
+      // 不会自动退出。所有离开短视频页的站内链接都先等待 Fullscreen API
+      // 完成，再渲染目标页，避免目标页继承全屏状态或先以全屏闪现。
       const exitRequest = exitDocumentFullscreen();
       if (!exitRequest) return;
 
       event.preventDefault();
-      const returnHome = () => navigate("/");
-      void exitRequest.then(returnHome, returnHome);
+      const completeNavigation = () => navigate(destination);
+      void exitRequest.then(completeNavigation, completeNavigation);
     },
     [navigate]
+  );
+
+  const handleBackToHomeClick = useCallback(
+    (event: React.MouseEvent<HTMLAnchorElement>) => {
+      handleShortsRouteClick(event, "/");
+    },
+    [handleShortsRouteClick]
   );
 
   function getVideoAtIndex(index: number) {
@@ -1088,6 +1095,7 @@ export default function ShortsPage() {
               onSourceCached={handleSourceCached}
               onUserPausedChange={setUserPausedForIndex}
               isVideoPausedByUser={isVideoPausedByUser}
+              onRouteClick={handleShortsRouteClick}
               showHud={showHud}
               loopDebugProbeRef={
                 debugHudEnabled ? loopDebugProbeRef : undefined
@@ -1160,10 +1168,20 @@ type SlideProps = {
   onSourceCached: (videoId: string) => void;
   onUserPausedChange: (index: number, isPaused: boolean) => void;
   isVideoPausedByUser: (index: number) => boolean;
+  /** 离开沉浸式短视频页前统一退出文档全屏。 */
+  onRouteClick: (
+    event: React.MouseEvent<HTMLAnchorElement>,
+    destination: string
+  ) => void;
   showHud: (text: string, icon?: React.ReactNode) => void;
   /** ?debug=1 时活跃 slide 在这里挂一个循环重启状态读取器，供面板轮询。 */
   loopDebugProbeRef?: React.MutableRefObject<ShortsLoopDebugProbe | null>;
 };
+
+type ShortsPlaybackFailure =
+  | "media-error"
+  | "play-rejected"
+  | "loop-restart";
 
 /**
  * 一屏短视频。
@@ -1197,6 +1215,7 @@ function ShortsSlideImpl({
   onSourceCached,
   onUserPausedChange,
   isVideoPausedByUser,
+  onRouteClick,
   showHud,
   loopDebugProbeRef,
 }: SlideProps) {
@@ -1230,6 +1249,8 @@ function ShortsSlideImpl({
     return localRef.current;
   }, [sharedVideoRef]);
   const [paused, setPaused] = useState(false);
+  const [playbackFailure, setPlaybackFailure] =
+    useState<ShortsPlaybackFailure | null>(null);
   const [fastActive, setFastActive] = useState(false);
 
   // 视频缓冲状态
@@ -1251,6 +1272,7 @@ function ShortsSlideImpl({
     averageBytesPerSecond(item)
   );
   const preloadKeepSeconds = preloadKeepSecondsFor(preloadBufferSeconds);
+  const detailPath = `/video/${encodeURIComponent(item.id)}`;
 
   // 时长是低频元数据，保留在 state。播放进度是高频信号：放进 ref 并直接
   // 写进度条 CSS 变量，避免 timeupdate/rVFC 让整棵 ShortsSlide 每秒重渲染。
@@ -1397,6 +1419,23 @@ function ShortsSlideImpl({
     playbackMotionFrameCountRef.current = 0;
   }, [clearLoopRestartWatchdog]);
 
+  // 媒体故障和用户暂停是两种不同状态。所有不可自行恢复的播放路径都汇总
+  // 到这里，统一收起瞬时手势/缓冲态，并交给显式的“重新播放”入口恢复。
+  const exposePlaybackFailure = useCallback(
+    (failure: ShortsPlaybackFailure) => {
+      hasStartedPlayingRef.current = false;
+      playbackMotionFrameCountRef.current = 0;
+      scrubbingRef.current = false;
+      setScrubbing(false);
+      setFastActive(false);
+      setPlaybackFailure(failure);
+      setPaused(true);
+      setIsBuffering(false);
+      onActiveNeedsPriority(index);
+    },
+    [index, onActiveNeedsPriority, setIsBuffering]
+  );
+
   const confirmPresentedPlayback = useCallback(
     (mediaTime?: number) => {
       clearLoopRestartWatchdog();
@@ -1405,6 +1444,7 @@ function ShortsSlideImpl({
       loopRestartReloadedRef.current = false;
       hasStartedPlayingRef.current = true;
       playbackMotionFrameCountRef.current = 0;
+      setPlaybackFailure(null);
       setPaused(false);
       setIsBuffering(false);
       if (
@@ -1466,6 +1506,7 @@ function ShortsSlideImpl({
 
   // 非当前屏/后续预加载/视频窗口内缓存视频不保留媒体源，确保离开窗口后浏览器中止原始网盘流。
   useEffect(() => {
+    if (!shouldLoad) setPlaybackFailure(null);
     if (usesSharedVideo) {
       if (!shouldLoad) {
         resetLoopRestartState();
@@ -1514,9 +1555,16 @@ function ShortsSlideImpl({
 
     const markPlayBlocked = () => {
       if (!canContinue()) return;
+      // NotAllowedError 是浏览器的自动播放策略，不代表媒体源损坏。
+      setPlaybackFailure(null);
       setIsBuffering(false);
       setPaused(true);
       onActiveNeedsPriority(index);
+    };
+
+    const markPlayFailed = () => {
+      if (!canContinue()) return;
+      exposePlaybackFailure("play-rejected");
     };
 
     const attemptPlay = () => {
@@ -1537,8 +1585,12 @@ function ShortsSlideImpl({
       let request: Promise<void> | undefined;
       try {
         request = video.play();
-      } catch {
-        markPlayBlocked();
+      } catch (error: unknown) {
+        if (getMediaErrorName(error) === "NotAllowedError") {
+          markPlayBlocked();
+        } else {
+          markPlayFailed();
+        }
         return;
       }
 
@@ -1553,7 +1605,11 @@ function ShortsSlideImpl({
           retryTimer = window.setTimeout(attemptPlay, retryCount * 120);
           return;
         }
-        markPlayBlocked();
+        if (errorName === "NotAllowedError") {
+          markPlayBlocked();
+          return;
+        }
+        markPlayFailed();
       });
     };
 
@@ -1581,6 +1637,7 @@ function ShortsSlideImpl({
       video.removeEventListener("canplay", retryWhenReady);
     };
   }, [
+    exposePlaybackFailure,
     getVideoElement,
     index,
     isActive,
@@ -1629,9 +1686,7 @@ function ShortsSlideImpl({
         // ignore
       }
       resetLoopRestartState();
-      setIsBuffering(false);
-      setPaused(true);
-      onActiveNeedsPriority(index);
+      exposePlaybackFailure("loop-restart");
     };
 
     const attemptRestart = (attempt: number) => {
@@ -1667,7 +1722,7 @@ function ShortsSlideImpl({
         }
 
         // 同一节点已经重建过一次播放管线仍没有任何呈现帧，就退出永久
-        // buffering，展示可点击的暂停态，让用户可以主动重试。
+        // buffering，展示明确的失败态，让用户可以主动重试。
         if (loopRestartReloadedRef.current) {
           failRestart(attempt);
           return;
@@ -1810,6 +1865,7 @@ function ShortsSlideImpl({
     };
   }, [
     clearLoopRestartWatchdog,
+    exposePlaybackFailure,
     getVideoElement,
     index,
     isActive,
@@ -2051,10 +2107,7 @@ function ShortsSlideImpl({
       if (usesSharedVideo && !video.error) return;
       if (!isActive) return;
       if (usesSharedVideo) resetLoopRestartState();
-      hasStartedPlayingRef.current = false;
-      setIsBuffering(false);
-      setPaused(true);
-      onActiveNeedsPriority(index);
+      exposePlaybackFailure("media-error");
     };
 
     function syncActivePreloadReadiness(currentVideo: HTMLVideoElement) {
@@ -2117,6 +2170,7 @@ function ShortsSlideImpl({
     clearBufferingIndicatorTimer,
     clearLoopRestartWatchdog,
     confirmPresentedPlayback,
+    exposePlaybackFailure,
     getVideoElement,
     index,
     isActive,
@@ -2254,18 +2308,16 @@ function ShortsSlideImpl({
 
   function togglePlayInternal() {
     const video = getVideoElement();
-    if (!video) return;
+    if (!video || playbackFailure) return;
     const shouldResume =
       isVideoPausedByUser(index) || (video.paused && !isBuffering);
     if (shouldResume) {
       onUserPausedChange(index, false);
       setPaused(false);
       if (video.readyState < 3) setIsBuffering(true);
-      video.play().catch(() => {
-        if (getVideoElement() !== video || !isActiveRef.current) return;
-        setPaused(true);
-        setIsBuffering(false);
-      });
+      video
+        .play()
+        .catch((error: unknown) => handleUserPlayFailure(video, error));
     } else {
       onUserPausedChange(index, true);
       video.pause();
@@ -2278,22 +2330,64 @@ function ShortsSlideImpl({
   // 首次点击必须在原始 click 回调内直接 play()；分发时序见 useShortsSlideGestures。
   function shouldResumeImmediatelyOnClick() {
     const video = getVideoElement();
-    return Boolean(video?.paused && !isBuffering);
+    return Boolean(video?.paused && !isBuffering && !playbackFailure);
   }
 
   function handleImmediateResume() {
     const video = getVideoElement();
-    if (!video) return;
+    if (!video || playbackFailure) return;
     onUserPausedChange(index, false);
     setPaused(false);
     if (video.readyState < HTMLMediaElement.HAVE_FUTURE_DATA) {
       setIsBuffering(true);
     }
-    video.play().catch(() => {
-      if (getVideoElement() !== video || !isActiveRef.current) return;
+    video
+      .play()
+      .catch((error: unknown) => handleUserPlayFailure(video, error));
+  }
+
+  function handleUserPlayFailure(
+    video: HTMLVideoElement,
+    error: unknown
+  ) {
+    if (getVideoElement() !== video || !isActiveRef.current) return;
+    if (getMediaErrorName(error) === "NotAllowedError") {
+      setPlaybackFailure(null);
       setPaused(true);
       setIsBuffering(false);
-    });
+      onActiveNeedsPriority(index);
+      return;
+    }
+    exposePlaybackFailure("play-rejected");
+  }
+
+  function handlePlaybackRetry(e: React.MouseEvent<HTMLButtonElement>) {
+    e.stopPropagation();
+    const video = getVideoElement();
+    if (!video || !isActiveRef.current || !shouldLoadRef.current) return;
+
+    resetLoopRestartState();
+    hasStartedPlayingRef.current = false;
+    playbackMotionFrameCountRef.current = 0;
+    onUserPausedChange(index, false);
+    setPlaybackFailure(null);
+    setPaused(false);
+    setFastActive(false);
+    normalizeVideoPlaybackRate(video);
+    applyVideoMutedState(video, mutedRef.current);
+    setIsBuffering(true);
+    onActiveNeedsPriority(index);
+
+    try {
+      // 复用当前 media element，只重建已经失败的媒体管线。iOS 上不能替换
+      // 节点，否则会丢失用户授予这个元素的有声播放权限。
+      video.load();
+      video
+        .play()
+        .catch((error: unknown) => handleUserPlayFailure(video, error));
+    } catch (error: unknown) {
+      handleUserPlayFailure(video, error);
+    }
   }
 
   // 手势输入：长按倍速、横滑快进、单/双击分发、进度条拖动
@@ -2305,7 +2399,7 @@ function ShortsSlideImpl({
   } = useShortsSlideGestures({
     getVideoElement,
     shouldMount,
-    disabled: isMarkedHidden,
+    disabled: isMarkedHidden || playbackFailure !== null,
     scrubbingRef,
     setScrubbing,
     setFastActive,
@@ -2517,7 +2611,7 @@ function ShortsSlideImpl({
 
 
 
-      {paused && isActive && !scrubbing && (
+      {paused && !playbackFailure && isActive && !scrubbing && (
         <div className="shorts-slide__paused" aria-hidden="true">
           <span className="shorts-slide__paused-icon">
             <Play size={22} fill="currentColor" strokeWidth={1.75} />
@@ -2526,9 +2620,38 @@ function ShortsSlideImpl({
       )}
 
       {/* 视频加载/缓冲旋转器 */}
-      {isBuffering && isActive && shouldLoad && !isMarkedHidden && (
+      {isBuffering &&
+        !playbackFailure &&
+        isActive &&
+        shouldLoad &&
+        !isMarkedHidden && (
         <div className="shorts-slide__buffering" aria-hidden="true">
           <ShortsLoadingSpinner size={30} />
+        </div>
+      )}
+
+      {playbackFailure && isActive && !isMarkedHidden && (
+        <div
+          className="shorts-slide__playback-error"
+          role="alert"
+          data-playback-failure={playbackFailure}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <AlertCircle size={28} aria-hidden="true" />
+          <div className="shorts-slide__playback-error-copy">
+            <div className="shorts-slide__playback-error-title">播放失败</div>
+            <div className="shorts-slide__playback-error-message">
+              视频暂时无法播放
+            </div>
+          </div>
+          <button
+            type="button"
+            className="shorts-slide__playback-retry"
+            onClick={handlePlaybackRetry}
+          >
+            <Play size={15} fill="currentColor" aria-hidden="true" />
+            <span>重新播放</span>
+          </button>
         </div>
       )}
 
@@ -2556,8 +2679,9 @@ function ShortsSlideImpl({
           )}
         </div>
         <Link
-          to={`/video/${encodeURIComponent(item.id)}`}
+          to={detailPath}
           className="shorts-slide__detail"
+          onClick={(event) => onRouteClick(event, detailPath)}
         >
           <Info size={13} />
           <span>查看详情</span>
@@ -2629,7 +2753,11 @@ function ShortsSlideImpl({
 
       {/* 移动端左右滑动 / 拖动进度时的时间提示。独立于底部进度条，
           这样可以在触屏设备上放到页面顶部且不受底部容器定位限制。 */}
-      {scrubbing && isActive && shouldLoad && !isMarkedHidden && (
+      {scrubbing &&
+        !playbackFailure &&
+        isActive &&
+        shouldLoad &&
+        !isMarkedHidden && (
         <div
           ref={progressTimeRef}
           className="shorts-slide__progress-time"
@@ -2640,7 +2768,7 @@ function ShortsSlideImpl({
       )}
 
       {/* 进度条 */}
-      {isActive && shouldLoad && !isMarkedHidden && (
+      {isActive && shouldLoad && !isMarkedHidden && !playbackFailure && (
         <div
           className={`shorts-slide__progress ${
             scrubbing ? "is-scrubbing" : ""

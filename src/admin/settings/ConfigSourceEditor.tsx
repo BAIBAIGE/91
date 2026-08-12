@@ -1,10 +1,10 @@
-import { useEffect, useMemo, useState, type Ref } from "react";
+import { useMemo, type Ref } from "react";
 import CodeMirror, {
   EditorView,
   type ReactCodeMirrorRef,
 } from "@uiw/react-codemirror";
 import { yaml } from "@codemirror/lang-yaml";
-import { getCurrentTheme } from "@/lib/theme";
+import { useCurrentTheme } from "@/lib/useCurrentTheme";
 
 type Props = {
   editorRef?: Ref<ReactCodeMirrorRef>;
@@ -13,28 +13,18 @@ type Props = {
   onChange: (value: string) => void;
 };
 
-function currentEditorTheme(): "light" | "dark" {
-  return getCurrentTheme() === "pink" ? "light" : "dark";
-}
-
 export default function ConfigSourceEditor({
   editorRef,
   value,
   disabled,
   onChange,
 }: Props) {
-  const [theme, setTheme] = useState<"light" | "dark">(currentEditorTheme);
+  const activeTheme = useCurrentTheme();
+  const theme = activeTheme === "pink" ? "light" : "dark";
   const extensions = useMemo(
     () => [yaml(), EditorView.contentAttributes.of({ "aria-label": "config.yaml 源码" })],
     []
   );
-
-  useEffect(() => {
-    const root = document.documentElement;
-    const observer = new MutationObserver(() => setTheme(currentEditorTheme()));
-    observer.observe(root, { attributes: true, attributeFilter: ["data-theme"] });
-    return () => observer.disconnect();
-  }, []);
 
   return (
     <CodeMirror

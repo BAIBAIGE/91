@@ -82,7 +82,7 @@ test("shorts progress dragging uses immediate pointer state", () => {
 test("mobile shorts scrubbing time is shown at the top", () => {
   assert.match(
     shortsPageSource,
-    /\{scrubbing && isActive && shouldLoad && !isMarkedHidden && \(\s*<div\s*ref=\{progressTimeRef\}\s*className="shorts-slide__progress-time"\s*aria-live="polite"\s*>\s*\{formatClock\(currentTimeRef\.current\)\} \/ \{formatClock\(duration\)\}/
+    /\{scrubbing &&\s*!playbackFailure &&\s*isActive &&\s*shouldLoad &&\s*!isMarkedHidden && \(\s*<div\s*ref=\{progressTimeRef\}\s*className="shorts-slide__progress-time"\s*aria-live="polite"\s*>\s*\{formatClock\(currentTimeRef\.current\)\} \/ \{formatClock\(duration\)\}/
   );
   assert.doesNotMatch(
     shortsPageSource,
@@ -91,6 +91,42 @@ test("mobile shorts scrubbing time is shown at the top", () => {
   assert.match(
     shortsCssSource,
     /@media \(hover: none\) and \(pointer: coarse\) \{\s*\.shorts-slide__progress-time \{\s*top: calc\(env\(safe-area-inset-top\) \+ 76px\);\s*bottom: auto;/
+  );
+});
+
+test("mobile shorts title stays plain text without creating a gesture dead zone", () => {
+  assert.match(
+    shortsPageSource,
+    /const detailPath = `\/video\/\$\{encodeURIComponent\(item\.id\)\}`;/
+  );
+  assert.match(
+    shortsPageSource,
+    /<h2 className="shorts-slide__title">\{item\.title\}<\/h2>/
+  );
+  assert.doesNotMatch(shortsPageSource, /shorts-slide__title-link/);
+  assert.match(
+    shortsCssSource,
+    /\.shorts-slide__detail \{\s*pointer-events: auto;/
+  );
+  assert.doesNotMatch(shortsCssSource, /\.shorts-slide__overlay \* \{/);
+  assert.match(
+    shortsCssSource,
+    /@media \(max-width: 768px\) \{\s*\.shorts-slide__detail \{\s*display: none !important;/
+  );
+});
+
+test("low-height landscape shorts keep actions below the header", () => {
+  assert.match(
+    shortsCssSource,
+    /\.shorts-slide__actions \{[\s\S]*?right: calc\(14px \+ env\(safe-area-inset-right\)\);/
+  );
+  assert.match(
+    shortsCssSource,
+    /@media \(orientation: landscape\) and \(max-height: 520px\) \{[\s\S]*?\.shorts-slide__actions \{\s*top: calc\(env\(safe-area-inset-top\) \+ 68px\);\s*bottom: auto;\s*gap: 12px;\s*\}[\s\S]*?\.shorts-drive-badge \{\s*display: none;/
+  );
+  assert.match(
+    shortsCssSource,
+    /padding: env\(safe-area-inset-top\)\s*calc\(16px \+ env\(safe-area-inset-right\)\) 0\s*calc\(16px \+ env\(safe-area-inset-left\)\);/
   );
 });
 
@@ -245,6 +281,58 @@ test("shorts retries interrupted active playback and exposes rejected autoplay",
   );
 });
 
+test("shorts exposes media failures separately from pause and retries in place", () => {
+  assert.match(
+    shortsPageSource,
+    /type ShortsPlaybackFailure =\s*\| "media-error"\s*\| "play-rejected"\s*\| "loop-restart";/
+  );
+  assert.match(
+    shortsPageSource,
+    /const \[playbackFailure, setPlaybackFailure\] =\s*useState<ShortsPlaybackFailure \| null>\(null\);/
+  );
+
+  const mediaErrorStart = shortsPageSource.indexOf("const handleError = () => {");
+  const mediaErrorEnd = shortsPageSource.indexOf(
+    "function syncActivePreloadReadiness",
+    mediaErrorStart
+  );
+  assert.ok(mediaErrorStart >= 0 && mediaErrorEnd > mediaErrorStart);
+  const mediaErrorBlock = shortsPageSource.slice(mediaErrorStart, mediaErrorEnd);
+  assert.match(mediaErrorBlock, /exposePlaybackFailure\("media-error"\);/);
+  assert.doesNotMatch(mediaErrorBlock, /setPaused\(true\)/);
+
+  assert.match(shortsPageSource, /exposePlaybackFailure\("play-rejected"\);/);
+  assert.match(shortsPageSource, /exposePlaybackFailure\("loop-restart"\);/);
+  assert.match(
+    shortsPageSource,
+    /\{paused && !playbackFailure && isActive && !scrubbing && \(/
+  );
+  assert.match(
+    shortsPageSource,
+    /className="shorts-slide__playback-error"\s*role="alert"[\s\S]*?<div className="shorts-slide__playback-error-title">播放失败<\/div>[\s\S]*?className="shorts-slide__playback-retry"[\s\S]*?<span>重新播放<\/span>/
+  );
+
+  const retryStart = shortsPageSource.indexOf("function handlePlaybackRetry(");
+  const retryEnd = shortsPageSource.indexOf("// 手势输入", retryStart);
+  assert.ok(retryStart >= 0 && retryEnd > retryStart);
+  const retryBlock = shortsPageSource.slice(retryStart, retryEnd);
+  assert.match(retryBlock, /resetLoopRestartState\(\);/);
+  assert.match(retryBlock, /video\.load\(\);/);
+  assert.match(retryBlock, /\.play\(\)/);
+  assert.match(
+    shortsPageSource,
+    /disabled: isMarkedHidden \|\| playbackFailure !== null/
+  );
+  assert.match(
+    slideGesturesSource,
+    /const start = \(\) => \{\s*if \(optionsRef\.current\.disabled\) return;/
+  );
+  assert.match(
+    shortsCssSource,
+    /\.shorts-slide__playback-error \{[\s\S]*?z-index: 18;[\s\S]*?backdrop-filter: blur\(14px\);/
+  );
+});
+
 test("shorts keyboard play pause does not show a toast", () => {
   const keyboardBlock = /else if \(e\.key === " "\) \{[\s\S]*?\} else if \(e\.key === "m"/.exec(useShortsKeyboardSource);
   assert.ok(keyboardBlock, "space key handler should be present");
@@ -364,7 +452,7 @@ test("shorts play pause does not render transient center hud", () => {
   assert.doesNotMatch(shortsCssSource, /@keyframes shorts-hud-pop/);
   assert.match(
     shortsPageSource,
-    /\{paused && isActive && !scrubbing && \(\s*<div className="shorts-slide__paused"/
+    /\{paused && !playbackFailure && isActive && !scrubbing && \(\s*<div className="shorts-slide__paused"/
   );
   assert.match(
     shortsPageSource,
@@ -1259,12 +1347,12 @@ test("shorts keeps per-swipe work off the queue length", () => {
   );
 });
 
-test("shorts back button exits document fullscreen before showing home", () => {
+test("shorts links exit document fullscreen before leaving the immersive page", () => {
   assert.match(shortsPageSource, /import \{ Link, useNavigate \} from "react-router";/);
   assert.match(shortsPageSource, /const navigate = useNavigate\(\);/);
   assert.match(
     shortsPageSource,
-    /const handleBackToHomeClick = useCallback\([\s\S]*?const exitRequest = exitDocumentFullscreen\(\);[\s\S]*?if \(!exitRequest\) return;[\s\S]*?event\.preventDefault\(\);[\s\S]*?exitRequest\.then\(returnHome, returnHome\)/
+    /const handleShortsRouteClick = useCallback\([\s\S]*?const exitRequest = exitDocumentFullscreen\(\);[\s\S]*?if \(!exitRequest\) return;[\s\S]*?event\.preventDefault\(\);[\s\S]*?const completeNavigation = \(\) => navigate\(destination\);[\s\S]*?exitRequest\.then\(completeNavigation, completeNavigation\)/
   );
   assert.match(
     shortsPageSource,
@@ -1273,6 +1361,15 @@ test("shorts back button exits document fullscreen before showing home", () => {
   assert.match(
     shortsPageSource,
     /<Link\s*to="\/"[\s\S]*?className="shorts-header__back"[\s\S]*?onClick=\{handleBackToHomeClick\}/
+  );
+  assert.match(
+    shortsPageSource,
+    /onRouteClick=\{handleShortsRouteClick\}/
+  );
+  assert.doesNotMatch(shortsPageSource, /shorts-slide__title-link/);
+  assert.match(
+    shortsPageSource,
+    /className="shorts-slide__detail"\s*onClick=\{\(event\) => onRouteClick\(event, detailPath\)\}/
   );
 });
 

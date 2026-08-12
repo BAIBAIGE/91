@@ -52,7 +52,7 @@ export function computeTouchSeekTime(input: {
 export type ShortsSlideGesturesOptions = {
   getVideoElement: () => HTMLVideoElement | null;
   shouldMount: boolean;
-  /** 隐藏遮罩等禁用交互的状态下不响应点击 */
+  /** 隐藏遮罩、播放失败等禁用交互的状态下不响应媒体手势 */
   disabled: boolean;
   /** 拖动中标记；媒体事件回调靠它忽略拖动期间的进度更新 */
   scrubbingRef: React.MutableRefObject<boolean>;
@@ -219,10 +219,12 @@ export function useShortsSlideGestures(options: ShortsSlideGesturesOptions) {
       }
     };
     const start = () => {
+      if (optionsRef.current.disabled) return;
       if (video.paused || video.ended) return;
       clearTimer();
       timer = window.setTimeout(() => {
         timer = null;
+        if (optionsRef.current.disabled) return;
         if (video.paused || video.ended) return;
         video.playbackRate = 2;
         active = true;
@@ -256,6 +258,7 @@ export function useShortsSlideGestures(options: ShortsSlideGesturesOptions) {
     };
 
     const handleTouchStart = (event: TouchEvent) => {
+      if (optionsRef.current.disabled) return;
       if (event.touches.length !== 1) return;
       const touch = event.touches[0];
       touchSeekState = {
@@ -270,6 +273,11 @@ export function useShortsSlideGestures(options: ShortsSlideGesturesOptions) {
     };
 
     const handleTouchMove = (event: TouchEvent) => {
+      if (optionsRef.current.disabled) {
+        resetTouchSeek();
+        end();
+        return;
+      }
       if (!touchSeekState) return;
       if (event.touches.length !== 1) {
         resetTouchSeek();
@@ -441,6 +449,7 @@ export function useShortsSlideGestures(options: ShortsSlideGesturesOptions) {
   function handleProgressPointerDown(e: React.PointerEvent<HTMLDivElement>) {
     e.preventDefault();
     e.stopPropagation();
+    if (options.disabled) return;
     const video = options.getVideoElement();
     const seekDuration = options.getSeekDuration(video);
     if (!video || !seekDuration) return;

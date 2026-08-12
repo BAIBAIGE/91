@@ -97,6 +97,25 @@ test("share page fits the visible mobile viewport without a forced scrollbar", (
   assert.doesNotMatch(baseStylesSource, /html\s*\{[\s\S]*?overflow-y:\s*scroll;/);
 });
 
+test("share header logo aligns with the video content and clears the safe area", () => {
+  assert.match(
+    shareStylesSource,
+    /\.share-page\s*\{\s*--share-page-content-max:\s*1040px;/
+  );
+  assert.match(
+    shareStylesSource,
+    /\.share-page__header\s*\{[\s\S]*?padding-top:\s*env\(safe-area-inset-top, 0px\);/
+  );
+  assert.match(
+    shareStylesSource,
+    /\.share-page__header-inner\s*\{\s*max-width:\s*var\(--share-page-content-max\);/
+  );
+  assert.match(
+    shareStylesSource,
+    /\.share-page__main\s*\{[\s\S]*?max-width:\s*var\(--share-page-content-max\);/
+  );
+});
+
 test("the share footer text links to the project repository", () => {
   assert.match(
     sharePageSource,

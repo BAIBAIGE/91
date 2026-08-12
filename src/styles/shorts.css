@@ -86,7 +86,9 @@ body.shorts-document-scroll::before {
   z-index: 20;
   /* 用 padding-top 把 header 内容压到 safe area 下面，
      这样刘海/状态栏不会盖住返回按钮 */
-  padding: env(safe-area-inset-top) 16px 0 16px;
+  padding: env(safe-area-inset-top)
+    calc(16px + env(safe-area-inset-right)) 0
+    calc(16px + env(safe-area-inset-left));
   height: calc(64px + env(safe-area-inset-top));
   display: flex;
   align-items: center;
@@ -331,6 +333,83 @@ body.shorts-document-scroll::before {
   transform: translateX(1px);
 }
 
+/* 媒体故障独立于暂停态：明确说明失败，并提供由用户手势触发的重载入口。 */
+.shorts-slide__playback-error {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: min(280px, calc(100% - 48px));
+  padding: 18px;
+  border-radius: 18px;
+  background: rgba(10, 10, 12, 0.82);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  color: #fff;
+  z-index: 18;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  text-align: center;
+  cursor: default;
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  box-shadow: 0 16px 42px rgba(0, 0, 0, 0.48);
+}
+
+.shorts-slide__playback-error > svg {
+  color: #ff6a7f;
+}
+
+.shorts-slide__playback-error-copy {
+  display: grid;
+  gap: 3px;
+}
+
+.shorts-slide__playback-error-title {
+  font-size: 16px;
+  line-height: 1.35;
+  font-weight: 700;
+}
+
+.shorts-slide__playback-error-message {
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.shorts-slide__playback-retry {
+  min-height: 40px;
+  padding: 0 16px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  background: rgba(255, 255, 255, 0.14);
+  color: #fff;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 650;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: background-color 0.18s ease, transform 0.18s ease;
+}
+
+.shorts-slide__playback-retry:hover {
+  background: rgba(255, 255, 255, 0.22);
+}
+
+.shorts-slide__playback-retry:active {
+  transform: scale(0.96);
+}
+
+.shorts-slide__playback-retry:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 3px;
+}
+
 /* 2x 倍速指示 */
 .shorts-slide__rate-hint {
   position: absolute;
@@ -387,9 +466,9 @@ body.shorts-document-scroll::before {
 /* ---------- 底部信息覆盖层 ---------- */
 .shorts-slide__overlay {
   position: absolute;
-  left: 0;
+  left: env(safe-area-inset-left);
   /* 给右侧操作栏让出更多位置，并提高人体工学间隔 */
-  right: 80px;
+  right: calc(80px + env(safe-area-inset-right));
   /* 抬高以腾出空间给下方的进度条，避免文字与进度条重叠 */
   bottom: calc(env(safe-area-inset-bottom) + 52px);
   padding: 0 16px 10px 16px;
@@ -413,7 +492,7 @@ body.shorts-document-scroll::before {
   opacity: 1;
 }
 
-.shorts-slide__overlay * {
+.shorts-slide__detail {
   pointer-events: auto;
 }
 
@@ -489,7 +568,7 @@ body.shorts-document-scroll::before {
 /* ---------- 右下角竖排操作栏 (符合人体工学的拇指扇形热区) ---------- */
 .shorts-slide__actions {
   position: absolute;
-  right: 14px;
+  right: calc(14px + env(safe-area-inset-right));
   /* 进一步抬升操作栏高度，避开底部交互，符合右手大拇指舒适操纵热区 */
   bottom: calc(env(safe-area-inset-bottom) + 120px);
   display: flex;
@@ -590,6 +669,21 @@ body.shorts-document-scroll::before {
   box-shadow: 0 0 12px rgba(255, 255, 255, 0.2), 0 4px 12px rgba(0, 0, 0, 0.35);
 }
 
+/* 低高度横屏不能沿用竖屏的 bottom 锚点：操作项总高度会向上侵入 header。
+   改由 header 下沿向下排列，并隐藏重复的非交互来源徽章，给操作按钮一个
+   稳定、可计算的纵向区域。 */
+@media (orientation: landscape) and (max-height: 520px) {
+  .shorts-slide__actions {
+    top: calc(env(safe-area-inset-top) + 68px);
+    bottom: auto;
+    gap: 12px;
+  }
+
+  .shorts-drive-badge {
+    display: none;
+  }
+}
+
 /* 点赞激活态 (高对比度红粉发光) */
 .shorts-slide__action.is-liked {
   color: #ff4060;
@@ -668,7 +762,8 @@ body.shorts-document-scroll::before {
   position: relative;
   border-radius: 99px;
   transition: height 0.15s ease, background-color 0.15s ease;
-  margin: 0 16px;
+  margin-left: calc(16px + env(safe-area-inset-left));
+  margin-right: calc(16px + env(safe-area-inset-right));
 }
 
 /* 进度条悬停/激活手柄 (微型发光白点) */
