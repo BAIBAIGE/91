@@ -6,10 +6,11 @@ REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 APP_NAME="${APP_NAME:-video-site-91}"
 BACKEND_SERVICE="${BACKEND_SERVICE:-video-site-backend}"
+# Kept only to retire installations created by the old two-service topology.
 FRONTEND_SERVICE="${FRONTEND_SERVICE:-video-site-frontend}"
-FRONTEND_HOST="${FRONTEND_HOST:-0.0.0.0}"
 FRONTEND_PORT="${FRONTEND_PORT:-9191}"
-BACKEND_LISTEN="${BACKEND_LISTEN:-127.0.0.1:9192}"
+BACKEND_LISTEN_WAS_SET="${BACKEND_LISTEN+x}"
+BACKEND_LISTEN="${BACKEND_LISTEN:-0.0.0.0:${FRONTEND_PORT}}"
 GO_VERSION="${GO_VERSION:-1.23.12}"
 INSTALL_DEPS="${INSTALL_DEPS:-1}"
 CONFIGURE_UFW="${CONFIGURE_UFW:-1}"
@@ -38,16 +39,17 @@ Default action:
 
 Actions:
   install    First deployment or full repair
-  update     Rebuild current code and restart services
-  restart    Restart systemd services
-  stop       Stop systemd services
+  update     Rebuild current code and restart the service
+  restart    Restart the systemd service
+  stop       Stop the systemd service
   status     Show service status
-  logs       Follow backend and frontend logs
-  uninstall  Remove systemd services only; keep repo, config, and data
+  logs       Follow backend logs
+  uninstall  Remove systemd service files only; keep repo, config, and data
 
 Common overrides:
   FRONTEND_PORT=9191      Public web port
-  FRONTEND_HOST=0.0.0.0   Public web bind address
+  BACKEND_LISTEN=0.0.0.0:9191
+                          Frontend, API, and media bind address
   GO_VERSION=1.23.12
   INSTALL_DEPS=0          Do not install missing Node/Go/ffmpeg/Python runtime deps
   CONFIGURE_UFW=0         Do not open UFW port automatically
@@ -224,6 +226,12 @@ prepare_config() {
     log "creating backend/config.yaml from example"
     cp "$example" "$cfg"
     sed -i -E "s#listen: \".*\"#listen: \"$BACKEND_LISTEN\"#" "$cfg"
+  elif [[ -n "$BACKEND_LISTEN_WAS_SET" ]]; then
+    log "updating backend listen address from BACKEND_LISTEN"
+    sed -i -E "s#listen: \".*\"#listen: \"$BACKEND_LISTEN\"#" "$cfg"
+  elif grep -Eq '^[[:space:]]*listen:[[:space:]]*"?127\.0\.0\.1:9192"?[[:space:]]*$' "$cfg"; then
+    log "migrating legacy two-service listen address to $BACKEND_LISTEN"
+    sed -i -E "s#listen: \"?127\.0\.0\.1:9192\"?#listen: \"$BACKEND_LISTEN\"#" "$cfg"
   else
     log "backend/config.yaml already exists; keeping it"
   fi
@@ -262,11 +270,18 @@ systemd_env_lines() {
   printf '%s' "$lines"
 }
 
+retire_legacy_frontend_service() {
+  local frontend_unit="/etc/systemd/system/${FRONTEND_SERVICE}.service"
+  if [[ -e "$frontend_unit" ]] || systemctl is-active --quiet "${FRONTEND_SERVICE}.service" 2>/dev/null; then
+    log "retiring legacy frontend service; backend now serves dist directly"
+  fi
+  systemctl disable --now "${FRONTEND_SERVICE}.service" >/dev/null 2>&1 || true
+  rm -f "$frontend_unit"
+}
+
 write_systemd_units() {
-  local npm_bin backend_unit frontend_unit env_lines
-  npm_bin="$(command -v npm)"
+  local backend_unit env_lines
   backend_unit="/etc/systemd/system/${BACKEND_SERVICE}.service"
-  frontend_unit="/etc/systemd/system/${FRONTEND_SERVICE}.service"
   env_lines="$(systemd_env_lines)"
 
   log "writing systemd unit: $backend_unit"
@@ -299,34 +314,9 @@ SyslogIdentifier=${BACKEND_SERVICE}
 WantedBy=multi-user.target
 EOF
 
-  log "writing systemd unit: $frontend_unit"
-  cat >"$frontend_unit" <<EOF
-[Unit]
-Description=Video Site Frontend
-After=network-online.target ${BACKEND_SERVICE}.service
-Wants=network-online.target
-
-[Service]
-Type=simple
-User=${DEPLOY_USER}
-Group=${DEPLOY_GROUP}
-WorkingDirectory=${REPO_DIR}
-ExecStart=${npm_bin} run preview -- --host ${FRONTEND_HOST} --port ${FRONTEND_PORT}
-Restart=on-failure
-RestartSec=5
-Environment=HOME=${DEPLOY_HOME}
-Environment=NODE_ENV=production
-Environment=PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
-StandardOutput=journal
-StandardError=journal
-SyslogIdentifier=${FRONTEND_SERVICE}
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
+  retire_legacy_frontend_service
   systemctl daemon-reload
-  systemctl enable "${BACKEND_SERVICE}.service" "${FRONTEND_SERVICE}.service" >/dev/null
+  systemctl enable "${BACKEND_SERVICE}.service" >/dev/null
 }
 
 open_firewall_port() {
@@ -339,9 +329,8 @@ open_firewall_port() {
 }
 
 restart_services() {
-  log "starting services"
+  log "starting backend service (frontend and API share one listener)"
   systemctl restart "${BACKEND_SERVICE}.service"
-  systemctl restart "${FRONTEND_SERVICE}.service"
 }
 
 show_summary() {
@@ -349,7 +338,7 @@ show_summary() {
   log "deployment finished"
   echo "  frontend: http://<server-ip>:${FRONTEND_PORT}/"
   echo "  admin:    http://<server-ip>:${FRONTEND_PORT}/admin"
-  echo "  backend:  127.0.0.1:9192"
+  echo "  listener: ${BACKEND_LISTEN} (frontend + API + media)"
   echo
   echo "First visit will ask you to create the admin username and password."
   echo "Useful commands:"
@@ -359,7 +348,7 @@ show_summary() {
 }
 
 show_status() {
-  systemctl --no-pager --full status "${BACKEND_SERVICE}.service" "${FRONTEND_SERVICE}.service" || true
+  systemctl --no-pager --full status "${BACKEND_SERVICE}.service" || true
 }
 
 install_or_update() {
@@ -367,9 +356,11 @@ install_or_update() {
   require_repo
   detect_deploy_user
   install_dependencies
-  prepare_config
   install_frontend
   build_backend
+  # Migrate the listen address only after both builds succeed. A failed build
+  # must leave the currently running two-service installation restart-safe.
+  prepare_config
   write_systemd_units
   open_firewall_port
   restart_services
@@ -380,7 +371,8 @@ install_or_update() {
 }
 
 uninstall_services() {
-  systemctl disable --now "${FRONTEND_SERVICE}.service" "${BACKEND_SERVICE}.service" 2>/dev/null || true
+  systemctl disable --now "${BACKEND_SERVICE}.service" 2>/dev/null || true
+  systemctl disable --now "${FRONTEND_SERVICE}.service" 2>/dev/null || true
   rm -f "/etc/systemd/system/${FRONTEND_SERVICE}.service" "/etc/systemd/system/${BACKEND_SERVICE}.service"
   systemctl daemon-reload
   log "removed systemd services; repo, config, and data were kept"
@@ -399,18 +391,24 @@ main() {
       ;;
     restart)
       need_root "$@"
+      require_repo
+      detect_deploy_user
+      prepare_config
+      retire_legacy_frontend_service
+      systemctl daemon-reload
       restart_services
       show_status
       ;;
     stop)
       need_root "$@"
-      systemctl stop "${FRONTEND_SERVICE}.service" "${BACKEND_SERVICE}.service"
+      systemctl stop "${BACKEND_SERVICE}.service"
+      systemctl stop "${FRONTEND_SERVICE}.service" 2>/dev/null || true
       ;;
     status)
       show_status
       ;;
     logs)
-      journalctl -u "${BACKEND_SERVICE}.service" -u "${FRONTEND_SERVICE}.service" -f
+      journalctl -u "${BACKEND_SERVICE}.service" -f
       ;;
     uninstall)
       need_root "$@"

@@ -23,7 +23,10 @@ import (
 	"github.com/video-site/backend/internal/requestmeta"
 )
 
-const frontendHashedAssetCacheControl = "public, max-age=31536000, immutable"
+const (
+	frontendHashedAssetCacheControl = "public, max-age=31536000, immutable"
+	frontendIndexCacheControl       = "no-cache"
+)
 
 const (
 	responseCompressionThreshold = 1024
@@ -478,6 +481,8 @@ func frontendHandler(dir string) http.HandlerFunc {
 					if strings.HasPrefix(cleanPath, "/assets/") {
 						w.Header().Set("Cache-Control", frontendHashedAssetCacheControl)
 						addHeaderToken(w.Header(), "Vary", "Accept-Encoding")
+					} else if cleanPath == "/index.html" {
+						w.Header().Set("Cache-Control", frontendIndexCacheControl)
 					}
 					if encoding != "" {
 						w.Header().Set("Content-Encoding", encoding)
@@ -495,6 +500,10 @@ func frontendHandler(dir string) http.HandlerFunc {
 			}
 		}
 
+		// index.html names hashed assets that are removed on the next build. It
+		// may be stored locally, but every navigation must revalidate it so an
+		// old document never points at files that no longer exist.
+		w.Header().Set("Cache-Control", frontendIndexCacheControl)
 		http.ServeFile(w, r, filepath.Join(dir, "index.html"))
 	}
 }

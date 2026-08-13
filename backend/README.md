@@ -343,6 +343,8 @@ flowchart LR
 
 ### 8. 日志与排查
 
-- 一键脚本部署（systemd）：`journalctl -u video-site-backend` / `-u video-site-frontend`；`start.sh` 模式日志在 `$LOG_DIR`（默认 `/tmp/video-site-91/`）。
+- 一键脚本部署（systemd）：前端静态资源、API 与媒体路由由同一个
+  `video-site-backend` 服务提供，日志用 `journalctl -u video-site-backend`；
+  `start.sh` 模式日志在 `$LOG_DIR`（默认 `/tmp/video-site-91/`）。
 - 后端日志按模块带前缀，直接 grep：`[scanner]`、`[scriptcrawler]`、`[nightly]`、`[dedupe-maintenance]`、`[local-upload-maintenance]` 等。爬虫 Python 子进程的输出并入后端日志。
 - 常见排查入口：网盘异常看后台网盘页的健康状态与 `lastError`；预览/封面卡住多半是上游限流，等冷却期过或看 `[nightly]` 是否在等队列排空；去重删了什么搜 `duplicate deleted`，内容匹配过程搜 `content duplicate matched`。
