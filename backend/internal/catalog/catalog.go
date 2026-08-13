@@ -127,27 +127,28 @@ func (c *Catalog) BackupTo(ctx context.Context, destination string) error {
 // ---------- Video ----------
 
 type Video struct {
-	ID                string   `json:"id"`
-	DriveID           string   `json:"driveId"`
-	FileID            string   `json:"fileId"`
-	FileName          string   `json:"fileName"`
-	ContentHash       string   `json:"contentHash"`
-	SampledSHA256     string   `json:"sampledSha256"`
-	FingerprintStatus string   `json:"fingerprintStatus"`
-	FingerprintError  string   `json:"fingerprintError"`
-	ParentID          string   `json:"parentId"`
-	DirName           string   `json:"dirName"`
-	Title             string   `json:"title"`
-	Author            string   `json:"author"`
-	Tags              []string `json:"tags"`
-	DurationSeconds   int      `json:"durationSeconds"`
-	Size              int64    `json:"size"`
-	Ext               string   `json:"ext"`
-	Quality           string   `json:"quality"`
-	ThumbnailURL      string   `json:"thumbnailUrl"`
-	PreviewFileID     string   `json:"previewFileId"`
-	PreviewLocal      string   `json:"previewLocal"`
-	PreviewStatus     string   `json:"previewStatus"`
+	ID                 string    `json:"id"`
+	DriveID            string    `json:"driveId"`
+	FileID             string    `json:"fileId"`
+	FileName           string    `json:"fileName"`
+	ContentHash        string    `json:"contentHash"`
+	SampledSHA256      string    `json:"sampledSha256"`
+	FingerprintStatus  string    `json:"fingerprintStatus"`
+	FingerprintError   string    `json:"fingerprintError"`
+	ParentID           string    `json:"parentId"`
+	DirName            string    `json:"dirName"`
+	Title              string    `json:"title"`
+	Author             string    `json:"author"`
+	Tags               []string  `json:"tags"`
+	DurationSeconds    int       `json:"durationSeconds"`
+	Size               int64     `json:"size"`
+	Ext                string    `json:"ext"`
+	Quality            string    `json:"quality"`
+	ThumbnailURL       string    `json:"thumbnailUrl"`
+	ThumbnailUpdatedAt time.Time `json:"thumbnailUpdatedAt"`
+	PreviewFileID      string    `json:"previewFileId"`
+	PreviewLocal       string    `json:"previewLocal"`
+	PreviewStatus      string    `json:"previewStatus"`
 	// TranscodeStatus：浏览器兼容性转码状态。
 	// ''=未检测 / pending=已入队 / ready=已转码 / skipped=无需转码 / failed=失败。
 	TranscodeStatus  string    `json:"transcodeStatus"`
@@ -185,17 +186,26 @@ func (c *Catalog) UpsertVideo(ctx context.Context, v *Video) error {
 		v.CreatedAt = time.UnixMilli(now)
 	}
 	v.UpdatedAt = time.UnixMilli(now)
+	thumbnailUpdatedAt := int64(0)
+	if v.ThumbnailURL != "" {
+		if v.ThumbnailUpdatedAt.IsZero() {
+			v.ThumbnailUpdatedAt = time.UnixMilli(now)
+		}
+		thumbnailUpdatedAt = v.ThumbnailUpdatedAt.UnixMilli()
+	} else {
+		v.ThumbnailUpdatedAt = time.Time{}
+	}
 
 	_, err := c.db.ExecContext(ctx, `
 INSERT INTO videos (
   id, drive_id, file_id, file_name, content_hash, sampled_sha256, fingerprint_status, fingerprint_error, parent_id, dir_name, title, author, tags,
-  duration_seconds, size_bytes, ext, quality, thumbnail_url, thumbnail_status,
+	  duration_seconds, size_bytes, ext, quality, thumbnail_url, thumbnail_updated_at, thumbnail_status,
 	  preview_file_id, preview_local, preview_status,
 	  views, last_viewed_at, favorites, comments, likes, dislikes,
 	  hidden, badges, description, published_at, created_at, updated_at
 	) VALUES (
 	  ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-	  ?, ?, ?, ?, ?, CASE WHEN COALESCE(?, '') != '' THEN 'ready' ELSE 'pending' END,
+	  ?, ?, ?, ?, ?, ?, CASE WHEN COALESCE(?, '') != '' THEN 'ready' ELSE 'pending' END,
 	  ?, ?, ?,
 	  ?, ?, ?, ?, ?, ?,
 	  ?, ?, ?, ?, ?, ?
@@ -239,6 +249,13 @@ ON CONFLICT(id) DO UPDATE SET
   ext             = excluded.ext,
   quality         = excluded.quality,
   thumbnail_url   = excluded.thumbnail_url,
+	thumbnail_updated_at = CASE
+	                    WHEN COALESCE(excluded.thumbnail_url, '') = '' THEN 0
+	                    WHEN COALESCE(excluded.thumbnail_url, '') != COALESCE(videos.thumbnail_url, '')
+	                         OR COALESCE(videos.thumbnail_updated_at, 0) = 0
+	                      THEN MAX(COALESCE(videos.thumbnail_updated_at, 0) + 1, excluded.thumbnail_updated_at)
+	                    ELSE videos.thumbnail_updated_at
+	                  END,
   -- thumbnail_url 写非空就意味着文件已就绪（要么 worker 抽帧填的本地 /p/thumb/<id>，
   -- 要么网盘 API 直接给的远程 URL，要么管理员手动指定）。同步把 status 标 'ready'，
   -- 避免出现 "url 非空 + status='pending'" 的脏状态。url 被改成空（本调用不发生，
@@ -252,7 +269,7 @@ ON CONFLICT(id) DO UPDATE SET
   updated_at      = excluded.updated_at
 `,
 		v.ID, v.DriveID, v.FileID, v.FileName, v.ContentHash, v.SampledSHA256, fingerprintStatus, v.FingerprintError, v.ParentID, v.DirName, v.Title, v.Author, string(tagsJSON),
-		v.DurationSeconds, v.Size, v.Ext, v.Quality, v.ThumbnailURL, v.ThumbnailURL,
+		v.DurationSeconds, v.Size, v.Ext, v.Quality, v.ThumbnailURL, thumbnailUpdatedAt, v.ThumbnailURL,
 		v.PreviewFileID, v.PreviewLocal, nullableStatus(v.PreviewStatus),
 		v.Views, unixMilliOrZero(v.LastViewedAt), v.Favorites, v.Comments, v.Likes, v.Dislikes,
 		boolToInt(v.Hidden), string(badgesJSON), v.Description,
@@ -585,9 +602,13 @@ type VideoMetaPatch struct {
 func (c *Catalog) UpdateVideoMeta(ctx context.Context, id string, p VideoMetaPatch) error {
 	parts := []string{}
 	args := []any{}
+	now := time.Now().UnixMilli()
 	if p.ThumbnailURL != "" {
-		parts = append(parts, "thumbnail_url = ?")
-		args = append(args, p.ThumbnailURL)
+		parts = append(parts,
+			"thumbnail_url = ?",
+			"thumbnail_updated_at = MAX(COALESCE(thumbnail_updated_at, 0) + 1, ?)",
+		)
+		args = append(args, p.ThumbnailURL, now)
 	}
 	switch {
 	case p.ThumbnailStatus != "":
@@ -644,7 +665,7 @@ func (c *Catalog) UpdateVideoMeta(ctx context.Context, id string, p VideoMetaPat
 		return nil
 	}
 	parts = append(parts, "updated_at = ?")
-	args = append(args, time.Now().UnixMilli())
+	args = append(args, now)
 	args = append(args, id)
 	q := `UPDATE videos SET ` + strings.Join(parts, ", ") + ` WHERE id = ?`
 	if _, err := c.db.ExecContext(ctx, q, args...); err != nil {
@@ -2115,6 +2136,44 @@ func (c *Catalog) ListVisibleVideoIDsByThumbnailReadiness(ctx context.Context) (
 	return readyIDs, pendingIDs, nil
 }
 
+// ListVisibleVideoIDsLatest returns a deterministic latest-first snapshot for
+// the home page's rotating "latest" section. Ready thumbnails keep the same
+// preference as /api/list while the limit bounds the session snapshot.
+func (c *Catalog) ListVisibleVideoIDsLatest(ctx context.Context, limit int) ([]string, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+	rows, err := c.db.QueryContext(ctx,
+		`SELECT videos.id
+		   FROM videos
+		  WHERE COALESCE(videos.hidden, 0) = 0
+		    AND `+activeDriveWhereSQL+`
+		    AND `+uniqueVideoWhereSQL+`
+		  ORDER BY CASE WHEN COALESCE(videos.thumbnail_url, '') != '' THEN 0 ELSE 1 END,
+		           videos.published_at DESC,
+		           videos.id ASC
+		  LIMIT ?`,
+		limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	ids := make([]string, 0, limit)
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return ids, nil
+}
+
 // VisibleVideosByIDs loads the still-visible subset of ids while preserving
 // the caller's order. Feed sessions are snapshots, so videos deleted, hidden,
 // or superseded by deduplication after the snapshot was created are skipped.
@@ -2613,7 +2672,7 @@ func (c *Catalog) ClearGeneratedAssets(ctx context.Context, videoID string, clea
 		parts = append(parts, "preview_file_id = ''", "preview_local = ''", "preview_status = 'pending'")
 	}
 	if clearThumbnail {
-		parts = append(parts, "thumbnail_url = ''", "thumbnail_status = 'pending'")
+		parts = append(parts, "thumbnail_url = ''", "thumbnail_updated_at = 0", "thumbnail_status = 'pending'")
 	}
 	if len(parts) == 0 {
 		return nil
@@ -3120,7 +3179,7 @@ const allVideoCols = `
 id, drive_id, file_id, COALESCE(file_name, ''), COALESCE(content_hash, ''),
 COALESCE(sampled_sha256, ''), COALESCE(fingerprint_status, 'pending'), COALESCE(fingerprint_error, ''),
 COALESCE(parent_id, ''), COALESCE(dir_name, ''), title, COALESCE(author, ''), COALESCE(tags, '[]'),
-duration_seconds, size_bytes, COALESCE(ext, ''), COALESCE(quality, ''), COALESCE(thumbnail_url, ''),
+duration_seconds, size_bytes, COALESCE(ext, ''), COALESCE(quality, ''), COALESCE(thumbnail_url, ''), COALESCE(thumbnail_updated_at, 0),
 COALESCE(preview_file_id, ''), COALESCE(preview_local, ''), COALESCE(preview_status, 'pending'),
 	COALESCE(transcode_status, ''), COALESCE(transcode_error, ''), COALESCE(transcoded_file_id, ''), COALESCE(transcoded_size, 0),
 	views, COALESCE(last_viewed_at, 0), favorites, comments, likes, COALESCE(last_liked_at, 0), dislikes,
@@ -3186,13 +3245,13 @@ type rowScanner interface {
 func scanVideo(row rowScanner) (*Video, error) {
 	v := &Video{}
 	var tagsJSON, badgesJSON string
-	var publishedAt, createdAt, updatedAt, lastViewedAt, lastLikedAt int64
+	var publishedAt, createdAt, updatedAt, thumbnailUpdatedAt, lastViewedAt, lastLikedAt int64
 	var hidden int
 	err := row.Scan(
 		&v.ID, &v.DriveID, &v.FileID, &v.FileName, &v.ContentHash,
 		&v.SampledSHA256, &v.FingerprintStatus, &v.FingerprintError,
 		&v.ParentID, &v.DirName, &v.Title, &v.Author, &tagsJSON,
-		&v.DurationSeconds, &v.Size, &v.Ext, &v.Quality, &v.ThumbnailURL,
+		&v.DurationSeconds, &v.Size, &v.Ext, &v.Quality, &v.ThumbnailURL, &thumbnailUpdatedAt,
 		&v.PreviewFileID, &v.PreviewLocal, &v.PreviewStatus,
 		&v.TranscodeStatus, &v.TranscodeError, &v.TranscodedFileID, &v.TranscodedSize,
 		&v.Views, &lastViewedAt, &v.Favorites, &v.Comments, &v.Likes, &lastLikedAt, &v.Dislikes,
@@ -3208,6 +3267,9 @@ func scanVideo(row rowScanner) (*Video, error) {
 	v.PublishedAt = time.UnixMilli(publishedAt)
 	v.CreatedAt = time.UnixMilli(createdAt)
 	v.UpdatedAt = time.UnixMilli(updatedAt)
+	if thumbnailUpdatedAt > 0 {
+		v.ThumbnailUpdatedAt = time.UnixMilli(thumbnailUpdatedAt)
+	}
 	if lastViewedAt > 0 {
 		v.LastViewedAt = time.UnixMilli(lastViewedAt)
 	}

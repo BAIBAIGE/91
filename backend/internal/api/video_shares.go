@@ -390,7 +390,11 @@ func (s *Server) serveVideoThumb(w http.ResponseWriter, r *http.Request, videoID
 			clean = backgroundPath
 		}
 	}
-	w.Header().Set("Cache-Control", "private, max-age=86400")
+	if r.URL.Query().Get("v") != "" {
+		w.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
+	} else {
+		w.Header().Set("Cache-Control", "private, max-age=86400")
+	}
 	s.Proxy.ServeLocal(w, r, clean)
 }
 

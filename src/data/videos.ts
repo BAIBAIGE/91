@@ -28,10 +28,19 @@ export async function fetchHomeVideos(count?: number): Promise<VideoItem[]> {
   return items;
 }
 
+export async function fetchLatestHomeVideos(count: number): Promise<VideoItem[]> {
+  const items = await apiGet<VideoItem[]>(`/api/home/latest?count=${count}`);
+  if (!Array.isArray(items)) {
+    throw new Error("Invalid /api/home/latest response");
+  }
+  return items;
+}
+
 export async function fetchListing(
   page: number,
   pageSize: number,
-  params?: { q?: string; tag?: string; sort?: string; includeTotal?: boolean }
+  params?: { q?: string; tag?: string; sort?: string; includeTotal?: boolean },
+  options: { signal?: AbortSignal } = {}
 ): Promise<{ items: VideoItem[]; total: number }> {
   const qs = new URLSearchParams({
     page: String(page),
@@ -42,7 +51,8 @@ export async function fetchListing(
   if (params?.sort) qs.set("sort", params.sort);
   if (params?.includeTotal === false) qs.set("count", "false");
   const result = await apiGet<{ items: VideoItem[]; total: number }>(
-    `/api/list?${qs.toString()}`
+    `/api/list?${qs.toString()}`,
+    options
   );
   if (
     !result ||
@@ -428,17 +438,46 @@ function isRetryableGetError(error: unknown): boolean {
   return error.status === 408 || error.status === 425 || error.status === 429 || error.status >= 500;
 }
 
-function wait(ms: number): Promise<void> {
-  return new Promise((resolve) => globalThis.setTimeout(resolve, ms));
+function abortReason(signal: AbortSignal): unknown {
+  return signal.reason ?? new DOMException("The operation was aborted", "AbortError");
 }
 
-async function apiGet<T>(path: string): Promise<T> {
+function wait(ms: number, signal?: AbortSignal): Promise<void> {
+  if (!signal) {
+    return new Promise((resolve) => globalThis.setTimeout(resolve, ms));
+  }
+  if (signal.aborted) return Promise.reject(abortReason(signal));
+
+  return new Promise((resolve, reject) => {
+    const timeoutID = globalThis.setTimeout(() => {
+      signal.removeEventListener("abort", handleAbort);
+      resolve();
+    }, ms);
+    const handleAbort = () => {
+      globalThis.clearTimeout(timeoutID);
+      reject(abortReason(signal));
+    };
+    signal.addEventListener("abort", handleAbort, { once: true });
+  });
+}
+
+async function apiGet<T>(
+  path: string,
+  options: { signal?: AbortSignal } = {}
+): Promise<T> {
   let lastError: unknown;
 
   for (let attempt = 1; attempt <= API_GET_MAX_ATTEMPTS; attempt += 1) {
+    if (options.signal?.aborted) throw abortReason(options.signal);
+
     const controller = new AbortController();
+    const handleExternalAbort = () => {
+      controller.abort(abortReason(options.signal!));
+    };
+    options.signal?.addEventListener("abort", handleExternalAbort, { once: true });
+    if (options.signal?.aborted) handleExternalAbort();
     const timeoutID = globalThis.setTimeout(
-      () => controller.abort(),
+      () => controller.abort(new DOMException("API request timed out", "TimeoutError")),
       API_GET_TIMEOUT_MS
     );
     try {
@@ -451,15 +490,17 @@ async function apiGet<T>(path: string): Promise<T> {
       if (!res.ok) throw new HTTPStatusError(res.status);
       return (await res.json()) as T;
     } catch (error) {
+      if (options.signal?.aborted) throw abortReason(options.signal);
       lastError = error;
       if (attempt >= API_GET_MAX_ATTEMPTS || !isRetryableGetError(error)) {
         throw error;
       }
     } finally {
       globalThis.clearTimeout(timeoutID);
+      options.signal?.removeEventListener("abort", handleExternalAbort);
     }
 
-    await wait(API_GET_RETRY_DELAY_MS);
+    await wait(API_GET_RETRY_DELAY_MS, options.signal);
   }
 
   throw lastError instanceof Error ? lastError : new Error("API request failed");

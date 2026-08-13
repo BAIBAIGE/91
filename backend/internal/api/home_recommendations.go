@@ -13,17 +13,20 @@ const (
 	homeRecommendationSessionTTL  = 24 * time.Hour
 	maxHomeRecommendationSessions = 256
 	homeRecommendationLookupChunk = 32
+	homeLatestSnapshotSize        = 96
 )
 
-// homeRecommendationSession owns one shuffled snapshot of the visible library.
-// The cursor advances only after a successful request, so every snapshot entry
-// is consumed before the session starts another random round. requestMu also
-// serializes concurrent refreshes from the same login session.
+// homeRecommendationSession owns independent random and latest snapshots for
+// one login session. Cursors advance only after successful requests, and each
+// mutex serializes concurrent refreshes of its own section.
 type homeRecommendationSession struct {
-	requestMu     sync.Mutex
-	roundVideoIDs []string
-	roundCursor   int
-	lastAccess    time.Time
+	requestMu       sync.Mutex
+	roundVideoIDs   []string
+	roundCursor     int
+	latestRequestMu sync.Mutex
+	latestVideoIDs  []string
+	latestCursor    int
+	lastAccess      time.Time
 }
 
 // nextHomeRecommendationBatch reads from the current shuffled library snapshot.
@@ -36,17 +39,15 @@ func (s *Server) nextHomeRecommendationBatch(
 	session *homeRecommendationSession,
 	count int,
 ) ([]*catalog.Video, []string, int, error) {
-	roundVideoIDs := session.roundVideoIDs
-	roundCursor := session.roundCursor
-	items := make([]*catalog.Video, 0, count)
-	selected := make(map[string]struct{}, count)
-
-	for len(items) < count {
-		eligibleEnd := len(roundVideoIDs)
-		if roundCursor >= len(roundVideoIDs) {
+	return s.nextHomeSnapshotBatch(
+		ctx,
+		session.roundVideoIDs,
+		session.roundCursor,
+		count,
+		func() ([]string, error) {
 			readyIDs, pendingIDs, err := s.Catalog.ListVisibleVideoIDsByThumbnailReadiness(ctx)
 			if err != nil {
-				return nil, nil, 0, err
+				return nil, err
 			}
 			rand.Shuffle(len(readyIDs), func(i, j int) {
 				readyIDs[i], readyIDs[j] = readyIDs[j], readyIDs[i]
@@ -54,7 +55,84 @@ func (s *Server) nextHomeRecommendationBatch(
 			rand.Shuffle(len(pendingIDs), func(i, j int) {
 				pendingIDs[i], pendingIDs[j] = pendingIDs[j], pendingIDs[i]
 			})
-			roundVideoIDs = append(readyIDs, pendingIDs...)
+			return append(readyIDs, pendingIDs...), nil
+		},
+	)
+}
+
+func (s *Server) nextHomeLatestBatch(
+	ctx context.Context,
+	session *homeRecommendationSession,
+	count int,
+) ([]*catalog.Video, []string, int, error) {
+	freshVideoIDs, err := s.Catalog.ListVisibleVideoIDsLatest(ctx, homeLatestSnapshotSize)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	latestVideoIDs, latestCursor := mergeLatestHomeSnapshot(
+		session.latestVideoIDs,
+		session.latestCursor,
+		freshVideoIDs,
+	)
+	return s.nextHomeSnapshotBatch(
+		ctx,
+		latestVideoIDs,
+		latestCursor,
+		count,
+		func() ([]string, error) {
+			return freshVideoIDs, nil
+		},
+	)
+}
+
+// mergeLatestHomeSnapshot keeps consumed IDs as a round marker, then rebuilds
+// the unconsumed tail from the current latest window. New videos therefore take
+// their correct ready/latest position without making consumed cards repeat.
+func mergeLatestHomeSnapshot(current []string, cursor int, fresh []string) ([]string, int) {
+	if len(current) == 0 || cursor <= 0 {
+		return fresh, 0
+	}
+	if cursor > len(current) {
+		cursor = len(current)
+	}
+
+	consumed := append([]string(nil), current[:cursor]...)
+	consumedSet := make(map[string]struct{}, len(consumed))
+	for _, id := range consumed {
+		consumedSet[id] = struct{}{}
+	}
+	merged := make([]string, 0, len(consumed)+len(fresh))
+	merged = append(merged, consumed...)
+	for _, id := range fresh {
+		if _, alreadyConsumed := consumedSet[id]; !alreadyConsumed {
+			merged = append(merged, id)
+		}
+	}
+	return merged, len(consumed)
+}
+
+// nextHomeSnapshotBatch consumes one stable ID snapshot, loading only the
+// requested cards. If a response crosses a round boundary, entries already in
+// that response are postponed in the new round so a grid never duplicates a
+// card.
+func (s *Server) nextHomeSnapshotBatch(
+	ctx context.Context,
+	roundVideoIDs []string,
+	roundCursor int,
+	count int,
+	loadRound func() ([]string, error),
+) ([]*catalog.Video, []string, int, error) {
+	items := make([]*catalog.Video, 0, count)
+	selected := make(map[string]struct{}, count)
+
+	for len(items) < count {
+		eligibleEnd := len(roundVideoIDs)
+		if roundCursor >= len(roundVideoIDs) {
+			freshVideoIDs, err := loadRound()
+			if err != nil {
+				return nil, nil, 0, err
+			}
+			roundVideoIDs = freshVideoIDs
 			roundCursor = 0
 			eligibleEnd = len(roundVideoIDs)
 			if len(roundVideoIDs) == 0 {

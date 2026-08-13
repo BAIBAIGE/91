@@ -1274,6 +1274,9 @@ INSERT INTO videos (
 	if got.Title != "Legacy Video" || got.Author != "Legacy Author" || got.Views != 7 {
 		t.Fatalf("migrated video lost data: %#v", got)
 	}
+	if got.ThumbnailUpdatedAt.UnixMilli() != nowMillis {
+		t.Fatalf("migrated thumbnail revision = %d, want %d", got.ThumbnailUpdatedAt.UnixMilli(), nowMillis)
+	}
 	if len(got.Tags) != 0 {
 		t.Fatalf("migrated video tags = %#v, want none", got.Tags)
 	}

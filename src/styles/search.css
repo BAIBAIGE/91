@@ -365,9 +365,14 @@
   transition: color var(--transition-fast), background var(--transition-fast);
 }
 
-.sort-toolbar__btn:hover {
+.sort-toolbar__btn:hover:not(:disabled) {
   color: var(--text-strong);
   background: rgba(255, 255, 255, 0.04);
+}
+
+.sort-toolbar__btn:disabled {
+  cursor: wait;
+  opacity: 0.58;
 }
 
 .sort-toolbar__btn.is-active {

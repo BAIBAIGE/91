@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS videos (
     ext              TEXT,
     quality          TEXT,                      -- HD / SD
     thumbnail_url    TEXT,
+    thumbnail_updated_at INTEGER DEFAULT 0,     -- thumbnail-only revision; unrelated metadata must not invalidate image caches
     thumbnail_status TEXT DEFAULT 'pending',    -- pending / ready / failed / skipped
     thumbnail_failures INTEGER DEFAULT 0,        -- consecutive transient thumbnail generation failures
     preview_file_id  TEXT,                      -- deprecated: 旧版回写网盘后的预览视频 file id

@@ -40,26 +40,23 @@ function ruleBody(css: string, selector: string): string {
 
 test("home page refresh button shares back-to-top slot until back-to-top is visible", () => {
   assert.match(homePageSource, /import \{ RefreshCw \} from "lucide-react"/);
-  assert.match(homePageSource, /const LATEST_POOL_SIZE = 96;/);
-  assert.match(homePageSource, /const HOME_LATEST_CURSOR_KEY = "home\.latest\.cursor";/);
-  assert.match(homePageSource, /function nextLatestBatch/);
-  assert.match(homePageSource, /let cachedLatestBatch: VideoItem\[\] \| null = null;/);
-  assert.match(homePageSource, /function cacheNextLatestBatch/);
-  assert.match(homePageSource, /loadLatestCursor\(items\.length\)/);
-  assert.match(homePageSource, /saveLatestCursor\(\(start \+ count\) % items\.length\)/);
+  assert.match(homePageSource, /const HOME_CACHE_TTL_MS = 60_000;/);
+  assert.match(homePageSource, /function cacheIsFresh/);
+  assert.match(homePageSource, /cachedRanking === null \|\| !cacheIsFresh\(cachedRankingAt\)/);
+  assert.match(homePageSource, /!cacheIsFresh\(cachedLatestAt\)/);
+  assert.match(homePageSource, /let cachedLatest: VideoItem\[\] \| null = null;/);
   assert.match(homePageSource, /const refreshHome = useCallback\(async \(\) =>/);
-  assert.match(homePageSource, /fetchHomeVideos\(displayCountRef\.current\)/);
-  assert.match(homePageSource, /fetchListing\(1,\s*LATEST_POOL_SIZE,\s*\{ sort: "latest", includeTotal: false \}\)/);
+  assert.match(homePageSource, /fetchHomeVideos\(DESKTOP_COUNT\)/);
+  assert.match(homePageSource, /fetchLatestHomeVideos\(displayCountRef\.current\)/);
   assert.match(homePageSource, /const DESKTOP_COUNT = 12;/);
   assert.match(homePageSource, /const MOBILE_COUNT = 8;/);
   assert.match(homePageSource, /const HOME_SEARCH_DESKTOP_PAGE_SIZE = 20;/);
-  assert.match(homePageSource, /setLatestVideos\(latestBatch\)/);
   assert.match(homePageSource, /const displayCount = isMobile \? MOBILE_COUNT : DESKTOP_COUNT;/);
   assert.match(homePageSource, /const displayCountRef = useRef\(displayCount\);/);
-  assert.match(homePageSource, /cacheNextLatestBatch\(\s*latestResult\.value\.items,\s*displayCountRef\.current\s*\)/);
-  assert.match(homePageSource, /cacheNextLatestBatch\(\s*latestResult\.items,\s*displayCountRef\.current\s*\)/);
-  assert.match(homePageSource, /const batchSize = Math\.min\(DESKTOP_COUNT, items\.length\);/);
-  assert.match(homePageSource, /saveLatestCursor\(\(start \+ count\) % items\.length\)/);
+  assert.match(homePageSource, /const previousDisplayCountRef = useRef\(displayCount\);/);
+  assert.match(homePageSource, /cachedLatest\.length < displayCountRef\.current/);
+  assert.doesNotMatch(homePageSource, /LATEST_POOL_SIZE|HOME_LATEST_CURSOR_KEY/);
+  assert.doesNotMatch(homePageSource, /fetchListing\(1,\s*96/);
   assert.doesNotMatch(homePageSource, /HOME_RECENT_KEY/);
   assert.doesNotMatch(homePageSource, /loadRecentHomeVideoIds/);
   assert.doesNotMatch(homePageSource, /rememberHomeVideos/);
@@ -85,10 +82,26 @@ test("home page refresh button shares back-to-top slot until back-to-top is visi
 });
 
 test("home page reuses the cached latest batch when returning from detail", () => {
-  assert.match(homePageSource, /const \[latestVideos,\s*setLatestVideos\] = useState<VideoItem\[\]>\(cachedLatestBatch \?\? \[\]\)/);
-  assert.match(homePageSource, /const \[latestLoading,\s*setLatestLoading\] = useState\(cachedLatestBatch === null\)/);
-  assert.match(homePageSource, /cachedLatestBatch \?\?\s*cacheNextLatestBatch\(cachedLatestPool, displayCountRef\.current\)/);
-  assert.doesNotMatch(homePageSource, /setLatestVideos\(nextLatestBatch\(cachedLatestPool,\s*DESKTOP_COUNT\)\)/);
+  assert.match(homePageSource, /const \[latestVideos,\s*setLatestVideos\] = useState<VideoItem\[\]>\(cachedLatest \?\? \[\]\)/);
+  assert.match(homePageSource, /const \[latestLoading,\s*setLatestLoading\] = useState\(cachedLatest === null\)/);
+  assert.match(homePageSource, /setLatestVideos\(cachedLatest\)/);
+  assert.doesNotMatch(homePageSource, /localStorage/);
+});
+
+test("widening the viewport refills only the latest section", () => {
+  const effectStart = homePageSource.indexOf(
+    "const previousCount = previousDisplayCountRef.current;"
+  );
+  const effectEnd = homePageSource.indexOf("  useEffect(() => {", effectStart);
+  assert.ok(effectStart >= 0 && effectEnd > effectStart);
+  const wideningEffect = homePageSource.slice(effectStart, effectEnd);
+
+  assert.match(homePageSource, /const rankingRequestVersion = useRef\(0\)/);
+  assert.match(homePageSource, /const latestRequestVersion = useRef\(0\)/);
+  assert.match(homePageSource, /const refreshLatest = useCallback\(\(\) => loadLatest\(true\), \[loadLatest\]\)/);
+  assert.match(wideningEffect, /latestLoading \|\| latestRevalidating/);
+  assert.match(wideningEffect, /void refreshLatest\(\)/);
+  assert.doesNotMatch(wideningEffect, /refreshHome|loadRanking|fetchHomeVideos/);
 });
 
 test("home page reserves tag cloud space while tags load and uses one empty library state", () => {
@@ -212,38 +225,39 @@ test("home page reserves tag cloud space while tags load and uses one empty libr
   assert.match(homePageSource, /const \[searchParams, setSearchParams\] = useSearchParams\(\)/);
   assert.match(homePageSource, /const activeSearchQuery = searchParams\.get\("q"\)\?\.trim\(\) \?\? ""/);
   assert.match(homePageSource, /const activeTag = searchParams\.get\("tag"\)\?\.trim\(\) \?\? ""/);
-  assert.match(homePageSource, /const \[searchSort, setSearchSort\] = useState<SortKey>\("hot"\)/);
-  assert.match(homePageSource, /const \[searchView, setSearchView\] = useState<ViewMode>\("grid"\)/);
-  assert.match(homePageSource, /const resetSearchResults = useCallback\(\(\) => \{\s*setSearchPage\(1\);\s*setSearchSort\("hot"\);/);
-  assert.match(homePageSource, /const handleSearch = useCallback\(\(keyword: string\) => \{[\s\S]*?const q = keyword\.trim\(\);[\s\S]*?setSearchParams\(/);
+  assert.match(homePageSource, /const searchPage = readListingPage\(searchParams\)/);
+  assert.match(homePageSource, /const searchSort = readListingSort\(searchParams\)/);
+  assert.match(homePageSource, /const searchView = readListingView\(searchParams\)/);
+  assert.match(homePageSource, /const handleSearch = useCallback\([\s\S]*?const q = keyword\.trim\(\);[\s\S]*?setSearchParams\(/);
   assert.match(homePageSource, /next\.set\("q", q\);[\s\S]*?next\.delete\("tag"\);/);
   assert.match(homePageSource, /next\.delete\("q"\);/);
   assert.match(homePageSource, /\{ replace: true \}/);
   assert.match(homePageSource, /<SearchPanel[\s\S]*?value=\{activeSearchQuery\}[\s\S]*?onSearch=\{handleSearch\}[\s\S]*?variant="uiverse"[\s\S]*?placeholder=""[\s\S]*?\/>/);
   assert.match(homePageSource, /className="search-panel--public search-panel--transparent"/);
   assert.match(homePageSource, /const searchPageSize = isMobile\s*\? MOBILE_VIDEO_PAGE_SIZE\s*:\s*HOME_SEARCH_DESKTOP_PAGE_SIZE/);
-  assert.match(homePageSource, /fetchListing\(searchPage,\s*searchPageSize,\s*\{[\s\S]*?q: activeSearchQuery,[\s\S]*?tag: activeTag,[\s\S]*?sort: searchSort/);
-  assert.match(homePageSource, /setSearchPage\(1\);\s*\}, \[searchPageSize\]\)/);
-  assert.match(homePageSource, /setSearchPage\(1\);\s*setSearchSort\("hot"\);\s*\}, \[activeSearchQuery, activeTag\]\)/);
+  assert.match(homePageSource, /const searchResult = useListingQuery\([\s\S]*?q: activeSearchQuery,[\s\S]*?tag: activeTag,[\s\S]*?sort: searchSort,[\s\S]*?page: searchPage,[\s\S]*?pageSize: searchPageSize/);
+  assert.match(homePageSource, /\{ enabled: hasActiveFilter \}/);
+  assert.match(homePageSource, /withListingPage\(current, 1\)/);
   assert.match(homePageSource, /const hasActiveTag = activeTag\.length > 0/);
   assert.match(homePageSource, /const hasActiveFilter = hasActiveSearch \|\| hasActiveTag/);
   assert.doesNotMatch(homePageSource, /搜索结果：/);
-  assert.match(homePageSource, /<SortToolbar[\s\S]*?sort=\{searchSort\}[\s\S]*?view=\{searchView\}/);
-  assert.match(homePageSource, /setSearchSort\(nextSort\);[\s\S]*?setSearchPage\(1\);/);
-  assert.match(homePageSource, /onViewChange=\{setSearchView\}/);
+  assert.match(homePageSource, /<SortToolbar[\s\S]*?sort=\{displayedSearchSort\}[\s\S]*?view=\{searchView\}/);
+  assert.match(homePageSource, /withListingNavigation\(searchParams,[\s\S]*?sort: nextSort,[\s\S]*?page: 1/);
+  assert.match(homePageSource, /withListingView\(searchParams, nextView\)/);
   assert.match(homePageSource, /compact=\{searchView === "compact"\}/);
   assert.match(homePageSource, /variant="no-results"[\s\S]*?text="未查询到"[\s\S]*?className="admin-empty-state admin-empty-state--plain home-empty-state"/);
-  assert.match(homePageSource, /const searchTotalPages = Math\.max\(1, Math\.ceil\(searchTotal \/ searchPageSize\)\)/);
-  assert.match(homePageSource, /<Pagination[\s\S]*?page=\{searchPage\}[\s\S]*?pageSize=\{searchPageSize\}/);
+  assert.match(homePageSource, /<Pagination[\s\S]*?page=\{displayedSearchPage\}[\s\S]*?pageSize=\{searchSnapshot\.query\.pageSize\}/);
+  assert.match(homePageSource, /refreshMode=\{[\s\S]*?searchResult\.transitioning[\s\S]*?"blocking"[\s\S]*?searchResult\.revalidating[\s\S]*?"background"/);
+  assert.match(homePageSource, /<ListingLoadError[\s\S]*?displayedPage=\{displayedSearchPage\}/);
   assert.match(homePageSource, /const hasAnyVideos = ranking\.length > 0 \|\| latest\.length > 0/);
   assert.match(homePageSource, /const \[latestError, setLatestError\] = useState\(false\)/);
   assert.match(homePageSource, /const hasHomeError = rankingError \|\| latestError/);
   assert.match(homePageSource, /const showEmptyHome = !homeLoading && !hasHomeError && !hasAnyVideos/);
-  assert.match(homePageSource, /const homeRequestVersion = useRef\(1\)/);
+  assert.match(homePageSource, /const homeRequestVersion = useRef\(0\)/);
   assert.match(homePageSource, /if \(requestVersion !== homeRequestVersion\.current\) return/);
   assert.match(homePageSource, /emptyText=\{latestError \? "最新视频加载失败，请刷新重试" : undefined\}/);
   assert.doesNotMatch(homePageSource, /cachedRanking = null;\s*setRankingVideos\(\[\]\);\s*setRankingError\(true\)/);
-  assert.match(homePageSource, /\{!hasActiveSearch && \(\s*hasAnyVideos \|\| hasActiveTag \? \(\s*<TagCloud linkBasePath="\/" onTagSelect=\{resetSearchResults\} \/>\s*\) : \(\s*<div className="tag-cloud-container is-reserved" aria-hidden="true" \/>\s*\)\s*\)\}/);
+  assert.match(homePageSource, /\{!hasActiveSearch &&[\s\S]*?<TagCloud linkBasePath="\/" \/>[\s\S]*?<div className="tag-cloud-container is-reserved" aria-hidden="true" \/>/);
   assert.match(homePageSource, /<SectionHeader title="随机推荐" \/>/);
   assert.match(homePageSource, /<SectionHeader title="最新视频" \/>/);
   assert.doesNotMatch(homePageSource, /随机展示/);

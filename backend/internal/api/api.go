@@ -197,6 +197,7 @@ func (s *Server) RegisterRoutes(r chi.Router, a *auth.Authenticator) {
 	r.Group(func(r chi.Router) {
 		r.Use(a.Required)
 		r.Get("/api/home", s.handleHome)
+		r.Get("/api/home/latest", s.handleHomeLatest)
 		r.Get("/api/list", s.handleList)
 		r.Get("/api/video/{id}", s.handleVideoDetail)
 		r.Get("/api/video/{id}/subtitles", s.handleVideoSubtitles)
@@ -248,12 +249,7 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	recommendationSession := &homeRecommendationSession{}
-	persistentSession := false
-	if identity, ok := auth.SessionIdentityFromContext(r.Context()); ok {
-		recommendationSession = s.homeRecommendationSession(identity)
-		persistentSession = true
-	}
+	recommendationSession, persistentSession := s.homeSessionFromContext(r.Context())
 	recommendationSession.requestMu.Lock()
 	defer recommendationSession.requestMu.Unlock()
 
@@ -273,6 +269,42 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, mapVideos(items))
+}
+
+func (s *Server) handleHomeLatest(w http.ResponseWriter, r *http.Request) {
+	count, err := homeRecommendationCount(r)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+
+	session, persistentSession := s.homeSessionFromContext(r.Context())
+	session.latestRequestMu.Lock()
+	defer session.latestRequestMu.Unlock()
+
+	items, latestVideoIDs, latestCursor, err := s.nextHomeLatestBatch(
+		r.Context(),
+		session,
+		count,
+	)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	session.latestVideoIDs = latestVideoIDs
+	session.latestCursor = latestCursor
+	if persistentSession {
+		s.touchHomeRecommendationSession(session)
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, mapVideos(items))
+}
+
+func (s *Server) homeSessionFromContext(ctx context.Context) (*homeRecommendationSession, bool) {
+	if identity, ok := auth.SessionIdentityFromContext(ctx); ok {
+		return s.homeRecommendationSession(identity), true
+	}
+	return &homeRecommendationSession{}, false
 }
 
 func homeRecommendationCount(r *http.Request) (int, error) {
@@ -1220,16 +1252,17 @@ func previewURL(v *catalog.Video) string {
 
 func thumbnailURL(v *catalog.Video) string {
 	base := "/p/thumb/" + pathSegment(v.ID)
+	hasThumbnail := v.ThumbnailURL != ""
 	if v.ThumbnailURL != "" {
 		base = v.ThumbnailURL
 		if thumbnailURLMatchesVideoID(base, v.ID) {
 			base = "/p/thumb/" + pathSegment(v.ID)
 		}
 	}
-	if !strings.HasPrefix(base, "/p/thumb/") || v.UpdatedAt.IsZero() {
+	if !hasThumbnail || !strings.HasPrefix(base, "/p/thumb/") || v.ThumbnailUpdatedAt.IsZero() {
 		return base
 	}
-	return base + "?v=" + strconv.FormatInt(v.UpdatedAt.UnixMilli(), 10)
+	return base + "?v=" + strconv.FormatInt(v.ThumbnailUpdatedAt.UnixMilli(), 10)
 }
 
 // transcodedSource 在视频有就绪的浏览器兼容性转码产物时返回产物的播放地址。

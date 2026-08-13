@@ -42,6 +42,19 @@ func (c *Catalog) migrate(ctx context.Context) error {
 	if err := c.addColumnIfMissing(ctx, "videos", "thumbnail_failures", "INTEGER DEFAULT 0"); err != nil {
 		return err
 	}
+	if err := c.addColumnIfMissing(ctx, "videos", "thumbnail_updated_at", "INTEGER DEFAULT 0"); err != nil {
+		return err
+	}
+	// Older databases only had videos.updated_at. Seed the thumbnail revision
+	// once, then keep it independent from views, reactions, and other metadata.
+	if _, err := c.db.ExecContext(ctx, `
+UPDATE videos
+   SET thumbnail_updated_at = updated_at
+ WHERE COALESCE(thumbnail_url, '') != ''
+   AND COALESCE(thumbnail_updated_at, 0) = 0
+`); err != nil {
+		return err
+	}
 	if err := c.addColumnIfMissing(ctx, "videos", "last_viewed_at", "INTEGER DEFAULT 0"); err != nil {
 		return err
 	}
@@ -642,6 +655,7 @@ var currentVideoColumnNames = []string{
 	"ext",
 	"quality",
 	"thumbnail_url",
+	"thumbnail_updated_at",
 	"thumbnail_status",
 	"thumbnail_failures",
 	"preview_file_id",
@@ -687,6 +701,7 @@ CREATE TABLE videos_category_drop_new (
     ext                TEXT,
     quality            TEXT,
     thumbnail_url      TEXT,
+	thumbnail_updated_at INTEGER DEFAULT 0,
     thumbnail_status   TEXT DEFAULT 'pending',
     thumbnail_failures INTEGER DEFAULT 0,
     preview_file_id    TEXT,
@@ -866,6 +881,7 @@ func (c *Catalog) clearVolatileOneDriveThumbnails(ctx context.Context) error {
 	_, err := c.db.ExecContext(ctx, `
 UPDATE videos
    SET thumbnail_url = '',
+	   thumbnail_updated_at = 0,
        thumbnail_status = 'pending',
        updated_at = ?
  WHERE lower(COALESCE(thumbnail_url, '')) LIKE 'https://%mediap.svc.ms/transform/thumbnail%'
@@ -896,6 +912,7 @@ func (c *Catalog) clearRemoteP123ThumbnailsOnce(ctx context.Context) error {
 	res, err := c.db.ExecContext(ctx, `
 	UPDATE videos
 	   SET thumbnail_url = '',
+	       thumbnail_updated_at = 0,
 	       thumbnail_status = 'pending',
 	       thumbnail_failures = 0,
 	       updated_at = ?
@@ -928,6 +945,7 @@ func (c *Catalog) clearRemoteThumbnails(ctx context.Context) error {
 	res, err := c.db.ExecContext(ctx, `
 UPDATE videos
    SET thumbnail_url = '',
+	   thumbnail_updated_at = 0,
        thumbnail_status = 'pending',
        thumbnail_failures = 0,
        updated_at = ?

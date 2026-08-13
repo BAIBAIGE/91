@@ -5,6 +5,8 @@ type Props = {
   pageSize: number;
   total: number;
   onChange: (p: number) => void;
+  disabled?: boolean;
+  pendingPage?: number;
 };
 
 function buildRange(current: number, last: number): (number | "...")[] {
@@ -22,7 +24,14 @@ function buildRange(current: number, last: number): (number | "...")[] {
   return result;
 }
 
-export function Pagination({ page, pageSize, total, onChange }: Props) {
+export function Pagination({
+  page,
+  pageSize,
+  total,
+  onChange,
+  disabled = false,
+  pendingPage,
+}: Props) {
   const last = Math.max(1, Math.ceil(total / pageSize));
   if (last <= 1) return null;
 
@@ -31,9 +40,10 @@ export function Pagination({ page, pageSize, total, onChange }: Props) {
   return (
     <nav className="pagination" aria-label="分页">
       <button
+        type="button"
         className="pagination__btn"
         onClick={() => onChange(page - 1)}
-        disabled={page <= 1}
+        disabled={disabled || page <= 1}
         aria-label="上一页"
       >
         <ChevronLeft size={14} />
@@ -45,9 +55,13 @@ export function Pagination({ page, pageSize, total, onChange }: Props) {
           </span>
         ) : (
           <button
+            type="button"
             key={p}
-            className={`pagination__btn ${p === page ? "is-active" : ""}`}
+            className={`pagination__btn ${p === page ? "is-active" : ""} ${
+              disabled && p === pendingPage ? "is-pending" : ""
+            }`}
             onClick={() => onChange(p)}
+            disabled={disabled}
             aria-current={p === page ? "page" : undefined}
           >
             {p}
@@ -55,9 +69,10 @@ export function Pagination({ page, pageSize, total, onChange }: Props) {
         )
       )}
       <button
+        type="button"
         className="pagination__btn"
         onClick={() => onChange(page + 1)}
-        disabled={page >= last}
+        disabled={disabled || page >= last}
         aria-label="下一页"
       >
         <ChevronRight size={14} />

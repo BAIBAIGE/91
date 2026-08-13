@@ -10,27 +10,32 @@ import { useInViewport } from "@/lib/useInViewport";
 import { formatCount } from "@/lib/format";
 import { isVideoReturnPath, routeToPath } from "@/lib/videoReturnPath";
 import { PreviewVideo } from "./PreviewVideo";
+import { VideoThumbnail } from "./VideoThumbnail";
 
 type Props = {
   video: VideoItem;
-  priority?: boolean;
+  eager?: boolean;
+  highPriority?: boolean;
 };
 
 const HOVER_DELAY_MS = 300;
 
-function useActivePreviewId(): string | null {
+function useIsActivePreview(videoID: string): boolean {
   return useSyncExternalStore(
     previewController.subscribe,
-    previewController.getActiveId,
-    () => null
+    () => previewController.getActiveId() === videoID,
+    () => false
   );
 }
 
-export function VideoCard({ video, priority = false }: Props) {
+export function VideoCard({
+  video,
+  eager = false,
+  highPriority = false,
+}: Props) {
   const [previewState, setPreviewState] = useState<PreviewState>("idle");
   const [shouldRenderPreview, setShouldRenderPreview] = useState(false);
   const [progress, setProgress] = useState(0); // 0~1
-  const [thumbnailRetry, setThumbnailRetry] = useState(0);
   const author = video.author.trim();
   const location = useLocation();
   const currentPath = routeToPath(location);
@@ -40,21 +45,20 @@ export function VideoCard({ video, priority = false }: Props) {
 
   const rootRef = useRef<HTMLElement | null>(null);
   const hoverTimerRef = useRef<number | null>(null);
-  const thumbnailRetryTimerRef = useRef<number | null>(null);
   const lastPointerTypeRef = useRef<string>("");
   const canHoverRef = useRef(true);
   const videoRef = useRef<HTMLVideoElement | null>(null);
 
-  const activeId = useActivePreviewId();
+  const previewIsActive = useIsActivePreview(video.id);
   const inView = useInViewport(rootRef);
 
   // 当全局活跃卡片不是自己时，立刻停止预览
   useEffect(() => {
-    if (activeId !== video.id && shouldRenderPreview) {
+    if (!previewIsActive && shouldRenderPreview) {
       cleanup();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeId, video.id]);
+  }, [previewIsActive, video.id]);
 
   // 离开视口时停止预览
   useEffect(() => {
@@ -68,9 +72,6 @@ export function VideoCard({ video, priority = false }: Props) {
   useEffect(() => {
     return () => {
       cleanup();
-      if (thumbnailRetryTimerRef.current) {
-        window.clearTimeout(thumbnailRetryTimerRef.current);
-      }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -84,14 +85,6 @@ export function VideoCard({ video, priority = false }: Props) {
     media.addEventListener("change", update);
     return () => media.removeEventListener("change", update);
   }, []);
-
-  useEffect(() => {
-    setThumbnailRetry(0);
-    if (thumbnailRetryTimerRef.current) {
-      window.clearTimeout(thumbnailRetryTimerRef.current);
-      thumbnailRetryTimerRef.current = null;
-    }
-  }, [video.id, video.thumbnail]);
 
   function cleanup() {
     if (hoverTimerRef.current) {
@@ -118,21 +111,6 @@ export function VideoCard({ video, priority = false }: Props) {
       previewController.setActiveId(null);
     }
   }
-
-  function handleThumbnailError() {
-    if (!video.thumbnail.startsWith("/p/thumb/")) return;
-    if (thumbnailRetry >= 8 || thumbnailRetryTimerRef.current) return;
-
-    thumbnailRetryTimerRef.current = window.setTimeout(() => {
-      thumbnailRetryTimerRef.current = null;
-      setThumbnailRetry((n) => n + 1);
-    }, Math.min(1000 + thumbnailRetry * 750, 5000));
-  }
-
-  const thumbnailSrc =
-    thumbnailRetry === 0
-      ? video.thumbnail
-      : withRetryParam(video.thumbnail, thumbnailRetry);
 
   function startPreviewIntent() {
     if (!inView) return;
@@ -176,7 +154,7 @@ export function VideoCard({ video, priority = false }: Props) {
   }
 
   function handleClickCapture(event: React.MouseEvent<HTMLAnchorElement>) {
-    const previewActive = activeId === video.id && shouldRenderPreview;
+    const previewActive = previewIsActive && shouldRenderPreview;
     if (
       !shouldInterceptPreviewTap({
         pointerType: lastPointerTypeRef.current,
@@ -209,12 +187,11 @@ export function VideoCard({ video, priority = false }: Props) {
         onClickCapture={handleClickCapture}
       >
         <div className="thumb-frame">
-          <img
-            className="thumb-image"
-            src={thumbnailSrc}
-            alt={video.title}
-            loading={priority ? "eager" : "lazy"}
-            onError={handleThumbnailError}
+          <VideoThumbnail
+            key={video.thumbnail}
+            src={video.thumbnail}
+            eager={eager}
+            highPriority={highPriority}
           />
 
           {shouldRenderPreview && (
@@ -290,11 +267,6 @@ export function VideoCard({ video, priority = false }: Props) {
       </Link>
     </article>
   );
-}
-
-function withRetryParam(src: string, retry: number): string {
-  const sep = src.includes("?") ? "&" : "?";
-  return `${src}${sep}r=${retry}`;
 }
 
 // 从后端返回的 sourceLabel 推断网盘类型（用于颜色标识）。

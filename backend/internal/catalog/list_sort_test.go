@@ -100,6 +100,76 @@ func TestIncrementLikeStoresLastLikedAt(t *testing.T) {
 	}
 }
 
+func TestThumbnailRevisionOnlyChangesWhenThumbnailChanges(t *testing.T) {
+	ctx := context.Background()
+	cat, err := Open(t.TempDir() + "/catalog.db")
+	if err != nil {
+		t.Fatalf("open catalog: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := cat.Close(); err != nil {
+			t.Fatalf("close catalog: %v", err)
+		}
+	})
+
+	now := time.Now()
+	if err := cat.UpsertVideo(ctx, &Video{
+		ID:           "video-1",
+		DriveID:      "drive",
+		FileID:       "file-1",
+		Title:        "Video 1",
+		ThumbnailURL: "/p/thumb/video-1",
+		PublishedAt:  now,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}); err != nil {
+		t.Fatalf("seed video: %v", err)
+	}
+
+	initial, err := cat.GetVideo(ctx, "video-1")
+	if err != nil {
+		t.Fatalf("get initial video: %v", err)
+	}
+	if initial.ThumbnailUpdatedAt.IsZero() {
+		t.Fatal("thumbnail revision was not initialized")
+	}
+
+	if _, err := cat.IncrementView(ctx, "video-1"); err != nil {
+		t.Fatalf("increment view: %v", err)
+	}
+	if _, err := cat.IncrementLike(ctx, "video-1"); err != nil {
+		t.Fatalf("increment like: %v", err)
+	}
+	afterMetadata, err := cat.GetVideo(ctx, "video-1")
+	if err != nil {
+		t.Fatalf("get video after metadata updates: %v", err)
+	}
+	if !afterMetadata.ThumbnailUpdatedAt.Equal(initial.ThumbnailUpdatedAt) {
+		t.Fatalf(
+			"thumbnail revision changed with views/reactions: %v -> %v",
+			initial.ThumbnailUpdatedAt,
+			afterMetadata.ThumbnailUpdatedAt,
+		)
+	}
+
+	if err := cat.UpdateVideoMeta(ctx, "video-1", VideoMetaPatch{
+		ThumbnailURL: "/p/thumb/video-1",
+	}); err != nil {
+		t.Fatalf("rewrite thumbnail: %v", err)
+	}
+	afterThumbnail, err := cat.GetVideo(ctx, "video-1")
+	if err != nil {
+		t.Fatalf("get video after thumbnail update: %v", err)
+	}
+	if !afterThumbnail.ThumbnailUpdatedAt.After(initial.ThumbnailUpdatedAt) {
+		t.Fatalf(
+			"thumbnail revision did not advance: %v -> %v",
+			initial.ThumbnailUpdatedAt,
+			afterThumbnail.ThumbnailUpdatedAt,
+		)
+	}
+}
+
 func TestListVideosHotSortUsesLikesThenLastLikedAt(t *testing.T) {
 	ctx := context.Background()
 	cat, err := Open(t.TempDir() + "/catalog.db")
