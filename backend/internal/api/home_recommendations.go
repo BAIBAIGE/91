@@ -14,6 +14,7 @@ const (
 	maxHomeRecommendationSessions = 256
 	homeRecommendationLookupChunk = 32
 	homeLatestSnapshotSize        = 96
+	homeLatestSnapshotTTL         = 30 * time.Second
 )
 
 // homeRecommendationSession owns independent random and latest snapshots for
@@ -65,7 +66,7 @@ func (s *Server) nextHomeLatestBatch(
 	session *homeRecommendationSession,
 	count int,
 ) ([]*catalog.Video, []string, int, error) {
-	freshVideoIDs, err := s.Catalog.ListVisibleVideoIDsLatest(ctx, homeLatestSnapshotSize)
+	freshVideoIDs, err := s.cachedHomeLatestVideoIDs(ctx)
 	if err != nil {
 		return nil, nil, 0, err
 	}
@@ -83,6 +84,28 @@ func (s *Server) nextHomeLatestBatch(
 			return freshVideoIDs, nil
 		},
 	)
+}
+
+// cachedHomeLatestVideoIDs shares the public latest window across login
+// sessions. The short TTL intentionally bounds how long a newly scanned video
+// can take to appear while avoiding an incomplete web of write-path
+// invalidation hooks. Holding the mutex through the refresh also prevents a
+// cold-cache request burst from rebuilding the same snapshot concurrently.
+func (s *Server) cachedHomeLatestVideoIDs(ctx context.Context) ([]string, error) {
+	now := s.homeRecommendationsNow()
+	s.homeLatestSnapshotMu.Lock()
+	defer s.homeLatestSnapshotMu.Unlock()
+
+	if now.Before(s.homeLatestSnapshotUntil) {
+		return append([]string(nil), s.homeLatestSnapshot...), nil
+	}
+	ids, err := s.Catalog.ListVisibleVideoIDsLatest(ctx, homeLatestSnapshotSize)
+	if err != nil {
+		return nil, err
+	}
+	s.homeLatestSnapshot = append(s.homeLatestSnapshot[:0], ids...)
+	s.homeLatestSnapshotUntil = now.Add(homeLatestSnapshotTTL)
+	return append([]string(nil), ids...), nil
 }
 
 // mergeLatestHomeSnapshot keeps consumed IDs as a round marker, then rebuilds
@@ -124,6 +147,11 @@ func (s *Server) nextHomeSnapshotBatch(
 ) ([]*catalog.Video, []string, int, error) {
 	items := make([]*catalog.Video, 0, count)
 	selected := make(map[string]struct{}, count)
+	// The current snapshot may contain IDs that became hidden or were deleted
+	// after it was built. Allow one refresh, but stop once a freshly loaded
+	// round is exhausted without yielding any visible videos; otherwise a stale
+	// loader could make this loop reload the same unavailable IDs forever.
+	freshRoundStartItemCount := -1
 
 	for len(items) < count {
 		eligibleEnd := len(roundVideoIDs)
@@ -135,6 +163,7 @@ func (s *Server) nextHomeSnapshotBatch(
 			roundVideoIDs = freshVideoIDs
 			roundCursor = 0
 			eligibleEnd = len(roundVideoIDs)
+			freshRoundStartItemCount = len(items)
 			if len(roundVideoIDs) == 0 {
 				break
 			}
@@ -180,6 +209,9 @@ func (s *Server) nextHomeSnapshotBatch(
 		if eligibleEnd < len(roundVideoIDs) {
 			// The tail belongs to the newly-started round but was shown at the
 			// end of the previous round in this response. Leave it for next time.
+			break
+		}
+		if freshRoundStartItemCount >= 0 && len(items) == freshRoundStartItemCount {
 			break
 		}
 	}

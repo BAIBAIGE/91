@@ -11,6 +11,7 @@ const searchPanelSource = readFileSync(new URL("../src/components/SearchPanel.ts
 const apiSource = readFileSync(new URL("../src/admin/api.ts", import.meta.url), "utf8");
 const emptyVisualSource = readFileSync(new URL("../src/admin/AdminEmptyVisual.tsx", import.meta.url), "utf8");
 const adminCss = readFileSync(new URL("../src/styles/admin.css", import.meta.url), "utf8");
+const sharedStateCss = readFileSync(new URL("../src/styles/shared-state.css", import.meta.url), "utf8");
 const filterAllIconSource = readFileSync(
   new URL("../src/components/icons/FilterAllIcon.tsx", import.meta.url),
   "utf8"
@@ -288,7 +289,7 @@ test("empty video tabs use the correct visual and distinguish search misses", ()
   assert.doesNotMatch(currentSource, /<Image size=\{48\}/);
   assert.doesNotMatch(blacklistSource, /<Ban size=\{48\}/);
   assert.match(
-    adminCss,
+    sharedStateCss,
     /\.admin-empty-state--plain\s*\{[^}]*border\s*:\s*0;[^}]*background\s*:\s*transparent/s
   );
   assert.match(

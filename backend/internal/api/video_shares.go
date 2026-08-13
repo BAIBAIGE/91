@@ -273,7 +273,7 @@ func (s *Server) mapSharedVideoDetail(ctx context.Context, v *catalog.Video, sha
 	dto := mapVideo(v)
 	dto.Href = ""
 	dto.Thumbnail = s.sharedThumbnailURL(v, shareID)
-	dto.PreviewSrc = sharedAssetURL(shareID, "preview", v.UpdatedAt)
+	dto.PreviewSrc = sharedAssetURL(shareID, "preview", v.PreviewUpdatedAt)
 	if d, err := s.Catalog.GetDrive(ctx, v.DriveID); err == nil {
 		dto.SourceLabel = driveKindLabel(d.Kind)
 	}
@@ -295,7 +295,7 @@ func (s *Server) mapSharedVideoDetail(ctx context.Context, v *catalog.Video, sha
 func (s *Server) sharedThumbnailURL(v *catalog.Video, shareID string) string {
 	thumbnail := thumbnailURL(v)
 	if strings.HasPrefix(thumbnail, "/p/thumb/") {
-		return sharedAssetURL(shareID, "thumb", v.UpdatedAt)
+		return sharedAssetURL(shareID, "thumb", v.ThumbnailUpdatedAt)
 	}
 	return thumbnail
 }
@@ -350,9 +350,17 @@ func (s *Server) servePreviewVideo(w http.ResponseWriter, r *http.Request, v *ca
 			http.Error(w, "invalid local path", http.StatusForbidden)
 			return
 		}
-		w.Header().Set("Cache-Control", "no-store")
-		w.Header().Set("Pragma", "no-cache")
-		w.Header().Set("Expires", "0")
+		expectedVersion := ""
+		if !v.PreviewUpdatedAt.IsZero() {
+			expectedVersion = strconv.FormatInt(v.PreviewUpdatedAt.UnixMilli(), 10)
+		}
+		if expectedVersion != "" && r.URL.Query().Get("v") == expectedVersion {
+			w.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
+		} else {
+			w.Header().Set("Cache-Control", "no-store")
+			w.Header().Set("Pragma", "no-cache")
+			w.Header().Set("Expires", "0")
+		}
 		s.Proxy.ServeLocal(w, r, localPreview)
 		return
 	}

@@ -36,6 +36,9 @@ func (c *Catalog) migrate(ctx context.Context) error {
 	if err := c.addColumnIfMissing(ctx, "videos", "hidden", "INTEGER DEFAULT 0"); err != nil {
 		return err
 	}
+	if err := c.addColumnIfMissing(ctx, "videos", "is_canonical", "INTEGER NOT NULL DEFAULT 1"); err != nil {
+		return err
+	}
 	if err := c.addColumnIfMissing(ctx, "videos", "thumbnail_status", "TEXT DEFAULT 'pending'"); err != nil {
 		return err
 	}
@@ -52,6 +55,20 @@ UPDATE videos
    SET thumbnail_updated_at = updated_at
  WHERE COALESCE(thumbnail_url, '') != ''
    AND COALESCE(thumbnail_updated_at, 0) = 0
+`); err != nil {
+		return err
+	}
+	if err := c.addColumnIfMissing(ctx, "videos", "preview_updated_at", "INTEGER DEFAULT 0"); err != nil {
+		return err
+	}
+	// Legacy previews were versioned with videos.updated_at. Seed a dedicated
+	// revision once; future metadata-only writes leave it unchanged.
+	if _, err := c.db.ExecContext(ctx, `
+UPDATE videos
+   SET preview_updated_at = updated_at
+ WHERE COALESCE(preview_local, '') != ''
+   AND COALESCE(preview_status, 'pending') = 'ready'
+   AND COALESCE(preview_updated_at, 0) = 0
 `); err != nil {
 		return err
 	}
@@ -193,9 +210,6 @@ CREATE TABLE IF NOT EXISTS deleted_videos (
 	if _, err := c.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_videos_hidden ON videos(hidden)`); err != nil {
 		return err
 	}
-	if _, err := c.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_videos_visible_pub ON videos(COALESCE(hidden, 0), published_at DESC)`); err != nil {
-		return err
-	}
 	if _, err := c.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_videos_last_viewed ON videos(last_viewed_at DESC)`); err != nil {
 		return err
 	}
@@ -206,6 +220,9 @@ CREATE TABLE IF NOT EXISTS deleted_videos (
 		return err
 	}
 	if _, err := c.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_videos_file_name_size_created ON videos(file_name, size_bytes, created_at, id)`); err != nil {
+		return err
+	}
+	if err := c.ensureCanonicalVideoMaterialization(ctx); err != nil {
 		return err
 	}
 	if _, err := c.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_deleted_videos_drive_file ON deleted_videos(drive_id, file_id)`); err != nil {
@@ -636,6 +653,376 @@ func (c *Catalog) ensureBaseVideoIndexes(ctx context.Context) error {
 	return nil
 }
 
+const canonicalMaterializationMarker = "videos.is_canonical.v1"
+
+const dedupRepresentativesMarker = "videos.dedup_representatives.v1"
+
+const canonicalRowsMatchingNewVideoSQL = `(videos.id = NEW.id
+	OR (COALESCE(NEW.content_hash, '') != ''
+		AND videos.content_hash = NEW.content_hash)
+	OR (NEW.size_bytes > 0
+		AND COALESCE(NEW.sampled_sha256, '') != ''
+		AND videos.size_bytes = NEW.size_bytes
+		AND videos.sampled_sha256 = NEW.sampled_sha256)
+	OR (NEW.size_bytes > 0
+		AND COALESCE(NEW.file_name, '') != ''
+		AND videos.size_bytes = NEW.size_bytes
+		AND videos.file_name = NEW.file_name))`
+
+const canonicalRowsMatchingOldVideoSQL = `(videos.id = OLD.id
+	OR (COALESCE(OLD.content_hash, '') != ''
+		AND videos.content_hash = OLD.content_hash)
+	OR (OLD.size_bytes > 0
+		AND COALESCE(OLD.sampled_sha256, '') != ''
+		AND videos.size_bytes = OLD.size_bytes
+		AND videos.sampled_sha256 = OLD.sampled_sha256)
+	OR (OLD.size_bytes > 0
+		AND COALESCE(OLD.file_name, '') != ''
+		AND videos.size_bytes = OLD.size_bytes
+		AND videos.file_name = OLD.file_name))`
+
+// ensureCanonicalVideoMaterialization installs row-local maintenance triggers
+// and performs a one-time full backfill. The trigger UPDATE runs inside the
+// originating SQLite statement, so every Catalog writer, direct INSERT, bulk
+// DELETE and restored database keeps the derived flag transactionally aligned.
+func (c *Catalog) ensureCanonicalVideoMaterialization(ctx context.Context) error {
+	if _, err := c.db.ExecContext(ctx, `
+CREATE TABLE IF NOT EXISTS video_dedup_representatives (
+	video_id          TEXT NOT NULL,
+	basis             TEXT NOT NULL CHECK (basis IN ('self', 'content_hash', 'sampled_sha256', 'file_name_size')),
+	representative_id TEXT NOT NULL,
+	PRIMARY KEY (video_id, basis)
+);
+CREATE INDEX IF NOT EXISTS idx_video_dedup_representative
+	ON video_dedup_representatives(representative_id, video_id);
+`); err != nil {
+		return fmt.Errorf("create dedup representative table: %w", err)
+	}
+
+	canonicalValueSQL := `CASE WHEN ` + dynamicUniqueVideoWhereSQL + ` THEN 1 ELSE 0 END`
+	insertRepresentativeRefreshSQL := refreshInsertedVideoDedupRepresentativesSQL()
+	updateRepresentativeRefreshSQL := refreshUpdatedVideoDedupRepresentativesSQL()
+	deleteRepresentativeRefreshSQL := refreshDeletedVideoDedupRepresentativesSQL()
+	triggerSQL := `
+DROP TRIGGER IF EXISTS maintain_video_canonical_after_insert;
+DROP TRIGGER IF EXISTS maintain_video_canonical_after_update;
+DROP TRIGGER IF EXISTS maintain_video_canonical_after_delete;
+DROP TRIGGER IF EXISTS maintain_video_representatives_after_insert;
+DROP TRIGGER IF EXISTS maintain_video_representatives_after_update;
+DROP TRIGGER IF EXISTS maintain_video_representatives_after_delete;
+
+CREATE TRIGGER maintain_video_canonical_after_insert
+AFTER INSERT ON videos
+BEGIN
+	UPDATE videos
+	   SET is_canonical = ` + canonicalValueSQL + `
+	 WHERE ` + canonicalRowsMatchingNewVideoSQL + `
+	   AND is_canonical != ` + canonicalValueSQL + `;
+END;
+
+CREATE TRIGGER maintain_video_canonical_after_update
+AFTER UPDATE OF id, content_hash, sampled_sha256, size_bytes, file_name, created_at ON videos
+WHEN OLD.id IS NOT NEW.id
+	OR COALESCE(OLD.content_hash, '') IS NOT COALESCE(NEW.content_hash, '')
+	OR COALESCE(OLD.sampled_sha256, '') IS NOT COALESCE(NEW.sampled_sha256, '')
+	OR COALESCE(OLD.size_bytes, 0) IS NOT COALESCE(NEW.size_bytes, 0)
+	OR COALESCE(OLD.file_name, '') IS NOT COALESCE(NEW.file_name, '')
+	OR OLD.created_at IS NOT NEW.created_at
+BEGIN
+	UPDATE videos
+	   SET is_canonical = ` + canonicalValueSQL + `
+	 WHERE (` + canonicalRowsMatchingOldVideoSQL + ` OR ` + canonicalRowsMatchingNewVideoSQL + `)
+	   AND is_canonical != ` + canonicalValueSQL + `;
+END;
+
+CREATE TRIGGER maintain_video_canonical_after_delete
+AFTER DELETE ON videos
+BEGIN
+	UPDATE videos
+	   SET is_canonical = ` + canonicalValueSQL + `
+	 WHERE ` + canonicalRowsMatchingOldVideoSQL + `
+	   AND is_canonical != ` + canonicalValueSQL + `;
+END;
+
+CREATE TRIGGER maintain_video_representatives_after_insert
+AFTER INSERT ON videos
+BEGIN
+` + insertRepresentativeRefreshSQL + `
+END;
+
+CREATE TRIGGER maintain_video_representatives_after_update
+AFTER UPDATE OF id, content_hash, sampled_sha256, size_bytes, file_name, created_at ON videos
+WHEN OLD.id IS NOT NEW.id
+	OR COALESCE(OLD.content_hash, '') IS NOT COALESCE(NEW.content_hash, '')
+	OR COALESCE(OLD.sampled_sha256, '') IS NOT COALESCE(NEW.sampled_sha256, '')
+	OR COALESCE(OLD.size_bytes, 0) IS NOT COALESCE(NEW.size_bytes, 0)
+	OR COALESCE(OLD.file_name, '') IS NOT COALESCE(NEW.file_name, '')
+	OR OLD.created_at IS NOT NEW.created_at
+BEGIN
+` + updateRepresentativeRefreshSQL + `
+END;
+
+CREATE TRIGGER maintain_video_representatives_after_delete
+AFTER DELETE ON videos
+BEGIN
+` + deleteRepresentativeRefreshSQL + `
+END;
+`
+	if _, err := c.db.ExecContext(ctx, triggerSQL); err != nil {
+		return fmt.Errorf("install canonical video triggers: %w", err)
+	}
+
+	marker, err := c.GetSetting(ctx, canonicalMaterializationMarker, "")
+	if err != nil {
+		return fmt.Errorf("read canonical materialization marker: %w", err)
+	}
+	if strings.TrimSpace(marker) != "1" {
+		if _, err := c.db.ExecContext(ctx, `
+UPDATE videos
+	SET is_canonical = `+canonicalValueSQL+`
+	WHERE is_canonical != `+canonicalValueSQL); err != nil {
+			return fmt.Errorf("backfill canonical videos: %w", err)
+		}
+		var inconsistent int
+		if err := c.db.QueryRowContext(ctx, `
+SELECT COUNT(*)
+	FROM videos
+	WHERE is_canonical != `+canonicalValueSQL).Scan(&inconsistent); err != nil {
+			return fmt.Errorf("verify canonical video backfill: %w", err)
+		}
+		if inconsistent != 0 {
+			return fmt.Errorf("verify canonical video backfill: %d inconsistent rows", inconsistent)
+		}
+		if err := c.SetSetting(ctx, canonicalMaterializationMarker, "1"); err != nil {
+			return fmt.Errorf("write canonical materialization marker: %w", err)
+		}
+	}
+
+	representativeMarker, err := c.GetSetting(ctx, dedupRepresentativesMarker, "")
+	if err != nil {
+		return fmt.Errorf("read dedup representative marker: %w", err)
+	}
+	if strings.TrimSpace(representativeMarker) != "1" {
+		tx, err := c.db.BeginTx(ctx, nil)
+		if err != nil {
+			return fmt.Errorf("begin dedup representative backfill: %w", err)
+		}
+		defer tx.Rollback()
+		if _, err := tx.ExecContext(ctx, rebuildVideoDedupRepresentativesSQL("1 = 1", "")); err != nil {
+			return fmt.Errorf("backfill dedup representatives: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, `
+INSERT INTO settings (key, value, updated_at) VALUES (?, '1', ?)
+ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+`, dedupRepresentativesMarker, time.Now().UnixMilli()); err != nil {
+			return fmt.Errorf("write dedup representative marker: %w", err)
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("commit dedup representative backfill: %w", err)
+		}
+	}
+	// This legacy index makes SQLite prefer a full visible-row scan followed by
+	// a temporary sort over the canonical expression indexes below.
+	if _, err := c.db.ExecContext(ctx, `
+DROP INDEX IF EXISTS idx_videos_visible_pub;
+DROP INDEX IF EXISTS idx_videos_canonical_hot_ready;
+DROP INDEX IF EXISTS idx_videos_canonical_recent_ready;
+`); err != nil {
+		return fmt.Errorf("drop superseded visible video index: %w", err)
+	}
+
+	for _, stmt := range []string{
+		`CREATE INDEX IF NOT EXISTS idx_videos_canonical_id
+			ON videos(id)
+			WHERE is_canonical = 1 AND COALESCE(hidden, 0) = 0`,
+		`CREATE INDEX IF NOT EXISTS idx_videos_canonical_latest
+			ON videos(published_at DESC, id ASC)
+			WHERE is_canonical = 1 AND COALESCE(hidden, 0) = 0`,
+		`CREATE INDEX IF NOT EXISTS idx_videos_canonical_latest_ready
+			ON videos(
+				CASE WHEN COALESCE(thumbnail_url, '') != '' THEN 0 ELSE 1 END,
+				published_at DESC,
+				id ASC
+			)
+			WHERE is_canonical = 1 AND COALESCE(hidden, 0) = 0`,
+	} {
+		if _, err := c.db.ExecContext(ctx, stmt); err != nil {
+			return fmt.Errorf("create canonical video index: %w", err)
+		}
+	}
+	return nil
+}
+
+func rebuildVideoDedupRepresentativesSQL(scopeSQL, removedVideoIDSQL string) string {
+	deleteWhere := `video_id IN (SELECT videos.id FROM videos WHERE ` + scopeSQL + `)`
+	if strings.TrimSpace(removedVideoIDSQL) != "" {
+		deleteWhere = `video_id = ` + removedVideoIDSQL + ` OR ` + deleteWhere
+	}
+	return `
+	DELETE FROM video_dedup_representatives
+	 WHERE ` + deleteWhere + `;
+
+	INSERT OR REPLACE INTO video_dedup_representatives (video_id, basis, representative_id)
+	SELECT videos.id, 'self', videos.id
+	  FROM videos
+	 WHERE ` + scopeSQL + `;
+
+	INSERT OR REPLACE INTO video_dedup_representatives (video_id, basis, representative_id)
+	SELECT videos.id,
+	       'content_hash',
+	       (SELECT canonical.id
+	          FROM videos canonical
+	         WHERE canonical.content_hash = videos.content_hash
+	           AND COALESCE(canonical.content_hash, '') != ''
+	         ORDER BY canonical.created_at ASC, canonical.id ASC
+	         LIMIT 1)
+	  FROM videos
+	 WHERE ` + scopeSQL + `
+	   AND COALESCE(videos.content_hash, '') != '';
+
+	INSERT OR REPLACE INTO video_dedup_representatives (video_id, basis, representative_id)
+	SELECT videos.id,
+	       'sampled_sha256',
+	       (SELECT canonical.id
+	          FROM videos canonical
+	         WHERE canonical.sampled_sha256 = videos.sampled_sha256
+	           AND canonical.size_bytes = videos.size_bytes
+	           AND COALESCE(canonical.sampled_sha256, '') != ''
+	           AND canonical.size_bytes > 0
+	         ORDER BY canonical.created_at ASC, canonical.id ASC
+	         LIMIT 1)
+	  FROM videos
+	 WHERE ` + scopeSQL + `
+	   AND COALESCE(videos.sampled_sha256, '') != ''
+	   AND videos.size_bytes > 0;
+
+	INSERT OR REPLACE INTO video_dedup_representatives (video_id, basis, representative_id)
+	SELECT videos.id,
+	       'file_name_size',
+	       (SELECT canonical.id
+	          FROM videos canonical
+	         WHERE canonical.file_name = videos.file_name
+	           AND canonical.size_bytes = videos.size_bytes
+	           AND COALESCE(canonical.file_name, '') != ''
+	           AND canonical.size_bytes > 0
+	         ORDER BY canonical.created_at ASC, canonical.id ASC
+	         LIMIT 1)
+	  FROM videos
+	 WHERE ` + scopeSQL + `
+	   AND COALESCE(videos.file_name, '') != ''
+	   AND videos.size_bytes > 0;
+`
+}
+
+func refreshInsertedVideoDedupRepresentativesSQL() string {
+	return `
+	DELETE FROM video_dedup_representatives WHERE video_id = NEW.id;
+	INSERT OR REPLACE INTO video_dedup_representatives (video_id, basis, representative_id)
+	VALUES (NEW.id, 'self', NEW.id);
+` + refreshVideoDedupRepresentativeGroupsSQL("", "NEW")
+}
+
+func refreshUpdatedVideoDedupRepresentativesSQL() string {
+	return `
+	DELETE FROM video_dedup_representatives WHERE video_id = OLD.id OR video_id = NEW.id;
+	INSERT OR REPLACE INTO video_dedup_representatives (video_id, basis, representative_id)
+	VALUES (NEW.id, 'self', NEW.id);
+` + refreshVideoDedupRepresentativeGroupsSQL("OLD", "NEW")
+}
+
+func refreshDeletedVideoDedupRepresentativesSQL() string {
+	return `
+	DELETE FROM video_dedup_representatives WHERE video_id = OLD.id;
+` + refreshVideoDedupRepresentativeGroupsSQL("OLD", "")
+}
+
+func refreshVideoDedupRepresentativeGroupsSQL(oldRef, newRef string) string {
+	hashScope := dedupRepresentativeHashScopeSQL(oldRef, newRef)
+	sampleScope := dedupRepresentativeSampleScopeSQL(oldRef, newRef)
+	fileScope := dedupRepresentativeFileScopeSQL(oldRef, newRef)
+	return `
+	INSERT OR REPLACE INTO video_dedup_representatives (video_id, basis, representative_id)
+	SELECT videos.id,
+	       'content_hash',
+	       (SELECT canonical.id
+	          FROM videos canonical
+	         WHERE canonical.content_hash = videos.content_hash
+	           AND COALESCE(canonical.content_hash, '') != ''
+	         ORDER BY canonical.created_at ASC, canonical.id ASC
+	         LIMIT 1)
+	  FROM videos
+	 WHERE ` + hashScope + `;
+
+	INSERT OR REPLACE INTO video_dedup_representatives (video_id, basis, representative_id)
+	SELECT videos.id,
+	       'sampled_sha256',
+	       (SELECT canonical.id
+	          FROM videos canonical
+	         WHERE canonical.sampled_sha256 = videos.sampled_sha256
+	           AND canonical.size_bytes = videos.size_bytes
+	           AND COALESCE(canonical.sampled_sha256, '') != ''
+	           AND canonical.size_bytes > 0
+	         ORDER BY canonical.created_at ASC, canonical.id ASC
+	         LIMIT 1)
+	  FROM videos
+	 WHERE ` + sampleScope + `;
+
+	INSERT OR REPLACE INTO video_dedup_representatives (video_id, basis, representative_id)
+	SELECT videos.id,
+	       'file_name_size',
+	       (SELECT canonical.id
+	          FROM videos canonical
+	         WHERE canonical.file_name = videos.file_name
+	           AND canonical.size_bytes = videos.size_bytes
+	           AND COALESCE(canonical.file_name, '') != ''
+	           AND canonical.size_bytes > 0
+	         ORDER BY canonical.created_at ASC, canonical.id ASC
+	         LIMIT 1)
+	  FROM videos
+	 WHERE ` + fileScope + `;
+`
+}
+
+func dedupRepresentativeHashScopeSQL(refs ...string) string {
+	conditions := make([]string, 0, len(refs))
+	for _, ref := range refs {
+		if ref == "" {
+			continue
+		}
+		conditions = append(conditions, `(COALESCE(`+ref+`.content_hash, '') != ''
+		AND videos.content_hash = `+ref+`.content_hash)`)
+	}
+	return strings.Join(conditions, " OR ")
+}
+
+func dedupRepresentativeSampleScopeSQL(refs ...string) string {
+	conditions := make([]string, 0, len(refs))
+	for _, ref := range refs {
+		if ref == "" {
+			continue
+		}
+		conditions = append(conditions, `(`+ref+`.size_bytes > 0
+		AND COALESCE(`+ref+`.sampled_sha256, '') != ''
+		AND videos.size_bytes = `+ref+`.size_bytes
+		AND videos.sampled_sha256 = `+ref+`.sampled_sha256)`)
+	}
+	return strings.Join(conditions, " OR ")
+}
+
+func dedupRepresentativeFileScopeSQL(refs ...string) string {
+	conditions := make([]string, 0, len(refs))
+	for _, ref := range refs {
+		if ref == "" {
+			continue
+		}
+		conditions = append(conditions, `(`+ref+`.size_bytes > 0
+		AND COALESCE(`+ref+`.file_name, '') != ''
+		AND videos.size_bytes = `+ref+`.size_bytes
+		AND videos.file_name = `+ref+`.file_name)`)
+	}
+	return strings.Join(conditions, " OR ")
+}
+
 var currentVideoColumnNames = []string{
 	"id",
 	"drive_id",
@@ -660,6 +1047,7 @@ var currentVideoColumnNames = []string{
 	"thumbnail_failures",
 	"preview_file_id",
 	"preview_local",
+	"preview_updated_at",
 	"preview_status",
 	"transcode_status",
 	"transcode_error",
@@ -673,6 +1061,7 @@ var currentVideoColumnNames = []string{
 	"last_liked_at",
 	"dislikes",
 	"hidden",
+	"is_canonical",
 	"tags_manual",
 	"badges",
 	"description",
@@ -706,6 +1095,7 @@ CREATE TABLE videos_category_drop_new (
     thumbnail_failures INTEGER DEFAULT 0,
     preview_file_id    TEXT,
     preview_local      TEXT,
+    preview_updated_at INTEGER DEFAULT 0,
     preview_status     TEXT DEFAULT 'pending',
     transcode_status   TEXT DEFAULT '',
     transcode_error    TEXT DEFAULT '',
@@ -719,6 +1109,7 @@ CREATE TABLE videos_category_drop_new (
     last_liked_at      INTEGER DEFAULT 0,
     dislikes           INTEGER DEFAULT 0,
     hidden             INTEGER DEFAULT 0,
+    is_canonical       INTEGER NOT NULL DEFAULT 1,
     tags_manual        INTEGER DEFAULT 0,
     badges             TEXT,
     description        TEXT,
@@ -860,6 +1251,7 @@ func (c *Catalog) requeueSkippedPreviews(ctx context.Context) error {
 UPDATE videos
    SET preview_file_id = '',
        preview_local = '',
+	   preview_updated_at = 0,
        preview_status = 'pending',
        updated_at = ?
  WHERE COALESCE(preview_status, 'pending') = 'skipped'

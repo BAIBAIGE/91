@@ -148,6 +148,7 @@ type Video struct {
 	ThumbnailUpdatedAt time.Time `json:"thumbnailUpdatedAt"`
 	PreviewFileID      string    `json:"previewFileId"`
 	PreviewLocal       string    `json:"previewLocal"`
+	PreviewUpdatedAt   time.Time `json:"previewUpdatedAt"`
 	PreviewStatus      string    `json:"previewStatus"`
 	// TranscodeStatus：浏览器兼容性转码状态。
 	// ''=未检测 / pending=已入队 / ready=已转码 / skipped=无需转码 / failed=失败。
@@ -195,18 +196,27 @@ func (c *Catalog) UpsertVideo(ctx context.Context, v *Video) error {
 	} else {
 		v.ThumbnailUpdatedAt = time.Time{}
 	}
+	previewUpdatedAt := int64(0)
+	if v.PreviewLocal != "" && v.PreviewStatus == "ready" {
+		if v.PreviewUpdatedAt.IsZero() {
+			v.PreviewUpdatedAt = time.UnixMilli(now)
+		}
+		previewUpdatedAt = v.PreviewUpdatedAt.UnixMilli()
+	} else {
+		v.PreviewUpdatedAt = time.Time{}
+	}
 
 	_, err := c.db.ExecContext(ctx, `
 INSERT INTO videos (
   id, drive_id, file_id, file_name, content_hash, sampled_sha256, fingerprint_status, fingerprint_error, parent_id, dir_name, title, author, tags,
 	  duration_seconds, size_bytes, ext, quality, thumbnail_url, thumbnail_updated_at, thumbnail_status,
-	  preview_file_id, preview_local, preview_status,
+	  preview_file_id, preview_local, preview_updated_at, preview_status,
 	  views, last_viewed_at, favorites, comments, likes, dislikes,
 	  hidden, badges, description, published_at, created_at, updated_at
 	) VALUES (
 	  ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 	  ?, ?, ?, ?, ?, ?, CASE WHEN COALESCE(?, '') != '' THEN 'ready' ELSE 'pending' END,
-	  ?, ?, ?,
+	  ?, ?, ?, ?,
 	  ?, ?, ?, ?, ?, ?,
 	  ?, ?, ?, ?, ?, ?
 	)
@@ -270,7 +280,7 @@ ON CONFLICT(id) DO UPDATE SET
 `,
 		v.ID, v.DriveID, v.FileID, v.FileName, v.ContentHash, v.SampledSHA256, fingerprintStatus, v.FingerprintError, v.ParentID, v.DirName, v.Title, v.Author, string(tagsJSON),
 		v.DurationSeconds, v.Size, v.Ext, v.Quality, v.ThumbnailURL, thumbnailUpdatedAt, v.ThumbnailURL,
-		v.PreviewFileID, v.PreviewLocal, nullableStatus(v.PreviewStatus),
+		v.PreviewFileID, v.PreviewLocal, previewUpdatedAt, nullableStatus(v.PreviewStatus),
 		v.Views, unixMilliOrZero(v.LastViewedAt), v.Favorites, v.Comments, v.Likes, v.Dislikes,
 		boolToInt(v.Hidden), string(badgesJSON), v.Description,
 		v.PublishedAt.UnixMilli(), v.CreatedAt.UnixMilli(), v.UpdatedAt.UnixMilli(),
@@ -302,9 +312,20 @@ func nullableStatus(s string) string {
 }
 
 func (c *Catalog) UpdatePreview(ctx context.Context, id, previewLocal, status string) error {
+	now := time.Now().UnixMilli()
 	_, err := c.db.ExecContext(ctx,
-		`UPDATE videos SET preview_file_id = '', preview_local = ?, preview_status = ?, updated_at = ? WHERE id = ?`,
-		previewLocal, status, time.Now().UnixMilli(), id)
+		`UPDATE videos
+		    SET preview_file_id = '',
+		        preview_local = ?,
+		        preview_updated_at = CASE
+		          WHEN ? = 'ready' AND COALESCE(?, '') != ''
+		            THEN MAX(COALESCE(preview_updated_at, 0) + 1, ?)
+		          ELSE 0
+		        END,
+		        preview_status = ?,
+		        updated_at = ?
+		  WHERE id = ?`,
+		previewLocal, status, previewLocal, now, status, now, id)
 	return err
 }
 
@@ -2669,7 +2690,7 @@ func (c *Catalog) ClearGeneratedAssets(ctx context.Context, videoID string, clea
 	parts := []string{}
 	args := []any{}
 	if clearPreview {
-		parts = append(parts, "preview_file_id = ''", "preview_local = ''", "preview_status = 'pending'")
+		parts = append(parts, "preview_file_id = ''", "preview_local = ''", "preview_updated_at = 0", "preview_status = 'pending'")
 	}
 	if clearThumbnail {
 		parts = append(parts, "thumbnail_url = ''", "thumbnail_updated_at = 0", "thumbnail_status = 'pending'")
@@ -3180,7 +3201,7 @@ id, drive_id, file_id, COALESCE(file_name, ''), COALESCE(content_hash, ''),
 COALESCE(sampled_sha256, ''), COALESCE(fingerprint_status, 'pending'), COALESCE(fingerprint_error, ''),
 COALESCE(parent_id, ''), COALESCE(dir_name, ''), title, COALESCE(author, ''), COALESCE(tags, '[]'),
 duration_seconds, size_bytes, COALESCE(ext, ''), COALESCE(quality, ''), COALESCE(thumbnail_url, ''), COALESCE(thumbnail_updated_at, 0),
-COALESCE(preview_file_id, ''), COALESCE(preview_local, ''), COALESCE(preview_status, 'pending'),
+COALESCE(preview_file_id, ''), COALESCE(preview_local, ''), COALESCE(preview_updated_at, 0), COALESCE(preview_status, 'pending'),
 	COALESCE(transcode_status, ''), COALESCE(transcode_error, ''), COALESCE(transcoded_file_id, ''), COALESCE(transcoded_size, 0),
 	views, COALESCE(last_viewed_at, 0), favorites, comments, likes, COALESCE(last_liked_at, 0), dislikes,
 	COALESCE(hidden, 0), COALESCE(badges, '[]'), COALESCE(description, ''),
@@ -3198,7 +3219,16 @@ const activeDriveWhereSQL = `(videos.drive_id = 'local-upload'
 		  FROM drives
 	))`
 
-const uniqueVideoWhereSQL = `((COALESCE(videos.content_hash, '') = ''
+// uniqueVideoWhereSQL is the hot-path materialized form of the exact legacy
+// predicate below. SQLite triggers update it in the same statement/transaction
+// as every insert, delete, or dedup-key change.
+const uniqueVideoWhereSQL = `videos.is_canonical = 1`
+
+// dynamicUniqueVideoWhereSQL remains the source of truth for migration,
+// trigger recomputation and consistency tests. Keep its three independent
+// clauses intact: a row may map to different representatives by hash, sampled
+// fingerprint, and filename+size, so a single canonical_video_id is lossy.
+const dynamicUniqueVideoWhereSQL = `((COALESCE(videos.content_hash, '') = ''
 		OR NOT EXISTS (
 			SELECT 1
 			FROM videos AS dup
@@ -3236,7 +3266,7 @@ const uniqueVideoWhereSQL = `((COALESCE(videos.content_hash, '') = ''
 				dup.created_at < videos.created_at
 				OR (dup.created_at = videos.created_at AND dup.id < videos.id)
 			  )
-		)))`
+		  )))`
 
 type rowScanner interface {
 	Scan(dest ...any) error
@@ -3245,14 +3275,14 @@ type rowScanner interface {
 func scanVideo(row rowScanner) (*Video, error) {
 	v := &Video{}
 	var tagsJSON, badgesJSON string
-	var publishedAt, createdAt, updatedAt, thumbnailUpdatedAt, lastViewedAt, lastLikedAt int64
+	var publishedAt, createdAt, updatedAt, thumbnailUpdatedAt, previewUpdatedAt, lastViewedAt, lastLikedAt int64
 	var hidden int
 	err := row.Scan(
 		&v.ID, &v.DriveID, &v.FileID, &v.FileName, &v.ContentHash,
 		&v.SampledSHA256, &v.FingerprintStatus, &v.FingerprintError,
 		&v.ParentID, &v.DirName, &v.Title, &v.Author, &tagsJSON,
 		&v.DurationSeconds, &v.Size, &v.Ext, &v.Quality, &v.ThumbnailURL, &thumbnailUpdatedAt,
-		&v.PreviewFileID, &v.PreviewLocal, &v.PreviewStatus,
+		&v.PreviewFileID, &v.PreviewLocal, &previewUpdatedAt, &v.PreviewStatus,
 		&v.TranscodeStatus, &v.TranscodeError, &v.TranscodedFileID, &v.TranscodedSize,
 		&v.Views, &lastViewedAt, &v.Favorites, &v.Comments, &v.Likes, &lastLikedAt, &v.Dislikes,
 		&hidden, &badgesJSON, &v.Description,
@@ -3269,6 +3299,9 @@ func scanVideo(row rowScanner) (*Video, error) {
 	v.UpdatedAt = time.UnixMilli(updatedAt)
 	if thumbnailUpdatedAt > 0 {
 		v.ThumbnailUpdatedAt = time.UnixMilli(thumbnailUpdatedAt)
+	}
+	if previewUpdatedAt > 0 {
+		v.PreviewUpdatedAt = time.UnixMilli(previewUpdatedAt)
 	}
 	if lastViewedAt > 0 {
 		v.LastViewedAt = time.UnixMilli(lastViewedAt)

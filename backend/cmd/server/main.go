@@ -461,6 +461,7 @@ func main() {
 		log.LstdFlags,
 	)
 	r.Use(requestLogMiddleware(accessLogger, log.Default(), logStore))
+	r.Use(responseCompressionMiddleware)
 	r.Use(middleware.Recoverer)
 	r.Use(corsMiddleware(cfg.Server.AllowedOrigins))
 

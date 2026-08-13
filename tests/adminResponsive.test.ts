@@ -6,6 +6,14 @@ const adminCss = readFileSync(
   new URL("../src/styles/admin.css", import.meta.url),
   "utf8"
 );
+const loginCss = readFileSync(
+  new URL("../src/styles/login.css", import.meta.url),
+  "utf8"
+);
+const adminControlsCss = readFileSync(
+  new URL("../src/styles/admin-controls.css", import.meta.url),
+  "utf8"
+);
 const searchCss = readFileSync(
   new URL("../src/styles/search.css", import.meta.url),
   "utf8"
@@ -99,7 +107,7 @@ function mobileCss(): string {
 }
 
 test("admin login card fits narrow phone screens", () => {
-  const body = ruleBody(adminCss, ".admin-login__card");
+  const body = ruleBody(loginCss, ".admin-login__card");
 
   // 桌面规则就用 min(...) 让窄屏自然适配；具体上限以 CSS 当前值为准（400px），
   // 关键是 `min(<某值>, 100%)` + `box-sizing: border-box`。
@@ -219,9 +227,9 @@ test("mobile user management cards keep identity, metadata, and actions separate
   assert.match(passwordResetChrome, /background\s*:\s*var\(--bg-surface\)/);
   assert.match(passwordResetClose, /border-color\s*:\s*transparent/);
   assert.match(passwordResetClose, /background\s*:\s*transparent/);
-  assert.match(ruleBody(adminCss, ".admin-password-input"), /position\s*:\s*relative/);
-  assert.match(ruleBody(adminCss, ".admin-password-input input"), /padding-right\s*:\s*42px/);
-  assert.match(ruleBody(adminCss, ".admin-password-input__toggle"), /position\s*:\s*absolute/);
+  assert.match(ruleBody(adminControlsCss, ".admin-password-input"), /position\s*:\s*relative/);
+  assert.match(ruleBody(adminControlsCss, ".admin-password-input input"), /padding-right\s*:\s*42px/);
+  assert.match(ruleBody(adminControlsCss, ".admin-password-input__toggle"), /position\s*:\s*absolute/);
   assert.match(usersPageSource, /className="admin-btn admin-btn--small is-danger"/);
   assert.match(usersPageSource, /className="admin-btn admin-btn--small"[\s\S]*?title="解除封禁"[\s\S]*?>\s*解除封禁\s*<\/button>/);
   assert.doesNotMatch(usersPageSource, /className="admin-btn admin-btn--small is-primary"[\s\S]*?解除封禁/);

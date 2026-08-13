@@ -10,8 +10,8 @@ const clipboardSource = readFileSync(
   new URL("../src/lib/clipboard.ts", import.meta.url),
   "utf8"
 );
-const adminCss = readFileSync(
-  new URL("../src/styles/admin.css", import.meta.url),
+const sharedStateCss = readFileSync(
+  new URL("../src/styles/shared-state.css", import.meta.url),
   "utf8"
 );
 
@@ -23,10 +23,10 @@ function ruleBody(css: string, selector: string): string {
 }
 
 function mobileCss(): string {
-  const marker = "@media (max-width: 768px)";
-  const start = adminCss.indexOf(marker);
-  assert.notEqual(start, -1, "Expected mobile admin media query");
-  return adminCss.slice(start);
+  const marker = "@media (max-width: 640px)";
+  const start = sharedStateCss.indexOf(marker);
+  assert.notEqual(start, -1, "Expected mobile shared-state media query");
+  return sharedStateCss.slice(start);
 }
 
 test("admin toasts auto-dismiss and copy their text when clicked", () => {
@@ -66,8 +66,8 @@ test("admin toasts keep the newest two visible", () => {
 });
 
 test("admin toasts show long messages without internal scrolling", () => {
-  const baseToast = ruleBody(adminCss, ".admin-toast");
-  const baseText = ruleBody(adminCss, ".admin-toast__text");
+  const baseToast = ruleBody(sharedStateCss, ".admin-toast");
+  const baseText = ruleBody(sharedStateCss, ".admin-toast__text");
   const mobileToast = ruleBody(mobileCss(), ".admin-toast");
 
   assert.match(baseToast, /max-width\s*:\s*min\(520px,\s*calc\(100vw - 48px\)\)/);
@@ -76,9 +76,9 @@ test("admin toasts show long messages without internal scrolling", () => {
   assert.match(baseToast, /overflow-wrap\s*:\s*anywhere/);
   assert.match(baseToast, /touch-action\s*:\s*manipulation/);
   assert.doesNotMatch(baseToast, /cursor\s*:\s*pointer/);
-  assert.match(ruleBody(adminCss, ".admin-toast.is-copyable"), /cursor\s*:\s*pointer/);
+  assert.match(ruleBody(sharedStateCss, ".admin-toast.is-copyable"), /cursor\s*:\s*pointer/);
   assert.match(baseText, /display\s*:\s*block/);
-  assert.doesNotMatch(adminCss, /\.admin-toast__close/);
+  assert.doesNotMatch(sharedStateCss, /\.admin-toast__close/);
   assert.match(mobileToast, /max-width\s*:\s*100%/);
   assert.match(mobileToast, /text-align\s*:\s*left/);
   assert.doesNotMatch(baseToast, /max-height/);

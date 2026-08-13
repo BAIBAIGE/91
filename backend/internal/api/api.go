@@ -71,6 +71,9 @@ type Server struct {
 	homeRecommendationMu       sync.Mutex
 	homeRecommendationSessions map[string]*homeRecommendationSession
 	homeRecommendationNow      func() time.Time
+	homeLatestSnapshotMu       sync.Mutex
+	homeLatestSnapshot         []string
+	homeLatestSnapshotUntil    time.Time
 
 	// shareNow is injectable so one-time share expiry behavior can be tested
 	// without sleeping. Production leaves it nil and uses time.Now.
@@ -454,6 +457,7 @@ func (s *Server) relatedTagPool(ctx context.Context, tags []string, seen map[str
 			PageSize:              30,
 			ThumbnailReadyOnly:    readyOnly,
 			PreferReadyThumbnails: !readyOnly,
+			SkipTotal:             true,
 		})
 		if err != nil {
 			continue
@@ -482,6 +486,7 @@ func (s *Server) relatedListPool(ctx context.Context, seen map[string]struct{}, 
 		PageSize:              pageSize,
 		ThumbnailReadyOnly:    readyOnly,
 		PreferReadyThumbnails: !readyOnly,
+		SkipTotal:             true,
 	})
 	if err != nil {
 		return nil
@@ -1244,10 +1249,10 @@ func normalizeSubtitleExt(ext string) string {
 
 func previewURL(v *catalog.Video) string {
 	base := "/p/preview/" + pathSegment(v.ID)
-	if v.UpdatedAt.IsZero() {
+	if v.PreviewUpdatedAt.IsZero() {
 		return base
 	}
-	return base + "?v=" + strconv.FormatInt(v.UpdatedAt.UnixMilli(), 10)
+	return base + "?v=" + strconv.FormatInt(v.PreviewUpdatedAt.UnixMilli(), 10)
 }
 
 func thumbnailURL(v *catalog.Video) string {

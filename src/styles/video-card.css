@@ -260,7 +260,7 @@
   border-radius: 6px;
   background: rgba(0, 0, 0, 0.78);
   color: #fff;
-  font-family: "Outfit", monospace;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: var(--font-xs);
   font-weight: var(--weight-semibold);
   letter-spacing: 0.02em;

@@ -42,6 +42,10 @@ const adminLayoutSource = readFileSync(
   new URL("../src/admin/AdminLayout.tsx", import.meta.url),
   "utf8"
 );
+const loginPageSource = readFileSync(
+  new URL("../src/admin/LoginPage.tsx", import.meta.url),
+  "utf8"
+);
 const spiderIconSource = readFileSync(
   new URL("../src/admin/icons/SpiderIcon.tsx", import.meta.url),
   "utf8"
@@ -64,6 +68,14 @@ const driveFormSource = readFileSync(
 );
 const adminCss = readFileSync(
   new URL("../src/styles/admin.css", import.meta.url),
+  "utf8"
+);
+const adminControlsCss = readFileSync(
+  new URL("../src/styles/admin-controls.css", import.meta.url),
+  "utf8"
+);
+const loginCss = readFileSync(
+  new URL("../src/styles/login.css", import.meta.url),
   "utf8"
 );
 const apiSource = readFileSync(
@@ -756,8 +768,26 @@ test("system sidebar contains navigation only while global actions live in the l
   assert.match(adminLayoutSource, /<AdminGlobalActions[\s\S]*?onCheckUpdate=[\s\S]*?onLogout=/);
 });
 
-test("admin shell stays mounted while lazy admin pages load", () => {
-  assert.match(appSource, /import \{ AdminLayout \} from "@\/admin\/AdminLayout";/);
+test("admin layout and its stylesheet load as one lazy route chunk", () => {
+  assert.doesNotMatch(appSource, /import \{ AdminLayout \} from "@\/admin\/AdminLayout";/);
+  assert.match(
+    appSource,
+    /const AdminLayout\s*=\s*lazy\(\(\) =>[\s\S]*?import\("@\/admin\/AdminLayout"\)[\s\S]*?default: module\.AdminLayout/
+  );
+  assert.match(
+    adminLayoutSource,
+    /import "@\/styles\/admin-controls\.css";\s*import "@\/styles\/admin\.css";/
+  );
+  assert.match(
+    loginPageSource,
+    /import "@\/styles\/admin-controls\.css";\s*import "@\/styles\/login\.css";/
+  );
+  for (const selector of ["admin-form", "admin-password-input", "admin-btn"]) {
+    const baseRule = new RegExp(`^\\.${selector}\\s*\\{`, "m");
+    assert.match(adminControlsCss, baseRule);
+    assert.doesNotMatch(adminCss, baseRule);
+    assert.doesNotMatch(loginCss, baseRule);
+  }
   assert.match(
     appSource,
     /import \{ DrivesPageLoading \} from "@\/admin\/DrivesPageLoading";/
@@ -766,10 +796,9 @@ test("admin shell stays mounted while lazy admin pages load", () => {
     appSource,
     /import \{ CrawlersPageLoading \} from "@\/admin\/CrawlersPageLoading";/
   );
-  assert.doesNotMatch(appSource, /const AdminLayout\s*=\s*lazy/);
   assert.doesNotMatch(appSource, /<Suspense fallback=\{null\}>\s*<Routes>/);
   assert.match(appSource, /function PageSuspense\(\{[\s\S]*fallback = null,[\s\S]*fallback\?: ReactNode/);
-  assert.match(appSource, /path="\/admin"[\s\S]*<AdminLayout \/>/);
+  assert.match(appSource, /path="\/admin"[\s\S]*?<PageSuspense>\s*<AdminLayout \/>\s*<\/PageSuspense>/);
   assert.match(
     appSource,
     /path="drives"[\s\S]*<PageSuspense fallback=\{<DrivesPageLoading \/>\}>[\s\S]*<DrivesPage \/>[\s\S]*<\/PageSuspense>/

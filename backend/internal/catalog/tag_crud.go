@@ -373,60 +373,6 @@ SELECT id, label
 
 func (c *Catalog) ListTags(ctx context.Context) ([]Tag, error) {
 	rows, err := c.db.QueryContext(ctx, `
-WITH tagged_tags AS (
-	SELECT vt.tag_id,
-	       tagged.id,
-	       COALESCE(tagged.content_hash, '') AS content_hash,
-	       COALESCE(tagged.sampled_sha256, '') AS sampled_sha256,
-	       tagged.size_bytes,
-	       COALESCE(tagged.file_name, '') AS file_name
-	  FROM video_tags vt
-	  JOIN videos tagged ON tagged.id = vt.video_id
-	 WHERE COALESCE(tagged.hidden, 0) = 0
-),
-tag_candidates AS (
-	SELECT tag_id, id AS video_id
-	  FROM tagged_tags
-	UNION ALL
-	SELECT tag_id,
-	       (SELECT canonical.id
-	          FROM videos canonical
-	         WHERE tagged_tags.content_hash != ''
-	           AND canonical.content_hash = tagged_tags.content_hash
-	           AND COALESCE(canonical.content_hash, '') != ''
-	         ORDER BY canonical.created_at ASC, canonical.id ASC
-	         LIMIT 1) AS video_id
-	  FROM tagged_tags
-	 WHERE content_hash != ''
-	UNION ALL
-	SELECT tag_id,
-	       (SELECT canonical.id
-	          FROM videos canonical
-	         WHERE tagged_tags.sampled_sha256 != ''
-	           AND tagged_tags.size_bytes > 0
-	           AND canonical.sampled_sha256 = tagged_tags.sampled_sha256
-	           AND canonical.size_bytes = tagged_tags.size_bytes
-	           AND COALESCE(canonical.sampled_sha256, '') != ''
-	           AND canonical.size_bytes > 0
-	         ORDER BY canonical.created_at ASC, canonical.id ASC
-	         LIMIT 1) AS video_id
-	  FROM tagged_tags
-	 WHERE sampled_sha256 != '' AND size_bytes > 0
-	UNION ALL
-	SELECT tag_id,
-	       (SELECT canonical.id
-	          FROM videos canonical
-	         WHERE tagged_tags.file_name != ''
-	           AND tagged_tags.size_bytes > 0
-	           AND canonical.file_name = tagged_tags.file_name
-	           AND canonical.size_bytes = tagged_tags.size_bytes
-	           AND COALESCE(canonical.file_name, '') != ''
-	           AND canonical.size_bytes > 0
-	         ORDER BY canonical.created_at ASC, canonical.id ASC
-	         LIMIT 1) AS video_id
-	  FROM tagged_tags
-	 WHERE file_name != '' AND size_bytes > 0
-)
 SELECT t.id,
        t.label,
        t.aliases,
@@ -444,8 +390,12 @@ SELECT t.id,
          THEN 1 ELSE 0
        END AS crawler_owned
 FROM tags t
-LEFT JOIN tag_candidates tc ON tc.tag_id = t.id AND tc.video_id IS NOT NULL
-LEFT JOIN videos ON videos.id = tc.video_id
+LEFT JOIN video_tags vt ON vt.tag_id = t.id
+LEFT JOIN videos tagged ON tagged.id = vt.video_id
+	AND COALESCE(tagged.hidden, 0) = 0
+LEFT JOIN video_dedup_representatives representative
+	ON representative.video_id = tagged.id
+LEFT JOIN videos ON videos.id = representative.representative_id
 	AND COALESCE(videos.hidden, 0) = 0
 	AND `+uniqueVideoWhereSQL+`
 GROUP BY t.id, t.label, t.aliases, t.match_rules, t.source, t.origin
@@ -490,60 +440,13 @@ func (c *Catalog) ListUserSelectableTags(ctx context.Context) ([]Tag, error) {
 
 func videoMatchesTagLabelSQL(videoAlias string) string {
 	return fmt.Sprintf(`%s.id IN (
-			WITH tagged_videos AS (
-				SELECT tagged.id,
-				       COALESCE(tagged.content_hash, '') AS content_hash,
-				       COALESCE(tagged.sampled_sha256, '') AS sampled_sha256,
-				       tagged.size_bytes,
-				       COALESCE(tagged.file_name, '') AS file_name
-				  FROM video_tags vt
-				  JOIN tags tag_filter ON tag_filter.id = vt.tag_id
-				  JOIN videos tagged ON tagged.id = vt.video_id
-				 WHERE tag_filter.label = ? COLLATE NOCASE
-				   AND COALESCE(tagged.hidden, 0) = 0
-			),
-			tag_candidates AS (
-				SELECT id AS video_id
-				  FROM tagged_videos
-				UNION ALL
-				SELECT (SELECT canonical.id
-				          FROM videos canonical
-				         WHERE tagged_videos.content_hash != ''
-				           AND canonical.content_hash = tagged_videos.content_hash
-				           AND COALESCE(canonical.content_hash, '') != ''
-				         ORDER BY canonical.created_at ASC, canonical.id ASC
-				         LIMIT 1) AS video_id
-				  FROM tagged_videos
-				 WHERE content_hash != ''
-				UNION ALL
-				SELECT (SELECT canonical.id
-				          FROM videos canonical
-				         WHERE tagged_videos.sampled_sha256 != ''
-				           AND tagged_videos.size_bytes > 0
-				           AND canonical.sampled_sha256 = tagged_videos.sampled_sha256
-				           AND canonical.size_bytes = tagged_videos.size_bytes
-				           AND COALESCE(canonical.sampled_sha256, '') != ''
-				           AND canonical.size_bytes > 0
-				         ORDER BY canonical.created_at ASC, canonical.id ASC
-				         LIMIT 1) AS video_id
-				  FROM tagged_videos
-				 WHERE sampled_sha256 != '' AND size_bytes > 0
-				UNION ALL
-				SELECT (SELECT canonical.id
-				          FROM videos canonical
-				         WHERE tagged_videos.file_name != ''
-				           AND tagged_videos.size_bytes > 0
-				           AND canonical.file_name = tagged_videos.file_name
-				           AND canonical.size_bytes = tagged_videos.size_bytes
-				           AND COALESCE(canonical.file_name, '') != ''
-				           AND canonical.size_bytes > 0
-				         ORDER BY canonical.created_at ASC, canonical.id ASC
-				         LIMIT 1) AS video_id
-				  FROM tagged_videos
-				 WHERE file_name != '' AND size_bytes > 0
-			)
-			SELECT video_id
-			  FROM tag_candidates
-			 WHERE video_id IS NOT NULL
+			SELECT representative.representative_id
+			  FROM video_tags vt
+			  JOIN tags tag_filter ON tag_filter.id = vt.tag_id
+			  JOIN videos tagged ON tagged.id = vt.video_id
+			  JOIN video_dedup_representatives representative
+			    ON representative.video_id = tagged.id
+			 WHERE tag_filter.label = ? COLLATE NOCASE
+			   AND COALESCE(tagged.hidden, 0) = 0
 		)`, videoAlias)
 }

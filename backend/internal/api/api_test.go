@@ -130,6 +130,7 @@ func TestVideoURLsEscapePathSegments(t *testing.T) {
 		Title:              "Video",
 		ThumbnailURL:       "/p/thumb/wopan-drive-fid/with space",
 		ThumbnailUpdatedAt: updated,
+		PreviewUpdatedAt:   updated,
 		UpdatedAt:          updated,
 	}
 
@@ -542,10 +543,10 @@ func TestVideoSourceUsesLocalUploadRoute(t *testing.T) {
 	}
 }
 
-func TestPreviewURLIncludesUpdatedAtVersion(t *testing.T) {
+func TestPreviewURLIncludesPreviewRevision(t *testing.T) {
 	got := previewURL(&catalog.Video{
-		ID:        "video-1",
-		UpdatedAt: time.UnixMilli(1778863000123),
+		ID:               "video-1",
+		PreviewUpdatedAt: time.UnixMilli(1778863000123),
 	})
 
 	if got != "/p/preview/video-1?v=1778863000123" {
@@ -553,7 +554,7 @@ func TestPreviewURLIncludesUpdatedAtVersion(t *testing.T) {
 	}
 }
 
-func TestPreviewURLFallsBackWithoutUpdatedAt(t *testing.T) {
+func TestPreviewURLFallsBackWithoutPreviewRevision(t *testing.T) {
 	got := previewURL(&catalog.Video{ID: "video-1"})
 
 	if got != "/p/preview/video-1" {
@@ -839,6 +840,34 @@ func assertUniqueHomeBatch(t *testing.T, got []VideoDTO) {
 	}
 }
 
+func TestNextHomeSnapshotBatchStopsAfterUnavailableFreshRound(t *testing.T) {
+	server, _, _ := newHomeRecommendationTestRoute(t, 0, 0)
+	loadCalls := 0
+
+	items, roundVideoIDs, roundCursor, err := server.nextHomeSnapshotBatch(
+		context.Background(),
+		[]string{"removed-from-current-round"},
+		0,
+		8,
+		func() ([]string, error) {
+			loadCalls++
+			return []string{"removed-from-fresh-round"}, nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("load unavailable snapshots: %v", err)
+	}
+	if len(items) != 0 {
+		t.Fatalf("items = %d, want 0", len(items))
+	}
+	if loadCalls != 1 {
+		t.Fatalf("fresh round loads = %d, want 1", loadCalls)
+	}
+	if len(roundVideoIDs) != 1 || roundVideoIDs[0] != "removed-from-fresh-round" || roundCursor != 1 {
+		t.Fatalf("fresh round state = %#v at %d, want exhausted unavailable round", roundVideoIDs, roundCursor)
+	}
+}
+
 func TestHomeRouteCompletesWholeLibraryBeforeRepeating(t *testing.T) {
 	// Twenty ready thumbnails are returned first; the final eight pending
 	// thumbnails still belong to the same complete-library round.
@@ -910,8 +939,10 @@ func TestHomeLatestRouteRotatesOneBoundedSnapshotWithMixedGridSizes(t *testing.T
 	}
 }
 
-func TestHomeLatestRouteInsertsNewVideosWithoutRepeatingConsumedCards(t *testing.T) {
+func TestHomeLatestRouteRefreshesSharedSnapshotAfterTTLWithoutRepeatingConsumedCards(t *testing.T) {
 	server, router, token := newHomeRecommendationTestRoute(t, 20, 20)
+	clock := time.Date(2026, 8, 13, 0, 0, 0, 0, time.UTC)
+	server.homeRecommendationNow = func() time.Time { return clock }
 	first := requestHomeLatestBatch(t, router, token, 8)
 	firstIDs := make(map[string]struct{}, len(first))
 	for _, item := range first {
@@ -932,14 +963,25 @@ func TestHomeLatestRouteInsertsNewVideosWithoutRepeatingConsumedCards(t *testing
 		t.Fatalf("seed new latest video: %v", err)
 	}
 
-	second := requestHomeLatestBatch(t, router, token, 8)
-	if len(second) != 8 {
-		t.Fatalf("second latest batch returned %d items, want 8", len(second))
+	withinTTL := requestHomeLatestBatch(t, router, token, 8)
+	if len(withinTTL) != 8 {
+		t.Fatalf("cached latest batch returned %d items, want 8", len(withinTTL))
 	}
-	if second[0].ID != "new-latest-video" {
-		t.Fatalf("first card after catalog refresh = %q, want new latest video", second[0].ID)
+	for _, item := range withinTTL {
+		if item.ID == "new-latest-video" {
+			t.Fatal("new video appeared before the shared latest snapshot TTL expired")
+		}
 	}
-	for _, item := range second {
+
+	clock = clock.Add(homeLatestSnapshotTTL)
+	afterTTL := requestHomeLatestBatch(t, router, token, 4)
+	if len(afterTTL) != 4 {
+		t.Fatalf("refreshed latest batch returned %d items, want 4", len(afterTTL))
+	}
+	if afterTTL[0].ID != "new-latest-video" {
+		t.Fatalf("first card after snapshot refresh = %q, want new latest video", afterTTL[0].ID)
+	}
+	for _, item := range append(withinTTL, afterTTL...) {
 		if _, duplicate := firstIDs[item.ID]; duplicate {
 			t.Fatalf("catalog refresh repeated consumed latest video %q", item.ID)
 		}
@@ -1514,17 +1556,19 @@ func TestHandlePreviewIgnoresRemotePreviewFileIDAndServesLocalFile(t *testing.T)
 		t.Fatalf("write local preview: %v", err)
 	}
 	now := time.Now()
+	previewRevision := time.UnixMilli(1778863000123)
 	if err := cat.UpsertVideo(ctx, &catalog.Video{
-		ID:            "video-1",
-		DriveID:       "drive-1",
-		FileID:        "file-1",
-		Title:         "Video",
-		PreviewStatus: "ready",
-		PreviewFileID: "remote-preview-file",
-		PreviewLocal:  localPreview,
-		PublishedAt:   now,
-		CreatedAt:     now,
-		UpdatedAt:     now,
+		ID:               "video-1",
+		DriveID:          "drive-1",
+		FileID:           "file-1",
+		Title:            "Video",
+		PreviewStatus:    "ready",
+		PreviewFileID:    "remote-preview-file",
+		PreviewLocal:     localPreview,
+		PreviewUpdatedAt: previewRevision,
+		PublishedAt:      now,
+		CreatedAt:        now,
+		UpdatedAt:        now,
 	}); err != nil {
 		t.Fatalf("seed video: %v", err)
 	}
@@ -1546,6 +1590,35 @@ func TestHandlePreviewIgnoresRemotePreviewFileIDAndServesLocalFile(t *testing.T)
 	}
 	if got := rr.Header().Get("Cache-Control"); got != "no-store" {
 		t.Fatalf("Cache-Control = %q, want no-store", got)
+	}
+
+	versionedReq := requestWithRouteParam(
+		http.MethodGet,
+		"/p/preview/video-1?v=1778863000123",
+		"videoID",
+		"video-1",
+		strings.NewReader(``),
+	)
+	versionedRR := httptest.NewRecorder()
+	server.handlePreview(versionedRR, versionedReq)
+	if versionedRR.Code != http.StatusOK {
+		t.Fatalf("versioned status = %d, body = %s", versionedRR.Code, versionedRR.Body.String())
+	}
+	if got := versionedRR.Header().Get("Cache-Control"); got != "private, max-age=31536000, immutable" {
+		t.Fatalf("versioned Cache-Control = %q, want immutable private cache", got)
+	}
+
+	staleReq := requestWithRouteParam(
+		http.MethodGet,
+		"/p/preview/video-1?v=stale",
+		"videoID",
+		"video-1",
+		strings.NewReader(``),
+	)
+	staleRR := httptest.NewRecorder()
+	server.handlePreview(staleRR, staleReq)
+	if got := staleRR.Header().Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("stale Cache-Control = %q, want no-store", got)
 	}
 }
 

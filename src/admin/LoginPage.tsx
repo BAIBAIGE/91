@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 import { Navigate, useLocation, useNavigate } from "react-router";
+import "@/styles/admin-controls.css";
+import "@/styles/login.css";
 import { useAuth } from "./AuthContext";
 import { useToast } from "./ToastContext";
 import * as api from "./api";

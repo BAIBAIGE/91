@@ -1314,20 +1314,8 @@ body.admin-mobile-nav-open {
 }
 
 /* =========================================================
- * Form
+ * Form extensions (shared primitives live in admin-controls.css)
  * ========================================================= */
-.admin-form {
-  display: grid;
-  gap: var(--space-4);
-  max-width: 600px;
-}
-
-.admin-form__row {
-  display: grid;
-  gap: 6px;
-}
-
-.admin-form__row label,
 .admin-form__label {
   font-size: var(--font-sm);
   font-weight: var(--weight-medium);
@@ -1340,7 +1328,6 @@ body.admin-mobile-nav-open {
   color: var(--text-default);
 }
 
-.admin-form__row input,
 .admin-form__row select,
 .admin-form__row textarea,
 .admin-input {
@@ -1354,13 +1341,11 @@ body.admin-mobile-nav-open {
   transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
 }
 
-.admin-form__row input::placeholder,
 .admin-form__row textarea::placeholder,
 .admin-input::placeholder {
   color: var(--text-faint);
 }
 
-.admin-form__row input:focus,
 .admin-form__row select:focus,
 .admin-form__row textarea:focus,
 .admin-input:focus {
@@ -1369,17 +1354,10 @@ body.admin-mobile-nav-open {
   box-shadow: 0 0 0 3px var(--accent-soft), 0 0 12px rgba(255, 138, 60, 0.15);
 }
 
-.admin-form__row input.is-invalid,
 .admin-form__row select.is-invalid,
 .admin-form__row textarea.is-invalid,
 .admin-input.is-invalid {
   border-color: var(--danger);
-}
-
-.admin-form__error {
-  color: var(--danger);
-  font-size: var(--font-xs);
-  line-height: var(--line-relaxed);
 }
 
 .admin-form__row textarea {
@@ -1425,47 +1403,6 @@ body.admin-mobile-nav-open {
 
 .admin-form-select:focus + .admin-form-select__icon {
   color: var(--accent);
-}
-
-.admin-password-input {
-  position: relative;
-  display: block;
-  width: 100%;
-}
-
-.admin-password-input input {
-  width: 100%;
-  padding-right: 42px;
-}
-
-.admin-password-input__toggle {
-  position: absolute;
-  top: 50%;
-  right: 8px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  padding: 0;
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--text-faint);
-  cursor: pointer;
-  transform: translateY(-50%);
-  transition: color var(--transition-fast), background var(--transition-fast);
-}
-
-.admin-password-input__toggle:hover {
-  color: var(--text-default);
-  background: var(--accent-soft);
-}
-
-.admin-password-input__toggle:focus-visible {
-  outline: none;
-  color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
 .admin-form__row--inline {
@@ -1614,63 +1551,13 @@ body.admin-mobile-nav-open {
 }
 
 /* =========================================================
- * Buttons
+ * Button extensions (shared primitives live in admin-controls.css)
  * ========================================================= */
-.admin-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  padding: 8px 14px;
-  border-radius: var(--radius-sm);
-  font-size: var(--font-sm);
-  font-weight: var(--weight-medium);
-  border: 1px solid var(--border-default);
-  background: var(--bg-elevated);
-  color: var(--text-default);
-  white-space: nowrap;
-  transition: background var(--transition-fast), border-color var(--transition-fast),
-    color var(--transition-fast), box-shadow var(--transition-fast),
-    transform var(--transition-fast);
-}
-
-.admin-btn__label {
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-
-.admin-btn:hover:not(:disabled) {
-  background: var(--bg-surface);
-  border-color: var(--border-strong);
-  color: var(--text-strong);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
-}
-
-.admin-btn:focus-visible,
 .admin-nav__link:focus-visible,
 .admin-mobile-nav-toggle:focus-visible,
 .admin-global-action:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
-  box-shadow: none;
-}
-
-.admin-btn:active:not(:disabled) {
-  transform: scale(0.97);
-}
-
-.admin-btn.is-primary {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: var(--text-on-accent);
-  box-shadow: none;
-}
-
-.admin-btn.is-primary:hover:not(:disabled) {
-  filter: none;
-  background: var(--accent-hover);
-  border-color: var(--accent-hover);
-  color: var(--text-on-accent);
   box-shadow: none;
 }
 
@@ -1702,11 +1589,6 @@ body.admin-mobile-nav-open {
   border-color: var(--warning);
   background: rgba(245, 181, 74, 0.2);
   box-shadow: 0 2px 10px rgba(245, 181, 74, 0.12);
-}
-
-.admin-btn:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
 }
 
 /* =========================================================
@@ -2057,42 +1939,6 @@ body.admin-mobile-nav-open {
 .admin-generation-state.is-cooling { background: var(--warning-soft); color: var(--warning); }
 .admin-generation-state.is-queued { background: rgba(255, 255, 255, 0.06); color: var(--text-muted); }
 .admin-generation-state.is-idle { background: var(--success-soft); color: var(--success); }
-
-/* =========================================================
- * Login
- * ========================================================= */
-.admin-login {
-  min-height: 100vh;
-  min-height: 100dvh;
-  display: grid;
-  place-items: center;
-  background:
-    radial-gradient(800px 400px at 80% 10%, rgba(255, 138, 60, 0.16), transparent 60%),
-    radial-gradient(900px 500px at 10% 90%, rgba(120, 80, 200, 0.10), transparent 60%),
-    var(--bg-page);
-  padding: var(--space-4);
-  padding-bottom: calc(var(--space-4) + env(safe-area-inset-bottom));
-}
-
-.admin-login__card {
-  width: min(400px, 100%);
-  box-sizing: border-box;
-  padding: var(--space-7);
-  background: var(--bg-surface);
-  border: 1px solid var(--border-default);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-xl);
-}
-
-.admin-login__error {
-  margin-top: var(--space-2);
-  padding: 8px var(--space-3);
-  background: var(--danger-soft);
-  color: var(--danger);
-  border: 1px solid rgba(241, 85, 108, 0.3);
-  border-radius: var(--radius-sm);
-  font-size: var(--font-sm);
-}
 
 /* =========================================================
  * Modal
@@ -2801,65 +2647,6 @@ body.admin-mobile-nav-open {
 .admin-delete-source-option:has(input:disabled) {
   cursor: default;
   opacity: 0.72;
-}
-
-/* =========================================================
- * Toast
- * ========================================================= */
-.admin-toast-stack {
-  position: fixed;
-  right: 24px;
-  bottom: 24px;
-  z-index: var(--z-toast);
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 10px;
-  pointer-events: none;
-}
-
-.admin-toast {
-  max-width: min(520px, calc(100vw - 48px));
-  padding: 14px 18px;
-  background: var(--bg-elevated);
-  color: var(--text-strong);
-  border: 1px solid var(--border-default);
-  border-radius: var(--radius-sm);
-  position: relative;
-  font-size: var(--font-sm);
-  font-weight: var(--weight-medium);
-  line-height: 1.5;
-  overflow-wrap: anywhere;
-  touch-action: manipulation;
-  box-shadow: var(--shadow-lg);
-  animation: toast-in var(--duration-normal) var(--ease-out);
-  pointer-events: auto;
-}
-
-.admin-toast.is-copyable {
-  cursor: pointer;
-}
-
-.admin-toast__text {
-  display: block;
-  min-width: 0;
-}
-
-@keyframes toast-in {
-  from { opacity: 0; transform: translateY(10px); }
-  to { opacity: 1; transform: none; }
-}
-
-.admin-toast.is-success {
-  background: var(--success-soft);
-  color: var(--success);
-  border-color: rgba(63, 207, 142, 0.4);
-}
-
-.admin-toast.is-error {
-  background: var(--danger-soft);
-  color: var(--danger);
-  border-color: rgba(241, 85, 108, 0.4);
 }
 
 /* =========================================================
@@ -3875,17 +3662,6 @@ body.admin-mobile-nav-open {
     flex: 1 1 auto;
   }
 
-  .admin-toast-stack {
-    left: 16px;
-    right: 16px;
-    bottom: 16px;
-    align-items: stretch;
-  }
-
-  .admin-toast {
-    max-width: 100%;
-    text-align: left;
-  }
 }
 
 /* =========================================================
@@ -4388,15 +4164,6 @@ body.admin-mobile-nav-open {
   .admin-video-card__select:active .admin-video-card__select-box {
     transform: none;
   }
-}
-
-.admin-loading-screen {
-  min-height: 100vh;
-  display: grid;
-  place-items: center;
-  color: var(--text-muted);
-  font-size: var(--font-md);
-  background: var(--bg-page);
 }
 
 .admin-loading-state {
@@ -8570,19 +8337,8 @@ body.admin-mobile-nav-open {
 /* Optimizations */
 .admin-skeleton-pulse { background: linear-gradient(90deg, var(--bg-elevated) 25%, var(--border-default) 50%, var(--bg-elevated) 75%); background-size: 200% 100%; animation: admin-loading 1.5s infinite; }
 @keyframes admin-loading { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
-.admin-empty-state { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 64px 16px; color: var(--text-faint); text-align: center; border: 1px dashed var(--border-default); border-radius: 8px; }
-.admin-empty-state--plain { min-height: 320px; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
 .admin-videos-current > .admin-empty-state--plain,
 .admin-videos-blacklist > .admin-empty-state--plain { box-sizing: border-box; flex: 1 1 auto; min-height: 0; padding: 0 16px 96px; }
-.admin-empty-visual { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; text-align: center; }
-.admin-empty-visual__media { display: flex; align-items: center; justify-content: center; width: 168px; height: 168px; }
-.admin-empty-visual__image { display: block; width: 100%; height: 100%; object-fit: contain; }
-.admin-empty-visual__text { color: var(--text-muted); font-size: var(--font-sm); line-height: var(--line-relaxed); }
-.admin-empty-state__icon { color: var(--border-default); margin-bottom: 16px; }
-.admin-empty-state h3 { margin: 0 0 8px 0; color: var(--text-strong); font-size: 16px; }
-@media (max-width: 640px) {
-  .admin-empty-visual__media { width: 136px; height: 136px; }
-}
 .admin-table { overflow: visible !important; border-collapse: separate !important; border-spacing: 0 !important; }
 .admin-table th { position: sticky; top: 0; background: var(--bg-elevated) !important; z-index: 10; }
 @media (hover: hover) and (pointer: fine) {

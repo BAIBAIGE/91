@@ -1,6 +1,13 @@
 import { defineConfig, type Plugin, type ProxyOptions } from "vite";
 import react from "@vitejs/plugin-react";
+import { readFileSync, writeFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  brotliCompressSync,
+  constants as zlibConstants,
+  gzipSync,
+} from "node:zlib";
 
 const backendTarget = "http://127.0.0.1:9192";
 const backendProxy: Record<string, ProxyOptions> = {
@@ -35,8 +42,43 @@ function hashedAssetCachePlugin(): Plugin {
   };
 }
 
+function precompressBuildAssets(): Plugin {
+  return {
+    name: "precompress-build-assets",
+    apply: "build",
+    enforce: "post",
+    writeBundle(options, bundle) {
+      if (!options.dir) {
+        throw new Error("precompress-build-assets requires a directory output");
+      }
+      for (const output of Object.values(bundle)) {
+        if (!output.fileName.startsWith("assets/") || !/\.(?:css|js|json|svg)$/.test(output.fileName)) {
+          continue;
+        }
+        // Read the file Rollup actually wrote. Vite removes internal CSS
+        // markers after generateBundle hooks, so compressing the in-memory
+        // asset there can create a sidecar that differs from the final hashed
+        // resource despite sharing its URL.
+        const assetPath = resolve(options.dir, output.fileName);
+        const source = readFileSync(assetPath);
+        if (source.byteLength < 1024) continue;
+
+        writeFileSync(
+          `${assetPath}.br`,
+          brotliCompressSync(source, {
+            params: {
+              [zlibConstants.BROTLI_PARAM_QUALITY]: 9,
+            },
+          })
+        );
+        writeFileSync(`${assetPath}.gz`, gzipSync(source, { level: 9 }));
+      }
+    },
+  };
+}
+
 export default defineConfig({
-  plugins: [react(), hashedAssetCachePlugin()],
+  plugins: [react(), hashedAssetCachePlugin(), precompressBuildAssets()],
   resolve: {
     alias: {
       "@": fileURLToPath(new URL("./src", import.meta.url)),

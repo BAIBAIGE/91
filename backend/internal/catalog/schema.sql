@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS videos (
     thumbnail_failures INTEGER DEFAULT 0,        -- consecutive transient thumbnail generation failures
     preview_file_id  TEXT,                      -- deprecated: 旧版回写网盘后的预览视频 file id
     preview_local    TEXT,                      -- 本地预览视频路径（兜底）
+    preview_updated_at INTEGER DEFAULT 0,       -- preview-only revision; unrelated metadata must not invalidate teaser caches
     preview_status   TEXT DEFAULT 'pending',    -- pending / ready / failed / disabled
     transcode_status TEXT DEFAULT '',           -- '' / pending / ready / skipped / failed（浏览器兼容性转码）
     transcode_error  TEXT DEFAULT '',
@@ -36,6 +37,7 @@ CREATE TABLE IF NOT EXISTS videos (
     last_liked_at    INTEGER DEFAULT 0,
     dislikes         INTEGER DEFAULT 0,
     hidden           INTEGER DEFAULT 0,          -- 1 = hidden from public display
+    is_canonical     INTEGER NOT NULL DEFAULT 1, -- derived by dedup triggers; hidden rows still participate
     tags_manual      INTEGER DEFAULT 0,          -- 1 = user explicitly curated tags
     badges           TEXT,                      -- JSON array
     description      TEXT,
@@ -49,6 +51,19 @@ CREATE INDEX IF NOT EXISTS idx_videos_pub   ON videos(published_at DESC);
 CREATE INDEX IF NOT EXISTS idx_videos_created ON videos(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_videos_duration ON videos(duration_seconds);
 CREATE INDEX IF NOT EXISTS idx_videos_views ON videos(views DESC);
+
+-- Exact per-basis representatives used to project tags from duplicate source
+-- rows without collapsing the three independent deduplication relations into
+-- one lossy canonical_video_id.
+CREATE TABLE IF NOT EXISTS video_dedup_representatives (
+    video_id          TEXT NOT NULL,
+    basis             TEXT NOT NULL CHECK (basis IN ('self', 'content_hash', 'sampled_sha256', 'file_name_size')),
+    representative_id TEXT NOT NULL,
+    PRIMARY KEY (video_id, basis)
+);
+
+CREATE INDEX IF NOT EXISTS idx_video_dedup_representative
+    ON video_dedup_representatives(representative_id, video_id);
 
 -- 管理员提交的视频直链后台任务。source_url 只在任务排队或执行期间保留；
 -- 进入 completed / failed / canceled 后由状态更新语句立即清空。

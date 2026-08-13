@@ -1,7 +1,6 @@
 import { Suspense, lazy, useEffect, type ReactNode } from "react";
 import { Navigate, Route, Routes, useLocation } from "react-router";
 import { SkyStarfield } from "@/components/SkyStarfield";
-import { AdminLayout } from "@/admin/AdminLayout";
 import { CrawlersPageLoading } from "@/admin/CrawlersPageLoading";
 import { DrivesPageLoading } from "@/admin/DrivesPageLoading";
 import { RequireAuth } from "@/admin/RequireAuth";
@@ -15,6 +14,11 @@ const UploadPage = lazy(() => import("@/pages/UploadPage"));
 const VideoDetailPage = lazy(() => import("@/pages/VideoDetailPage"));
 const SharedVideoPage = lazy(() => import("@/pages/SharedVideoPage"));
 
+const AdminLayout = lazy(() =>
+  import("@/admin/AdminLayout").then((module) => ({
+    default: module.AdminLayout,
+  }))
+);
 const LoginPage = lazy(() =>
   import("@/admin/LoginPage").then((module) => ({ default: module.LoginPage }))
 );
@@ -153,7 +157,9 @@ export default function App() {
           element={
             <RequireAuth>
               <RequireAdmin>
-                <AdminLayout />
+                <PageSuspense>
+                  <AdminLayout />
+                </PageSuspense>
               </RequireAdmin>
             </RequireAuth>
           }

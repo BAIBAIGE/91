@@ -1,8 +1,12 @@
 package main
 
 import (
+	"bytes"
+	"compress/gzip"
 	"fmt"
+	"io"
 	"log"
+	"mime"
 	"net/http"
 	"os"
 	"path"
@@ -11,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/andybalholm/brotli"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 
@@ -19,6 +24,23 @@ import (
 )
 
 const frontendHashedAssetCacheControl = "public, max-age=31536000, immutable"
+
+const (
+	responseCompressionThreshold = 1024
+	responseBrotliQuality        = 4
+)
+
+var dynamicCompressibleContentTypes = map[string]struct{}{
+	"application/javascript":    {},
+	"application/json":          {},
+	"application/manifest+json": {},
+	"application/x-javascript":  {},
+	"image/svg+xml":             {},
+	"text/css":                  {},
+	"text/html":                 {},
+	"text/javascript":           {},
+	"text/plain":                {},
+}
 
 type capturedLogFormatter struct {
 	access      *middleware.DefaultLogFormatter
@@ -194,6 +216,216 @@ func corsMiddleware(allowedOrigins []string) func(http.Handler) http.Handler {
 	}
 }
 
+// responseCompressionMiddleware compresses bounded textual responses after
+// their content type and size are known. Media proxy routes and range requests
+// bypass the wrapper entirely. An early explicit Flush commits the buffered
+// response uncompressed; after compression has started, Flush propagates
+// through both the encoder and the underlying writer.
+func responseCompressionMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodHead || r.Header.Get("Range") != "" || isMediaRoute(r.URL.Path) {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		writer := &thresholdCompressionWriter{
+			ResponseWriter: w,
+			encoding:       negotiateResponseEncoding(r.Header.Values("Accept-Encoding")),
+			status:         http.StatusOK,
+		}
+		next.ServeHTTP(writer, r)
+		_ = writer.finish()
+	})
+}
+
+func isMediaRoute(requestPath string) bool {
+	return requestPath == "/p" || strings.HasPrefix(requestPath, "/p/")
+}
+
+type thresholdCompressionWriter struct {
+	http.ResponseWriter
+	buffer      bytes.Buffer
+	encoding    string
+	status      int
+	wroteHeader bool
+	committed   bool
+	target      io.Writer
+	closer      io.Closer
+}
+
+func (w *thresholdCompressionWriter) Unwrap() http.ResponseWriter {
+	return w.ResponseWriter
+}
+
+func (w *thresholdCompressionWriter) WriteHeader(status int) {
+	if w.wroteHeader {
+		return
+	}
+	w.wroteHeader = true
+	w.status = status
+}
+
+func (w *thresholdCompressionWriter) Write(payload []byte) (int, error) {
+	if !w.wroteHeader {
+		w.WriteHeader(http.StatusOK)
+	}
+	if w.committed {
+		return w.target.Write(payload)
+	}
+	if !w.responseCanBeCompressed() {
+		if err := w.commit(false); err != nil {
+			return 0, err
+		}
+		return w.target.Write(payload)
+	}
+	written, err := w.buffer.Write(payload)
+	if err != nil {
+		return written, err
+	}
+	if w.buffer.Len() >= responseCompressionThreshold {
+		if err := w.commit(true); err != nil {
+			return written, err
+		}
+	}
+	return written, nil
+}
+
+func (w *thresholdCompressionWriter) Flush() {
+	if !w.committed {
+		_ = w.commit(false)
+	}
+	if flusher, ok := w.target.(interface{ Flush() error }); ok {
+		_ = flusher.Flush()
+	}
+	if flusher, ok := w.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
+}
+
+func (w *thresholdCompressionWriter) finish() error {
+	if !w.committed {
+		if err := w.commit(w.buffer.Len() >= responseCompressionThreshold); err != nil {
+			return err
+		}
+	}
+	if w.closer != nil {
+		return w.closer.Close()
+	}
+	return nil
+}
+
+func (w *thresholdCompressionWriter) commit(compress bool) error {
+	if w.committed {
+		return nil
+	}
+	w.committed = true
+	w.target = w.ResponseWriter
+
+	if compress && w.responseCanBeCompressed() {
+		addHeaderToken(w.Header(), "Vary", "Accept-Encoding")
+		switch w.encoding {
+		case "br":
+			encoder := brotli.NewWriterLevel(w.ResponseWriter, responseBrotliQuality)
+			w.target = encoder
+			w.closer = encoder
+			w.Header().Set("Content-Encoding", "br")
+		case "gzip":
+			encoder, err := gzip.NewWriterLevel(w.ResponseWriter, gzip.BestSpeed)
+			if err != nil {
+				return err
+			}
+			w.target = encoder
+			w.closer = encoder
+			w.Header().Set("Content-Encoding", "gzip")
+		}
+		if w.encoding != "" {
+			w.Header().Del("Content-Length")
+		}
+	}
+
+	w.ResponseWriter.WriteHeader(w.status)
+	if w.buffer.Len() == 0 {
+		return nil
+	}
+	_, err := io.Copy(w.target, &w.buffer)
+	return err
+}
+
+func (w *thresholdCompressionWriter) responseCanBeCompressed() bool {
+	if w.status == http.StatusNoContent || w.status == http.StatusNotModified || w.status == http.StatusPartialContent {
+		return false
+	}
+	if w.Header().Get("Content-Encoding") != "" || w.Header().Get("Content-Range") != "" {
+		return false
+	}
+	contentType := w.Header().Get("Content-Type")
+	if index := strings.IndexByte(contentType, ';'); index >= 0 {
+		contentType = contentType[:index]
+	}
+	_, ok := dynamicCompressibleContentTypes[strings.ToLower(strings.TrimSpace(contentType))]
+	return ok
+}
+
+func negotiateResponseEncoding(values []string) string {
+	qualities := make(map[string]float64)
+	specified := make(map[string]bool)
+	for _, value := range values {
+		for _, item := range strings.Split(value, ",") {
+			parts := strings.Split(item, ";")
+			name := strings.ToLower(strings.TrimSpace(parts[0]))
+			if name == "" {
+				continue
+			}
+			quality := 1.0
+			for _, parameter := range parts[1:] {
+				key, raw, found := strings.Cut(strings.TrimSpace(parameter), "=")
+				if !found || !strings.EqualFold(strings.TrimSpace(key), "q") {
+					continue
+				}
+				parsed, err := strconv.ParseFloat(strings.TrimSpace(raw), 64)
+				if err != nil || parsed < 0 || parsed > 1 {
+					quality = 0
+				} else {
+					quality = parsed
+				}
+			}
+			if !specified[name] || quality > qualities[name] {
+				qualities[name] = quality
+				specified[name] = true
+			}
+		}
+	}
+	qualityFor := func(name string) float64 {
+		if specified[name] {
+			return qualities[name]
+		}
+		if specified["*"] {
+			return qualities["*"]
+		}
+		return 0
+	}
+	brotliQuality := qualityFor("br")
+	gzipQuality := qualityFor("gzip")
+	if brotliQuality <= 0 && gzipQuality <= 0 {
+		return ""
+	}
+	if brotliQuality >= gzipQuality {
+		return "br"
+	}
+	return "gzip"
+}
+
+func addHeaderToken(header http.Header, name, token string) {
+	for _, value := range header.Values(name) {
+		for _, existing := range strings.Split(value, ",") {
+			if strings.EqualFold(strings.TrimSpace(existing), token) {
+				return
+			}
+		}
+	}
+	header.Add(name, token)
+}
+
 func mountFrontend(r chi.Router) {
 	dir, ok := resolveFrontendDir()
 	if !ok {
@@ -238,14 +470,22 @@ func frontendHandler(dir string) http.HandlerFunc {
 		rel := strings.TrimPrefix(cleanPath, "/")
 		if rel != "" && rel != "." {
 			name := filepath.FromSlash(rel)
-			f, err := os.Open(filepath.Join(dir, name))
+			assetPath := filepath.Join(dir, name)
+			f, encoding, err := openFrontendAsset(r, assetPath, cleanPath)
 			if err == nil {
 				defer f.Close()
 				if st, statErr := f.Stat(); statErr == nil && !st.IsDir() {
 					if strings.HasPrefix(cleanPath, "/assets/") {
 						w.Header().Set("Cache-Control", frontendHashedAssetCacheControl)
+						addHeaderToken(w.Header(), "Vary", "Accept-Encoding")
 					}
-					http.ServeContent(w, r, st.Name(), st.ModTime(), f)
+					if encoding != "" {
+						w.Header().Set("Content-Encoding", encoding)
+						if contentType := mime.TypeByExtension(filepath.Ext(name)); contentType != "" {
+							w.Header().Set("Content-Type", contentType)
+						}
+					}
+					http.ServeContent(w, r, filepath.Base(name), st.ModTime(), f)
 					return
 				}
 			}
@@ -257,6 +497,22 @@ func frontendHandler(dir string) http.HandlerFunc {
 
 		http.ServeFile(w, r, filepath.Join(dir, "index.html"))
 	}
+}
+
+func openFrontendAsset(r *http.Request, assetPath, requestPath string) (*os.File, string, error) {
+	if strings.HasPrefix(requestPath, "/assets/") && r.Header.Get("Range") == "" {
+		if encoding := negotiateResponseEncoding(r.Header.Values("Accept-Encoding")); encoding != "" {
+			extension := "." + encoding
+			if encoding == "gzip" {
+				extension = ".gz"
+			}
+			if file, err := os.Open(assetPath + extension); err == nil {
+				return file, encoding, nil
+			}
+		}
+	}
+	file, err := os.Open(assetPath)
+	return file, "", err
 }
 
 func isBackendRoute(p string) bool {

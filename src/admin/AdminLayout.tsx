@@ -1,5 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { NavLink, useLocation, useNavigate } from "react-router";
+import "@/styles/admin-controls.css";
+import "@/styles/admin.css";
 import {
   ArchiveRestore,
   HardDrive,
