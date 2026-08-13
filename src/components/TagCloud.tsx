@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router";
 import { fetchTags, readCachedTags, type TagItem } from "@/data/videos";
+import { withListingNavigation } from "@/lib/listingSearchParams";
 
 const TAG_PLACEHOLDER_COUNT = 16;
 
@@ -11,7 +12,7 @@ type TagCloudProps = {
 
 export function TagCloud({ linkBasePath = "/list", onTagSelect }: TagCloudProps) {
   const [params] = useSearchParams();
-  const activeTag = params.get("tag");
+  const activeTag = params.get("tag")?.trim() ?? "";
   const initialTagsRef = useRef<TagItem[] | null>(readCachedTags());
   const [tags, setTags] = useState<TagItem[]>(initialTagsRef.current ?? []);
   const [loaded, setLoaded] = useState(initialTagsRef.current !== null);
@@ -137,10 +138,17 @@ export function TagCloud({ linkBasePath = "/list", onTagSelect }: TagCloudProps)
 
   const loading = !loaded && visibleTags.length === 0;
 
+  const buildTagHref = (label: string) => {
+    const nextTag = activeTag === label ? null : label;
+    const next = withListingNavigation(params, { tag: nextTag, page: 1 });
+    const query = next.toString();
+    return query ? `${linkBasePath}?${query}` : linkBasePath;
+  };
+
   const renderTag = (tag: TagItem) => (
     <Link
       key={tag.id}
-      to={`${linkBasePath}?tag=${encodeURIComponent(tag.label)}`}
+      to={buildTagHref(tag.label)}
       className={`tag-chip ${activeTag === tag.label ? "is-active" : ""}`}
       onClick={onTagSelect}
     >

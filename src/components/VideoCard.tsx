@@ -188,7 +188,6 @@ export function VideoCard({
       >
         <div className="thumb-frame">
           <VideoThumbnail
-            key={video.thumbnail}
             src={video.thumbnail}
             eager={eager}
             highPriority={highPriority}

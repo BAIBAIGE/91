@@ -64,12 +64,7 @@ export function VideoGrid({
         ))}
       </div>
       {blockingRefresh && (
-        <div className="video-grid-refresh-overlay" role="status">
-          <span className="video-grid-refresh-overlay__status">
-            <span className="video-grid-refresh-overlay__spinner" aria-hidden="true" />
-            <span>正在更新视频列表</span>
-          </span>
-        </div>
+        <div className="video-grid-refresh-overlay" aria-hidden="true" />
       )}
       {backgroundRefresh && (
         <div className="video-grid-background-status" role="status">

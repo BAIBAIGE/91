@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 type Props = {
   src: string;
@@ -15,16 +15,32 @@ export function VideoThumbnail({
   eager = false,
   highPriority = false,
 }: Props) {
+  // One component instance owns exactly one source lifecycle. This makes a src
+  // change synchronous instead of resetting state later in an effect, which can
+  // otherwise overwrite an already-fired load event from the browser cache.
+  return (
+    <ThumbnailResource
+      key={src}
+      src={src}
+      eager={eager}
+      highPriority={highPriority}
+    />
+  );
+}
+
+function ThumbnailResource({
+  src,
+  eager = false,
+  highPriority = false,
+}: Props) {
   const [state, setState] = useState<ThumbnailState>(src ? "loading" : "failed");
   const [retry, setRetry] = useState(0);
   const retryTimerRef = useRef<number | null>(null);
+  const imageRef = useRef<HTMLImageElement | null>(null);
 
   useEffect(() => {
-    setRetry(0);
-    setState(src ? "loading" : "failed");
-    clearRetryTimer();
     return clearRetryTimer;
-  }, [src]);
+  }, []);
 
   function clearRetryTimer() {
     if (retryTimerRef.current !== null) {
@@ -57,17 +73,29 @@ export function VideoThumbnail({
 
   const thumbnailSrc = retry === 0 ? src : withRetryParam(src, retry);
 
+  // A cached image can finish between DOM insertion and React's passive effects,
+  // and some browsers do not replay that load event. Reconcile the DOM state
+  // before paint so a completed image can never remain hidden at opacity: 0.
+  useLayoutEffect(() => {
+    const image = imageRef.current;
+    if (!image?.complete) return;
+    if (image.naturalWidth > 0) {
+      handleLoad();
+    } else {
+      handleError();
+    }
+  }, [thumbnailSrc]);
+
   return (
     <>
       <span
         className="thumb-placeholder"
         data-state={state}
         aria-hidden="true"
-      >
-        <span className="thumb-placeholder__mark" />
-      </span>
+      />
       {src && (
         <img
+          ref={imageRef}
           key={thumbnailSrc}
           className={`thumb-image ${state === "ready" ? "is-ready" : ""}`}
           src={thumbnailSrc}

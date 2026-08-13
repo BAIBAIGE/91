@@ -27,17 +27,11 @@ import type { VideoItem } from "@/types";
 const DESKTOP_COUNT = 12;
 const MOBILE_COUNT = 8;
 const HOME_SEARCH_DESKTOP_PAGE_SIZE = 20;
-const HOME_CACHE_TTL_MS = 60_000;
 
-// 模块级缓存让详情页返回时立即恢复；时间戳确保长时间停留后会静默重验。
+// 首页推荐接口每次请求都会推进会话轮换游标。模块级快照因此在 SPA 会话内
+// 保持稳定，只有用户主动刷新、浏览器整页刷新或响应式布局需要补足卡片时才更新。
 let cachedRanking: VideoItem[] | null = null;
 let cachedLatest: VideoItem[] | null = null;
-let cachedRankingAt = 0;
-let cachedLatestAt = 0;
-
-function cacheIsFresh(receivedAt: number): boolean {
-  return receivedAt > 0 && Date.now() - receivedAt < HOME_CACHE_TTL_MS;
-}
 
 export default function HomePage() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -104,7 +98,6 @@ export default function HomePage() {
       const rankingItems = await fetchHomeVideos(DESKTOP_COUNT);
       if (requestVersion !== rankingRequestVersion.current) return;
       cachedRanking = rankingItems;
-      cachedRankingAt = Date.now();
       setRankingVideos(rankingItems);
       setRankingError(false);
     } catch {
@@ -128,7 +121,6 @@ export default function HomePage() {
       const latestItems = await fetchLatestHomeVideos(displayCountRef.current);
       if (requestVersion !== latestRequestVersion.current) return;
       cachedLatest = latestItems;
-      cachedLatestAt = Date.now();
       setLatestVideos(latestItems);
       setLatestError(false);
     } catch {
@@ -153,26 +145,6 @@ export default function HomePage() {
     setRefreshing(false);
   }, [loadLatest, loadRanking]);
 
-  const handleSearch = useCallback(
-    (keyword: string) => {
-      const q = keyword.trim();
-      setSearchParams(
-        (current) => {
-          const next = new URLSearchParams(current);
-          if (q) {
-            next.set("q", q);
-            next.delete("tag");
-          } else {
-            next.delete("q");
-          }
-          return withListingNavigation(next, { page: 1, sort: "hot" });
-        },
-        { replace: true }
-      );
-    },
-    [setSearchParams]
-  );
-
   useEffect(() => {
     document.title = activeSearchQuery
       ? `搜索 "${activeSearchQuery}"`
@@ -182,16 +154,14 @@ export default function HomePage() {
   }, [activeSearchQuery, activeTag]);
 
   useEffect(() => {
-    if (cachedRanking === null || !cacheIsFresh(cachedRankingAt)) {
-      void loadRanking(cachedRanking !== null);
+    if (cachedRanking === null) {
+      void loadRanking(false);
     }
 
-    if (
-      cachedLatest === null ||
-      !cacheIsFresh(cachedLatestAt) ||
-      cachedLatest.length < displayCountRef.current
-    ) {
-      void loadLatest(cachedLatest !== null);
+    if (cachedLatest === null) {
+      void loadLatest(false);
+    } else if (cachedLatest.length < displayCountRef.current) {
+      void loadLatest(true);
     } else {
       setLatestVideos(cachedLatest);
       setLatestLoading(false);
@@ -264,18 +234,16 @@ export default function HomePage() {
       <div className="container page-section home-discovery-section">
         <PromoStrip />
         <SearchPanel
-          value={activeSearchQuery}
-          onSearch={handleSearch}
+          navigationPath="/"
           variant="uiverse"
           placeholder=""
           className="search-panel--public search-panel--transparent"
         />
-        {!hasActiveSearch &&
-          (hasAnyVideos || hasActiveTag ? (
-            <TagCloud linkBasePath="/" />
-          ) : (
-            <div className="tag-cloud-container is-reserved" aria-hidden="true" />
-          ))}
+        {hasAnyVideos || hasActiveFilter ? (
+          <TagCloud linkBasePath="/" />
+        ) : (
+          <div className="tag-cloud-container is-reserved" aria-hidden="true" />
+        )}
       </div>
 
       {hasActiveFilter ? (

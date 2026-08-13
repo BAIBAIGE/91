@@ -31,6 +31,8 @@ test("video skeleton mirrors thumbnail, title, and metadata structure", () => {
 
   assert.match(skeleton, /--skeleton-shimmer-base\s*:/);
   assert.match(thumb, /aspect-ratio\s*:\s*16 \/ 9/);
+  assert.match(videoCardCss, /\.skeleton-card__title\s*\{\s*margin-top:[^}]*border-radius:\s*0/s);
+  assert.match(videoCardCss, /\.skeleton-card__meta\s*\{\s*margin-top:[^}]*border-radius:\s*0/s);
   assert.match(pink, /--skeleton-shimmer-base\s*:\s*rgba\(255,\s*91,\s*138,\s*0\.12\)/);
   assert.match(sky, /--skeleton-shimmer-base\s*:\s*rgba\(60,\s*100,\s*170,\s*0\.13\)/);
   assert.match(videoCardCss, /\.video-grid-loading\.is-compact \.skeleton-card/);
@@ -41,6 +43,8 @@ test("background list revalidation stays interactive while transitions remain bl
   assert.match(videoGridSource, /const blockingRefresh = refreshMode === "blocking"/);
   assert.match(videoGridSource, /const backgroundRefresh = refreshMode === "background"/);
   assert.match(videoGridSource, /\{blockingRefresh && \([\s\S]*?video-grid-refresh-overlay/);
+  assert.doesNotMatch(videoGridSource, /正在更新视频列表/);
+  assert.doesNotMatch(videoGridSource, /video-grid-refresh-overlay__status/);
   assert.match(videoGridSource, /\{backgroundRefresh && \([\s\S]*?video-grid-background-status/);
 
   const blockedGrid = ruleBody(videoCardCss, ".video-grid-region.is-busy .video-grid");

@@ -10,6 +10,14 @@ const listingPageSource = readFileSync(
   new URL("../src/pages/ListingPage.tsx", import.meta.url),
   "utf8"
 );
+const tagCloudSource = readFileSync(
+  new URL("../src/components/TagCloud.tsx", import.meta.url),
+  "utf8"
+);
+const searchPanelSource = readFileSync(
+  new URL("../src/components/SearchPanel.tsx", import.meta.url),
+  "utf8"
+);
 const listingQuerySource = readFileSync(
   new URL("../src/lib/useListingQuery.ts", import.meta.url),
   "utf8"
@@ -67,6 +75,35 @@ test("public listing query control state is restored from the URL", () => {
   assert.match(listingPageSource, /withListingPage\(params, nextPage\)/);
   assert.match(listingPageSource, /withListingView\(params, nextView\)/);
   assert.doesNotMatch(listingPageSource, /sessionStorage|localStorage/);
+});
+
+test("tag selection toggles through the shared listing query instead of rebuilding it", () => {
+  assert.match(
+    tagCloudSource,
+    /const nextTag = activeTag === label \? null : label/
+  );
+  assert.match(
+    tagCloudSource,
+    /withListingNavigation\(params, \{ tag: nextTag, page: 1 \}\)/
+  );
+  assert.match(tagCloudSource, /to=\{buildTagHref\(tag\.label\)\}/);
+  assert.doesNotMatch(
+    tagCloudSource,
+    /to=\{`\$\{linkBasePath\}\?tag=\$\{encodeURIComponent\(tag\.label\)\}`\}/
+  );
+});
+
+test("list search updates the shared listing query instead of rebuilding it", () => {
+  assert.match(searchPanelSource, /navigationPath = "\/list"/);
+  assert.match(
+    searchPanelSource,
+    /withListingNavigation\(params, \{ q, page: 1 \}\)/
+  );
+  assert.match(
+    searchPanelSource,
+    /navigate\(query \? `\$\{navigationPath\}\?\$\{query\}` : navigationPath\)/
+  );
+  assert.doesNotMatch(searchPanelSource, /const sp = new URLSearchParams\(\)/);
 });
 
 test("public video lists use fourteen mobile and twenty desktop items per page", () => {

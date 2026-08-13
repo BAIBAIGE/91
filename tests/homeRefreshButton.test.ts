@@ -40,10 +40,6 @@ function ruleBody(css: string, selector: string): string {
 
 test("home page refresh button shares back-to-top slot until back-to-top is visible", () => {
   assert.match(homePageSource, /import \{ RefreshCw \} from "lucide-react"/);
-  assert.match(homePageSource, /const HOME_CACHE_TTL_MS = 60_000;/);
-  assert.match(homePageSource, /function cacheIsFresh/);
-  assert.match(homePageSource, /cachedRanking === null \|\| !cacheIsFresh\(cachedRankingAt\)/);
-  assert.match(homePageSource, /!cacheIsFresh\(cachedLatestAt\)/);
   assert.match(homePageSource, /let cachedLatest: VideoItem\[\] \| null = null;/);
   assert.match(homePageSource, /const refreshHome = useCallback\(async \(\) =>/);
   assert.match(homePageSource, /fetchHomeVideos\(DESKTOP_COUNT\)/);
@@ -84,7 +80,11 @@ test("home page refresh button shares back-to-top slot until back-to-top is visi
 test("home page reuses the cached latest batch when returning from detail", () => {
   assert.match(homePageSource, /const \[latestVideos,\s*setLatestVideos\] = useState<VideoItem\[\]>\(cachedLatest \?\? \[\]\)/);
   assert.match(homePageSource, /const \[latestLoading,\s*setLatestLoading\] = useState\(cachedLatest === null\)/);
+  assert.match(homePageSource, /if \(cachedRanking === null\) \{\s*void loadRanking\(false\);/);
+  assert.match(homePageSource, /if \(cachedLatest === null\) \{\s*void loadLatest\(false\);/);
+  assert.match(homePageSource, /else if \(cachedLatest\.length < displayCountRef\.current\) \{\s*void loadLatest\(true\);/);
   assert.match(homePageSource, /setLatestVideos\(cachedLatest\)/);
+  assert.doesNotMatch(homePageSource, /HOME_CACHE_TTL_MS|cacheIsFresh|cachedRankingAt|cachedLatestAt/);
   assert.doesNotMatch(homePageSource, /localStorage/);
 });
 
@@ -119,7 +119,7 @@ test("home page reserves tag cloud space while tags load and uses one empty libr
   assert.match(tagCloudSource, /linkBasePath\?: string;/);
   assert.match(tagCloudSource, /onTagSelect\?: \(\) => void;/);
   assert.match(tagCloudSource, /export function TagCloud\(\{ linkBasePath = "\/list", onTagSelect \}: TagCloudProps\)/);
-  assert.match(tagCloudSource, /to=\{`\$\{linkBasePath\}\?tag=\$\{encodeURIComponent\(tag\.label\)\}`\}/);
+  assert.match(tagCloudSource, /to=\{buildTagHref\(tag\.label\)\}/);
   assert.match(tagCloudSource, /onClick=\{onTagSelect\}/);
   assert.match(tagCloudSource, /const \[hasMoreRight, setHasMoreRight\] = useState\(false\)/);
   assert.match(tagCloudSource, /const remaining = slider\.scrollWidth - slider\.clientWidth - slider\.scrollLeft/);
@@ -228,11 +228,9 @@ test("home page reserves tag cloud space while tags load and uses one empty libr
   assert.match(homePageSource, /const searchPage = readListingPage\(searchParams\)/);
   assert.match(homePageSource, /const searchSort = readListingSort\(searchParams\)/);
   assert.match(homePageSource, /const searchView = readListingView\(searchParams\)/);
-  assert.match(homePageSource, /const handleSearch = useCallback\([\s\S]*?const q = keyword\.trim\(\);[\s\S]*?setSearchParams\(/);
-  assert.match(homePageSource, /next\.set\("q", q\);[\s\S]*?next\.delete\("tag"\);/);
-  assert.match(homePageSource, /next\.delete\("q"\);/);
-  assert.match(homePageSource, /\{ replace: true \}/);
-  assert.match(homePageSource, /<SearchPanel[\s\S]*?value=\{activeSearchQuery\}[\s\S]*?onSearch=\{handleSearch\}[\s\S]*?variant="uiverse"[\s\S]*?placeholder=""[\s\S]*?\/>/);
+  assert.doesNotMatch(homePageSource, /const handleSearch = useCallback/);
+  assert.doesNotMatch(homePageSource, /next\.delete\("tag"\)/);
+  assert.match(homePageSource, /<SearchPanel[\s\S]*?navigationPath="\/"[\s\S]*?variant="uiverse"[\s\S]*?placeholder=""[\s\S]*?\/>/);
   assert.match(homePageSource, /className="search-panel--public search-panel--transparent"/);
   assert.match(homePageSource, /const searchPageSize = isMobile\s*\? MOBILE_VIDEO_PAGE_SIZE\s*:\s*HOME_SEARCH_DESKTOP_PAGE_SIZE/);
   assert.match(homePageSource, /const searchResult = useListingQuery\([\s\S]*?q: activeSearchQuery,[\s\S]*?tag: activeTag,[\s\S]*?sort: searchSort,[\s\S]*?page: searchPage,[\s\S]*?pageSize: searchPageSize/);
@@ -257,7 +255,7 @@ test("home page reserves tag cloud space while tags load and uses one empty libr
   assert.match(homePageSource, /if \(requestVersion !== homeRequestVersion\.current\) return/);
   assert.match(homePageSource, /emptyText=\{latestError \? "最新视频加载失败，请刷新重试" : undefined\}/);
   assert.doesNotMatch(homePageSource, /cachedRanking = null;\s*setRankingVideos\(\[\]\);\s*setRankingError\(true\)/);
-  assert.match(homePageSource, /\{!hasActiveSearch &&[\s\S]*?<TagCloud linkBasePath="\/" \/>[\s\S]*?<div className="tag-cloud-container is-reserved" aria-hidden="true" \/>/);
+  assert.match(homePageSource, /\{hasAnyVideos \|\| hasActiveFilter \? \([\s\S]*?<TagCloud linkBasePath="\/" \/>[\s\S]*?<div className="tag-cloud-container is-reserved" aria-hidden="true" \/>/);
   assert.match(homePageSource, /<SectionHeader title="随机推荐" \/>/);
   assert.match(homePageSource, /<SectionHeader title="最新视频" \/>/);
   assert.doesNotMatch(homePageSource, /随机展示/);

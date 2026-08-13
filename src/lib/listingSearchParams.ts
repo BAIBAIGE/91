@@ -2,6 +2,14 @@ import type { SortKey } from "../types";
 
 export type ListingViewMode = "grid" | "compact";
 
+type ListingNavigationPatch = {
+  q?: string | null;
+  tag?: string | null;
+  page?: number;
+  sort?: SortKey;
+  view?: ListingViewMode;
+};
+
 export function readListingSort(params: URLSearchParams): SortKey {
   const sort = params.get("sort");
   switch (sort) {
@@ -66,11 +74,28 @@ export function withListingView(
 
 export function withListingNavigation(
   params: URLSearchParams,
-  patch: { page?: number; sort?: SortKey; view?: ListingViewMode }
+  patch: ListingNavigationPatch
 ): URLSearchParams {
   let next = new URLSearchParams(params);
+  if (patch.q !== undefined) next = withListingFilter(next, "q", patch.q);
+  if (patch.tag !== undefined) next = withListingFilter(next, "tag", patch.tag);
   if (patch.sort !== undefined) next = withListingSort(next, patch.sort);
   if (patch.page !== undefined) next = withListingPage(next, patch.page);
   if (patch.view !== undefined) next = withListingView(next, patch.view);
+  return next;
+}
+
+function withListingFilter(
+  params: URLSearchParams,
+  key: "q" | "tag",
+  value: string | null
+): URLSearchParams {
+  const next = new URLSearchParams(params);
+  const normalized = value?.trim() ?? "";
+  if (normalized) {
+    next.set(key, normalized);
+  } else {
+    next.delete(key);
+  }
   return next;
 }

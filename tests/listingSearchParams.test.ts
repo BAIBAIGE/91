@@ -50,6 +50,53 @@ test("listing navigation applies page sort and view atomically", () => {
   assert.equal(original.get("page"), "8");
 });
 
+test("tag navigation preserves the current keyword, sort, and view while resetting the page", () => {
+  const original = new URLSearchParams(
+    "q=舞蹈&tag=旧标签&sort=recent&view=compact&page=8"
+  );
+  const next = withListingNavigation(original, {
+    tag: "新标签",
+    page: 1,
+  });
+
+  assert.equal(next.get("q"), "舞蹈");
+  assert.equal(next.get("tag"), "新标签");
+  assert.equal(next.get("sort"), "recent");
+  assert.equal(next.get("view"), "compact");
+  assert.equal(next.get("page"), null);
+  assert.equal(original.get("tag"), "旧标签");
+  assert.equal(original.get("page"), "8");
+
+  const cleared = withListingNavigation(next, { tag: null, page: 1 });
+  assert.equal(cleared.get("q"), "舞蹈");
+  assert.equal(cleared.get("tag"), null);
+  assert.equal(cleared.get("sort"), "recent");
+  assert.equal(cleared.get("view"), "compact");
+  assert.equal(cleared.get("page"), null);
+});
+
+test("search navigation preserves the current tag, sort, and view while resetting the page", () => {
+  const original = new URLSearchParams(
+    "q=旧关键字&tag=推荐&sort=recent&view=compact&page=8"
+  );
+  const next = withListingNavigation(original, {
+    q: "新关键字",
+    page: 1,
+  });
+
+  assert.equal(next.get("q"), "新关键字");
+  assert.equal(next.get("tag"), "推荐");
+  assert.equal(next.get("sort"), "recent");
+  assert.equal(next.get("view"), "compact");
+  assert.equal(next.get("page"), null);
+
+  const cleared = withListingNavigation(next, { q: null, page: 1 });
+  assert.equal(cleared.get("q"), null);
+  assert.equal(cleared.get("tag"), "推荐");
+  assert.equal(cleared.get("sort"), "recent");
+  assert.equal(cleared.get("view"), "compact");
+});
+
 test("listing sort URL updates preserve filters and omit the default", () => {
   const original = new URLSearchParams("q=舞蹈&tag=推荐");
 
