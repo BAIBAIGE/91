@@ -66,7 +66,11 @@ type AdminServer struct {
 	OnDeleteVideo                  func(ctx context.Context, videoID string, deleteSource bool) (DeleteVideoResult, error)
 	OnStartBlacklistSourceDelete   func(BlacklistSourceDeleteRequest) bool
 	GetBlacklistSourceDeleteStatus func() BlacklistSourceDeleteStatus
-	OnStartTagRetag                func() bool
+	// OnRemoveBlacklist owns the complete application-level restore operation:
+	// provider inspection, catalog mutation, source-delete coordination, and any
+	// post-restore generation/cache work. Tests may omit it for non-direct paths.
+	OnRemoveBlacklist func(ctx context.Context, videoID string) error
+	OnStartTagRetag   func() bool
 	// OnTagsChanged invalidates read-side tag caches after a catalog mutation.
 	OnTagsChanged                func()
 	GetTagJobStatus              func() TagJobStatus
@@ -167,6 +171,7 @@ type BlacklistSourceDeleteStatus struct {
 	Total        int    `json:"total"`
 	Processed    int    `json:"processed"`
 	Deleted      int    `json:"deleted"`
+	Skipped      int    `json:"skipped"`
 	Failed       int    `json:"failed"`
 	CurrentFile  string `json:"currentFile,omitempty"`
 	LastError    string `json:"lastError,omitempty"`

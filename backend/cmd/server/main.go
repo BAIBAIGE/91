@@ -411,6 +411,9 @@ func main() {
 		GetBlacklistSourceDeleteStatus: func() api.BlacklistSourceDeleteStatus {
 			return app.blacklistSourceDeleteStatus()
 		},
+		OnRemoveBlacklist: func(reqCtx context.Context, videoID string) error {
+			return app.restoreDeletedVideo(reqCtx, videoID)
+		},
 		OnStartTagRetag: func() bool {
 			return app.startTagRetag(ctx)
 		},
