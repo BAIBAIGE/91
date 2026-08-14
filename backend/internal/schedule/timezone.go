@@ -8,7 +8,7 @@ import (
 	_ "time/tzdata"
 )
 
-const DefaultTimezone = "Etc/UTC"
+const DefaultTimezone = "Asia/Shanghai"
 
 var ErrInvalidTimezone = errors.New("timezone must be a valid IANA timezone name")
 

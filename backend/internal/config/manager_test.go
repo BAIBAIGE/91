@@ -58,7 +58,7 @@ future_section:
 	if strings.Contains(text, "cron_hour:") || !strings.Contains(text, "start_time: 04:25") {
 		t.Fatalf("nightly schema was not migrated:\n%s", text)
 	}
-	if !strings.Contains(text, "timezone: Etc/UTC") {
+	if !strings.Contains(text, "timezone: Asia/Shanghai") {
 		t.Fatalf("nightly timezone was not made explicit:\n%s", text)
 	}
 	if strings.Contains(text, "duplicate_review_enabled") || strings.Contains(text, "dedupe:") {
@@ -70,7 +70,7 @@ future_section:
 	if !strings.Contains(text, "builtin_pack_enabled: false") {
 		t.Fatalf("built-in tag setting was not migrated:\n%s", text)
 	}
-	want := LiveSettings{NightlyStartTime: "04:25", NightlyTimezone: "Etc/UTC", BuiltinTagsEnabled: false}
+	want := LiveSettings{NightlyStartTime: "04:25", NightlyTimezone: "Asia/Shanghai", BuiltinTagsEnabled: false}
 	if got := manager.LiveSettings(); got != want {
 		t.Fatalf("live settings = %#v, want %#v", got, want)
 	}
@@ -87,7 +87,7 @@ func TestManagerYAMLValuesWinOverLegacySQLiteValues(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := LiveSettings{NightlyStartTime: "02:10", NightlyTimezone: "Etc/UTC", BuiltinTagsEnabled: true}
+	want := LiveSettings{NightlyStartTime: "02:10", NightlyTimezone: "Asia/Shanghai", BuiltinTagsEnabled: true}
 	if got := manager.LiveSettings(); got != want {
 		t.Fatalf("live settings = %#v, want YAML %#v", got, want)
 	}
@@ -158,7 +158,7 @@ func TestManagerReloadPublishesExternalValidChangeAndKeepsLastGoodOnError(t *tes
 	if err != nil || !changed {
 		t.Fatalf("reload changed=%v err=%v", changed, err)
 	}
-	want := LiveSettings{NightlyStartTime: "06:30", NightlyTimezone: "Etc/UTC", BuiltinTagsEnabled: true}
+	want := LiveSettings{NightlyStartTime: "06:30", NightlyTimezone: "Asia/Shanghai", BuiltinTagsEnabled: true}
 	if got := manager.LiveSettings(); got != want {
 		t.Fatalf("settings = %#v, want %#v", got, want)
 	}

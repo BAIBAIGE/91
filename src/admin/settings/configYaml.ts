@@ -20,7 +20,7 @@ export type VisualField = keyof SettingsDraft;
 
 export const DEFAULT_DRAFT: SettingsDraft = {
   nightlyStartTime: "01:00",
-  nightlyTimezone: "Etc/UTC",
+  nightlyTimezone: "Asia/Shanghai",
   builtinTagsEnabled: true,
 };
 

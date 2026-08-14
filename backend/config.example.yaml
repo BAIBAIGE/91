@@ -45,7 +45,7 @@ nightly:
   # 运行时会统一编排扫描、媒体资产生成和后续清理任务。
   start_time: "01:00"
   # 启动时间使用的 IANA 时区；仅影响应用调度，不修改服务器系统时区。
-  timezone: "Etc/UTC"
+  timezone: "Asia/Shanghai"
 
 tags:
   # 是否启用系统内置标签包；后台保存后会热更新。

@@ -48,6 +48,9 @@ func TestShouldRunChecksDate(t *testing.T) {
 }
 
 func TestNewAppliesDefaults(t *testing.T) {
+	if schedule.DefaultTimezone != "Asia/Shanghai" {
+		t.Fatalf("DefaultTimezone = %q, want Asia/Shanghai", schedule.DefaultTimezone)
+	}
 	r := New(Config{Settings: newStubSettings()})
 	if r.cfg.CronHour != 1 {
 		t.Errorf("CronHour zero-value should fall back to 1, got %d", r.cfg.CronHour)
@@ -89,6 +92,7 @@ func TestNaturalRunMatchesHourAndMinute(t *testing.T) {
 	r := New(Config{
 		Settings:  settings,
 		StartTime: "00:15",
+		Timezone:  "Etc/UTC",
 		Now:       func() time.Time { return now },
 		ListScanTargets: func(context.Context) []string {
 			runs.Add(1)
@@ -114,6 +118,7 @@ func TestUpdateStartTimeChangesNaturalSchedule(t *testing.T) {
 	r := New(Config{
 		Settings:  settings,
 		StartTime: "01:00",
+		Timezone:  "Etc/UTC",
 		Now:       func() time.Time { return now },
 		ListScanTargets: func(context.Context) []string {
 			runs.Add(1)
