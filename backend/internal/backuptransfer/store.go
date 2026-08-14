@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/video-site/backend/internal/atomicfile"
 	"github.com/video-site/backend/internal/backup"
 )
 
@@ -59,7 +60,7 @@ func readJSONFile(path string, destination any) error {
 	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
 		return errors.New("backup transfer: state is not a regular file")
 	}
-	if info.Mode().Perm()&0o077 != 0 {
+	if stateFilePermissionsTooBroad(info.Mode()) {
 		return errors.New("backup transfer: state file permissions are too broad")
 	}
 	if info.Size() > maxStateFileBytes {
@@ -119,16 +120,7 @@ func writeJSONAtomic(path string, value any) error {
 		return err
 	}
 	removeTemporary = false
-	directoryHandle, err := os.Open(directory)
-	if err != nil {
-		return err
-	}
-	syncErr := directoryHandle.Sync()
-	closeErr := directoryHandle.Close()
-	if syncErr != nil {
-		return syncErr
-	}
-	return closeErr
+	return atomicfile.SyncDirectory(directory)
 }
 
 func validOpaqueID(value string) bool {

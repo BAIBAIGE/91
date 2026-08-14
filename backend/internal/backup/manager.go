@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/video-site/backend/internal/atomicfile"
 	"github.com/video-site/backend/internal/catalog"
 	"github.com/video-site/backend/internal/config"
 	"github.com/video-site/backend/internal/localpath"
@@ -1124,19 +1125,7 @@ func writeJSONAtomic(filePath string, value any, mode os.FileMode) error {
 		return err
 	}
 	removeTemporary = false
-	directoryHandle, err := os.Open(directory)
-	if err != nil {
-		return err
-	}
-	syncErr := directoryHandle.Sync()
-	closeErr := directoryHandle.Close()
-	if syncErr != nil {
-		return syncErr
-	}
-	if closeErr != nil {
-		return closeErr
-	}
-	return nil
+	return atomicfile.SyncDirectory(directory)
 }
 
 func metaPath(archivePath string) string {
