@@ -24,7 +24,10 @@ import { generationStateClass, generationStateLabel } from "./drive/constants";
 import { CrawlerUploadTargetField } from "./drive/CrawlerUploadTargetField";
 import { SpiderIcon } from "./icons/SpiderIcon";
 import { AdminEmptyVisual } from "./AdminEmptyVisual";
-import { CrawlerListSkeleton } from "./CrawlersPageLoading";
+import {
+  CrawlerListControlsPlaceholder,
+  CrawlerListSkeleton,
+} from "./CrawlersPageLoading";
 import { useAdminFloatingActionSpace } from "./useAdminFloatingActionSpace";
 import {
   useAdminRouteActive,
@@ -224,6 +227,7 @@ export function CrawlersPage() {
           className="admin-card admin-crawler-list"
           aria-busy={loading || undefined}
         >
+          {loading && !hasCrawlers && <CrawlerListControlsPlaceholder />}
           {hasCrawlers && (
             <div className="admin-crawler-list__controls">
               <div className="admin-crawler-global-teaser">

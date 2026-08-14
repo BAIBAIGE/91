@@ -126,6 +126,8 @@ test("admin log viewer is reachable from the authenticated admin layout", () => 
   assert.match(logsPageSource, /warning: "WARN"/);
   assert.match(logsPageSource, /error: "ERROR"/);
   assert.equal((logsPageSource.match(/label: "ALL"/g) ?? []).length, 3);
+  assert.match(logsPageSource, /\{ value: "http", label: "访问日志" \}/);
+  assert.doesNotMatch(logsPageSource, /HTTP 访问/);
   assert.match(
     logsPageSource,
     /admin-log-filter-panel__top[\s\S]*?<span className="admin-log-filter-label">来源<\/span>[\s\S]*?admin-log-clear-filters/
@@ -136,11 +138,11 @@ test("admin log viewer is reachable from the authenticated admin layout", () => 
   );
   assert.match(
     adminCss,
-    /\.admin-log-filter-toggle\s*\{[^}]*display:\s*none[^}]*min-height:\s*40px/s
+    /\.admin-btn\.admin-log-filter-toggle\s*\{[^}]*display:\s*none[^}]*min-height:\s*40px/s
   );
   assert.match(
     adminCss,
-    /@media \(max-width: 768px\)[\s\S]*?\.admin-log-filter-toggle\s*\{[^}]*display:\s*inline-flex[^}]*\}[\s\S]*?\.admin-log-filter-panel\s*\{[^}]*display:\s*none[^}]*\}[\s\S]*?\.admin-log-filter-panel\.is-expanded\s*\{[^}]*display:\s*flex/s
+    /@media \(max-width: 768px\)[\s\S]*?\.admin-btn\.admin-log-filter-toggle\s*\{[^}]*display:\s*inline-flex[^}]*\}[\s\S]*?\.admin-log-filter-panel\s*\{[^}]*display:\s*none[^}]*\}[\s\S]*?\.admin-log-filter-panel\.is-expanded\s*\{[^}]*display:\s*flex/s
   );
   assert.match(
     adminCss,

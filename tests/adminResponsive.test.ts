@@ -632,9 +632,13 @@ test("desktop current video list uses a CPA-style responsive card grid", () => {
   const selectionInput = ruleBody(adminCss, ".admin-video-card__select-input");
   const selectionBox = ruleBody(adminCss, ".admin-video-card__select-box");
   const checkedSelectionBox = ruleBody(adminCss, ".admin-video-card__select-box.is-checked");
-  const actionButton = ruleBody(adminCss, ".admin-video-card__actions .admin-video-card__icon-button");
-  const dangerButton = ruleBody(adminCss, ".admin-video-card__actions .admin-video-card__icon-button.is-danger");
+  const actionButton = ruleBody(adminCss, ".admin-video-action-icon-button");
+  const dangerButton = ruleBody(adminCss, ".admin-video-action-icon-button.is-danger");
   const hoverCard = ruleBody(adminCss, ".admin-video-card:hover");
+  const deleteIconButtonSource = videosPageSource.slice(
+    videosPageSource.indexOf("function VideoDeleteIconButton"),
+    videosPageSource.indexOf("function CurrentVideoCard")
+  );
   const currentCardSource = videosPageSource.slice(
     videosPageSource.indexOf("function CurrentVideoCard"),
     videosPageSource.indexOf("function VideoTitleCell")
@@ -647,7 +651,9 @@ test("desktop current video list uses a CPA-style responsive card grid", () => {
   assert.match(videosPageSource, /<CurrentVideoCard[\s\S]*?video=\{v\}/);
   assert.match(currentCardSource, /<article className="admin-video-card" role="listitem">/);
   assert.match(currentCardSource, /<footer className="admin-video-card__actions">/);
-  assert.match(currentCardSource, /className="admin-video-card__utility-actions"[\s\S]*?admin-video-card__icon-button"[\s\S]*?<Edit size=\{15\}[\s\S]*?admin-video-card__icon-button is-danger"[\s\S]*?<Trash2 size=\{15\}[\s\S]*?className="admin-video-card__select"/);
+  assert.match(currentCardSource, /className="admin-video-card__utility-actions"[\s\S]*?className="admin-btn admin-video-action-icon-button"[\s\S]*?<Edit size=\{15\}[\s\S]*?<VideoDeleteIconButton[\s\S]*?onClick=\{onDelete\}[\s\S]*?title="删除视频"[\s\S]*?ariaLabel="删除视频"[\s\S]*?className="admin-video-card__select"/);
+  assert.match(deleteIconButtonSource, /className="admin-btn admin-video-action-icon-button is-danger"[\s\S]*?<Trash2 size=\{15\} aria-hidden="true" \/>/);
+  assert.equal(Array.from(videosPageSource.matchAll(/<VideoDeleteIconButton/g)).length, 2);
   assert.match(currentCardSource, /className="admin-video-card__select"[\s\S]*?className="admin-video-card__select-input"[\s\S]*?type="checkbox"[\s\S]*?checked=\{selected\}[\s\S]*?onChange=\{onToggleSelect\}/);
   assert.match(currentCardSource, /admin-video-card__select-box\$\{selected \? " is-checked" : ""\}`\}[\s\S]*?aria-hidden="true"[\s\S]*?selected && <Check size=\{12\}/);
   assert.doesNotMatch(currentCardSource, /selectMode|is-selected|aria-selected|role=\{selectMode \? "option"|onKeyDown|onClick=\{\(event\)/);
@@ -685,9 +691,9 @@ test("desktop current video list uses a CPA-style responsive card grid", () => {
   assert.match(actionButton, /width\s*:\s*30px/);
   assert.match(actionButton, /height\s*:\s*30px/);
   assert.match(actionButton, /background\s*:\s*transparent/);
-  assert.match(actionButton, /border\s*:\s*1px solid var\(--admin-video-card-pill-border\)/);
-  assert.match(dangerButton, /border-color\s*:\s*color-mix\(in srgb,\s*var\(--admin-video-card-danger\) 26%,\s*transparent\)/);
-  assert.match(dangerButton, /color\s*:\s*color-mix\(in srgb,\s*var\(--admin-video-card-danger\) 68%,\s*transparent\)/);
+  assert.match(actionButton, /border\s*:\s*1px solid var\(--admin-video-card-pill-border,\s*var\(--border-subtle\)\)/);
+  assert.match(dangerButton, /border-color\s*:\s*color-mix\(in srgb,\s*var\(--admin-video-card-danger,\s*var\(--danger\)\) 26%,\s*transparent\)/);
+  assert.match(dangerButton, /color\s*:\s*color-mix\(in srgb,\s*var\(--admin-video-card-danger,\s*var\(--danger\)\) 68%,\s*transparent\)/);
   assert.match(hoverCard, /transform\s*:\s*translateY\(-1px\)/);
 });
 
@@ -784,6 +790,43 @@ test("admin table action headers center-align with action buttons", () => {
   assert.match(actionCell, /text-align\s*:\s*center/);
 });
 
+test("desktop table cell surfaces follow the rounded frame without clipping sticky headers", () => {
+  const table = ruleBody(adminCss, ".admin-table");
+  const header = ruleBody(adminCss, ".admin-table th");
+  const topLeft = ruleBodyByContains(
+    adminCss,
+    ".admin-table > thead:first-child > tr:first-child > th:first-child"
+  );
+  const topRight = ruleBodyByContains(
+    adminCss,
+    ".admin-table > thead:first-child > tr:first-child > th:last-child"
+  );
+  const bottomLeft = ruleBody(
+    adminCss,
+    ".admin-table > tbody:last-child > tr:last-child > td:first-child"
+  );
+  const bottomRight = ruleBody(
+    adminCss,
+    ".admin-table > tbody:last-child > tr:last-child > td:last-child"
+  );
+
+  assert.match(table, /border-collapse\s*:\s*separate/);
+  assert.match(table, /border-spacing\s*:\s*0/);
+  assert.match(table, /border-radius\s*:\s*var\(--radius-md\)/);
+  assert.match(table, /overflow\s*:\s*visible/);
+  assert.match(header, /position\s*:\s*sticky/);
+  assert.match(header, /top\s*:\s*0/);
+  assert.match(topLeft, /border-top-left-radius\s*:\s*calc\(var\(--radius-md\) - 1px\)/);
+  assert.match(topRight, /border-top-right-radius\s*:\s*calc\(var\(--radius-md\) - 1px\)/);
+  assert.match(bottomLeft, /border-bottom-left-radius\s*:\s*calc\(var\(--radius-md\) - 1px\)/);
+  assert.match(bottomRight, /border-bottom-right-radius\s*:\s*calc\(var\(--radius-md\) - 1px\)/);
+  assert.match(
+    adminCss,
+    /@media \(min-width:\s*769px\)\s*\{\s*\.admin-table > thead:first-child > tr:first-child > th:first-child/s
+  );
+  assert.equal(Array.from(adminCss.matchAll(/\.admin-table\s*\{/g)).length, 1);
+});
+
 test("current video delete dialogs use flat modal chrome", () => {
   const flatModal = ruleBodyByContains(adminCss, ".admin-modal--video-delete-flat");
   const flatModalChrome = ruleBodyByContains(adminCss, ".admin-modal--video-delete-flat .admin-modal__header");
@@ -870,7 +913,11 @@ test("blacklist source files can be deleted by one serialized background task", 
     ".admin-blacklist-row-select.is-disabled .admin-video-card__select-box"
   );
   const rowActions = ruleBody(adminCss, ".admin-blacklist-actions");
-  const rowDelete = ruleBody(adminCss, ".admin-blacklist-delete-source-btn");
+  const sharedDeleteButton = ruleBody(adminCss, ".admin-video-action-icon-button");
+  const sharedDeleteButtonSource = videosPageSource.slice(
+    videosPageSource.indexOf("function VideoDeleteIconButton"),
+    videosPageSource.indexOf("function CurrentVideoCard")
+  );
   const deleteAllButtonClass = videosPageSource.indexOf("admin-blacklist-source-delete__button");
   const deleteAllButtonStart = videosPageSource.lastIndexOf("<button", deleteAllButtonClass);
   const deleteAllButtonEnd = videosPageSource.indexOf("</button>", deleteAllButtonStart);
@@ -966,7 +1013,15 @@ test("blacklist source files can be deleted by one serialized background task", 
   assert.match(rowActions, /display\s*:\s*flex/);
   // 桌面端黑名单操作列保持单行（8be7ebd）；移动端媒体查询里仍允许换行
   assert.match(rowActions, /flex-wrap\s*:\s*nowrap/);
-  assert.match(rowDelete, /white-space\s*:\s*nowrap/);
+  assert.match(sharedDeleteButton, /width\s*:\s*30px/);
+  assert.match(sharedDeleteButton, /height\s*:\s*30px/);
+  assert.match(sharedDeleteButtonSource, /className="admin-btn admin-video-action-icon-button is-danger"[\s\S]*?<Trash2 size=\{15\} aria-hidden="true" \/>/);
+  assert.match(
+    blacklistSource,
+    /<VideoDeleteIconButton[\s\S]*?onClick=\{\(\) => setSourceDeleteTarget\(v\)\}[\s\S]*?disabled=\{sourceDeleteRunning\}[\s\S]*?title="删除"[\s\S]*?ariaLabel=\{`删除 \$\{v\.fileName \|\| v\.id\}`\}[\s\S]*?\/>/
+  );
+  assert.doesNotMatch(videosPageSource, /admin-blacklist-delete-source-btn/);
+  assert.doesNotMatch(adminCss, /admin-blacklist-delete-source-btn/);
 });
 
 test("admin video management controls wrap instead of covering text on mobile", () => {
@@ -1033,7 +1088,7 @@ test("admin video management controls wrap instead of covering text on mobile", 
   );
   const blacklistActionButton = ruleBody(
     css,
-    ".admin-blacklist-table:not(.admin-drives-table) td.is-actions .admin-btn"
+    ".admin-blacklist-table:not(.admin-drives-table) td.is-actions .admin-btn:not(.admin-video-action-icon-button)"
   );
   const blacklistCard = ruleBody(css, ".admin-blacklist-table:not(.admin-drives-table) tr");
   const blacklistSelectCell = ruleBody(
@@ -1206,9 +1261,20 @@ test("crawler loading keeps the real page structure and skeletonizes only crawle
   assert.match(crawlersPageLoadingSource, /const CRAWLER_LIST_SKELETON_COUNT = 3/);
   assert.match(
     crawlersPageLoadingSource,
-    /className="admin-page admin-page--with-floating-actions admin-crawlers-page"[\s\S]*?className="admin-card admin-crawler-list" aria-busy="true">\s*<CrawlerListSkeleton \/>/
+    /className="admin-page admin-page--with-floating-actions admin-crawlers-page"[\s\S]*?className="admin-card admin-crawler-list" aria-busy="true">\s*<CrawlerListControlsPlaceholder \/>\s*<CrawlerListSkeleton \/>/
   );
-  assert.doesNotMatch(crawlersPageLoadingSource, /admin-crawler-list__controls|预览视频|toggle-switch/);
+  assert.match(
+    crawlersPageLoadingSource,
+    /className="admin-crawler-list__controls admin-crawler-list__controls--placeholder"[\s\S]*?className="admin-crawler-global-teaser"[\s\S]*?预览视频[\s\S]*?className="toggle-switch"/
+  );
+  assert.match(
+    crawlersPageSource,
+    /\{loading && !hasCrawlers && <CrawlerListControlsPlaceholder \/>\}/
+  );
+  assert.match(
+    ruleBody(adminCss, ".admin-crawler-list__controls--placeholder"),
+    /visibility\s*:\s*hidden/
+  );
   assert.match(
     crawlersPageLoadingSource,
     /className="admin-crawler-table admin-crawler-table--skeleton"[\s\S]*?role="status"[\s\S]*?aria-busy="true"[\s\S]*?admin-crawler-card-skeleton admin-card-skeleton-surface/
@@ -1275,8 +1341,8 @@ test("mobile video management uses compact theme-aware video cards", () => {
   const source = ruleBody(adminCss, ".admin-video-card__source");
   const actions = ruleBody(adminCss, ".admin-video-card__actions");
   const utilityActions = ruleBody(adminCss, ".admin-video-card__utility-actions");
-  const actionButton = ruleBody(adminCss, ".admin-video-card__actions .admin-video-card__icon-button");
-  const dangerButton = ruleBody(adminCss, ".admin-video-card__actions .admin-video-card__icon-button.is-danger");
+  const actionButton = ruleBody(adminCss, ".admin-video-action-icon-button");
+  const dangerButton = ruleBody(adminCss, ".admin-video-action-icon-button.is-danger");
 
   assert.match(grid, /gap\s*:\s*10px/);
   assert.match(card, /--admin-video-card-bg\s*:\s*color-mix\(in srgb,\s*var\(--bg-surface\) 82%,\s*transparent\)/);
@@ -1312,8 +1378,8 @@ test("mobile video management uses compact theme-aware video cards", () => {
   assert.match(actionButton, /justify-content\s*:\s*center/);
   assert.match(actionButton, /border-radius\s*:\s*8px/);
   assert.match(actionButton, /background\s*:\s*transparent/);
-  assert.match(dangerButton, /border-color\s*:\s*color-mix\(in srgb,\s*var\(--admin-video-card-danger\) 26%,\s*transparent\)/);
-  assert.match(dangerButton, /color\s*:\s*color-mix\(in srgb,\s*var\(--admin-video-card-danger\) 68%,\s*transparent\)/);
+  assert.match(dangerButton, /border-color\s*:\s*color-mix\(in srgb,\s*var\(--admin-video-card-danger,\s*var\(--danger\)\) 26%,\s*transparent\)/);
+  assert.match(dangerButton, /color\s*:\s*color-mix\(in srgb,\s*var\(--admin-video-card-danger,\s*var\(--danger\)\) 68%,\s*transparent\)/);
   assert.doesNotMatch(adminCss, /\.admin-video-card\.is-selected/);
 });
 

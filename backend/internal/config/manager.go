@@ -230,9 +230,9 @@ func (m *Manager) UpdateAdminCredentials(username, password string) error {
 // cron_hour is converted to start_time and then removed to avoid two competing
 // fields. Missing timezone values are made explicit so future scheduling no
 // longer depends on the host. The built-in tag switch is migrated from SQLite
-// when the YAML field is absent. The retired duplicate-review switch is removed
-// at the same boundary; comments and unrelated unknown nodes are retained by
-// yaml.Node encoding.
+// when the YAML field is absent. Retired settings and the unused drives field
+// are removed at the same boundary; comments and unrelated unknown nodes are
+// retained by yaml.Node encoding.
 func (m *Manager) MigrateLegacyRuntimeSettings(legacy LegacyRuntimeSettings) (bool, error) {
 	if m == nil {
 		return false, errors.New("configuration manager is unavailable")
@@ -293,6 +293,12 @@ func (m *Manager) MigrateLegacyRuntimeSettings(legacy LegacyRuntimeSettings) (bo
 		if len(dedupe.Content) == 0 && deleteMappingValue(document, "dedupe") {
 			changed = true
 		}
+	}
+	// Drive definitions have always been persisted and loaded from SQLite. Any
+	// YAML drives node is therefore dead configuration and can contain stale
+	// credentials. Remove the complete node regardless of whether it is empty.
+	if deleteMappingValue(document, "drives") {
+		changed = true
 	}
 
 	if !changed {

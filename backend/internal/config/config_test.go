@@ -109,6 +109,19 @@ func TestLoadDefaultScannerVideoExtensionsIncludeSTRM(t *testing.T) {
 	}
 }
 
+func TestExampleConfigOmitsDatabaseManagedDriveDefinitions(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "config.example.yaml"))
+	if err != nil {
+		t.Fatalf("read example config: %v", err)
+	}
+	text := string(data)
+	for _, obsolete := range []string{"drives:", "# 盘列表", "my-onedrive", "my-webdav"} {
+		if strings.Contains(text, obsolete) {
+			t.Fatalf("example config still exposes database-managed drive definition %q", obsolete)
+		}
+	}
+}
+
 func TestResolveStoragePathsUsesStartupDirectoryWithoutMutatingConfig(t *testing.T) {
 	baseDir := t.TempDir()
 	storage := Storage{

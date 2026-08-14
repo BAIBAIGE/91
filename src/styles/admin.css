@@ -603,6 +603,10 @@ body.admin-mobile-nav-open {
   padding: var(--space-4) var(--space-4) 0;
 }
 
+.admin-crawler-list__controls--placeholder {
+  visibility: hidden;
+}
+
 .admin-crawler-global-teaser {
   display: inline-grid;
   justify-items: center;
@@ -1719,11 +1723,12 @@ body.admin-mobile-nav-open {
  * ========================================================= */
 .admin-table {
   width: 100%;
-  border-collapse: collapse;
+  border-collapse: separate;
+  border-spacing: 0;
   background: var(--bg-surface);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
-  overflow: hidden;
+  overflow: visible;
 }
 
 .admin-table th,
@@ -1737,6 +1742,9 @@ body.admin-mobile-nav-open {
 }
 
 .admin-table th {
+  position: sticky;
+  top: 0;
+  z-index: 10;
   background: var(--bg-elevated);
   font-weight: var(--weight-semibold);
   color: var(--text-faint);
@@ -1751,6 +1759,28 @@ body.admin-mobile-nav-open {
 
 .admin-table tr:last-child td {
   border-bottom: 0;
+}
+
+/* With sticky headers the table cannot clip descendants. Give the visible
+   corner cells the inner radius so their backgrounds follow the table frame. */
+@media (min-width: 769px) {
+  .admin-table > thead:first-child > tr:first-child > th:first-child,
+  .admin-table > tbody:first-child > tr:first-child > td:first-child {
+    border-top-left-radius: calc(var(--radius-md) - 1px);
+  }
+
+  .admin-table > thead:first-child > tr:first-child > th:last-child,
+  .admin-table > tbody:first-child > tr:first-child > td:last-child {
+    border-top-right-radius: calc(var(--radius-md) - 1px);
+  }
+
+  .admin-table > tbody:last-child > tr:last-child > td:first-child {
+    border-bottom-left-radius: calc(var(--radius-md) - 1px);
+  }
+
+  .admin-table > tbody:last-child > tr:last-child > td:last-child {
+    border-bottom-right-radius: calc(var(--radius-md) - 1px);
+  }
 }
 
 @media (hover: hover) and (pointer: fine) {
@@ -4035,7 +4065,7 @@ body.admin-mobile-nav-open {
   stroke-width: 2.4;
 }
 
-.admin-video-card__actions .admin-video-card__icon-button {
+.admin-video-action-icon-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -4045,11 +4075,11 @@ body.admin-mobile-nav-open {
   height: 30px;
   min-height: 30px;
   padding: 0;
-  border: 1px solid var(--admin-video-card-pill-border);
+  border: 1px solid var(--admin-video-card-pill-border, var(--border-subtle));
   border-radius: 8px;
   background: transparent;
   box-shadow: none;
-  color: var(--admin-video-card-button-text);
+  color: var(--admin-video-card-button-text, var(--text-default));
   transition:
     transform var(--transition-fast),
     background-color var(--transition-fast),
@@ -4057,18 +4087,18 @@ body.admin-mobile-nav-open {
     color var(--transition-fast);
 }
 
-.admin-video-card__actions .admin-video-card__icon-button svg {
+.admin-video-action-icon-button svg {
   display: block;
   flex-shrink: 0;
 }
 
-.admin-video-card__actions .admin-video-card__icon-button.is-danger {
-  border-color: color-mix(in srgb, var(--admin-video-card-danger) 26%, transparent);
+.admin-video-action-icon-button.is-danger {
+  border-color: color-mix(in srgb, var(--admin-video-card-danger, var(--danger)) 26%, transparent);
   background: transparent;
-  color: color-mix(in srgb, var(--admin-video-card-danger) 68%, transparent);
+  color: color-mix(in srgb, var(--admin-video-card-danger, var(--danger)) 68%, transparent);
 }
 
-.admin-video-card__actions .admin-video-card__icon-button:active:not(:disabled) {
+.admin-video-action-icon-button:active:not(:disabled) {
   transform: scale(0.96);
 }
 
@@ -4079,17 +4109,17 @@ body.admin-mobile-nav-open {
     box-shadow: var(--shadow-md);
   }
 
-  .admin-video-card__actions .admin-video-card__icon-button:hover:not(:disabled) {
+  .admin-video-action-icon-button:hover:not(:disabled) {
     border-color: var(--border-strong);
-    background: var(--admin-video-card-button-hover-bg);
+    background: var(--admin-video-card-button-hover-bg, var(--bg-elevated));
     box-shadow: none;
-    color: var(--admin-video-card-main);
+    color: var(--admin-video-card-main, var(--text-strong));
   }
 
-  .admin-video-card__actions .admin-video-card__icon-button.is-danger:hover:not(:disabled) {
-    border-color: var(--admin-video-card-danger);
+  .admin-video-action-icon-button.is-danger:hover:not(:disabled) {
+    border-color: var(--admin-video-card-danger, var(--danger));
     background: var(--danger-soft);
-    color: var(--admin-video-card-danger);
+    color: var(--admin-video-card-danger, var(--danger));
   }
 }
 
@@ -4155,12 +4185,12 @@ body.admin-mobile-nav-open {
     transform: none;
   }
 
-  .admin-video-card__actions .admin-video-card__icon-button,
+  .admin-video-action-icon-button,
   .admin-video-card__select-box {
     transition: none;
   }
 
-  .admin-video-card__actions .admin-video-card__icon-button:active:not(:disabled),
+  .admin-video-action-icon-button:active:not(:disabled),
   .admin-video-card__select:active .admin-video-card__select-box {
     transform: none;
   }
@@ -4691,13 +4721,6 @@ body.admin-mobile-nav-open {
   flex-wrap: nowrap;
 }
 
-.admin-blacklist-delete-source-btn {
-  width: 34px;
-  height: 32px;
-  padding: 0;
-  white-space: nowrap;
-}
-
 .admin-blacklist-source-delete {
   display: flex;
   align-items: center;
@@ -5080,7 +5103,7 @@ body.admin-mobile-nav-open {
     display: none;
   }
 
-  .admin-blacklist-table:not(.admin-drives-table) td.is-actions .admin-btn {
+  .admin-blacklist-table:not(.admin-drives-table) td.is-actions .admin-btn:not(.admin-video-action-icon-button) {
     justify-content: center;
     flex: 0 0 auto;
     min-width: 0;
@@ -5088,13 +5111,6 @@ body.admin-mobile-nav-open {
     min-height: 32px;
     padding: 6px 10px;
     white-space: nowrap;
-  }
-
-  .admin-blacklist-table:not(.admin-drives-table) td.is-actions .admin-blacklist-delete-source-btn {
-    flex: 0 0 32px;
-    width: 32px;
-    height: 32px;
-    padding: 0;
   }
 
   .admin-blacklist-source-delete {
@@ -8339,8 +8355,6 @@ body.admin-mobile-nav-open {
 @keyframes admin-loading { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
 .admin-videos-current > .admin-empty-state--plain,
 .admin-videos-blacklist > .admin-empty-state--plain { box-sizing: border-box; flex: 1 1 auto; min-height: 0; padding: 0 16px 96px; }
-.admin-table { overflow: visible !important; border-collapse: separate !important; border-spacing: 0 !important; }
-.admin-table th { position: sticky; top: 0; background: var(--bg-elevated) !important; z-index: 10; }
 @media (hover: hover) and (pointer: fine) {
   .admin-table:not(.admin-table--static-rows) tbody tr:hover td { background: var(--bg-elevated) !important; }
 }
@@ -9338,7 +9352,7 @@ body.admin-logs-fullscreen-active {
   pointer-events: none;
 }
 
-.admin-log-filter-toggle {
+.admin-btn.admin-log-filter-toggle {
   display: none;
   min-height: 40px;
 }
@@ -9845,7 +9859,7 @@ body.admin-logs-fullscreen-active {
     flex-basis: 100%;
   }
 
-  .admin-log-filter-toggle {
+  .admin-btn.admin-log-filter-toggle {
     display: inline-flex;
   }
 

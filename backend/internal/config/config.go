@@ -40,7 +40,6 @@ type Config struct {
 	Nightly      Nightly      `yaml:"nightly"`
 	Tags         Tags         `yaml:"tags"`
 	RemoteUpload RemoteUpload `yaml:"remote_upload"`
-	Drives       []Drive      `yaml:"drives"`
 }
 
 type Server struct {
@@ -328,16 +327,6 @@ type RemoteUpload struct {
 	DiskReserveBytes int64 `yaml:"disk_reserve_bytes"`
 	// IdleTimeoutSeconds 是响应正文连续无数据时中止任务的秒数。
 	IdleTimeoutSeconds int `yaml:"idle_timeout_seconds"`
-}
-
-// Drive 配置项中的敏感字段（Cookie / RefreshToken 等）最终由管理后台写入 DB
-// 这里保留 yaml 中的静态定义，用于启动时预置盘。生产建议只在 DB 里维护。
-type Drive struct {
-	ID     string            `yaml:"id"`
-	Kind   string            `yaml:"kind"` // quark / p115 / p123 / pikpak / wopan / guangyapan / onedrive / googledrive / webdav / localstorage
-	Name   string            `yaml:"name"`
-	RootID string            `yaml:"root_id"`
-	Params map[string]string `yaml:"params,omitempty"`
 }
 
 // Load 读取配置；若不存在则从 config.example.yaml 复制一份并返回

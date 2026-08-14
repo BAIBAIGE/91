@@ -1312,16 +1312,12 @@ function BlacklistTab({
                         </span>
                       )}
                       {sourceDeletable && (
-                        <button
-                          type="button"
-                          className="admin-btn is-danger admin-blacklist-delete-source-btn"
+                        <VideoDeleteIconButton
                           onClick={() => setSourceDeleteTarget(v)}
                           disabled={sourceDeleteRunning}
-                          aria-label={`删除 ${v.fileName || v.id}`}
                           title="删除"
-                        >
-                          <Trash2 size={13} aria-hidden="true" />
-                        </button>
+                          ariaLabel={`删除 ${v.fileName || v.id}`}
+                        />
                       )}
                     </div>
                   </td>
@@ -1587,6 +1583,31 @@ function DeleteSourceOption({
   );
 }
 
+function VideoDeleteIconButton({
+  onClick,
+  title,
+  ariaLabel,
+  disabled = false,
+}: {
+  onClick: () => void;
+  title: string;
+  ariaLabel: string;
+  disabled?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      className="admin-btn admin-video-action-icon-button is-danger"
+      onClick={onClick}
+      disabled={disabled}
+      title={title}
+      aria-label={ariaLabel}
+    >
+      <Trash2 size={15} aria-hidden="true" />
+    </button>
+  );
+}
+
 function CurrentVideoCard({
   video,
   driveName,
@@ -1625,22 +1646,18 @@ function CurrentVideoCard({
         <div className="admin-video-card__utility-actions">
           <button
             type="button"
-            className="admin-btn admin-video-card__icon-button"
+            className="admin-btn admin-video-action-icon-button"
             onClick={onEdit}
             title="编辑视频"
             aria-label="编辑视频"
           >
             <Edit size={15} />
           </button>
-          <button
-            type="button"
-            className="admin-btn admin-video-card__icon-button is-danger"
+          <VideoDeleteIconButton
             onClick={onDelete}
             title="删除视频"
-            aria-label="删除视频"
-          >
-            <Trash2 size={15} />
-          </button>
+            ariaLabel="删除视频"
+          />
         </div>
         <label className="admin-video-card__select" title={selected ? "取消选择" : "选择视频"}>
           <input

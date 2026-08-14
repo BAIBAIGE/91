@@ -63,7 +63,7 @@ const sourceOptions: Array<{
 }> = [
   { value: "", label: "ALL" },
   { value: "application", label: "应用日志" },
-  { value: "http", label: "HTTP 访问" },
+  { value: "http", label: "访问日志" },
 ];
 
 const levelOptions: Array<{

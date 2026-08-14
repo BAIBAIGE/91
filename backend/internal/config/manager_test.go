@@ -28,6 +28,8 @@ nightly:
   cron_hour: 3
 dedupe:
   duplicate_review_enabled: false
+# obsolete template placeholder
+drives: []
 future_section:
   keep_me: true
 `)
@@ -62,6 +64,9 @@ future_section:
 	if strings.Contains(text, "duplicate_review_enabled") || strings.Contains(text, "dedupe:") {
 		t.Fatalf("retired duplicate-review setting remains:\n%s", text)
 	}
+	if strings.Contains(text, "drives:") || strings.Contains(text, "obsolete template placeholder") {
+		t.Fatalf("retired empty drive placeholder remains:\n%s", text)
+	}
 	if !strings.Contains(text, "builtin_pack_enabled: false") {
 		t.Fatalf("built-in tag setting was not migrated:\n%s", text)
 	}
@@ -89,6 +94,38 @@ func TestManagerYAMLValuesWinOverLegacySQLiteValues(t *testing.T) {
 	data, _ := os.ReadFile(path)
 	if strings.Contains(string(data), "cron_hour:") || strings.Contains(string(data), "duplicate_review_enabled") {
 		t.Fatalf("retired fields remain:\n%s", data)
+	}
+}
+
+func TestManagerRemovesNonEmptyLegacyDriveDefinitions(t *testing.T) {
+	source := `nightly:
+  start_time: "01:00"
+  timezone: "Etc/UTC"
+tags:
+  builtin_pack_enabled: true
+drives:
+  - id: "operator-copy"
+    kind: "webdav"
+    params:
+      base_url: "https://example.com/dav"
+`
+	manager, path := newManagerForTest(t, source)
+	changed, err := manager.MigrateLegacyRuntimeSettings(LegacyRuntimeSettings{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !changed {
+		t.Fatal("non-empty legacy drive data was not removed")
+	}
+	written, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(written)
+	for _, removed := range []string{"drives:", "operator-copy", "base_url", "example.com/dav"} {
+		if strings.Contains(text, removed) {
+			t.Fatalf("retired drive data %q remains:\n%s", removed, written)
+		}
 	}
 }
 
