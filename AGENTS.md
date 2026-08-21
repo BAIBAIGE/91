@@ -1,5 +1,3 @@
-# Development Guidelines
-
 ## Documentation Rules
 
 - Do not modify the README.md file in the project root directory unless explicitly requested.
