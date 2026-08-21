@@ -1929,7 +1929,7 @@ function fileMeta(v: api.AdminVideo): string {
 }
 
 function fileMetaParts(v: api.AdminVideo): string[] {
-  return [normalizeExt(v.ext), v.quality, v.size > 0 ? formatBytes(v.size) : ""].filter(Boolean);
+  return [normalizeExt(v.ext), v.size > 0 ? formatBytes(v.size) : ""].filter(Boolean);
 }
 
 function normalizeExt(ext: string): string {

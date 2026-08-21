@@ -483,7 +483,6 @@ function RecommendedItemContent(
   }
 
   const author = "author" in video ? video.author : "";
-  const quality = "quality" in video ? video.quality : undefined;
 
   return (
     <li
@@ -533,9 +532,6 @@ function RecommendedItemContent(
           )}
           {video.duration && previewState !== "playing" && (
             <span className="vd-rail__duration">{video.duration}</span>
-          )}
-          {quality === "HD" && previewState !== "playing" && (
-            <span className="vd-rail__hd">HD</span>
           )}
           {current && previewState !== "playing" && (
             <span className="vd-rail__current">当前视频</span>

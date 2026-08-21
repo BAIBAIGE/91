@@ -260,11 +260,6 @@
   backdrop-filter: blur(6px);
 }
 
-.video-badge.is-hd {
-  background: var(--accent);
-  color: var(--text-on-accent);
-}
-
 /* ----- 来源网盘徽标（右上） ----- */
 .source-badge {
   position: absolute;

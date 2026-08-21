@@ -2356,8 +2356,7 @@
 }
 
 .vd-rail__duration,
-.vd-rail__current,
-.vd-rail__hd {
+.vd-rail__current {
   z-index: 2;
 }
 
@@ -2390,25 +2389,6 @@
   white-space: nowrap;
 }
 
-.vd-rail__hd {
-  position: absolute;
-  left: 6px;
-  top: 6px;
-  padding: 2px 7px;
-  border-radius: var(--radius-pill);
-  background: linear-gradient(135deg, #ff6f8f 0%, #ff2f68 100%);
-  color: #fff;
-  font-size: 10px;
-  font-weight: var(--weight-bold);
-  letter-spacing: 0.04em;
-}
-
-:root[data-theme="sky"] .vd-rail__hd {
-  background: var(--accent);
-  color: var(--text-on-accent);
-  border: 0;
-  box-shadow: 0 4px 10px var(--accent-glow);
-}
 
 .vd-rail__body {
   min-width: 0;

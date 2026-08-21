@@ -232,7 +232,6 @@ type Event struct {
 	DetailURL          string            `json:"detail_url,omitempty"`
 	Author             string            `json:"author,omitempty"`
 	Tags               []string          `json:"tags,omitempty"`
-	Quality            string            `json:"quality,omitempty"`
 	DurationSeconds    int               `json:"duration_seconds,omitempty"`
 	Description        string            `json:"description,omitempty"`
 	Headers            map[string]string `json:"headers,omitempty"`
@@ -254,7 +253,6 @@ type Item struct {
 	DetailURL          string            `json:"detail_url,omitempty"`
 	Author             string            `json:"author,omitempty"`
 	Tags               []string          `json:"tags,omitempty"`
-	Quality            string            `json:"quality,omitempty"`
 	DurationSeconds    int               `json:"duration_seconds,omitempty"`
 	Description        string            `json:"description,omitempty"`
 	Headers            map[string]string `json:"headers,omitempty"`
@@ -298,9 +296,6 @@ func (e Event) normalizedItem() Item {
 	}
 	if len(item.Tags) == 0 && len(e.Tags) > 0 {
 		item.Tags = e.Tags
-	}
-	if strings.TrimSpace(item.Quality) == "" {
-		item.Quality = e.Quality
 	}
 	if item.DurationSeconds == 0 {
 		item.DurationSeconds = e.DurationSeconds
@@ -726,10 +721,6 @@ func (c *Crawler) processItem(ctx context.Context, item Item) (bool, error) {
 		}
 	}
 	crawlerTagLabel = c.crawlerTagName()
-	quality := strings.TrimSpace(item.Quality)
-	if quality == "" {
-		quality = "HD"
-	}
 	previewStatus := "pending"
 	if c.previewDisabled(ctx) {
 		previewStatus = "disabled"
@@ -744,7 +735,6 @@ func (c *Crawler) processItem(ctx context.Context, item Item) (bool, error) {
 		DurationSeconds: item.DurationSeconds,
 		Size:            size,
 		Ext:             strings.TrimPrefix(videoExt, "."),
-		Quality:         quality,
 		Description:     strings.TrimSpace(item.Description),
 		PreviewStatus:   previewStatus,
 		PublishedAt:     now,
@@ -1375,7 +1365,6 @@ func normalizeItemForImport(item Item) (Item, string, error) {
 	}
 	item.DetailURL = strings.TrimSpace(item.DetailURL)
 	item.Author = strings.TrimSpace(item.Author)
-	item.Quality = strings.TrimSpace(item.Quality)
 	item.Description = strings.TrimSpace(item.Description)
 	item.MediaURL = strings.TrimSpace(item.MediaURL)
 	item.MediaLocalFile = strings.TrimSpace(item.MediaLocalFile)

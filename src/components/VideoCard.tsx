@@ -226,16 +226,15 @@ export function VideoCard({
             </span>
           )}
 
-          <div className="badge-row">
-            {video.quality === "HD" && (
-              <span className="video-badge is-hd">HD</span>
-            )}
-            {(video.badges ?? []).map((badge) => (
-              <span className="video-badge" key={badge}>
-                {badge}
-              </span>
-            ))}
-          </div>
+          {(video.badges ?? []).length > 0 && (
+            <div className="badge-row">
+              {video.badges.map((badge) => (
+                <span className="video-badge" key={badge}>
+                  {badge}
+                </span>
+              ))}
+            </div>
+          )}
 
           {video.sourceLabel && previewState !== "playing" && (
             <span

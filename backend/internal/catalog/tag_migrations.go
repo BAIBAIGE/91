@@ -124,6 +124,10 @@ UPDATE videos
 	if err := c.dropColumnIfExists(ctx, "videos", "llm_tagged_at"); err != nil {
 		return err
 	}
+	// quality 曾被扫盘统一写成 HD，并不代表真实分辨率；完整退役该无效元数据。
+	if err := c.dropColumnIfExists(ctx, "videos", "quality"); err != nil {
+		return err
+	}
 	if err := c.ensureBaseVideoIndexes(ctx); err != nil {
 		return err
 	}
@@ -639,9 +643,9 @@ func (c *Catalog) dropColumnIfExists(ctx context.Context, table, column string) 
 	if _, err = c.db.ExecContext(ctx, `ALTER TABLE `+table+` DROP COLUMN `+column); err == nil {
 		return nil
 	}
-	if table == "videos" && (strings.EqualFold(column, "category") || strings.EqualFold(column, "llm_tagged_at")) {
+	if table == "videos" && (strings.EqualFold(column, "category") || strings.EqualFold(column, "llm_tagged_at") || strings.EqualFold(column, "quality")) {
 		log.Printf("[catalog] native drop column videos.%s failed, rebuilding videos table with current columns: %v", column, err)
-		return c.rebuildVideosTableWithoutCategory(ctx)
+		return c.rebuildVideosTableWithCurrentColumns(ctx)
 	}
 	return err
 }
@@ -1048,7 +1052,6 @@ var currentVideoColumnNames = []string{
 	"duration_seconds",
 	"size_bytes",
 	"ext",
-	"quality",
 	"thumbnail_url",
 	"thumbnail_updated_at",
 	"thumbnail_status",
@@ -1078,8 +1081,8 @@ var currentVideoColumnNames = []string{
 	"updated_at",
 }
 
-const createVideosWithoutCategorySQL = `
-CREATE TABLE videos_category_drop_new (
+const createCurrentVideosTableSQL = `
+CREATE TABLE videos_schema_rebuild_new (
     id                 TEXT PRIMARY KEY,
     drive_id           TEXT NOT NULL,
     file_id            TEXT NOT NULL,
@@ -1096,7 +1099,6 @@ CREATE TABLE videos_category_drop_new (
     duration_seconds   INTEGER DEFAULT 0,
     size_bytes         INTEGER DEFAULT 0,
     ext                TEXT,
-    quality            TEXT,
     thumbnail_url      TEXT,
 	thumbnail_updated_at INTEGER DEFAULT 0,
     thumbnail_status   TEXT DEFAULT 'pending',
@@ -1126,28 +1128,28 @@ CREATE TABLE videos_category_drop_new (
     updated_at         INTEGER NOT NULL
 )`
 
-func (c *Catalog) rebuildVideosTableWithoutCategory(ctx context.Context) error {
+func (c *Catalog) rebuildVideosTableWithCurrentColumns(ctx context.Context) error {
 	tx, err := c.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
 
-	if _, err := tx.ExecContext(ctx, `DROP TABLE IF EXISTS videos_category_drop_new`); err != nil {
+	if _, err := tx.ExecContext(ctx, `DROP TABLE IF EXISTS videos_schema_rebuild_new`); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, createVideosWithoutCategorySQL); err != nil {
+	if _, err := tx.ExecContext(ctx, createCurrentVideosTableSQL); err != nil {
 		return err
 	}
 	cols := strings.Join(currentVideoColumnNames, ", ")
 	if _, err := tx.ExecContext(ctx,
-		`INSERT INTO videos_category_drop_new (`+cols+`) SELECT `+cols+` FROM videos`); err != nil {
+		`INSERT INTO videos_schema_rebuild_new (`+cols+`) SELECT `+cols+` FROM videos`); err != nil {
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, `DROP TABLE videos`); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `ALTER TABLE videos_category_drop_new RENAME TO videos`); err != nil {
+	if _, err := tx.ExecContext(ctx, `ALTER TABLE videos_schema_rebuild_new RENAME TO videos`); err != nil {
 		return err
 	}
 	return tx.Commit()

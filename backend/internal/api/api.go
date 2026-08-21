@@ -125,7 +125,6 @@ type VideoDTO struct {
 	PreviewStrategy string   `json:"previewStrategy"`
 	Duration        string   `json:"duration"`
 	Badges          []string `json:"badges"`
-	Quality         string   `json:"quality,omitempty"`
 	SourceLabel     string   `json:"sourceLabel,omitempty"`
 	Author          string   `json:"author"`
 	Views           int      `json:"views"`
@@ -1153,7 +1152,6 @@ func mapVideo(v *catalog.Video) VideoDTO {
 		PreviewStrategy: "teaser-file",
 		Duration:        formatDuration(v.DurationSeconds),
 		Badges:          badges,
-		Quality:         v.Quality,
 		Author:          v.Author,
 		Views:           v.Views,
 		Favorites:       v.Favorites,

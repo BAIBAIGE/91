@@ -346,7 +346,7 @@ func TestRemoveDeletedVideoDirectRestoresLocalUploadLosslessly(t *testing.T) {
 		ID: "local-upload-rich", DriveID: "local-upload", FileID: "rich.mp4",
 		FileName: "rich.mp4", Title: "用户起的标题", Author: "上传者",
 		Tags: []string{"标签一", "标签二"}, Description: "简介", DurationSeconds: 42,
-		Size: 4096, Ext: "mp4", Quality: "HD",
+		Size: 4096, Ext: "mp4",
 		ThumbnailURL: "/p/thumb/local-upload-rich", PreviewLocal: "/data/previews/local-upload-rich.mp4",
 		PreviewStatus: "ready", TranscodeStatus: "ready", TranscodedFileID: "transcoded.mp4",
 		TranscodedSize: 2048, Views: 7, Likes: 3,

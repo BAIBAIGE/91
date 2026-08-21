@@ -585,7 +585,6 @@ func writeCrawlerVideo(t *testing.T, cat *catalog.Catalog, d *scriptcrawler.Driv
 		Title:             "Sample " + sourceID,
 		Author:            "tester",
 		Ext:               strings.TrimPrefix(ext, "."),
-		Quality:           "HD",
 		Size:              int64(len(content)),
 		PreviewStatus:     previewStatus,
 		FingerprintStatus: fingerprintStatus,

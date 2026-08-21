@@ -8,7 +8,6 @@ export type VideoItem = {
   previewStrategy: "teaser-file" | "sprite-frames";
   duration: string;
   badges: string[];
-  quality?: "SD" | "HD";
   sourceLabel?: string;
   author: string;
   views: number;

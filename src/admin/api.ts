@@ -1003,7 +1003,6 @@ export type AdminVideo = {
   durationSeconds: number;
   size: number;
   ext: string;
-  quality: string;
   thumbnailUrl: string;
   previewStatus: string;
   views: number;
@@ -1145,7 +1144,6 @@ export type UpdateVideoInput = Partial<{
   badges: string[];
   description: string;
   thumbnail: string;
-  quality: string;
   durationSeconds: number;
 }>;
 

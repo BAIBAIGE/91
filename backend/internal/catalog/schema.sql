@@ -16,7 +16,6 @@ CREATE TABLE IF NOT EXISTS videos (
     duration_seconds INTEGER DEFAULT 0,
     size_bytes       INTEGER DEFAULT 0,
     ext              TEXT,
-    quality          TEXT,                      -- HD / SD
     thumbnail_url    TEXT,
     thumbnail_updated_at INTEGER DEFAULT 0,     -- thumbnail-only revision; unrelated metadata must not invalidate image caches
     thumbnail_status TEXT DEFAULT 'pending',    -- pending / ready / failed / skipped

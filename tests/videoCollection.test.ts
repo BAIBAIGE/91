@@ -125,15 +125,13 @@ test("desktop collection requests previews and reuses recommendation preview beh
   );
 });
 
-test("recommendation metadata badges remain above a loaded thumbnail", () => {
+test("recommendation rail omits retired quality metadata", () => {
   assert.match(
     stylesSource,
-    /\.vd-rail__duration,\s*\.vd-rail__current,\s*\.vd-rail__hd\s*\{\s*z-index:\s*2;/
+    /\.vd-rail__duration,\s*\.vd-rail__current\s*\{\s*z-index:\s*2;/
   );
-  assert.match(
-    railSource,
-    /quality === "HD" && previewState !== "playing"/
-  );
+  assert.doesNotMatch(railSource, /vd-rail__hd|quality === "HD"/);
+  assert.doesNotMatch(stylesSource, /\.vd-rail__hd/);
 });
 
 test("desktop collection loading state renders six skeleton cards", () => {
