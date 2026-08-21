@@ -29,6 +29,10 @@ type Catalog struct {
 	matcherMu      sync.Mutex
 	matcherVersion int64
 	matcher        *tagging.Matcher
+
+	// tagMaintenanceMu serializes rule edits with full-library maintenance so a
+	// matcher built from an older rule set cannot overwrite a just-edited tag.
+	tagMaintenanceMu sync.Mutex
 }
 
 // WriteBarrier owns a database connection with a BEGIN IMMEDIATE transaction.

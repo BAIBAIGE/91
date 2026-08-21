@@ -304,6 +304,12 @@ CREATE TABLE IF NOT EXISTS deleted_videos (
 // generated labels, and re-matches videos. The only generated labels it may
 // add are AV series labels while the built-in AV mechanism is enabled.
 func (c *Catalog) RunPostStartupTagMaintenance(ctx context.Context) error {
+	c.tagMaintenanceMu.Lock()
+	defer c.tagMaintenanceMu.Unlock()
+	return c.runPostStartupTagMaintenance(ctx)
+}
+
+func (c *Catalog) runPostStartupTagMaintenance(ctx context.Context) error {
 	if err := c.removeRetiredTagRuleFields(ctx); err != nil {
 		return err
 	}
