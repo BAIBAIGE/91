@@ -108,6 +108,5 @@ docker compose logs -f                        # 查看日志
 ## 致谢
 
 - [Cli-Proxy-API-Management-Center](https://github.com/router-for-me/Cli-Proxy-API-Management-Center) — 参考其页面设计
-- [ArtPlayer](https://github.com/zhw2590582/ArtPlayer) — 当前项目采用的播放器
+- [ArtPlayer](https://github.com/zhw2590582/ArtPlayer) — 当前项目使用的视频播放器
 - [OpenList](https://github.com/OpenListTeam/OpenList) — 参考其网盘接口
-
