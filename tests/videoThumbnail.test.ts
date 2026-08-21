@@ -35,6 +35,9 @@ test("video thumbnails hide failed images behind a stable lifecycle placeholder"
   assert.match(css, /\.thumb-image\s*\{[^}]*opacity:\s*0/s);
   assert.match(css, /\.thumb-image\.is-ready\s*\{[^}]*opacity:\s*1/s);
   assert.match(thumbnailSource, /className="thumb-placeholder"/);
+  const placeholderRule = css.match(/\.thumb-placeholder\s*\{[^}]*\}/s)?.[0] ?? "";
+  assert.match(placeholderRule, /background:\s*linear-gradient\(145deg/);
+  assert.doesNotMatch(placeholderRule, /radial-gradient|accent-softer/);
   assert.doesNotMatch(thumbnailSource, /thumb-placeholder__mark/);
   assert.doesNotMatch(css, /\.thumb-placeholder__mark/);
 });
