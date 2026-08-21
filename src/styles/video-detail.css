@@ -1659,11 +1659,7 @@
     white-space: nowrap;
   }
 
-  .vd-collection-entry__position > svg:first-child {
-    color: var(--accent);
-  }
-
-  .vd-collection-entry__position > svg:last-child {
+  .vd-collection-entry__position > svg {
     margin-left: -2px;
     color: var(--text-faint);
   }
@@ -2058,11 +2054,6 @@
     margin-left: 4px;
   }
 
-  .vd-collection-entry__position > svg:first-child {
-    width: 16px;
-    height: 16px;
-  }
-
   .vd-collection-sheet {
     width: 100%;
     height: 82vh;
@@ -2100,10 +2091,6 @@
 }
 
 @media (max-width: 360px) {
-  .vd-collection-entry__position > svg:first-child {
-    display: none;
-  }
-
   .vd-collection-item__link,
   .vd-collection-sheet__skeleton-row {
     grid-template-columns: 116px minmax(0, 1fr);

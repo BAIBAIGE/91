@@ -26,6 +26,15 @@ test("video detail renders a directory collection only when it has siblings", ()
   );
   assert.match(componentSource, />合集</);
   assert.match(componentSource, /collection\.currentIndex\}\/\{collection\.total/);
+  assert.doesNotMatch(componentSource, /\bListVideo\b/);
+  assert.match(
+    componentSource,
+    /collection\.currentIndex\}\/\{collection\.total[\s\S]*?<ChevronRight/
+  );
+  assert.doesNotMatch(
+    stylesSource,
+    /\.vd-collection-entry__position\s*>\s*svg:first-child/
+  );
 });
 
 test("collection items load lazily through the dedicated endpoint", () => {

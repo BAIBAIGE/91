@@ -9,13 +9,7 @@ import {
 import type { PointerEvent as ReactPointerEvent } from "react";
 import { createPortal } from "react-dom";
 import { Link, useLocation } from "react-router";
-import {
-  ArrowUpDown,
-  ChevronRight,
-  Eye,
-  ListVideo,
-  X,
-} from "lucide-react";
+import { ArrowUpDown, ChevronRight, Eye, X } from "lucide-react";
 import { fetchVideoCollection } from "@/data/videos";
 import { formatCount } from "@/lib/format";
 import { useDocumentScrollLock } from "@/lib/useDocumentScrollLock";
@@ -608,7 +602,6 @@ export function MobileVideoCollection({ videoId, collection }: Props) {
         </span>
         <span className="vd-collection-entry__name">{collection.name}</span>
         <span className="vd-collection-entry__position">
-          <ListVideo size={18} aria-hidden="true" />
           <span>
             {collection.currentIndex}/{collection.total}
           </span>
