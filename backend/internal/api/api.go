@@ -168,14 +168,15 @@ type VideoCollectionDTO struct {
 	Items []VideoCollectionItemDTO `json:"items"`
 }
 
-// VideoCollectionItemDTO intentionally contains only what the mobile row
-// renders. Large provider directories can contain hundreds of videos; sending
-// previews, reactions, tags and badges here would waste mobile bandwidth.
+// VideoCollectionItemDTO stays compact for the mobile sheet. Desktop callers
+// can explicitly request PreviewSrc without pulling reactions, tags, badges or
+// the rest of VideoDTO for every item in a large provider directory.
 type VideoCollectionItemDTO struct {
 	ID          string `json:"id"`
 	Href        string `json:"href"`
 	Title       string `json:"title"`
 	Thumbnail   string `json:"thumbnail"`
+	PreviewSrc  string `json:"previewSrc,omitempty"`
 	Duration    string `json:"duration"`
 	Views       int    `json:"views"`
 	PublishedAt string `json:"publishedAt"`
@@ -435,13 +436,16 @@ func (s *Server) handleVideoCollection(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, VideoCollectionDTO{
 		VideoCollectionSummary: *summary,
-		Items:                  mapVideoCollectionItems(items),
+		Items: mapVideoCollectionItems(
+			items,
+			r.URL.Query().Get("preview") == "1",
+		),
 	})
 }
 
 // videoCollection builds a directory-backed collection in one canonical order.
 // The detail response keeps only its lightweight summary; the full item list is
-// loaded through /collection when the mobile sheet is opened.
+// loaded through /collection when either collection UI is opened.
 func (s *Server) videoCollection(ctx context.Context, current *catalog.Video) (*VideoCollectionSummary, []*catalog.Video, error) {
 	if current == nil || strings.TrimSpace(current.ParentID) == "" {
 		return nil, nil, nil
@@ -1735,13 +1739,13 @@ func mapVideos(vs []*catalog.Video) []VideoDTO {
 	return out
 }
 
-func mapVideoCollectionItems(videos []*catalog.Video) []VideoCollectionItemDTO {
+func mapVideoCollectionItems(videos []*catalog.Video, includePreview bool) []VideoCollectionItemDTO {
 	items := make([]VideoCollectionItemDTO, 0, len(videos))
 	for _, video := range videos {
 		if video == nil {
 			continue
 		}
-		items = append(items, VideoCollectionItemDTO{
+		item := VideoCollectionItemDTO{
 			ID:          video.ID,
 			Href:        "/video/" + pathSegment(video.ID),
 			Title:       video.Title,
@@ -1749,7 +1753,11 @@ func mapVideoCollectionItems(videos []*catalog.Video) []VideoCollectionItemDTO {
 			Duration:    formatDuration(video.DurationSeconds),
 			Views:       video.Views,
 			PublishedAt: video.PublishedAt.Format("2006-01-02"),
-		})
+		}
+		if includePreview {
+			item.PreviewSrc = previewURL(video)
+		}
+		items = append(items, item)
 	}
 	return items
 }

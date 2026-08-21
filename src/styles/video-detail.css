@@ -1575,8 +1575,8 @@
 }
 
 /* ---------- Mobile directory collection ---------- */
-/* Desktop implementation is intentionally deferred; keep the trigger and the
- * portal inert above the detail-page mobile breakpoint. */
+/* The trigger and portal stay mobile-only; desktop collection navigation lives
+ * in the recommendation rail so sheet gestures never leak into desktop UI. */
 .vd-mobile-collection,
 .vd-collection-sheet-modal {
   display: none;
@@ -2111,6 +2111,66 @@
   gap: 0;
 }
 
+.vd-rail__tabs {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 6px 0 10px;
+  border-bottom: 1px solid var(--border-default);
+  scrollbar-width: none;
+}
+
+.vd-rail__tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.vd-rail__tabs--loading {
+  pointer-events: none;
+}
+
+.vd-rail__tab {
+  min-height: 34px;
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  padding: 0 12px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: var(--bg-elevated);
+  color: var(--text-default);
+  font-size: var(--font-sm);
+  font-weight: var(--weight-bold);
+  line-height: 1;
+  transition: background var(--transition-fast), color var(--transition-fast),
+    border-color var(--transition-fast);
+}
+
+.vd-rail__tab:hover:not(:disabled):not([aria-selected="true"]) {
+  border-color: var(--border-strong);
+  color: var(--text-strong);
+}
+
+.vd-rail__tab[aria-selected="true"] {
+  background: var(--text-strong);
+  color: var(--bg-page);
+}
+
+.vd-rail__tab:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.vd-rail__tab:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.vd-rail__head.vd-rail__head--mobile-only {
+  display: none;
+}
+
 .vd-rail__head {
   display: flex;
   align-items: center;
@@ -2153,6 +2213,10 @@
   letter-spacing: 0;
 }
 
+.vd-rail__tabpanel {
+  min-width: 0;
+}
+
 .vd-rail__list {
   list-style: none;
   margin: 0;
@@ -2160,6 +2224,86 @@
   display: flex;
   flex-direction: column;
   gap: 0;
+}
+
+.vd-rail__collection-list,
+.vd-rail__collection-loading {
+  max-height: min(720px, calc(100vh - 140px));
+}
+
+.vd-rail__collection-list {
+  position: relative;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.vd-rail__collection-list::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
+}
+
+.vd-rail__collection-item {
+  content-visibility: auto;
+  contain-intrinsic-block-size: 108px;
+}
+
+.vd-rail__collection-loading {
+  overflow: hidden;
+}
+
+.vd-rail__loading-row {
+  min-height: 108px;
+  display: grid;
+  grid-template-columns: 148px minmax(0, 1fr);
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.vd-rail__loading-thumb {
+  display: block;
+  width: 148px;
+  aspect-ratio: 16 / 9;
+  border-radius: var(--radius-sm);
+}
+
+.vd-rail__loading-body {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.vd-rail__loading-body > span {
+  display: block;
+  width: 100%;
+  height: 13px;
+  border-radius: var(--radius-xs);
+}
+
+.vd-rail__loading-body > span:nth-child(2) {
+  width: 72%;
+}
+
+.vd-rail__loading-body > span:nth-child(3) {
+  width: 52%;
+  height: 10px;
+}
+
+.vd-rail__loading-thumb,
+.vd-rail__loading-body > span {
+  background: linear-gradient(
+    90deg,
+    var(--bg-surface) 0%,
+    var(--bg-elevated) 42%,
+    var(--bg-surface) 78%
+  );
+  background-size: 220% 100%;
+  animation: vd-shimmer 1.4s linear infinite;
 }
 
 .vd-rail__item {
@@ -2211,6 +2355,12 @@
   transform: scale(1.04);
 }
 
+.vd-rail__duration,
+.vd-rail__current,
+.vd-rail__hd {
+  z-index: 2;
+}
+
 .vd-rail__duration {
   position: absolute;
   right: 6px;
@@ -2222,6 +2372,22 @@
   font-size: 11px;
   font-weight: var(--weight-semibold);
   letter-spacing: 0.02em;
+}
+
+.vd-rail__current {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  padding: 3px 6px;
+  background: rgba(255, 255, 255, 0.78);
+  color: var(--accent-strong);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.16);
+  -webkit-backdrop-filter: blur(4px);
+  backdrop-filter: blur(4px);
+  font-size: 10px;
+  font-weight: var(--weight-bold);
+  line-height: 1;
+  white-space: nowrap;
 }
 
 .vd-rail__hd {
@@ -2270,6 +2436,10 @@
   color: var(--accent);
 }
 
+.vd-rail__link[aria-current="page"] .vd-rail__title {
+  color: var(--accent-strong);
+}
+
 .vd-rail__meta {
   display: flex;
   flex-wrap: wrap;
@@ -2291,6 +2461,36 @@
   font-weight: var(--weight-medium);
 }
 
+.vd-rail__views {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.vd-rail__state {
+  min-height: 180px;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: var(--space-3);
+  padding: var(--space-5);
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--text-muted);
+  font-size: var(--font-sm);
+  text-align: center;
+}
+
+.vd-rail__state button {
+  min-width: 96px;
+  min-height: 40px;
+  padding: 0 var(--space-4);
+  border: 1px solid var(--border-accent);
+  border-radius: var(--radius-sm);
+  background: var(--accent-softer);
+  color: var(--accent-strong);
+  font-weight: var(--weight-semibold);
+}
+
 /* ---------- Skeleton & empty ---------- */
 .vd-skeleton {
   align-items: start;
@@ -2303,11 +2503,7 @@
   .vd-skeleton__actions span,
   .vd-skeleton__section-head,
   .vd-skeleton__line,
-  .vd-skeleton__tag-row span,
-  .vd-skeleton__rail-head,
-  .vd-skeleton__rail-thumb,
-  .vd-skeleton__rail-title,
-  .vd-skeleton__rail-meta
+  .vd-skeleton__tag-row span
 ) {
   background: linear-gradient(
     90deg,
@@ -2325,11 +2521,7 @@
   .vd-skeleton__actions span,
   .vd-skeleton__section-head,
   .vd-skeleton__line,
-  .vd-skeleton__tag-row span,
-  .vd-skeleton__rail-head,
-  .vd-skeleton__rail-thumb,
-  .vd-skeleton__rail-title,
-  .vd-skeleton__rail-meta
+  .vd-skeleton__tag-row span
 ) {
   background: linear-gradient(
     90deg,
@@ -2456,59 +2648,6 @@
   border-radius: var(--radius-pill);
 }
 
-.vd-skeleton__rail {
-  width: 100%;
-}
-
-.vd-skeleton__rail-head {
-  width: 96px;
-  height: 20px;
-  border-radius: var(--radius-sm);
-}
-
-.vd-skeleton__rail-list {
-  gap: var(--space-3);
-}
-
-.vd-skeleton__rail-item {
-  display: grid;
-  grid-template-columns: 150px minmax(0, 1fr);
-  gap: var(--space-3);
-  align-items: start;
-}
-
-.vd-skeleton__rail-thumb {
-  display: block;
-  width: 150px;
-  aspect-ratio: 16 / 9;
-  border-radius: var(--radius-sm);
-}
-
-.vd-skeleton__rail-body {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-  gap: 8px;
-  padding-top: 2px;
-}
-
-.vd-skeleton__rail-title {
-  width: 100%;
-  height: 15px;
-  border-radius: var(--radius-sm);
-}
-
-.vd-skeleton__rail-title--short {
-  width: 72%;
-}
-
-.vd-skeleton__rail-meta {
-  width: 58%;
-  height: 12px;
-  margin-top: 2px;
-  border-radius: var(--radius-sm);
-}
-
 @keyframes vd-shimmer {
   0% {
     background-position: 200% 0;
@@ -2545,21 +2684,17 @@
     padding-top: var(--space-5);
   }
 
-  .vd-rail__link {
+  .vd-rail__link,
+  .vd-rail__loading-row {
     grid-template-columns: 200px minmax(0, 1fr);
   }
 
-  .vd-skeleton__rail-item {
-    grid-template-columns: 200px minmax(0, 1fr);
-  }
 
-  .vd-rail__thumb {
+  .vd-rail__thumb,
+  .vd-rail__loading-thumb {
     width: 200px;
   }
 
-  .vd-skeleton__rail-thumb {
-    width: 200px;
-  }
 
   .vd-header__title {
     font-size: var(--font-xl);
@@ -2831,9 +2966,19 @@
     flex: 1 1 auto;
   }
 
-  /* 推荐栏：横向紧凑列表 */
+  /* 推荐栏：横向紧凑列表。合集仍由移动端底部浮窗承载。 */
   .vd-rail {
     padding-top: var(--space-4);
+  }
+
+  .vd-rail--collection-only,
+  .vd-rail__tabs,
+  .vd-rail__tabpanel--collection {
+    display: none;
+  }
+
+  .vd-rail__head.vd-rail__head--mobile-only {
+    display: flex;
   }
 
   .vd-rail__head-title {
@@ -2844,24 +2989,17 @@
     gap: 0;
   }
 
-  .vd-rail__link {
+  .vd-rail__link,
+  .vd-rail__loading-row {
     grid-template-columns: 132px minmax(0, 1fr);
     gap: var(--space-3);
     padding: var(--space-3) 0;
   }
 
-  .vd-skeleton__rail-item {
-    grid-template-columns: 132px minmax(0, 1fr);
-    padding: var(--space-3) 0;
-  }
-
-  .vd-rail__thumb {
+  .vd-rail__thumb,
+  .vd-rail__loading-thumb {
     width: 132px;
     border-radius: var(--radius-sm);
-  }
-
-  .vd-skeleton__rail-thumb {
-    width: 132px;
   }
 
   .vd-rail__body {

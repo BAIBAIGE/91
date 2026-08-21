@@ -10,18 +10,14 @@ import type { PointerEvent as ReactPointerEvent } from "react";
 import { createPortal } from "react-dom";
 import { Link, useLocation } from "react-router";
 import { ArrowUpDown, ChevronRight, Eye, X } from "lucide-react";
-import { fetchVideoCollection } from "@/data/videos";
 import { formatCount } from "@/lib/format";
 import { useDocumentScrollLock } from "@/lib/useDocumentScrollLock";
+import { useLazyVideoCollection } from "@/lib/useLazyVideoCollection";
 import {
   resolveVideoReturnPath,
   routeToPath,
 } from "@/lib/videoReturnPath";
-import type {
-  VideoCollection,
-  VideoCollectionItem,
-  VideoCollectionSummary,
-} from "@/types";
+import type { VideoCollectionItem, VideoCollectionSummary } from "@/types";
 import { VideoThumbnail } from "./VideoThumbnail";
 
 type Props = {
@@ -63,11 +59,8 @@ const SHEET_DISMISS_ANIMATION_MS = 180;
  */
 export function MobileVideoCollection({ videoId, collection }: Props) {
   const [open, setOpen] = useState(false);
-  const [data, setData] = useState<VideoCollection | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
+  const { data, loading, error, retry } = useLazyVideoCollection(videoId, open);
   const [ascending, setAscending] = useState(true);
-  const [reloadVersion, setReloadVersion] = useState(0);
   const titleId = useId();
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const closeRef = useRef<HTMLButtonElement | null>(null);
@@ -112,32 +105,6 @@ export function MobileVideoCollection({ videoId, collection }: Props) {
     const loaded = data?.items ?? [];
     return ascending ? loaded : [...loaded].reverse();
   }, [ascending, data]);
-
-  useEffect(() => {
-    if (!open || data) return;
-
-    const controller = new AbortController();
-    let active = true;
-    setLoading(true);
-    setError("");
-    fetchVideoCollection(videoId, { signal: controller.signal })
-      .then((next) => {
-        if (!active) return;
-        setData(next);
-      })
-      .catch((reason: unknown) => {
-        if (!active || isAbortError(reason)) return;
-        setError("合集加载失败，请稍后重试");
-      })
-      .finally(() => {
-        if (active) setLoading(false);
-      });
-
-    return () => {
-      active = false;
-      controller.abort();
-    };
-  }, [data, open, reloadVersion, videoId]);
 
   useEffect(() => {
     if (!open) return;
@@ -477,12 +444,6 @@ export function MobileVideoCollection({ videoId, collection }: Props) {
     finishSheetDragAt(event.clientY, event.timeStamp, cancelled);
   }
 
-  function retry() {
-    setData(null);
-    setError("");
-    setReloadVersion((version) => version + 1);
-  }
-
   const shownSummary = data ?? collection;
   const sheet = open
     ? createPortal(
@@ -682,8 +643,4 @@ function CollectionLoading() {
       ))}
     </div>
   );
-}
-
-function isAbortError(error: unknown) {
-  return error instanceof DOMException && error.name === "AbortError";
 }

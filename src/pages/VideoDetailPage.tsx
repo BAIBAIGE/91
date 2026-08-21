@@ -11,7 +11,10 @@ import { VideoActions } from "@/components/VideoActions";
 import { VideoMetaHeader } from "@/components/VideoMetaHeader";
 import { VideoInfoPanel } from "@/components/VideoInfoPanel";
 import { MobileVideoCollection } from "@/components/MobileVideoCollection";
-import { RecommendedRail } from "@/components/RecommendedRail";
+import {
+  RecommendedRail,
+  VideoRailSkeleton,
+} from "@/components/RecommendedRail";
 import {
   deleteVideo,
   fetchTags,
@@ -282,27 +285,7 @@ function VideoDetailContent({ id }: { id?: string }) {
                 </div>
               </div>
 
-              <aside className="vd-rail vd-skeleton__rail">
-                <div className="vd-rail__head">
-                  <span className="vd-rail__head-icon" aria-hidden="true">
-                    <span />
-                    <span />
-                  </span>
-                  <span className="vd-skeleton__rail-head" />
-                </div>
-                <ul className="vd-rail__list vd-skeleton__rail-list">
-                  {Array.from({ length: 6 }).map((_, index) => (
-                    <li key={index} className="vd-skeleton__rail-item">
-                      <span className="vd-skeleton__rail-thumb" />
-                      <span className="vd-skeleton__rail-body">
-                        <span className="vd-skeleton__rail-title" />
-                        <span className="vd-skeleton__rail-title vd-skeleton__rail-title--short" />
-                        <span className="vd-skeleton__rail-meta" />
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              </aside>
+              <VideoRailSkeleton />
             </div>
           </div>
         </div>
@@ -383,7 +366,11 @@ function VideoDetailContent({ id }: { id?: string }) {
               </div>
             </div>
 
-            <RecommendedRail videos={detail.relatedVideos} />
+            <RecommendedRail
+              videos={detail.relatedVideos}
+              videoId={detail.id}
+              collection={detail.collection}
+            />
           </div>
         </div>
       </div>

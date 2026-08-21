@@ -14,6 +14,10 @@ const detailPageSource = readFileSync(
   new URL("../src/pages/VideoDetailPage.tsx", import.meta.url),
   "utf8"
 );
+const railSource = readFileSync(
+  new URL("../src/components/RecommendedRail.tsx", import.meta.url),
+  "utf8"
+);
 
 test("detail player poster uses full-frame contain scaling", () => {
   assert.match(
@@ -266,8 +270,11 @@ test("detail loading skeleton matches current desktop video page layout", () => 
   assert.match(detailPageSource, /className="vd-layout vd-skeleton"/);
   assert.match(detailPageSource, /className="vd-skeleton__summary"/);
   assert.match(detailPageSource, /className="vd-skeleton__info"/);
-  assert.match(detailPageSource, /className="vd-rail vd-skeleton__rail"/);
-  assert.match(detailPageSource, /Array\.from\(\{ length: 6 \}\)/);
+  assert.match(detailPageSource, /<VideoRailSkeleton \/>/);
+  assert.match(
+    railSource,
+    /function VideoRailSkeleton[\s\S]*?>\s*推荐视频\s*<[\s\S]*?>相关合集<[\s\S]*?Array\.from\(\{ length: 6 \}\)/
+  );
   assert.doesNotMatch(detailPageSource, /className="vd-skeleton__meta"/);
   assert.match(
     detailCss,
@@ -279,7 +286,7 @@ test("detail loading skeleton matches current desktop video page layout", () => 
   );
   assert.match(
     detailCss,
-    /\.vd-skeleton__rail-item\s*\{[^}]*grid-template-columns:\s*150px minmax\(0,\s*1fr\)/s
+    /\.vd-rail__loading-row\s*\{[^}]*grid-template-columns:\s*148px minmax\(0,\s*1fr\)/s
   );
   assert.doesNotMatch(
     detailCss,

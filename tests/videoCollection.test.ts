@@ -10,6 +10,14 @@ const detailSource = readFileSync(
   new URL("../src/pages/VideoDetailPage.tsx", import.meta.url),
   "utf8"
 );
+const railSource = readFileSync(
+  new URL("../src/components/RecommendedRail.tsx", import.meta.url),
+  "utf8"
+);
+const collectionHookSource = readFileSync(
+  new URL("../src/lib/useLazyVideoCollection.ts", import.meta.url),
+  "utf8"
+);
 const dataSource = readFileSync(
   new URL("../src/data/videos.ts", import.meta.url),
   "utf8"
@@ -37,14 +45,139 @@ test("video detail renders a directory collection only when it has siblings", ()
   );
 });
 
-test("collection items load lazily through the dedicated endpoint", () => {
+test("collection items load lazily through one shared resource", () => {
   assert.match(
     dataSource,
-    /`\/api\/video\/\$\{encodeURIComponent\(id\)\}\/collection`/
+    /`\/api\/video\/\$\{encodeURIComponent\(id\)\}\/collection\$\{previewQuery\}`/
   );
-  assert.match(componentSource, /if \(!open \|\| data\) return/);
-  assert.match(componentSource, /fetchVideoCollection\(videoId, \{ signal: controller\.signal \}\)/);
+  assert.match(
+    componentSource,
+    /useLazyVideoCollection\(videoId, open\)/
+  );
+  assert.match(
+    collectionHookSource,
+    /if \(!enabled \|\| dataHasRequiredFields\) return/
+  );
+  assert.match(
+    collectionHookSource,
+    /fetchVideoCollection\(videoId, \{[\s\S]*?signal:\s*controller\.signal,[\s\S]*?includePreview,/
+  );
+  assert.match(collectionHookSource, /cachedCollectionsByVideoID/);
+  assert.match(
+    collectionHookSource,
+    /requirePreview && !cached\.includesPreview/
+  );
   assert.match(dataSource, /collection\.total !== collection\.items\.length/);
+});
+
+test("desktop recommendation rail offers recommendation and collection tabs", () => {
+  assert.match(
+    detailSource,
+    /<RecommendedRail[\s\S]*?videos=\{detail\.relatedVideos\}[\s\S]*?videoId=\{detail\.id\}[\s\S]*?collection=\{detail\.collection\}/
+  );
+  assert.match(
+    railSource,
+    /className="vd-rail__tabs" role="tablist"[\s\S]*?>\s*推荐视频\s*<[\s\S]*?>\s*相关合集\s*</
+  );
+  assert.match(
+    railSource,
+    /desktop && hasCollection && activeView === "collection"/
+  );
+  assert.match(
+    stylesSource,
+    /\.vd-rail__tab\s*\{[\s\S]*?min-height:\s*34px;[\s\S]*?padding:\s*0 12px;[\s\S]*?font-size:\s*var\(--font-sm\);/
+  );
+  assert.match(
+    stylesSource,
+    /\.vd-rail__tab\[aria-selected="true"\]\s*\{[\s\S]*?background:\s*var\(--text-strong\);/
+  );
+  assert.match(
+    stylesSource,
+    /\.vd-rail__head\.vd-rail__head--mobile-only\s*\{\s*display:\s*none;/
+  );
+  assert.match(
+    stylesSource,
+    /@media \(max-width:\s*768px\)[\s\S]*?\.vd-rail__head\.vd-rail__head--mobile-only\s*\{\s*display:\s*flex;/
+  );
+  assert.match(
+    stylesSource,
+    /@media \(max-width:\s*768px\)[\s\S]*?\.vd-rail--collection-only,\s*\.vd-rail__tabs,\s*\.vd-rail__tabpanel--collection\s*\{\s*display:\s*none;/
+  );
+});
+
+test("desktop collection requests previews and reuses recommendation preview behavior", () => {
+  assert.match(dataSource, /options\.includePreview \? "\?preview=1" : ""/);
+  assert.match(
+    railSource,
+    /useLazyVideoCollection\([\s\S]*?\{ includePreview: true \}/
+  );
+  assert.match(
+    railSource,
+    /variant="collection"[\s\S]*?shouldRenderPreview && video\.previewSrc[\s\S]*?<PreviewVideo/
+  );
+  assert.match(
+    railSource,
+    /previewController\.setActiveId\(video\.id\)/
+  );
+  assert.match(
+    componentSource,
+    /useLazyVideoCollection\(videoId, open\)/
+  );
+});
+
+test("recommendation metadata badges remain above a loaded thumbnail", () => {
+  assert.match(
+    stylesSource,
+    /\.vd-rail__duration,\s*\.vd-rail__current,\s*\.vd-rail__hd\s*\{\s*z-index:\s*2;/
+  );
+  assert.match(
+    railSource,
+    /quality === "HD" && previewState !== "playing"/
+  );
+});
+
+test("desktop collection loading state renders six skeleton cards", () => {
+  assert.match(
+    railSource,
+    /className="vd-rail__collection-loading"[\s\S]*?Array\.from\(\{ length: 6 \}\)[\s\S]*?className="vd-rail__loading-row"/
+  );
+  assert.doesNotMatch(railSource, />\s*正在加载相关合集…\s*</);
+  assert.match(
+    stylesSource,
+    /\.vd-rail__loading-row\s*\{[\s\S]*?grid-template-columns:\s*148px minmax\(0, 1fr\);/
+  );
+  assert.match(
+    stylesSource,
+    /\.vd-rail__loading-thumb,[\s\S]*?\.vd-rail__loading-body\s*>\s*span\s*\{[\s\S]*?animation:\s*vd-shimmer/
+  );
+});
+
+test("desktop collection stays bounded and positions the current video", () => {
+  assert.match(
+    stylesSource,
+    /\.vd-rail__collection-list,\s*\.vd-rail__collection-loading\s*\{[\s\S]*?max-height:/
+  );
+  assert.match(
+    stylesSource,
+    /\.vd-rail__collection-list\s*\{[\s\S]*?overflow-y:\s*auto;[\s\S]*?scrollbar-width:\s*none;/
+  );
+  assert.match(
+    stylesSource,
+    /\.vd-rail__collection-list::\-webkit-scrollbar\s*\{[\s\S]*?display:\s*none;/
+  );
+  assert.match(
+    stylesSource,
+    /\.vd-rail__collection-item\s*\{[\s\S]*?content-visibility:\s*auto;/
+  );
+  assert.match(
+    railSource,
+    /current\.offsetTop - list\.clientHeight \/ 2 \+ current\.clientHeight \/ 2/
+  );
+  assert.match(railSource, /aria-current=\{current \? "page" : undefined\}/);
+  assert.match(
+    stylesSource,
+    /\.vd-rail__link\[aria-current="page"\]\s+\.vd-rail__title\s*\{[\s\S]*?color:\s*var\(--accent-strong\);/
+  );
 });
 
 test("mobile collection uses an accessible scroll-locked bottom sheet", () => {
@@ -173,7 +306,7 @@ test("detail, collection, and info cards use a compact mobile stack", () => {
   );
 });
 
-test("collection UI stays hidden on desktop and becomes a bottom sheet on mobile", () => {
+test("mobile collection trigger stays hidden on desktop and becomes a bottom sheet on mobile", () => {
   assert.match(
     stylesSource,
     /\.vd-mobile-collection,\s*\.vd-collection-sheet-modal\s*\{\s*display:\s*none;/s

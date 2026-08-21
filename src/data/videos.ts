@@ -77,10 +77,11 @@ export function fetchVideoDetail(id: string): Promise<VideoDetail | null> {
 
 export async function fetchVideoCollection(
   id: string,
-  options: { signal?: AbortSignal } = {}
+  options: { signal?: AbortSignal; includePreview?: boolean } = {}
 ): Promise<VideoCollection> {
+  const previewQuery = options.includePreview ? "?preview=1" : "";
   const collection = await apiGet<VideoCollection>(
-    `/api/video/${encodeURIComponent(id)}/collection`,
+    `/api/video/${encodeURIComponent(id)}/collection${previewQuery}`,
     options
   );
   if (
@@ -100,6 +101,9 @@ export async function fetchVideoCollection(
         typeof item.title !== "string" ||
         typeof item.thumbnail !== "string" ||
         typeof item.duration !== "string" ||
+        (item.previewSrc !== undefined &&
+          typeof item.previewSrc !== "string") ||
+        (options.includePreview && typeof item.previewSrc !== "string") ||
         !Number.isInteger(item.views) ||
         item.views < 0 ||
         typeof item.publishedAt !== "string"

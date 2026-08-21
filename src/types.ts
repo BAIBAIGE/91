@@ -53,7 +53,10 @@ export type VideoCollectionSummary = {
 export type VideoCollectionItem = Pick<
   VideoItem,
   "id" | "href" | "title" | "thumbnail" | "duration" | "views" | "publishedAt"
->;
+> & {
+  /** Present only when the desktop collection requests preview metadata. */
+  previewSrc?: string;
+};
 
 export type VideoCollection = VideoCollectionSummary & {
   items: VideoCollectionItem[];

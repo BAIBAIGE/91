@@ -80,6 +80,9 @@ func TestVideoDetailAndCollectionUseSameNaturalDirectoryOrder(t *testing.T) {
 	if collectionRecorder.Code != http.StatusOK {
 		t.Fatalf("collection status = %d, body = %s", collectionRecorder.Code, collectionRecorder.Body.String())
 	}
+	if strings.Contains(collectionRecorder.Body.String(), `"previewSrc"`) {
+		t.Fatalf("compact collection unexpectedly contains previewSrc: %s", collectionRecorder.Body.String())
+	}
 	var collection VideoCollectionDTO
 	if err := json.NewDecoder(collectionRecorder.Body).Decode(&collection); err != nil {
 		t.Fatalf("decode collection: %v", err)
@@ -91,6 +94,27 @@ func TestVideoDetailAndCollectionUseSameNaturalDirectoryOrder(t *testing.T) {
 	for index, id := range want {
 		if collection.Items[index].ID != id {
 			t.Fatalf("collection item %d = %q, want %q", index, collection.Items[index].ID, id)
+		}
+	}
+
+	previewRequest := requestWithVideoID(
+		http.MethodGet,
+		"/api/video/episode-2/collection?preview=1",
+		"episode-2",
+		strings.NewReader(""),
+	)
+	previewRecorder := httptest.NewRecorder()
+	server.handleVideoCollection(previewRecorder, previewRequest)
+	if previewRecorder.Code != http.StatusOK {
+		t.Fatalf("preview collection status = %d, body = %s", previewRecorder.Code, previewRecorder.Body.String())
+	}
+	var previewCollection VideoCollectionDTO
+	if err := json.NewDecoder(previewRecorder.Body).Decode(&previewCollection); err != nil {
+		t.Fatalf("decode preview collection: %v", err)
+	}
+	for index, id := range want {
+		if got := previewCollection.Items[index].PreviewSrc; got != "/p/preview/"+id {
+			t.Fatalf("preview collection item %d preview = %q, want %q", index, got, "/p/preview/"+id)
 		}
 	}
 }
