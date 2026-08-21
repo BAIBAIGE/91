@@ -20,6 +20,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -1072,7 +1073,7 @@ func (m *Migrator) migrateOne(ctx context.Context, v *catalog.Video, plan migrat
 			if strings.TrimSpace(existing.FileID) == "" {
 				return false, fmt.Errorf("%s reconcile destination returned empty file id", pp.Kind())
 			}
-			if err := m.completeMigration(ctx, v, plan, *existing, uploadName); err != nil {
+			if err := m.completeMigration(ctx, v, plan, *existing, uploadName, parent); err != nil {
 				return false, err
 			}
 			log.Printf("[crawlerupload] %s reconciled existing drive=%s(kind=%s) file=%s name=%q", v.ID, plan.targetDriveID, pp.Kind(), existing.FileID, uploadName)
@@ -1087,7 +1088,7 @@ func (m *Migrator) migrateOne(ctx context.Context, v *catalog.Video, plan migrat
 		return false, fmt.Errorf("%s returned empty file id", pp.Kind())
 	}
 
-	if err := m.completeMigration(ctx, v, plan, res, uploadName); err != nil {
+	if err := m.completeMigration(ctx, v, plan, res, uploadName, parent); err != nil {
 		return false, err
 	}
 
@@ -1095,27 +1096,42 @@ func (m *Migrator) migrateOne(ctx context.Context, v *catalog.Video, plan migrat
 	return true, nil
 }
 
-func (m *Migrator) completeMigration(ctx context.Context, v *catalog.Video, plan migrationPlan, res UploadResult, uploadName string) error {
-	// The catalog rewrite is transactional. If the process stops after the
+func (m *Migrator) completeMigration(ctx context.Context, v *catalog.Video, plan migrationPlan, res UploadResult, uploadName, parentID string) error {
+	// The catalog rewrite is one atomic UPDATE. If the process stops after the
 	// remote write but before this point, FindExisting reconciles it next run.
+	// Persist the known upload directory now instead of waiting for a later
+	// destination-drive scan to repair an incomplete storage identity.
 	persistence.RLock()
 	defer persistence.RUnlock()
-	if err := m.cfg.Catalog.MigrateVideoToDrive(ctx, v.ID, plan.targetDriveID, res.FileID, res.Hash); err != nil {
+	title := firstNonEmpty(videoname.TitleFromFileName(uploadName), v.Title)
+	if err := m.cfg.Catalog.MigrateVideoToDrive(ctx, v.ID, catalog.VideoDriveMigration{
+		DriveID:     plan.targetDriveID,
+		FileID:      res.FileID,
+		ContentHash: res.Hash,
+		ParentID:    strings.TrimSpace(parentID),
+		DirName:     uploadDirectoryLabel(plan),
+		FileName:    uploadName,
+		Title:       title,
+	}); err != nil {
 		return fmt.Errorf("catalog migrate: %w", err)
 	}
 	m.preserveCrawledThumbnail(ctx, plan.source, v)
-	// 同步 catalog 里的 file_name，让下次目标盘扫盘时 (file_name, size) 也能匹配上
-	if err := m.cfg.Catalog.UpdateVideoMeta(ctx, v.ID, catalog.VideoMetaPatch{
-		FileName: uploadName,
-		Title:    videoname.TitleFromFileName(uploadName),
-		TitleSet: true,
-	}); err != nil {
-		log.Printf("[crawlerupload] %s update file_name/title after migrate: %v", v.ID, err)
-	}
 
 	// 删除本地 mp4 和源 thumb（公共 /p/thumb 副本已在 preserveCrawledThumbnail 中保留）。
 	CleanupLocal(plan.source, v.FileID)
 	return nil
+}
+
+func uploadDirectoryLabel(plan migrationPlan) string {
+	clean := strings.Trim(strings.TrimSpace(plan.uploadDir), "/")
+	label := strings.TrimSpace(path.Base(clean))
+	if label != "" && label != "." {
+		return label
+	}
+	if plan.row != nil {
+		return strings.TrimSpace(plan.row.ID)
+	}
+	return ""
 }
 
 func (m *Migrator) bindToExistingTarget(ctx context.Context, v, target *catalog.Video, plan migrationPlan) (bool, error) {
@@ -1127,17 +1143,21 @@ func (m *Migrator) bindToExistingTarget(ctx context.Context, v, target *catalog.
 	}
 	persistence.RLock()
 	defer persistence.RUnlock()
-	if err := m.cfg.Catalog.MigrateVideoToDrive(ctx, v.ID, plan.targetDriveID, target.FileID, firstNonEmpty(target.ContentHash, v.ContentHash)); err != nil {
-		return false, fmt.Errorf("catalog bind existing target: %w", err)
-	}
+	fileName := firstNonEmpty(target.FileName, v.FileName)
+	title := v.Title
 	if target.FileName != "" {
-		if err := m.cfg.Catalog.UpdateVideoMeta(ctx, v.ID, catalog.VideoMetaPatch{
-			FileName: target.FileName,
-			Title:    videoname.TitleFromFileName(target.FileName),
-			TitleSet: true,
-		}); err != nil {
-			log.Printf("[crawlerupload] %s update file_name/title after duplicate bind: %v", v.ID, err)
-		}
+		title = firstNonEmpty(videoname.TitleFromFileName(target.FileName), title)
+	}
+	if err := m.cfg.Catalog.MigrateVideoToDrive(ctx, v.ID, catalog.VideoDriveMigration{
+		DriveID:     plan.targetDriveID,
+		FileID:      target.FileID,
+		ContentHash: firstNonEmpty(target.ContentHash, v.ContentHash),
+		ParentID:    target.ParentID,
+		DirName:     firstNonEmpty(target.DirName, v.DirName),
+		FileName:    fileName,
+		Title:       title,
+	}); err != nil {
+		return false, fmt.Errorf("catalog bind existing target: %w", err)
 	}
 	m.preserveCrawledThumbnail(ctx, plan.source, v)
 	CleanupLocal(plan.source, v.FileID)

@@ -10,6 +10,7 @@ import { VideoPlayer } from "@/components/VideoPlayer";
 import { VideoActions } from "@/components/VideoActions";
 import { VideoMetaHeader } from "@/components/VideoMetaHeader";
 import { VideoInfoPanel } from "@/components/VideoInfoPanel";
+import { MobileVideoCollection } from "@/components/MobileVideoCollection";
 import { RecommendedRail } from "@/components/RecommendedRail";
 import {
   deleteVideo,
@@ -353,24 +354,33 @@ function VideoDetailContent({ id }: { id?: string }) {
                 </div>
               </div>
 
-              <section className="vd-summary" aria-label="当前视频">
-                <VideoMetaHeader video={detail} />
+              <div className="vd-detail-panels">
+                <section className="vd-summary" aria-label="当前视频">
+                  <VideoMetaHeader video={detail} />
 
-                <VideoActions
+                  <VideoActions
+                    video={detail}
+                    onDeleteVideo={handleOpenDelete}
+                    deleteSaving={deleteSaving}
+                    canDelete={isAdmin}
+                    onReactionCountsChange={handleReactionCountsChange}
+                  />
+                </section>
+
+                {detail.collection && detail.collection.total > 1 && (
+                  <MobileVideoCollection
+                    videoId={detail.id}
+                    collection={detail.collection}
+                  />
+                )}
+
+                <VideoInfoPanel
                   video={detail}
-                  onDeleteVideo={handleOpenDelete}
-                  deleteSaving={deleteSaving}
-                  canDelete={isAdmin}
-                  onReactionCountsChange={handleReactionCountsChange}
+                  availableTags={tags}
+                  tagSaving={tagSaving}
+                  onTagsChange={isAdmin ? handleTagsChange : undefined}
                 />
-              </section>
-
-              <VideoInfoPanel
-                video={detail}
-                availableTags={tags}
-                tagSaving={tagSaving}
-                onTagsChange={isAdmin ? handleTagsChange : undefined}
-              />
+              </div>
             </div>
 
             <RecommendedRail videos={detail.relatedVideos} />

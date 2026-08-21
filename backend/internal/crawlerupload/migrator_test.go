@@ -215,6 +215,9 @@ func TestRunOnceUploadsScriptCrawlerLocalVideo(t *testing.T) {
 	if got.DriveID != target.ID() || !strings.HasPrefix(got.FileID, "remote-") {
 		t.Fatalf("catalog target = drive %q file %q, want target drive", got.DriveID, got.FileID)
 	}
+	if got.ParentID != "target-root/Script Crawlers/crawler-one" || got.DirName != "crawler-one" {
+		t.Fatalf("catalog directory = parent %q name %q, want crawler destination", got.ParentID, got.DirName)
+	}
 	if got.FileName != wantName {
 		t.Fatalf("file_name = %q, want %q", got.FileName, wantName)
 	}
@@ -436,6 +439,9 @@ func TestRunOnceReconcilesRemoteWriteAfterCatalogCrashWithoutReupload(t *testing
 	}
 	if got.DriveID != target.ID() || got.FileID != "existing-remote-fid" || got.ContentHash != strings.Repeat("c", 40) {
 		t.Fatalf("migrated video = drive %q file %q hash %q", got.DriveID, got.FileID, got.ContentHash)
+	}
+	if got.ParentID != "target-root/Script Crawlers/crawler-reconcile" || got.DirName != "crawler-reconcile" {
+		t.Fatalf("reconciled directory = parent %q name %q, want destination directory", got.ParentID, got.DirName)
 	}
 	if _, err := os.Stat(filepath.Join(src.VideosDir(), "source-crash.mp4")); !os.IsNotExist(err) {
 		t.Fatalf("local source was not cleaned after reconciliation: %v", err)

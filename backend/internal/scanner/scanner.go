@@ -203,6 +203,10 @@ func (s *Scanner) walk(ctx context.Context, dirID, dirName string, stats *Stats,
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+		// The directory passed to List is authoritative even when a provider omits
+		// or misreports Entry.ParentID (several APIs treat that field as optional).
+		parentID := dirID
+
 		if existing != nil {
 			recordID := existing.ID
 			patch := catalog.VideoMetaPatch{}
@@ -210,8 +214,17 @@ func (s *Scanner) walk(ctx context.Context, dirID, dirName string, stats *Stats,
 				patch.ContentHash = e.Hash
 				existing.ContentHash = e.Hash
 			}
-			if dirName != "" && existing.DirName != dirName {
+			// parent_id is the stable collection identity; dir_name is its label.
+			// Synchronize both (including an empty root label) so moving a file does
+			// not leave it grouped with videos in its previous directory.
+			if existing.ParentID != parentID {
+				patch.ParentID = parentID
+				patch.ParentIDSet = true
+				existing.ParentID = parentID
+			}
+			if existing.DirName != dirName {
 				patch.DirName = dirName
+				patch.DirNameSet = true
 				existing.DirName = dirName
 			}
 			if e.Name != "" && existing.FileName != e.Name {
@@ -225,7 +238,7 @@ func (s *Scanner) walk(ctx context.Context, dirID, dirName string, stats *Stats,
 				patch.TitleSet = true
 				existing.Title = displayTitle
 			}
-			if patch.ContentHash != "" || patch.FileName != "" || patch.DirName != "" || patch.TitleSet || patch.AuthorSet {
+			if patch.ContentHash != "" || patch.FileName != "" || patch.ParentIDSet || patch.DirNameSet || patch.TitleSet || patch.AuthorSet {
 				_ = s.Catalog.UpdateVideoMeta(ctx, recordID, patch)
 				if err := ctx.Err(); err != nil {
 					return err
@@ -260,7 +273,7 @@ func (s *Scanner) walk(ctx context.Context, dirID, dirName string, stats *Stats,
 			FileID:        e.ID,
 			FileName:      e.Name,
 			ContentHash:   e.Hash,
-			ParentID:      e.ParentID,
+			ParentID:      parentID,
 			DirName:       dirName,
 			Title:         displayTitle,
 			Author:        parsed.Author,

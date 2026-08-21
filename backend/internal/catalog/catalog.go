@@ -256,6 +256,10 @@ ON CONFLICT(id) DO UPDATE SET
                       WHEN excluded.file_name != '' THEN excluded.file_name
                       ELSE videos.file_name
                     END,
+  parent_id       = CASE
+                      WHEN excluded.parent_id != '' THEN excluded.parent_id
+                      ELSE videos.parent_id
+                    END,
   dir_name        = CASE
                       WHEN excluded.dir_name != '' THEN excluded.dir_name
                       ELSE videos.dir_name
@@ -463,14 +467,28 @@ func (c *Catalog) ListHiddenVideos(ctx context.Context) ([]*Video, error) {
 	return out, rows.Err()
 }
 
-// MigrateVideoToDrive rewrites a crawler video row after it has been uploaded
-// to another drive. The video id is preserved so tags, favorites, likes and
-// view records keep pointing at the same logical video.
+// VideoDriveMigration is the complete storage identity of a video after a
+// cross-drive move. Directory identity belongs to the storage location and
+// must be committed with drive/file identity; otherwise readers can observe a
+// video on the destination drive while it still belongs to the source folder.
+type VideoDriveMigration struct {
+	DriveID     string
+	FileID      string
+	ContentHash string
+	ParentID    string
+	DirName     string
+	FileName    string
+	Title       string
+}
+
+// MigrateVideoToDrive atomically rewrites a crawler video row after it has been
+// uploaded to another drive. The video id is preserved so tags, favorites,
+// likes and view records keep pointing at the same logical video.
 //
-// scanner 后续看到 PikPak 目录下相同 hash / file_name 的文件时，会通过
+// scanner 后续看到目标目录下相同 hash / file_name 的文件时，会通过
 // findDuplicate 命中本行，不会再插入重复行。
-func (c *Catalog) MigrateVideoToDrive(ctx context.Context, videoID, newDriveID, newFileID, newContentHash string) error {
-	if videoID == "" || newDriveID == "" || newFileID == "" {
+func (c *Catalog) MigrateVideoToDrive(ctx context.Context, videoID string, target VideoDriveMigration) error {
+	if strings.TrimSpace(videoID) == "" || strings.TrimSpace(target.DriveID) == "" || strings.TrimSpace(target.FileID) == "" {
 		return fmt.Errorf("catalog: migrate video: empty id/drive/file")
 	}
 	res, err := c.db.ExecContext(ctx,
@@ -478,9 +496,25 @@ func (c *Catalog) MigrateVideoToDrive(ctx context.Context, videoID, newDriveID, 
 		   SET drive_id     = ?,
 		       file_id      = ?,
 		       content_hash = CASE WHEN ? != '' THEN ? ELSE content_hash END,
+		       parent_id    = ?,
+		       dir_name     = ?,
+		       file_name    = CASE WHEN ? != '' THEN ? ELSE file_name END,
+		       title        = CASE WHEN ? != '' THEN ? ELSE title END,
 		       updated_at   = ?
 		 WHERE id = ?`,
-		newDriveID, newFileID, newContentHash, newContentHash, time.Now().UnixMilli(), videoID)
+		target.DriveID,
+		target.FileID,
+		target.ContentHash,
+		target.ContentHash,
+		target.ParentID,
+		target.DirName,
+		target.FileName,
+		target.FileName,
+		target.Title,
+		target.Title,
+		time.Now().UnixMilli(),
+		videoID,
+	)
 	if err != nil {
 		return err
 	}
@@ -630,7 +664,10 @@ type VideoMetaPatch struct {
 	DurationSeconds        int
 	ContentHash            string
 	FileName               string
+	ParentID               string
+	ParentIDSet            bool
 	DirName                string
+	DirNameSet             bool
 	Title                  string
 	TitleSet               bool
 	Author                 string
@@ -684,7 +721,11 @@ func (c *Catalog) UpdateVideoMeta(ctx context.Context, id string, p VideoMetaPat
 		parts = append(parts, "file_name = ?")
 		args = append(args, p.FileName)
 	}
-	if p.DirName != "" {
+	if p.ParentIDSet || p.ParentID != "" {
+		parts = append(parts, "parent_id = ?")
+		args = append(args, p.ParentID)
+	}
+	if p.DirNameSet || p.DirName != "" {
 		parts = append(parts, "dir_name = ?")
 		args = append(args, p.DirName)
 	}
@@ -919,6 +960,43 @@ func (c *Catalog) ListVideosByDrive(ctx context.Context, driveID string) ([]*Vid
 	}
 	defer rows.Close()
 	var out []*Video
+	for rows.Next() {
+		v, err := scanVideo(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
+}
+
+// ListVisibleVideosByDirectory returns the public videos stored beside the
+// current video. A directory identity is scoped by drive: provider folder IDs
+// are not globally unique. Empty parent IDs are deliberately rejected because
+// crawler and standalone-upload rows use an empty value to mean "no directory";
+// grouping those rows would create one unrelated pseudo collection.
+func (c *Catalog) ListVisibleVideosByDirectory(ctx context.Context, driveID, parentID string) ([]*Video, error) {
+	driveID = strings.TrimSpace(driveID)
+	parentID = strings.TrimSpace(parentID)
+	if driveID == "" || parentID == "" {
+		return []*Video{}, nil
+	}
+	rows, err := c.db.QueryContext(ctx,
+		`SELECT `+allVideoCols+` FROM videos
+		 WHERE videos.drive_id = ?
+		   AND videos.parent_id = ?
+		   AND COALESCE(videos.hidden, 0) = 0
+		   AND `+activeDriveWhereSQL+`
+		   AND `+uniqueVideoWhereSQL+`
+		 ORDER BY COALESCE(NULLIF(videos.file_name, ''), videos.title) COLLATE NOCASE ASC,
+		          videos.created_at ASC,
+		          videos.id ASC`,
+		driveID, parentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]*Video, 0)
 	for rows.Next() {
 		v, err := scanVideo(rows)
 		if err != nil {

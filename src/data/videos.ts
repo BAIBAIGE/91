@@ -1,4 +1,9 @@
-import type { VideoDetail, VideoItem, VideoSubtitle } from "@/types";
+import type {
+  VideoCollection,
+  VideoDetail,
+  VideoItem,
+  VideoSubtitle,
+} from "@/types";
 import type {
   VideoReaction,
   VideoReactionCounts,
@@ -68,6 +73,44 @@ export function fetchVideoDetail(id: string): Promise<VideoDetail | null> {
   return apiGet<VideoDetail>(`/api/video/${encodeURIComponent(id)}`).catch(
     () => null
   );
+}
+
+export async function fetchVideoCollection(
+  id: string,
+  options: { signal?: AbortSignal } = {}
+): Promise<VideoCollection> {
+  const collection = await apiGet<VideoCollection>(
+    `/api/video/${encodeURIComponent(id)}/collection`,
+    options
+  );
+  if (
+    !collection ||
+    typeof collection.name !== "string" ||
+    !Number.isInteger(collection.total) ||
+    collection.total < 0 ||
+    !Number.isInteger(collection.currentIndex) ||
+    collection.currentIndex < 0 ||
+    !Array.isArray(collection.items) ||
+    collection.total !== collection.items.length ||
+    collection.items.some(
+      (item) =>
+        !item ||
+        typeof item.id !== "string" ||
+        typeof item.href !== "string" ||
+        typeof item.title !== "string" ||
+        typeof item.thumbnail !== "string" ||
+        typeof item.duration !== "string" ||
+        !Number.isInteger(item.views) ||
+        item.views < 0 ||
+        typeof item.publishedAt !== "string"
+    ) ||
+    (collection.total > 0 &&
+      (collection.currentIndex < 1 ||
+        collection.currentIndex > collection.total))
+  ) {
+    throw new Error("Invalid video collection response");
+  }
+  return collection;
 }
 
 export function fetchVideoSubtitles(id: string): Promise<VideoSubtitle[]> {

@@ -93,6 +93,11 @@ UPDATE videos
 	if err := c.addColumnIfMissing(ctx, "videos", "transcoded_size", "INTEGER DEFAULT 0"); err != nil {
 		return err
 	}
+	// 目录身份用于同目录合集。非常早期的库可能还没有 parent_id；先补身份列，
+	// 再补仅用于展示和标签匹配的目录名。
+	if err := c.addColumnIfMissing(ctx, "videos", "parent_id", "TEXT DEFAULT ''"); err != nil {
+		return err
+	}
 	// videos.dir_name：视频所在目录名，扫盘时落库；标签全库重算需要用它做匹配材料。
 	if err := c.addColumnIfMissing(ctx, "videos", "dir_name", "TEXT DEFAULT ''"); err != nil {
 		return err
@@ -220,6 +225,9 @@ CREATE TABLE IF NOT EXISTS deleted_videos (
 		return err
 	}
 	if _, err := c.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_videos_file_name_size_created ON videos(file_name, size_bytes, created_at, id)`); err != nil {
+		return err
+	}
+	if _, err := c.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_videos_directory ON videos(drive_id, parent_id)`); err != nil {
 		return err
 	}
 	if err := c.ensureCanonicalVideoMaterialization(ctx); err != nil {

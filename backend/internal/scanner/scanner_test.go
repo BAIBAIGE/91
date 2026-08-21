@@ -897,6 +897,53 @@ func TestRunDoesNotEnforceLegacyMaxDepth(t *testing.T) {
 	}
 }
 
+func TestRunSynchronizesExistingVideoDirectoryIdentity(t *testing.T) {
+	ctx := context.Background()
+	cat, err := catalog.Open(t.TempDir() + "/catalog.db")
+	if err != nil {
+		t.Fatalf("open catalog: %v", err)
+	}
+	t.Cleanup(func() { _ = cat.Close() })
+
+	now := time.Now()
+	if err := cat.UpsertVideo(ctx, &catalog.Video{
+		ID:          "fake-drive-file-1",
+		DriveID:     "drive",
+		FileID:      "file-1",
+		FileName:    "episode.mp4",
+		ParentID:    "old-folder",
+		DirName:     "Old Series",
+		Title:       "episode",
+		Size:        123,
+		PublishedAt: now,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}); err != nil {
+		t.Fatalf("seed video: %v", err)
+	}
+
+	drv := &scannerTreeFakeDrive{entries: map[string][]drives.Entry{
+		"root": {{ID: "new-folder", Name: "New Series", IsDir: true}},
+		"new-folder": {{
+			ID:       "file-1",
+			ParentID: "incorrect-provider-parent",
+			Name:     "episode.mp4",
+			Size:     123,
+		}},
+	}}
+	if _, err := New(cat, drv, []string{".mp4"}, nil, nil).Run(ctx, ""); err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+
+	got, err := cat.GetVideo(ctx, "fake-drive-file-1")
+	if err != nil {
+		t.Fatalf("get video: %v", err)
+	}
+	if got.ParentID != "new-folder" || got.DirName != "New Series" {
+		t.Fatalf("directory = parent %q name %q, want new-folder / New Series", got.ParentID, got.DirName)
+	}
+}
+
 type scannerFakeDrive struct {
 	entries []drives.Entry
 }
