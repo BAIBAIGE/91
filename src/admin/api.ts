@@ -576,8 +576,15 @@ export type UpsertDriveInput = {
   skipDirIds?: string[];
 };
 
+export type DriveConfigSaveResult = {
+  ok: boolean;
+  deferred?: boolean;
+  message?: string;
+  warning?: string;
+};
+
 export function upsertDrive(body: UpsertDriveInput) {
-  return request<{ ok: boolean; warning?: string }>("/drives", {
+  return request<DriveConfigSaveResult>("/drives", {
     method: "POST",
     body: JSON.stringify(body),
   });
@@ -691,7 +698,7 @@ export function listCrawlers() {
 }
 
 export function upsertCrawler(body: UpsertCrawlerInput) {
-  return request<{ ok: boolean; id: string; warning?: string }>("/crawlers", {
+  return request<DriveConfigSaveResult & { id: string }>("/crawlers", {
     method: "POST",
     body: JSON.stringify(body),
   });
@@ -891,11 +898,11 @@ export function getGuangYaPanQRStatus(deviceCode: string) {
 /**
  * 切换某个云盘的预览视频生成开关。点击网盘列表里行内的 toggle 按钮时调用。
  *
- * 后端会写 catalog.drives.teaser_enabled，并在从关到开时立刻补扫该盘 pending 预览视频；
- * 关闭分支不补做任何事，新的入队判断会自动停。
+ * 后端会写 catalog.drives.teaser_enabled；空闲时立即生效，有任务时返回
+ * deferred=true 并在当前任务结束后切换。
  */
 export function setDriveTeaserEnabled(id: string, enabled: boolean) {
-  return request<{ ok: boolean; teaserEnabled: boolean }>(
+  return request<DriveConfigSaveResult & { teaserEnabled: boolean }>(
     `/drives/${encodeURIComponent(id)}/teaser-enabled`,
     {
       method: "POST",
@@ -932,7 +939,7 @@ export function listDriveDirChildren(id: string, parentId?: string) {
  * 传空数组 = 清空跳过列表。下次扫描时生效，不会立刻重扫。
  */
 export function setDriveSkipDirIds(id: string, dirIds: string[]) {
-  return request<{ ok: boolean; skipDirIds: string[] }>(
+  return request<DriveConfigSaveResult & { skipDirIds: string[] }>(
     `/drives/${encodeURIComponent(id)}/skip-dirs`,
     {
       method: "POST",

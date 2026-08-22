@@ -433,6 +433,10 @@ type Registry interface {
 type Config struct {
 	Catalog  *catalog.Catalog
 	Registry Registry
+	// GetDrive returns the task-generation configuration snapshot. Production
+	// supplies this while deferred admin edits are pending; tests and standalone
+	// users may omit it to read Catalog directly.
+	GetDrive func(context.Context, string) (*catalog.Drive, error)
 	// Interval 已废弃 —— 旧版迁移 worker 是周期 ticker，新版只通过 nightly
 	// pipeline 调用 RunOnce，不再有内置定时器。保留字段不删是为了兼容外
 	// 部 yaml / 测试代码里仍传值的场景。
@@ -546,7 +550,32 @@ func (m *Migrator) RunOnce(ctx context.Context) error {
 		return nil
 	}
 	defer m.finishRun()
-	m.run(ctx, "")
+	m.run(ctx, nil)
+	return nil
+}
+
+// RunDrives migrates exactly the supplied crawler IDs. The application uses
+// this after admitting the same source set, so a crawler attached concurrently
+// cannot escape task/configuration coordination.
+func (m *Migrator) RunDrives(ctx context.Context, driveIDs []string) error {
+	seen := make(map[string]struct{}, len(driveIDs))
+	cleaned := make([]string, 0, len(driveIDs))
+	for _, driveID := range driveIDs {
+		driveID = strings.TrimSpace(driveID)
+		if driveID == "" {
+			continue
+		}
+		if _, exists := seen[driveID]; exists {
+			continue
+		}
+		seen[driveID] = struct{}{}
+		cleaned = append(cleaned, driveID)
+	}
+	if len(cleaned) == 0 || !m.tryBeginRun() {
+		return nil
+	}
+	defer m.finishRun()
+	m.run(ctx, cleaned)
 	return nil
 }
 
@@ -562,7 +591,7 @@ func (m *Migrator) StartDrive(ctx context.Context, driveID string) (<-chan error
 	go func() {
 		func() {
 			defer m.finishRun()
-			m.run(ctx, driveID)
+			m.run(ctx, []string{driveID})
 		}()
 		done <- nil
 		close(done)
@@ -593,10 +622,9 @@ func (m *Migrator) finishRun() {
 	m.mu.Unlock()
 }
 
-// run executes either the global nightly migration (driveID empty) or one
-// explicitly selected crawler. The two modes share upload and cleanup logic,
-// but only the nightly mode enumerates every crawler in the registry.
-func (m *Migrator) run(ctx context.Context, driveID string) {
+// run executes either the global nightly migration (driveIDs nil) or exactly
+// the explicitly selected crawler set.
+func (m *Migrator) run(ctx context.Context, driveIDs []string) {
 
 	// captcha 冷却期间整轮跳过 —— 不做任何 PikPak API 调用、不做本地清理，
 	// 等冷却结束。这样从用户视角看：进入冷却 → 一行日志 → 完全静默 → 冷却
@@ -611,10 +639,13 @@ func (m *Migrator) run(ctx context.Context, driveID string) {
 	}
 
 	var plans []migrationPlan
-	if driveID == "" {
+	if driveIDs == nil {
 		plans = m.migrationPlans(ctx)
 	} else {
-		plans = m.migrationPlansForDrive(ctx, driveID)
+		plans = make([]migrationPlan, 0, len(driveIDs))
+		for _, driveID := range driveIDs {
+			plans = append(plans, m.migrationPlansForDrive(ctx, driveID)...)
+		}
 	}
 	if len(plans) == 0 {
 		// 没目标就静默 —— 用户选择了本地保存，或目标盘还没挂载。
@@ -728,6 +759,16 @@ func (m *Migrator) migrationPlansForDrive(ctx context.Context, driveID string) [
 	return []migrationPlan{plan}
 }
 
+func (m *Migrator) getDrive(ctx context.Context, driveID string) (*catalog.Drive, error) {
+	if m != nil && m.cfg.GetDrive != nil {
+		return m.cfg.GetDrive(ctx, driveID)
+	}
+	if m == nil || m.cfg.Catalog == nil {
+		return nil, errors.New("catalog not configured")
+	}
+	return m.cfg.Catalog.GetDrive(ctx, driveID)
+}
+
 func (m *Migrator) migrationPlan(ctx context.Context, d drives.Drive) (migrationPlan, bool) {
 	if d == nil {
 		return migrationPlan{}, false
@@ -736,7 +777,7 @@ func (m *Migrator) migrationPlan(ctx context.Context, d drives.Drive) (migration
 	if !ok {
 		return migrationPlan{}, false
 	}
-	row, err := m.cfg.Catalog.GetDrive(ctx, d.ID())
+	row, err := m.getDrive(ctx, d.ID())
 	if err != nil || row == nil || row.Kind != scriptcrawler.Kind {
 		return migrationPlan{}, false
 	}

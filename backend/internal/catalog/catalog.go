@@ -3114,8 +3114,26 @@ type Drive struct {
 	UpdatedAt  time.Time `json:"updatedAt"`
 }
 
+type DriveUpsertOptions struct {
+	ReplaceSkipDirIDs    bool
+	ReplaceTeaserEnabled bool
+	PatchCredentials     bool
+}
+
+// UpsertDrive persists a complete configuration. On an existing row it
+// deliberately preserves status/last_error; those fields are owned by the
+// mounted runtime and must be changed through SetDriveRuntimeStatus.
 func (c *Catalog) UpsertDrive(ctx context.Context, d *Drive) error {
-	return c.upsertDrive(ctx, d, true, false)
+	return c.upsertDrive(ctx, d, DriveUpsertOptions{
+		ReplaceSkipDirIDs:    true,
+		ReplaceTeaserEnabled: true,
+	})
+}
+
+// UpsertDriveWithOptions lets partial admin forms preserve independently saved
+// settings atomically instead of performing stale read-then-write merges.
+func (c *Catalog) UpsertDriveWithOptions(ctx context.Context, d *Drive, options DriveUpsertOptions) error {
+	return c.upsertDrive(ctx, d, options)
 }
 
 // UpsertDrivePreservingSkipDirIDs writes the authoritative drive fields while
@@ -3124,7 +3142,7 @@ func (c *Catalog) UpsertDrive(ctx context.Context, d *Drive) error {
 // value in SQL avoids a read-then-write race with the dedicated skip-dir API.
 // New rows still receive the normalized value from d (normally an empty list).
 func (c *Catalog) UpsertDrivePreservingSkipDirIDs(ctx context.Context, d *Drive) error {
-	return c.upsertDrive(ctx, d, false, false)
+	return c.upsertDrive(ctx, d, DriveUpsertOptions{ReplaceTeaserEnabled: true})
 }
 
 // UpsertDrivePatchingCredentials updates drive metadata while atomically
@@ -3132,16 +3150,23 @@ func (c *Catalog) UpsertDrivePreservingSkipDirIDs(ctx context.Context, d *Drive)
 // credentials. This prevents an admin edit from rolling back tokens refreshed
 // after the edit form was opened.
 func (c *Catalog) UpsertDrivePatchingCredentials(ctx context.Context, d *Drive) error {
-	return c.upsertDrive(ctx, d, true, true)
+	return c.upsertDrive(ctx, d, DriveUpsertOptions{
+		ReplaceSkipDirIDs:    true,
+		ReplaceTeaserEnabled: true,
+		PatchCredentials:     true,
+	})
 }
 
 // UpsertDrivePatchingCredentialsPreservingSkipDirIDs combines credential patch
 // semantics with the omitted-skipDirIds behavior used by the admin form.
 func (c *Catalog) UpsertDrivePatchingCredentialsPreservingSkipDirIDs(ctx context.Context, d *Drive) error {
-	return c.upsertDrive(ctx, d, false, true)
+	return c.upsertDrive(ctx, d, DriveUpsertOptions{
+		ReplaceTeaserEnabled: true,
+		PatchCredentials:     true,
+	})
 }
 
-func (c *Catalog) upsertDrive(ctx context.Context, d *Drive, replaceSkipDirIDs, patchCredentials bool) error {
+func (c *Catalog) upsertDrive(ctx context.Context, d *Drive, options DriveUpsertOptions) error {
 	normalizeDriveRootFields(d)
 	cred, _ := json.Marshal(d.Credentials)
 	skipDirs := d.SkipDirIDs
@@ -3163,19 +3188,27 @@ ON CONFLICT(id) DO UPDATE SET
   root_id        = excluded.root_id,
   scan_root_id   = excluded.scan_root_id,
   credentials    = CASE
+                     WHEN ? != 0 AND excluded.kind = 'googledrive' THEN json_remove(
+                       json_patch(
+                         CASE WHEN json_valid(COALESCE(drives.credentials, '')) THEN drives.credentials ELSE '{}' END,
+                         excluded.credentials
+                       ),
+                       '$.use_online_api', '$.api_url_address'
+                     )
                      WHEN ? != 0 THEN json_patch(
                        CASE WHEN json_valid(COALESCE(drives.credentials, '')) THEN drives.credentials ELSE '{}' END,
                        excluded.credentials
                      )
                      ELSE excluded.credentials
                    END,
-  status         = excluded.status,
-  last_error     = excluded.last_error,
-  teaser_enabled = excluded.teaser_enabled,
+  status         = drives.status,
+  last_error     = drives.last_error,
+  teaser_enabled = CASE WHEN ? != 0 THEN excluded.teaser_enabled ELSE drives.teaser_enabled END,
   skip_dir_ids   = CASE WHEN ? != 0 THEN excluded.skip_dir_ids ELSE drives.skip_dir_ids END,
   updated_at     = excluded.updated_at
 `, d.ID, d.Kind, d.Name, d.RootID, d.ScanRootID, string(cred), d.Status, d.LastError, boolToInt(d.TeaserEnabled), string(skipDirsJSON),
-		d.CreatedAt.UnixMilli(), d.UpdatedAt.UnixMilli(), boolToInt(patchCredentials), boolToInt(replaceSkipDirIDs))
+		d.CreatedAt.UnixMilli(), d.UpdatedAt.UnixMilli(), boolToInt(options.PatchCredentials), boolToInt(options.PatchCredentials),
+		boolToInt(options.ReplaceTeaserEnabled), boolToInt(options.ReplaceSkipDirIDs))
 	return err
 }
 
@@ -3183,11 +3216,14 @@ func normalizeDriveRootFields(d *Drive) {
 	if d == nil {
 		return
 	}
-	d.RootID = normalizeDriveRootID(d.Kind, d.RootID)
+	d.RootID = NormalizeDriveRootID(d.Kind, d.RootID)
 	d.ScanRootID = d.RootID
 }
 
-func normalizeDriveRootID(kind, rootID string) string {
+// NormalizeDriveRootID returns the canonical runtime root for a provider. API
+// validation uses the same function before reserving a configuration update so
+// root-change classification cannot diverge from persistence.
+func NormalizeDriveRootID(kind, rootID string) string {
 	rootID = strings.TrimSpace(rootID)
 	switch kind {
 	case "pikpak", "guangyapan":
@@ -3338,6 +3374,115 @@ UPDATE drives
 	return nil
 }
 
+// PatchDriveCredentialsIfMatch applies a runtime credential rotation only
+// while both its provider kind and source credential are still current. It
+// prevents a refresh that completed after an administrator changed provider or
+// supplied a replacement token/cookie from overwriting that explicit edit. A
+// false result is a normal stale-write rejection, not an error.
+func (c *Catalog) PatchDriveCredentialsIfMatch(
+	ctx context.Context,
+	id, expectedKind, anchorKey, anchorValue string,
+	updates map[string]string,
+) (bool, error) {
+	id = strings.TrimSpace(id)
+	expectedKind = strings.TrimSpace(expectedKind)
+	anchorKey = strings.TrimSpace(anchorKey)
+	if id == "" {
+		return false, fmt.Errorf("catalog: patch drive credentials if match: empty id")
+	}
+	if expectedKind == "" {
+		return false, fmt.Errorf("catalog: patch drive credentials if match: empty expected kind")
+	}
+	if anchorKey == "" {
+		return false, fmt.Errorf("catalog: patch drive credentials if match: empty anchor key")
+	}
+	cleaned := make(map[string]string, len(updates))
+	for rawKey, value := range updates {
+		key := strings.TrimSpace(rawKey)
+		if key != "" {
+			cleaned[key] = value
+		}
+	}
+	if len(cleaned) == 0 {
+		return true, nil
+	}
+	payload, err := json.Marshal(cleaned)
+	if err != nil {
+		return false, fmt.Errorf("catalog: marshal conditional drive credential patch: %w", err)
+	}
+	res, err := c.db.ExecContext(ctx, `
+UPDATE drives
+   SET credentials = json_patch(
+         CASE WHEN json_valid(COALESCE(credentials, '')) THEN credentials ELSE '{}' END,
+         ?
+       ),
+       updated_at = ?
+ WHERE id = ?
+   AND kind = ?
+   AND COALESCE(json_extract(
+         CASE WHEN json_valid(COALESCE(credentials, '')) THEN credentials ELSE '{}' END,
+         ?
+       ), '') = ?`, string(payload), time.Now().UnixMilli(), id, expectedKind, "$."+anchorKey, anchorValue)
+	if err != nil {
+		return false, fmt.Errorf("catalog: patch drive credentials if match: %w", err)
+	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("catalog: inspect conditional drive credential patch: %w", err)
+	}
+	return rows > 0, nil
+}
+
+// UpdateDriveRuntimeState atomically records a runtime status transition and
+// a small credential-state patch without replacing configuration columns. It
+// is used by crawler completion, where last_crawl_at and the observed result
+// belong to one event. Administrative configuration must not call this method.
+func (c *Catalog) UpdateDriveRuntimeState(
+	ctx context.Context,
+	id, expectedKind, status, lastError string,
+	credentialUpdates map[string]string,
+) error {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return fmt.Errorf("catalog: update drive runtime state: empty id")
+	}
+	expectedKind = strings.TrimSpace(expectedKind)
+	if expectedKind == "" {
+		return fmt.Errorf("catalog: update drive runtime state: empty expected kind")
+	}
+	if status != "ok" && status != "error" {
+		return fmt.Errorf("catalog: update drive runtime state: invalid status %q", status)
+	}
+	cleaned := make(map[string]string, len(credentialUpdates))
+	for rawKey, value := range credentialUpdates {
+		if key := strings.TrimSpace(rawKey); key != "" {
+			cleaned[key] = value
+		}
+	}
+	payload, err := json.Marshal(cleaned)
+	if err != nil {
+		return fmt.Errorf("catalog: marshal drive runtime credential patch: %w", err)
+	}
+	res, err := c.db.ExecContext(ctx, `
+UPDATE drives
+   SET credentials = json_patch(
+         CASE WHEN json_valid(COALESCE(credentials, '')) THEN credentials ELSE '{}' END,
+         ?
+       ),
+       status = ?,
+       last_error = ?,
+       updated_at = ?
+ WHERE id = ?
+   AND kind = ?`, string(payload), status, lastError, time.Now().UnixMilli(), id, expectedKind)
+	if err != nil {
+		return fmt.Errorf("catalog: update drive runtime state: %w", err)
+	}
+	if rows, err := res.RowsAffected(); err == nil && rows == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
 // SetDriveRuntimeStatus updates only the connection state observed while the
 // server is already running. Playback and other runtime checks must not use
 // UpsertDrive here: doing so could overwrite credentials or drive settings with
@@ -3412,6 +3557,77 @@ func (c *Catalog) SetDriveSkipDirIDs(ctx context.Context, id string, ids []strin
 	if rows, err := res.RowsAffected(); err == nil && rows == 0 {
 		return sql.ErrNoRows
 	}
+	return nil
+}
+
+// EnsureDriveSkipDirID atomically adds one system-owned directory to the
+// latest stored skip list. Transcode workers must use this method instead of a
+// GetDrive/SetDriveSkipDirIDs read-modify-write pair: an administrator may
+// replace the user-managed list while a long-running worker is still active.
+func (c *Catalog) EnsureDriveSkipDirID(ctx context.Context, id, dirID string) error {
+	id = strings.TrimSpace(id)
+	dirID = strings.TrimSpace(dirID)
+	if id == "" {
+		return fmt.Errorf("catalog: ensure drive skip_dir_id: empty id")
+	}
+	if dirID == "" {
+		return fmt.Errorf("catalog: ensure drive skip_dir_id: empty directory id")
+	}
+
+	// BEGIN IMMEDIATE reserves SQLite's writer slot before reading. The critical
+	// section is deliberately catalog-owned so every caller, including config
+	// APIs that do not know about transcode workers, participates in the same
+	// database-level ordering.
+	conn, err := c.db.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("catalog: reserve skip_dir_ids connection: %w", err)
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
+		return fmt.Errorf("catalog: begin ensure skip_dir_id: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_, _ = conn.ExecContext(context.Background(), `ROLLBACK`)
+		}
+	}()
+
+	var stored string
+	if err := conn.QueryRowContext(ctx,
+		`SELECT COALESCE(skip_dir_ids, '[]') FROM drives WHERE id = ?`, id,
+	).Scan(&stored); err != nil {
+		return err
+	}
+	var ids []string
+	if err := json.Unmarshal([]byte(stored), &ids); err != nil {
+		return fmt.Errorf("catalog: decode drive skip_dir_ids: %w", err)
+	}
+	for _, existing := range ids {
+		if existing == dirID {
+			if _, err := conn.ExecContext(ctx, `COMMIT`); err != nil {
+				return fmt.Errorf("catalog: commit unchanged skip_dir_ids: %w", err)
+			}
+			committed = true
+			return nil
+		}
+	}
+
+	ids = append(ids, dirID)
+	payload, err := json.Marshal(ids)
+	if err != nil {
+		return fmt.Errorf("catalog: marshal ensured skip_dir_ids: %w", err)
+	}
+	if _, err := conn.ExecContext(ctx,
+		`UPDATE drives SET skip_dir_ids = ?, updated_at = ? WHERE id = ?`,
+		string(payload), time.Now().UnixMilli(), id,
+	); err != nil {
+		return fmt.Errorf("catalog: ensure drive skip_dir_id: %w", err)
+	}
+	if _, err := conn.ExecContext(ctx, `COMMIT`); err != nil {
+		return fmt.Errorf("catalog: commit ensured skip_dir_id: %w", err)
+	}
+	committed = true
 	return nil
 }
 

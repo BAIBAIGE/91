@@ -1003,8 +1003,12 @@ type Worker struct {
 	Gen     TeaserGenerator
 	Catalog *catalog.Catalog
 	Drive   drives.Drive
-	ch      chan *catalog.Video
-	queue   videoQueue
+	// TaskGuard holds application-level task admission for the complete provider
+	// operation. A nil release means this worker belongs to a retired runtime
+	// generation and the queued item must remain pending for its replacement.
+	TaskGuard func() func()
+	ch        chan *catalog.Video
+	queue     videoQueue
 
 	RateLimitCooldown time.Duration
 	rateLimit         rateLimitState
@@ -1053,11 +1057,12 @@ func (w *Worker) EnqueueBlocking(ctx context.Context, v *catalog.Video) bool {
 }
 
 type ThumbWorker struct {
-	Gen     ThumbnailGenerator
-	Catalog *catalog.Catalog
-	Drive   drives.Drive
-	ch      chan *catalog.Video
-	queue   videoQueue
+	Gen       ThumbnailGenerator
+	Catalog   *catalog.Catalog
+	Drive     drives.Drive
+	TaskGuard func() func()
+	ch        chan *catalog.Video
+	queue     videoQueue
 
 	RateLimitCooldown time.Duration
 	rateLimit         rateLimitState
@@ -1380,8 +1385,23 @@ func (w *ThumbWorker) Run(ctx context.Context) {
 }
 
 func (w *Worker) processQueued(ctx context.Context, v *catalog.Video) {
+	if v == nil {
+		return
+	}
+	if w.Catalog == nil || v.ID == "" {
+		w.queue.release(v)
+		return
+	}
+	if w.TaskGuard != nil {
+		release := w.TaskGuard()
+		if release == nil {
+			w.queue.release(v)
+			return
+		}
+		defer release()
+	}
 	defer w.queue.release(v)
-	if w.Catalog == nil || v == nil || v.ID == "" {
+	if err := ctx.Err(); err != nil {
 		return
 	}
 	current, err := w.Catalog.GetVideo(ctx, v.ID)
@@ -1397,16 +1417,31 @@ func (w *Worker) processQueued(ctx context.Context, v *catalog.Video) {
 }
 
 func (w *ThumbWorker) processQueued(ctx context.Context, v *catalog.Video) {
+	if w.TaskGuard != nil {
+		release := w.TaskGuard()
+		if release == nil {
+			w.queue.release(v)
+			return
+		}
+		defer release()
+	}
+	if err := ctx.Err(); err != nil {
+		w.queue.release(v)
+		return
+	}
 	w.activity.start(v)
 	retry := false
 	if waitForRateLimitCooldown(ctx, &w.rateLimit, "thumb", w.Drive) {
 		retry = w.process(ctx, v)
 	}
-	w.activity.done()
+	// Keep activity non-idle across release-and-requeue. Configuration admission
+	// checks worker status while holding its queue gate; an idle gap here could
+	// otherwise let a runtime update start just before this retry is queued.
 	w.queue.release(v)
 	if retry && ctx.Err() == nil {
 		w.EnqueueBlocking(ctx, v)
 	}
+	w.activity.done()
 }
 
 func waitForRateLimitCooldown(ctx context.Context, state *rateLimitState, label string, drive drives.Drive) bool {

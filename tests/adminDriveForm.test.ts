@@ -287,6 +287,27 @@ test("pikpak drive form presents email login before refresh token fallback", () 
   assert.match(drivesPageSource, /changedCredentialValues\(/);
 });
 
+test("all existing drive edits submit credential deltas", () => {
+  assert.match(
+    drivesPageSource,
+    /const credentials = existing\s*\? changedCredentialValues\(/
+  );
+  assert.doesNotMatch(
+    drivesPageSource,
+    /existing\s*&&\s*form\.kind\s*===\s*["']pikpak["']/
+  );
+});
+
+test("busy drive edits are saved and report deferred activation", () => {
+  assert.doesNotMatch(drivesPageSource, /const runtimeConfigChanged = Boolean/);
+  assert.doesNotMatch(
+    drivesPageSource,
+    /runtimeConfigChanged && isDriveBusy\(existing\)/
+  );
+  assert.match(drivesPageSource, /resp\.deferred/);
+  assert.match(drivesPageSource, /已保存，将在当前网盘任务结束后生效/);
+});
+
 test("wopan drive form omits the optional family space field", () => {
   const match =
     /case "wopan":\s*return \[([\s\S]*?)\];\s*case "guangyapan":/.exec(
@@ -631,6 +652,7 @@ test("crawler management is a separate admin section", () => {
   assert.doesNotMatch(crawlerDeleteModal, /details=/);
   assert.doesNotMatch(crawlerDeleteModal, /danger/);
   assert.doesNotMatch(crawlerDeleteModal, /confirmText=/);
+  assert.match(crawlerDeleteModal, /正在运行的任务将先自动停止/);
   assert.match(crawlerDeleteModal, /本地保留的视频、封面、预览和抓取文件将一并删除/);
   assert.match(crawlerDeleteModal, /已迁移到网盘的视频不受影响/);
   assert.match(confirmModalSource, /plainConfirm \? "" : danger \? " is-danger" : " is-primary"/);
@@ -1130,6 +1152,7 @@ test("drive delete and credential confirm buttons use ordinary styling", () => {
   );
 
   assert.match(deleteDriveModalSource, /const primaryText = deleting \? "删除中\.\.\." : "确认"/);
+  assert.match(deleteDriveModalSource, /正在运行的任务将先自动停止，完全退出后再删除/);
   assert.match(deleteDriveModalSource, /className="admin-btn"\s+onClick=\{onConfirm\}/);
   assert.doesNotMatch(deleteDriveModalSource, /Trash2|确认删除|is-danger/);
   assert.match(
@@ -1320,6 +1343,11 @@ test("drive preview generation uses an accessible slider switch", () => {
   assert.match(driveComponentsSource, /role="switch"/);
   assert.match(driveComponentsSource, /aria-checked=\{d\.teaserEnabled\}/);
   assert.match(driveComponentsSource, /className="toggle-switch__dot"/);
+  assert.match(
+    driveComponentsSource,
+    /disabled=\{togglingTeaserId === d\.id\}/
+  );
+  assert.doesNotMatch(driveComponentsSource, /previewSettingBusy|暂不能修改预览开关/);
   assert.doesNotMatch(driveComponentsSource, /预览视频：开|预览视频：关|PowerOff/);
 });
 
@@ -1349,6 +1377,10 @@ test("drive skip directory selections auto-save without polling away local edits
     /draftRevisionRef\.current !== savedRevisionRef\.current/
   );
   assert.match(skipDirsPanelSource, /保存失败，正在重试…/);
+  assert.match(skipDirsPanelSource, /已保存，任务结束后生效/);
+  assert.doesNotMatch(skipDirsPanelSource, /drive\.scanGenerationStatus\?\.state/);
+  assert.match(skipDirsPanelSource, /disabled=\{disabled\}/);
+  assert.doesNotMatch(skipDirsPanelSource, /等待任务完成后再修改跳过目录/);
   assert.doesNotMatch(skipDirsPanelSource, /修改后自动保存/);
   assert.match(skipDirsPanelSource, /saveStatus === "idle"[\s\S]*\? null/);
   assert.match(drivesPageSource, /driveListRequestVersion\.current \+= 1/);

@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -70,6 +72,82 @@ func TestInitRefreshesTokenThroughOpenListOnlineAPIAndPersistsUpdate(t *testing.
 	}
 	if persistedAccess != "new-access" || persistedRefresh != "new-refresh" {
 		t.Fatalf("persisted tokens = %q/%q, want new-access/new-refresh", persistedAccess, persistedRefresh)
+	}
+}
+
+func TestConcurrentUnauthorizedRequestsShareOneTokenRefresh(t *testing.T) {
+	var oldRequests atomic.Int32
+	var refreshes atomic.Int32
+	var releaseOld sync.Once
+	bothOldRequestsArrived := make(chan struct{})
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/renewapi":
+			refreshes.Add(1)
+			writeJSON(t, w, map[string]any{
+				"access_token":  "new-access",
+				"refresh_token": "new-refresh",
+			})
+		case "/v1.0/me/drive/items/file-a", "/v1.0/me/drive/items/file-b":
+			if r.Header.Get("Authorization") == "Bearer old-access" {
+				if oldRequests.Add(1) == 2 {
+					releaseOld.Do(func() { close(bothOldRequestsArrived) })
+				}
+				<-bothOldRequestsArrived
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusUnauthorized)
+				if err := json.NewEncoder(w).Encode(map[string]any{"error": map[string]any{
+					"code": "InvalidAuthenticationToken", "message": "expired",
+				}}); err != nil {
+					t.Errorf("encode auth error: %v", err)
+				}
+				return
+			}
+			writeJSON(t, w, map[string]any{"id": strings.TrimPrefix(r.URL.Path, "/v1.0/me/drive/items/")})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	var persisted atomic.Int32
+	d := New(Config{
+		ID:           "od-main",
+		AccessToken:  "old-access",
+		RefreshToken: "old-refresh",
+		RenewAPIURL:  srv.URL + "/renewapi",
+		APIBaseURL:   srv.URL,
+		OnTokenUpdate: func(_, _ string) {
+			persisted.Add(1)
+		},
+	})
+
+	var wg sync.WaitGroup
+	errs := make(chan error, 2)
+	for _, fileID := range []string{"file-a", "file-b"} {
+		wg.Add(1)
+		go func(fileID string) {
+			defer wg.Done()
+			_, err := d.Stat(context.Background(), fileID)
+			errs <- err
+		}(fileID)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent stat: %v", err)
+		}
+	}
+	if got := refreshes.Load(); got != 1 {
+		t.Fatalf("token refreshes = %d, want 1", got)
+	}
+	if got := persisted.Load(); got != 1 {
+		t.Fatalf("token persistence callbacks = %d, want 1", got)
+	}
+	if got := d.tokenSnapshot(); got.access != "new-access" || got.refresh != "new-refresh" {
+		t.Fatalf("tokens = %#v, want refreshed pair", got)
 	}
 }
 

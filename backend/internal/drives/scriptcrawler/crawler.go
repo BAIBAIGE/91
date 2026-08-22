@@ -51,9 +51,12 @@ const (
 )
 
 type CrawlerConfig struct {
-	Driver      *Driver
-	Catalog     *catalog.Catalog
-	CrawlerName string
+	Driver  *Driver
+	Catalog *catalog.Catalog
+	// GetDriveConfig can supply the task-generation snapshot while a newer
+	// desired configuration is waiting for the current crawl to finish.
+	GetDriveConfig func(context.Context, string) (*catalog.Drive, error)
+	CrawlerName    string
 	// Protocol is the protocol to start from. Every run re-reads it from the
 	// script itself, so this is the value used before the first run and
 	// whenever SkipProtocolRefresh keeps the script from being consulted.
@@ -1009,9 +1012,15 @@ func (c *Crawler) previewDisabled(ctx context.Context) bool {
 	if c == nil {
 		return false
 	}
-	if c.cfg.Catalog != nil && c.cfg.Driver != nil {
-		if d, err := c.cfg.Catalog.GetDrive(ctx, c.cfg.Driver.ID()); err == nil && d != nil {
-			return !d.TeaserEnabled
+	if c.cfg.Driver != nil {
+		if c.cfg.GetDriveConfig != nil {
+			if d, err := c.cfg.GetDriveConfig(ctx, c.cfg.Driver.ID()); err == nil && d != nil {
+				return !d.TeaserEnabled
+			}
+		} else if c.cfg.Catalog != nil {
+			if d, err := c.cfg.Catalog.GetDrive(ctx, c.cfg.Driver.ID()); err == nil && d != nil {
+				return !d.TeaserEnabled
+			}
 		}
 	}
 	return c.cfg.DisablePreview

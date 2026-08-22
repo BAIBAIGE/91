@@ -192,6 +192,7 @@ func main() {
 	app.crawlerUploader = crawlerupload.New(crawlerupload.Config{
 		Catalog:          cat,
 		Registry:         app.registry,
+		GetDrive:         app.activeDriveConfig,
 		CommonThumbDir:   app.commonThumbsDir(),
 		OnUploadProgress: app.updateCrawlerUploadProgress,
 	})
@@ -351,9 +352,14 @@ func main() {
 			setupRequired = false
 			return nil
 		},
-		LocalPreviewDir: cfg.Storage.LocalPreviewDir,
-		OnDriveSaved: func(driveID string) error {
-			return app.reloadSavedDrive(ctx, driveID)
+		LocalPreviewDir:        cfg.Storage.LocalPreviewDir,
+		BeginDriveConfigUpdate: app.beginDriveConfigUpdate,
+		OnDriveRuntimeConfigChanged: func(driveID string) error {
+			return app.reloadDriveRuntime(ctx, driveID)
+		},
+		OnPrepareDriveDelete: func(deleteCtx context.Context, driveID string) error {
+			app.stopDriveTasks(ctx, driveID)
+			return app.waitDriveTasksStopped(deleteCtx, driveID)
 		},
 		OnDriveDeleteCleanup: func(cleanupCtx context.Context, driveID string) (int, error) {
 			return app.cleanupDriveVideosForDelete(cleanupCtx, driveID)
@@ -437,7 +443,7 @@ func main() {
 			worker := app.workers[driveID]
 			thumbWorker := app.thumbWorkers[driveID]
 			app.mu.Unlock()
-			go app.enqueueDriveGeneration(ctx, driveID, worker, thumbWorker)
+			app.scheduleDriveGenerationEnqueue(ctx, driveID, worker, thumbWorker)
 		},
 		GetTheme: func() string { return app.Theme() },
 		SetTheme: func(theme string) error {
@@ -491,7 +497,7 @@ func main() {
 		ListCrawlerDrives:     app.listCrawlerDriveIDs,
 		RunCrawlerCrawl:       app.runScriptCrawlerCrawl,
 		WaitPreviewQueuesIdle: app.waitAllPreviewQueuesIdle,
-		RunMigration:          app.crawlerUploader.RunOnce,
+		RunMigration:          app.runCrawlerUploadMigration,
 		RestoreCrawlerVideos:  app.restoreScriptCrawlerVideos,
 		RunDedupeAssetCleanup: app.cleanupDuplicateVideoAssets,
 	})

@@ -292,11 +292,15 @@ export function DrivesPage() {
     const driveID = existing
       ? form.id
       : makeUniqueDriveId(form.kind, name, list);
-    const credentials = existing && form.kind === "pikpak"
+    const editableCredentialKeys = credentialFields(form.kind).map((field) => field.key);
+    // QR login writes a few values that do not have a standalone input field.
+    if (form.kind === "p123") editableCredentialKeys.push("access_token");
+    if (form.kind === "wopan") editableCredentialKeys.push("family_id");
+    const credentials = existing
       ? changedCredentialValues(
           form.creds,
           initialForm.creds,
-          credentialFields(form.kind).map((field) => field.key)
+          editableCredentialKeys
         )
       : form.creds;
     const rootId = usesRootDirectoryID(form.kind)
@@ -314,8 +318,10 @@ export function DrivesPage() {
 
       if (resp.warning) {
         show(`已保存，但 driver 初始化失败：${resp.warning}`, "error");
+      } else if (resp.deferred) {
+        show(resp.message || "已保存，将在当前网盘任务结束后生效", "success");
       } else {
-        show("已保存", "success");
+        show("已保存并生效", "success");
       }
       setModalOpen(false);
       setInitialForm(form);
@@ -493,9 +499,11 @@ export function DrivesPage() {
     try {
       const resp = await api.setDriveTeaserEnabled(d.id, next);
       show(
-        resp.teaserEnabled
-          ? `已开启「${d.name || d.id}」的预览视频生成`
-          : `已关闭「${d.name || d.id}」的预览视频生成`,
+        resp.deferred
+          ? resp.message || "已保存，将在当前网盘任务结束后生效"
+          : resp.teaserEnabled
+            ? `已开启「${d.name || d.id}」的预览视频生成`
+            : `已关闭「${d.name || d.id}」的预览视频生成`,
         "success"
       );
       setList((prev) =>

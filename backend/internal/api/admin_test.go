@@ -26,6 +26,38 @@ import (
 	"github.com/video-site/backend/internal/drives/scriptcrawler"
 )
 
+type adminTestDriveConfigLease struct {
+	busyReason     string
+	deferred       bool
+	scope          DriveConfigUpdateScope
+	committedScope DriveConfigUpdateScope
+	pendingApply   []func() error
+	released       bool
+}
+
+func (lease *adminTestDriveConfigLease) Authorize(scope DriveConfigUpdateScope) string {
+	lease.scope = scope
+	return lease.busyReason
+}
+
+func (lease *adminTestDriveConfigLease) Commit(scope DriveConfigUpdateScope, apply func() error) (bool, error) {
+	lease.committedScope |= scope
+	if lease.deferred {
+		if apply != nil {
+			lease.pendingApply = append(lease.pendingApply, apply)
+		}
+		return true, nil
+	}
+	if apply == nil {
+		return false, nil
+	}
+	return false, apply()
+}
+
+func (lease *adminTestDriveConfigLease) Release() {
+	lease.released = true
+}
+
 func TestHandleUpdateVideoRejectsReadOnlyTitleAndAuthor(t *testing.T) {
 	ctx := context.Background()
 	cat, err := catalog.Open(t.TempDir() + "/catalog.db")
@@ -924,7 +956,7 @@ func TestHandleStopAllTasksInvokesHookAndReturnsStatus(t *testing.T) {
 	}
 }
 
-func TestHandleUpsertDrivePreservesExistingCredentialsWhenRequestCredentialsEmpty(t *testing.T) {
+func TestHandleUpsertDriveMetadataOnlySaveDoesNotReloadRuntime(t *testing.T) {
 	ctx := context.Background()
 	cat, err := catalog.Open(t.TempDir() + "/catalog.db")
 	if err != nil {
@@ -946,7 +978,8 @@ func TestHandleUpsertDrivePreservesExistingCredentialsWhenRequestCredentialsEmpt
 		Credentials: map[string]string{
 			"cookie": "existing-cookie",
 		},
-		Status: "ok",
+		Status:        "ok",
+		TeaserEnabled: true,
 	}); err != nil {
 		t.Fatalf("seed drive: %v", err)
 	}
@@ -960,8 +993,20 @@ func TestHandleUpsertDrivePreservesExistingCredentialsWhenRequestCredentialsEmpt
 		"credentials": {}
 	}`))
 	rr := httptest.NewRecorder()
+	runtimeReloads := 0
+	lease := &adminTestDriveConfigLease{}
+	server := &AdminServer{
+		Catalog: cat,
+		BeginDriveConfigUpdate: func(string) (DriveConfigUpdateLease, string) {
+			return lease, ""
+		},
+		OnDriveRuntimeConfigChanged: func(string) error {
+			runtimeReloads++
+			return nil
+		},
+	}
 
-	(&AdminServer{Catalog: cat}).handleUpsertDrive(rr, req)
+	server.handleUpsertDrive(rr, req)
 
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", rr.Code, rr.Body.String())
@@ -981,6 +1026,65 @@ func TestHandleUpsertDrivePreservesExistingCredentialsWhenRequestCredentialsEmpt
 	}
 	if len(got.SkipDirIDs) != 1 || got.SkipDirIDs[0] != "keep-skipped" {
 		t.Fatalf("skip dir ids = %#v, want preserved setting", got.SkipDirIDs)
+	}
+	if got.Status != "ok" {
+		t.Fatalf("status = %q, want preserved ok", got.Status)
+	}
+	if runtimeReloads != 0 {
+		t.Fatalf("runtime reloads = %d, want 0 for metadata-only save", runtimeReloads)
+	}
+	if lease.scope != 0 || !lease.released {
+		t.Fatalf("config lease scope/released = %v/%v, want metadata-only released lease", lease.scope, lease.released)
+	}
+}
+
+func TestDriveRuntimeReloadRequired(t *testing.T) {
+	base := &catalog.Drive{
+		ID:            "drive-main",
+		Kind:          "onedrive",
+		Name:          "Old name",
+		RootID:        "root",
+		TeaserEnabled: true,
+		Credentials:   map[string]string{"refresh_token": "persisted-refresh"},
+	}
+	tests := []struct {
+		name string
+		next *catalog.Drive
+		want bool
+	}{
+		{
+			name: "metadata only",
+			next: &catalog.Drive{ID: "drive-main", Kind: "onedrive", Name: "New name", RootID: "root", TeaserEnabled: false},
+		},
+		{
+			name: "root changed",
+			next: &catalog.Drive{ID: "drive-main", Kind: "onedrive", RootID: "other-root"},
+			want: true,
+		},
+		{
+			name: "credential patch",
+			next: &catalog.Drive{ID: "drive-main", Kind: "onedrive", RootID: "root", Credentials: map[string]string{"refresh_token": "replacement"}},
+			want: true,
+		},
+		{
+			name: "kind changed",
+			next: &catalog.Drive{ID: "drive-main", Kind: "pikpak", RootID: "root"},
+			want: true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := driveRuntimeReloadRequired(base, test.next); got != test.want {
+				t.Fatalf("driveRuntimeReloadRequired() = %v, want %v", got, test.want)
+			}
+		})
+	}
+	if !driveRuntimeReloadRequired(nil, &catalog.Drive{Kind: "onedrive", RootID: "root"}) {
+		t.Fatal("new drive did not require runtime reload")
+	}
+	crawler := &catalog.Drive{ID: "crawler-main", Kind: scriptcrawler.Kind, RootID: "/"}
+	if !driveRuntimeReloadRequired(crawler, crawler) {
+		t.Fatal("script crawler save did not require runtime reload")
 	}
 }
 
@@ -1028,6 +1132,85 @@ func TestHandleUpsertDriveClearsSkipDirsWhenExplicitlyRequested(t *testing.T) {
 	}
 }
 
+func TestDriveTaskSensitiveSettingHandlersSaveAndDeferApply(t *testing.T) {
+	ctx := context.Background()
+	cat, err := catalog.Open(t.TempDir() + "/catalog.db")
+	if err != nil {
+		t.Fatalf("open catalog: %v", err)
+	}
+	t.Cleanup(func() { _ = cat.Close() })
+	if err := cat.UpsertDrive(ctx, &catalog.Drive{
+		ID:            "drive-main",
+		Kind:          "onedrive",
+		Name:          "OneDrive",
+		RootID:        "root",
+		TeaserEnabled: true,
+		SkipDirIDs:    []string{"old-dir"},
+	}); err != nil {
+		t.Fatalf("seed drive: %v", err)
+	}
+
+	withDriveID := func(req *http.Request) *http.Request {
+		routeCtx := chi.NewRouteContext()
+		routeCtx.URLParams.Add("id", "drive-main")
+		return req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, routeCtx))
+	}
+
+	t.Run("preview", func(t *testing.T) {
+		lease := &adminTestDriveConfigLease{deferred: true}
+		callbackCalled := false
+		server := &AdminServer{
+			Catalog: cat,
+			BeginDriveConfigUpdate: func(string) (DriveConfigUpdateLease, string) {
+				return lease, ""
+			},
+			OnTeaserEnabledChanged: func(string, bool) { callbackCalled = true },
+		}
+		req := withDriveID(httptest.NewRequest(http.MethodPost, "/admin/api/drives/drive-main/teaser-enabled", strings.NewReader(`{"enabled":false}`)))
+		rr := httptest.NewRecorder()
+		server.handleSetDriveTeaserEnabled(rr, req)
+		if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), `"deferred":true`) {
+			t.Fatalf("status = %d, body=%s", rr.Code, rr.Body.String())
+		}
+		got, err := cat.GetDrive(ctx, "drive-main")
+		if err != nil {
+			t.Fatalf("get drive: %v", err)
+		}
+		if got.TeaserEnabled || callbackCalled {
+			t.Fatalf("teaser persisted/callback = %v/%v, want false/deferred", got.TeaserEnabled, callbackCalled)
+		}
+		if lease.scope != DriveConfigUpdatePreview || lease.committedScope != DriveConfigUpdatePreview || !lease.released {
+			t.Fatalf("lease scopes/released = %v/%v/%v", lease.scope, lease.committedScope, lease.released)
+		}
+	})
+
+	t.Run("skip directories", func(t *testing.T) {
+		lease := &adminTestDriveConfigLease{deferred: true}
+		server := &AdminServer{
+			Catalog: cat,
+			BeginDriveConfigUpdate: func(string) (DriveConfigUpdateLease, string) {
+				return lease, ""
+			},
+		}
+		req := withDriveID(httptest.NewRequest(http.MethodPost, "/admin/api/drives/drive-main/skip-dirs", strings.NewReader(`{"dirIds":["new-dir"]}`)))
+		rr := httptest.NewRecorder()
+		server.handleSetDriveSkipDirs(rr, req)
+		if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), `"deferred":true`) {
+			t.Fatalf("status = %d, body=%s", rr.Code, rr.Body.String())
+		}
+		got, err := cat.GetDrive(ctx, "drive-main")
+		if err != nil {
+			t.Fatalf("get drive: %v", err)
+		}
+		if len(got.SkipDirIDs) != 1 || got.SkipDirIDs[0] != "new-dir" {
+			t.Fatalf("skip dirs = %#v, want saved desired value", got.SkipDirIDs)
+		}
+		if lease.scope != DriveConfigUpdateScan || lease.committedScope != DriveConfigUpdateScan || !lease.released {
+			t.Fatalf("lease scopes/released = %v/%v/%v", lease.scope, lease.committedScope, lease.released)
+		}
+	})
+}
+
 func TestHandleUpsertDriveDefaultsEmptyRootID(t *testing.T) {
 	ctx := context.Background()
 	cat, err := catalog.Open(t.TempDir() + "/catalog.db")
@@ -1066,6 +1249,64 @@ func TestHandleUpsertDriveDefaultsEmptyRootID(t *testing.T) {
 	}
 }
 
+func TestHandleUpsertDriveSavesBusyRuntimeAndDefersReload(t *testing.T) {
+	ctx := context.Background()
+	cat, err := catalog.Open(t.TempDir() + "/catalog.db")
+	if err != nil {
+		t.Fatalf("open catalog: %v", err)
+	}
+	t.Cleanup(func() { _ = cat.Close() })
+	if err := cat.UpsertDrive(ctx, &catalog.Drive{
+		ID:          "quark-main",
+		Kind:        "quark",
+		Name:        "Quark",
+		RootID:      "0",
+		Credentials: map[string]string{"cookie": "old-cookie"},
+		Status:      "ok",
+	}); err != nil {
+		t.Fatalf("seed drive: %v", err)
+	}
+
+	lease := &adminTestDriveConfigLease{deferred: true}
+	reloaded := false
+	server := &AdminServer{
+		Catalog: cat,
+		BeginDriveConfigUpdate: func(string) (DriveConfigUpdateLease, string) {
+			return lease, ""
+		},
+		OnDriveRuntimeConfigChanged: func(string) error {
+			reloaded = true
+			return nil
+		},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/drives", strings.NewReader(`{
+		"id":"quark-main",
+		"kind":"quark",
+		"name":"Quark",
+		"rootId":"0",
+		"credentials":{"cookie":"new-cookie"}
+	}`))
+	rr := httptest.NewRecorder()
+	server.handleUpsertDrive(rr, req)
+
+	if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), `"deferred":true`) {
+		t.Fatalf("status/body = %d/%q, want deferred success", rr.Code, rr.Body.String())
+	}
+	got, err := cat.GetDrive(ctx, "quark-main")
+	if err != nil {
+		t.Fatalf("get drive: %v", err)
+	}
+	if got.Credentials["cookie"] != "new-cookie" {
+		t.Fatalf("desired credentials were not saved: %#v", got.Credentials)
+	}
+	if reloaded {
+		t.Fatal("runtime reload ran before deferred callback")
+	}
+	if lease.scope != DriveConfigUpdateRuntime || lease.committedScope != DriveConfigUpdateRuntime || !lease.released {
+		t.Fatalf("lease scopes/released = %v/%v/%v", lease.scope, lease.committedScope, lease.released)
+	}
+}
+
 func TestHandleUpsertDriveReplacesExistingCredentialsWhenProvided(t *testing.T) {
 	ctx := context.Background()
 	cat, err := catalog.Open(t.TempDir() + "/catalog.db")
@@ -1101,8 +1342,16 @@ func TestHandleUpsertDriveReplacesExistingCredentialsWhenProvided(t *testing.T) 
 		"credentials": {"cookie": "new-cookie"}
 	}`))
 	rr := httptest.NewRecorder()
+	runtimeReloads := 0
+	server := &AdminServer{
+		Catalog: cat,
+		OnDriveRuntimeConfigChanged: func(string) error {
+			runtimeReloads++
+			return nil
+		},
+	}
 
-	(&AdminServer{Catalog: cat}).handleUpsertDrive(rr, req)
+	server.handleUpsertDrive(rr, req)
 
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", rr.Code, rr.Body.String())
@@ -1113,6 +1362,9 @@ func TestHandleUpsertDriveReplacesExistingCredentialsWhenProvided(t *testing.T) 
 	}
 	if got.Credentials["cookie"] != "new-cookie" {
 		t.Fatalf("cookie credential = %q, want new-cookie", got.Credentials["cookie"])
+	}
+	if runtimeReloads != 1 {
+		t.Fatalf("runtime reloads = %d, want 1 for credential change", runtimeReloads)
 	}
 }
 
@@ -1173,6 +1425,53 @@ func TestHandleUpsertPikPakPatchesCredentials(t *testing.T) {
 		if got.Credentials[key] != want {
 			t.Fatalf("credential %s = %q, want %q; all=%#v", key, got.Credentials[key], want, got.Credentials)
 		}
+	}
+}
+
+func TestHandleUpsertOneDrivePatchesRuntimeTokens(t *testing.T) {
+	ctx := context.Background()
+	cat, err := catalog.Open(t.TempDir() + "/catalog.db")
+	if err != nil {
+		t.Fatalf("open catalog: %v", err)
+	}
+	t.Cleanup(func() { _ = cat.Close() })
+
+	if err := cat.UpsertDrive(ctx, &catalog.Drive{
+		ID:     "onedrive-main",
+		Kind:   "onedrive",
+		Name:   "OneDrive",
+		RootID: "root",
+		Credentials: map[string]string{
+			"access_token":  "runtime-access",
+			"refresh_token": "runtime-refresh",
+			"region":        "global",
+		},
+	}); err != nil {
+		t.Fatalf("seed drive: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/drives", bytes.NewBufferString(`{
+		"id": "onedrive-main",
+		"kind": "onedrive",
+		"name": "Renamed OneDrive",
+		"rootId": "root",
+		"credentials": {"region": "cn"}
+	}`))
+	rr := httptest.NewRecorder()
+	(&AdminServer{Catalog: cat}).handleUpsertDrive(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rr.Code, rr.Body.String())
+	}
+	got, err := cat.GetDrive(ctx, "onedrive-main")
+	if err != nil {
+		t.Fatalf("get drive: %v", err)
+	}
+	if got.Name != "Renamed OneDrive" || got.Credentials["region"] != "cn" {
+		t.Fatalf("editable settings not updated: %+v", got)
+	}
+	if got.Credentials["access_token"] != "runtime-access" || got.Credentials["refresh_token"] != "runtime-refresh" {
+		t.Fatalf("runtime tokens were replaced: %#v", got.Credentials)
 	}
 }
 
@@ -1477,7 +1776,9 @@ func TestHandleDeleteDriveRunsRequestedCleanupBeforeDeletingDrive(t *testing.T) 
 	}
 
 	cleanupCalled := ""
+	preparedCalled := ""
 	removedCalled := ""
+	lease := &adminTestDriveConfigLease{}
 	req := httptest.NewRequest(http.MethodDelete, "/admin/api/drives/drive-one", strings.NewReader(`{"deleteVideos":true}`))
 	rctx := chi.NewRouteContext()
 	rctx.URLParams.Add("id", "drive-one")
@@ -1486,7 +1787,20 @@ func TestHandleDeleteDriveRunsRequestedCleanupBeforeDeletingDrive(t *testing.T) 
 
 	(&AdminServer{
 		Catalog: cat,
+		BeginDriveConfigUpdate: func(driveID string) (DriveConfigUpdateLease, string) {
+			if driveID != "drive-one" {
+				t.Fatalf("begin delete lease for %q", driveID)
+			}
+			return lease, ""
+		},
+		OnPrepareDriveDelete: func(_ context.Context, driveID string) error {
+			preparedCalled = driveID
+			return nil
+		},
 		OnDriveDeleteCleanup: func(cleanupCtx context.Context, driveID string) (int, error) {
+			if preparedCalled != driveID {
+				t.Fatal("cleanup ran before task stop-and-drain preparation")
+			}
 			cleanupCalled = driveID
 			if _, err := cat.GetDrive(cleanupCtx, driveID); err != nil {
 				t.Fatalf("drive should still exist during cleanup: %v", err)
@@ -1501,8 +1815,14 @@ func TestHandleDeleteDriveRunsRequestedCleanupBeforeDeletingDrive(t *testing.T) 
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", rr.Code, rr.Body.String())
 	}
+	if preparedCalled != "drive-one" {
+		t.Fatalf("prepare called with %q, want drive-one", preparedCalled)
+	}
 	if cleanupCalled != "drive-one" {
 		t.Fatalf("cleanup called with %q, want drive-one", cleanupCalled)
+	}
+	if lease.scope != DriveConfigUpdateDestructive || lease.committedScope != DriveConfigUpdateDestructive || !lease.released {
+		t.Fatalf("delete lease scope/committed/released = %d/%d/%v", lease.scope, lease.committedScope, lease.released)
 	}
 	if removedCalled != "drive-one" {
 		t.Fatalf("removed hook called with %q, want drive-one", removedCalled)
@@ -1562,6 +1882,50 @@ func TestHandleDeleteDriveRequiresCleanupConfirmation(t *testing.T) {
 	}
 	if _, err := cat.GetDrive(ctx, "drive-one"); err != nil {
 		t.Fatalf("drive should remain after rejected delete: %v", err)
+	}
+}
+
+func TestHandleDeleteDriveKeepsDriveWhenTaskDrainFails(t *testing.T) {
+	ctx := context.Background()
+	cat, err := catalog.Open(t.TempDir() + "/catalog.db")
+	if err != nil {
+		t.Fatalf("open catalog: %v", err)
+	}
+	t.Cleanup(func() { _ = cat.Close() })
+	if err := cat.UpsertDrive(ctx, &catalog.Drive{
+		ID: "drive-one", Kind: "pikpak", Name: "Drive One", RootID: "root",
+	}); err != nil {
+		t.Fatalf("seed drive: %v", err)
+	}
+	lease := &adminTestDriveConfigLease{}
+	req := httptest.NewRequest(http.MethodDelete, "/admin/api/drives/drive-one", strings.NewReader(`{"deleteVideos":true}`))
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("id", "drive-one")
+	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+	rr := httptest.NewRecorder()
+
+	(&AdminServer{
+		Catalog: cat,
+		BeginDriveConfigUpdate: func(string) (DriveConfigUpdateLease, string) {
+			return lease, ""
+		},
+		OnPrepareDriveDelete: func(context.Context, string) error {
+			return errors.New("task did not exit")
+		},
+		OnDriveDeleteCleanup: func(context.Context, string) (int, error) {
+			t.Fatal("cleanup must not run before tasks drain")
+			return 0, nil
+		},
+	}).handleDeleteDrive(rr, req)
+
+	if rr.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500; body = %s", rr.Code, rr.Body.String())
+	}
+	if _, err := cat.GetDrive(ctx, "drive-one"); err != nil {
+		t.Fatalf("drive was removed after drain failure: %v", err)
+	}
+	if lease.committedScope != 0 || !lease.released {
+		t.Fatalf("delete lease committed/released = %d/%v, want 0/true", lease.committedScope, lease.released)
 	}
 }
 
@@ -2408,9 +2772,9 @@ func TestHandleDeleteCrawlerRemovesScriptLocalVideosAndDrive(t *testing.T) {
 			}
 			return 1, nil
 		},
-		OnStopDriveTasks: func(driveID string) bool {
+		OnPrepareDriveDelete: func(_ context.Context, driveID string) error {
 			stopped = driveID == "crawler-delete-me"
-			return true
+			return nil
 		},
 		OnDriveRemoved: func(driveID string) {
 			removed = driveID == "crawler-delete-me"
