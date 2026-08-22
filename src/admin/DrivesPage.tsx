@@ -41,7 +41,8 @@ import { DriveDetailLoading, DriveListSkeleton } from "./DrivesPageLoading";
 import { DriveForm } from "./drive/DriveForm";
 import {
   changedCredentialValues,
-  newDriveCredentialError,
+  driveCredentialsForForm,
+  driveCredentialError,
 } from "./drive/credentials";
 import { DeleteDriveModal } from "./drive/DeleteDriveModal";
 import { SkipDirsPanel } from "./drive/SkipDirsPanel";
@@ -219,7 +220,10 @@ export function DrivesPage() {
     setEditingCredentialsId(d.id);
     try {
       const result = await api.getDriveCredentials(d.id);
-      const creds = { ...(result.credentials ?? {}) };
+      const creds = driveCredentialsForForm(
+        d.kind,
+        result.credentials ?? {}
+      );
       if (d.kind === "localstorage" && !("strm_allow_outside_root" in creds)) {
         creds.strm_allow_outside_root = (d.strmAllowOutsideRoot ?? false) ? "true" : "false";
       }
@@ -272,12 +276,12 @@ export function DrivesPage() {
       show("请填写网盘名称", "error");
       return;
     }
+    const credentialError = driveCredentialError(form.kind, form.creds, !form.id);
+    if (credentialError) {
+      show(credentialError, "error");
+      return;
+    }
     if (!form.id) {
-      const credentialError = newDriveCredentialError(form.kind, form.creds);
-      if (credentialError) {
-        show(credentialError, "error");
-        return;
-      }
       const missingField = credentialFields(form.kind).find(
         (field) =>
           field.required &&

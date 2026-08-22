@@ -99,6 +99,18 @@ func googleDriveCredentialPatch(incoming map[string]string) map[string]string {
 	return cleaned
 }
 
+// Preserve explicit empty custom-client values in an edit patch so switching
+// an existing OneDrive mount back to OpenList API also clears the old secret.
+func oneDriveCredentialPatch(incoming map[string]string) map[string]string {
+	cleaned := nonEmptyCredentials(incoming)
+	for _, key := range []string{"client_id", "client_secret"} {
+		if value, ok := incoming[key]; ok {
+			cleaned[key] = strings.TrimSpace(value)
+		}
+	}
+	return cleaned
+}
+
 // mergeNonEmptyCredentials 逐键合并凭证：incoming 里非空的键覆盖旧值，
 // 空值/缺失的键沿用旧值。quark、googledrive、webdav、localstorage 和 guangyapan 的编辑表单都依赖
 // 这个语义（留空 = 不修改）。

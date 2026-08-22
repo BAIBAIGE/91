@@ -75,6 +75,107 @@ func TestInitRefreshesTokenThroughOpenListOnlineAPIAndPersistsUpdate(t *testing.
 	}
 }
 
+func TestInitRefreshesTokenWithCustomOAuthClientAndPersistsUpdate(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/common/oauth2/v2.0/token" {
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.String())
+		}
+		if err := r.ParseForm(); err != nil {
+			t.Fatalf("parse form: %v", err)
+		}
+		want := map[string]string{
+			"grant_type":    "refresh_token",
+			"client_id":     "custom-client-id",
+			"client_secret": "custom-client-secret",
+			"refresh_token": "old-refresh",
+		}
+		for key, value := range want {
+			if got := r.Form.Get(key); got != value {
+				t.Fatalf("form %s = %q, want %q", key, got, value)
+			}
+		}
+		writeJSON(t, w, map[string]any{
+			"access_token":  "new-access",
+			"refresh_token": "new-refresh",
+			"expires_in":    3600,
+		})
+	}))
+	defer srv.Close()
+
+	var persistedAccess, persistedRefresh string
+	d := New(Config{
+		ID:           "od-custom",
+		RefreshToken: "old-refresh",
+		AuthMode:     authModeCustomApp,
+		ClientID:     "custom-client-id",
+		ClientSecret: "custom-client-secret",
+		OAuthURL:     srv.URL + "/common/oauth2/v2.0/token",
+		OnTokenUpdate: func(access, refresh string) {
+			persistedAccess = access
+			persistedRefresh = refresh
+		},
+	})
+
+	if err := d.Init(context.Background()); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	if persistedAccess != "new-access" || persistedRefresh != "new-refresh" {
+		t.Fatalf("persisted tokens = %q/%q, want new-access/new-refresh", persistedAccess, persistedRefresh)
+	}
+}
+
+func TestInitRejectsIncompleteCustomOAuthClient(t *testing.T) {
+	tests := []struct {
+		name         string
+		clientID     string
+		clientSecret string
+	}{
+		{name: "missing secret", clientID: "custom-client-id"},
+		{name: "missing id", clientSecret: "custom-client-secret"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := New(Config{
+				RefreshToken: "refresh-token",
+				AuthMode:     authModeCustomApp,
+				ClientID:     tt.clientID,
+				ClientSecret: tt.clientSecret,
+			})
+			err := d.Init(context.Background())
+			if err == nil || !strings.Contains(err.Error(), "client_id and client_secret must be provided together") {
+				t.Fatalf("init error = %v, want incomplete custom client error", err)
+			}
+		})
+	}
+}
+
+func TestExplicitOpenListAuthModeIgnoresStoredCustomOAuthCredentials(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/renewapi" {
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.String())
+		}
+		writeJSON(t, w, map[string]any{
+			"access_token":  "online-access",
+			"refresh_token": "online-refresh",
+		})
+	}))
+	defer srv.Close()
+
+	d := New(Config{
+		RefreshToken: "old-refresh",
+		AuthMode:     authModeOpenListAPI,
+		ClientID:     "stale-client-id",
+		ClientSecret: "stale-client-secret",
+		RenewAPIURL:  srv.URL + "/renewapi",
+	})
+	if err := d.Init(context.Background()); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	if got := d.tokenSnapshot(); got.access != "online-access" || got.refresh != "online-refresh" {
+		t.Fatalf("tokens = %#v, want OpenList API response", got)
+	}
+}
+
 func TestConcurrentUnauthorizedRequestsShareOneTokenRefresh(t *testing.T) {
 	var oldRequests atomic.Int32
 	var refreshes atomic.Int32

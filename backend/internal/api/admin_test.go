@@ -1585,6 +1585,68 @@ func TestHandleUpsertGoogleDriveMergesOAuthCredentials(t *testing.T) {
 	}
 }
 
+func TestHandleUpsertOneDriveCanClearCustomOAuthCredentials(t *testing.T) {
+	ctx := context.Background()
+	cat, err := catalog.Open(t.TempDir() + "/catalog.db")
+	if err != nil {
+		t.Fatalf("open catalog: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := cat.Close(); err != nil {
+			t.Fatalf("close catalog: %v", err)
+		}
+	})
+
+	if err := cat.UpsertDrive(ctx, &catalog.Drive{
+		ID:     "onedrive-main",
+		Kind:   "onedrive",
+		Name:   "OneDrive",
+		RootID: "root",
+		Credentials: map[string]string{
+			"refresh_token": "existing-refresh",
+			"access_token":  "existing-access",
+			"auth_mode":     "custom_app",
+			"client_id":     "custom-client-id",
+			"client_secret": "custom-client-secret",
+		},
+		Status: "ok",
+	}); err != nil {
+		t.Fatalf("seed drive: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/drives", bytes.NewBufferString(`{
+		"id": "onedrive-main",
+		"kind": "onedrive",
+		"name": "OneDrive",
+		"rootId": "root",
+		"credentials": {
+			"auth_mode": "openlist_api",
+			"client_id": "",
+			"client_secret": ""
+		}
+	}`))
+	rr := httptest.NewRecorder()
+
+	(&AdminServer{Catalog: cat}).handleUpsertDrive(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rr.Code, rr.Body.String())
+	}
+	got, err := cat.GetDrive(ctx, "onedrive-main")
+	if err != nil {
+		t.Fatalf("get drive: %v", err)
+	}
+	if got.Credentials["client_id"] != "" || got.Credentials["client_secret"] != "" {
+		t.Fatalf("custom oauth credentials were not cleared: %#v", got.Credentials)
+	}
+	if got.Credentials["auth_mode"] != "openlist_api" {
+		t.Fatalf("auth mode = %q, want openlist_api", got.Credentials["auth_mode"])
+	}
+	if got.Credentials["refresh_token"] != "existing-refresh" || got.Credentials["access_token"] != "existing-access" {
+		t.Fatalf("tokens were not preserved: %#v", got.Credentials)
+	}
+}
+
 func TestHandleUpsertWebDAVMergesCredentials(t *testing.T) {
 	ctx := context.Background()
 	cat, err := catalog.Open(t.TempDir() + "/catalog.db")

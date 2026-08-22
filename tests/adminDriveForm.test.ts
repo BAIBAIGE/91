@@ -199,7 +199,7 @@ test("drive form labels the optional root directory and hides it for localstorag
   assert.doesNotMatch(combinedSource, /set\("scanRootId"/);
 });
 
-test("onedrive drive form only exposes required default-app fields", () => {
+test("onedrive drive form supports default and custom OAuth applications", () => {
   const match =
     /case "onedrive":\s*return \[([\s\S]*?)\];\s*case "googledrive":/.exec(
       combinedSource
@@ -207,12 +207,31 @@ test("onedrive drive form only exposes required default-app fields", () => {
   assert.ok(match, "onedrive credential field block should be present");
   const fields = match[1];
 
+  assert.match(fields, /key: "auth_mode"/);
+  assert.match(fields, /label: "认证方式"/);
+  assert.match(fields, /defaultValue: ONEDRIVE_AUTH_MODE_OPENLIST_API/);
+  assert.match(fields, /label: "OpenList API"/);
+  assert.match(fields, /label: "自建应用"/);
+  assert.match(fields, /key: "client_id"/);
+  assert.match(fields, /label: "客户端 ID"/);
+  assert.match(fields, /key: "client_secret"/);
+  assert.match(fields, /label: "客户端密钥"/);
+  assert.match(fields, /visibleWhen:[\s\S]*?ONEDRIVE_AUTH_MODE_CUSTOM_APP/);
+  assert.match(fields, /请填写客户端密钥值，不是密钥 ID/);
   assert.match(fields, /key: "refresh_token"/);
+  assert.match(fields, /与所用应用匹配的 OneDrive refresh_token/);
   assert.doesNotMatch(fields, /key: "access_token"/);
   assert.doesNotMatch(fields, /key: "api_url_address"/);
   assert.doesNotMatch(fields, /key: "region"/);
   assert.doesNotMatch(fields, /key: "is_sharepoint"/);
   assert.doesNotMatch(fields, /key: "site_id"/);
+  assert.match(driveFormSource, /const visibleFields = fields\.filter/);
+  assert.match(driveFormSource, /\{visibleFields\.map\(\(f\) => \(/);
+  assert.match(
+    driveFormSource,
+    /v === ONEDRIVE_AUTH_MODE_OPENLIST_API[\s\S]*?creds\.client_id = "";[\s\S]*?creds\.client_secret = "";/
+  );
+  assert.match(drivesPageSource, /driveCredentialsForForm\(/);
 });
 
 test("googledrive drive form only supports a custom OAuth client", () => {
@@ -283,7 +302,10 @@ test("pikpak drive form presents email login before refresh token fallback", () 
     driveFormSource,
     /className="admin-form__method-label">\{f\.methodLabel\}<\/div>/
   );
-  assert.match(drivesPageSource, /newDriveCredentialError\(form\.kind, form\.creds\)/);
+  assert.match(
+    drivesPageSource,
+    /driveCredentialError\(form\.kind, form\.creds, !form\.id\)/
+  );
   assert.match(drivesPageSource, /changedCredentialValues\(/);
 });
 
