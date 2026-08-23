@@ -3106,8 +3106,8 @@ type Drive struct {
 	// 替代早期的全局 preview.enabled 开关；新建 drive 时 UpsertDrive 默认置 true。
 	TeaserEnabled bool `json:"teaserEnabled"`
 	// SkipDirIDs 是用户在管理后台为该盘选定的"扫描跳过目录"集合（网盘侧的目录 fileID）。
-	// scanner 在 walk 时命中其中任意一个就直接 continue —— 不递归、不收集文件，也
-	// 不参与 stats 统计。替代旧版硬编码"影视"目录的特例分支。
+	// scanner 发现阶段命中后不递归、不收集文件，也不参与 presence 统计。完整根
+	// 扫描时，该目录的历史记录会按连续缺失确认策略退出媒体库管理范围。
 	// 含义按"目录 ID 自身"匹配，所以同名目录在不同父级下需要分别选定。
 	SkipDirIDs []string  `json:"skipDirIds,omitempty"`
 	CreatedAt  time.Time `json:"createdAt"`

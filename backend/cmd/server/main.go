@@ -479,7 +479,7 @@ func main() {
 	mountFrontend(r)
 
 	// 凌晨流水线：每天按后台可热更新的 HH:mm + IANA 时区触发一次，串行跑
-	//   Phase 1 扫所有非爬虫 / localupload 网盘 + 删除检测 + 入队封面/预览视频
+	//   Phase 1 扫所有非爬虫 / localupload 网盘 + 连续缺失确认清理 + 入队封面/预览视频
 	//   Phase 2 脚本爬虫 + 入队预览视频
 	//   Phase 3 爬虫本地视频 → 云盘上传
 	//   Phase 4 扫描爬虫本地目录并恢复已取消拉黑的视频

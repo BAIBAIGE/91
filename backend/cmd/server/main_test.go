@@ -2539,6 +2539,98 @@ func TestCleanupMissingPikPakVideosRemovesDatabaseRowsAndLocalAssets(t *testing.
 	}
 }
 
+func TestFullRootScanDeletesSkippedDirectoryVideoAndAssetsAfterTwoConfirmations(t *testing.T) {
+	ctx := context.Background()
+	localDir := t.TempDir()
+	cat, err := catalog.Open(t.TempDir() + "/catalog.db")
+	if err != nil {
+		t.Fatalf("open catalog: %v", err)
+	}
+	t.Cleanup(func() { _ = cat.Close() })
+
+	const (
+		driveID = "skip-drive"
+		videoID = "fake-skip-drive-skipped-file"
+	)
+	if err := cat.UpsertDrive(ctx, &catalog.Drive{
+		ID:         driveID,
+		Kind:       "fake",
+		Name:       "Skip Drive",
+		RootID:     "root",
+		SkipDirIDs: []string{"skip-dir"},
+	}); err != nil {
+		t.Fatalf("seed drive: %v", err)
+	}
+
+	previewPath := filepath.Join(localDir, "skipped-preview.mp4")
+	thumbnailPath := filepath.Join(localDir, "thumbs", videoID+".jpg")
+	for _, assetPath := range []string{previewPath, thumbnailPath} {
+		if err := os.MkdirAll(filepath.Dir(assetPath), 0o755); err != nil {
+			t.Fatalf("mkdir asset directory: %v", err)
+		}
+		if err := os.WriteFile(assetPath, []byte("generated asset"), 0o644); err != nil {
+			t.Fatalf("write asset: %v", err)
+		}
+	}
+	now := time.Now()
+	if err := cat.UpsertVideo(ctx, &catalog.Video{
+		ID:            videoID,
+		DriveID:       driveID,
+		FileID:        "skipped-file",
+		FileName:      "skipped.mp4",
+		ParentID:      "skip-dir",
+		DirName:       "Skipped",
+		Title:         "Skipped",
+		Size:          123,
+		PreviewStatus: "ready",
+		PreviewLocal:  previewPath,
+		ThumbnailURL:  "/p/thumb/" + videoID,
+		PublishedAt:   now,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}); err != nil {
+		t.Fatalf("seed skipped video: %v", err)
+	}
+
+	drv := &serverTreeScanDrive{
+		id: driveID,
+		entries: map[string][]drives.Entry{
+			"root":     {{ID: "skip-dir", Name: "Skipped", IsDir: true}},
+			"skip-dir": {{ID: "skipped-file", Name: "skipped.mp4", Size: 123}},
+		},
+	}
+	registry := proxy.NewRegistry()
+	registry.Set(driveID, drv)
+	app := &App{
+		cfg: &config.Config{
+			Scanner: config.Scanner{VideoExtensions: []string{".mp4"}},
+			Storage: config.Storage{LocalPreviewDir: localDir},
+		},
+		cat:      cat,
+		registry: registry,
+	}
+
+	app.runScan(ctx, driveID)
+	if _, err := cat.GetVideo(ctx, videoID); err != nil {
+		t.Fatalf("video removed after first missing confirmation: %v", err)
+	}
+	for _, assetPath := range []string{previewPath, thumbnailPath} {
+		if _, err := os.Stat(assetPath); err != nil {
+			t.Fatalf("asset removed after first confirmation: %s: %v", assetPath, err)
+		}
+	}
+
+	app.runScan(ctx, driveID)
+	if _, err := cat.GetVideo(ctx, videoID); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("skipped video lookup after second scan = %v, want sql.ErrNoRows", err)
+	}
+	for _, assetPath := range []string{previewPath, thumbnailPath} {
+		if _, err := os.Stat(assetPath); !os.IsNotExist(err) {
+			t.Fatalf("asset still exists after second scan: %s: %v", assetPath, err)
+		}
+	}
+}
+
 func TestCleanupDriveVideosForDeleteRemovesRowsAndGeneratedAssetsOnly(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
@@ -3665,6 +3757,17 @@ type serverListResultDrive struct {
 
 func (d *serverListResultDrive) List(context.Context, string) ([]drives.Entry, error) {
 	return d.entries, d.err
+}
+
+type serverTreeScanDrive struct {
+	serverFakeDrive
+	id      string
+	entries map[string][]drives.Entry
+}
+
+func (d *serverTreeScanDrive) ID() string { return d.id }
+func (d *serverTreeScanDrive) List(_ context.Context, dirID string) ([]drives.Entry, error) {
+	return d.entries[dirID], nil
 }
 
 type serverRemovableFakeDrive struct {
