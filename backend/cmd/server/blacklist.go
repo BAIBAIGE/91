@@ -621,35 +621,5 @@ func removeLocalVideoAssets(localDir string, v *catalog.Video) error {
 	if localDir == "" || v == nil || v.ID == "" {
 		return nil
 	}
-	candidates := []string{
-		v.PreviewLocal,
-	}
-	candidates = append(candidates, mediaasset.PreviewPathCandidates(localDir, v.ID)...)
-	candidates = append(candidates, mediaasset.ThumbnailAssetPathCandidates(localDir, v.ID)...)
-	candidates = append(candidates, mediaasset.FrameSignaturePath(localDir, v.ID))
-	seen := make(map[string]struct{}, len(candidates))
-	for _, candidate := range candidates {
-		clean, ok := localPathWithin(localDir, candidate)
-		if !ok {
-			continue
-		}
-		if _, ok := seen[clean]; ok {
-			continue
-		}
-		seen[clean] = struct{}{}
-		info, err := os.Stat(clean)
-		if err != nil {
-			if os.IsNotExist(err) {
-				continue
-			}
-			return err
-		}
-		if !info.Mode().IsRegular() {
-			continue
-		}
-		if err := os.Remove(clean); err != nil && !os.IsNotExist(err) {
-			return err
-		}
-	}
-	return nil
+	return mediaasset.RemoveGeneratedVideoAssets(localDir, v.ID, v.PreviewLocal)
 }

@@ -805,11 +805,17 @@ func (c *Crawler) processItem(ctx context.Context, item Item) (bool, error) {
 	// Coordinate only the final file/catalog cleanup and publication.
 	persistence.RLock()
 	defer persistence.RUnlock()
+	publishedByReplacement := false
 	if duplicate != nil && duplicate.video != nil {
 		if v.Size > duplicate.video.Size {
-			if err := c.cfg.Catalog.DeleteVideoWithTombstoneOptions(ctx, duplicate.video.ID, catalog.DeleteVideoTombstoneOptions{
-				Reason:           catalog.DeletedVideoReasonDuplicate,
-				CanonicalVideoID: v.ID,
+			if err := c.cfg.Catalog.ReplaceDuplicateVideo(ctx, catalog.DuplicateVideoReplacement{
+				NewVideo:                  v,
+				ReplacedVideoID:           duplicate.video.ID,
+				ExpectedReplacedUpdatedAt: duplicate.video.UpdatedAt.UnixMilli(),
+				CrawlerSource: &catalog.CrawlerSourceSeen{
+					Kind: Kind, DriveID: c.cfg.Driver.ID(), SourceID: sourceID,
+					Status: "imported", SampledSHA256: sampled, Size: size,
+				},
 			}); err != nil {
 				_ = os.Remove(videoPath)
 				if thumbPath != "" {
@@ -818,8 +824,10 @@ func (c *Crawler) processItem(ctx context.Context, item Item) (bool, error) {
 				if commonThumbPath != "" {
 					_ = os.Remove(commonThumbPath)
 				}
-				return false, fmt.Errorf("delete smaller near duplicate %s: %w", duplicate.video.ID, err)
+				return false, fmt.Errorf("replace smaller near duplicate %s: %w", duplicate.video.ID, err)
 			}
+			publishedByReplacement = true
+			c.cleanupReplacedDuplicateAssets(ctx, duplicate.video)
 			log.Printf("[scriptcrawler] drive=%s source_id=%s replacing_smaller_near_duplicate=%s old_size=%d new_size=%d title_similarity=%.3f thumbnail_ssim=%.3f content_ssim=%.3f title=%q duration=%d", c.cfg.Driver.ID(), sourceID, duplicate.video.ID, duplicate.video.Size, v.Size, duplicate.titleSimilarity, duplicate.thumbnailSSIM, duplicate.contentSSIM, title, v.DurationSeconds)
 		} else {
 			_ = os.Remove(videoPath)
@@ -836,9 +844,11 @@ func (c *Crawler) processItem(ctx context.Context, item Item) (bool, error) {
 			return false, nil
 		}
 	}
-	if err := c.cfg.Catalog.UpsertVideo(ctx, v); err != nil {
-		_ = os.Remove(videoPath)
-		return false, err
+	if !publishedByReplacement {
+		if err := c.cfg.Catalog.UpsertVideo(ctx, v); err != nil {
+			_ = os.Remove(videoPath)
+			return false, err
+		}
 	}
 	if len(tagAssignments) > 0 {
 		if _, err := c.cfg.Catalog.AddVideoTagAssignments(ctx, v.ID, tagAssignments); err != nil {
@@ -865,11 +875,30 @@ func (c *Crawler) processItem(ctx context.Context, item Item) (bool, error) {
 			}
 		}
 	}
-	if err := c.cfg.Catalog.MarkCrawlerSourceSeen(ctx, Kind, c.cfg.Driver.ID(), sourceID, "imported", v.ID, sampled, size); err != nil {
-		log.Printf("[scriptcrawler] drive=%s source_id=%s mark imported seen: %v", c.cfg.Driver.ID(), sourceID, err)
+	if !publishedByReplacement {
+		if err := c.cfg.Catalog.MarkCrawlerSourceSeen(ctx, Kind, c.cfg.Driver.ID(), sourceID, "imported", v.ID, sampled, size); err != nil {
+			log.Printf("[scriptcrawler] drive=%s source_id=%s mark imported seen: %v", c.cfg.Driver.ID(), sourceID, err)
+		}
 	}
 	log.Printf("[scriptcrawler] drive=%s source_id=%s ok title=%q size=%d", c.cfg.Driver.ID(), sourceID, title, size)
 	return true, nil
+}
+
+func (c *Crawler) cleanupReplacedDuplicateAssets(ctx context.Context, video *catalog.Video) {
+	if c == nil || c.cfg.Catalog == nil || video == nil || strings.TrimSpace(c.cfg.CommonThumbDir) == "" {
+		return
+	}
+	localDir := filepath.Dir(strings.TrimSpace(c.cfg.CommonThumbDir))
+	if err := mediaasset.RemoveGeneratedVideoAssets(localDir, video.ID, video.PreviewLocal); err != nil {
+		if markErr := c.cfg.Catalog.FailDuplicateAssetCleanupJob(ctx, video.ID, err); markErr != nil {
+			log.Printf("[scriptcrawler] record duplicate asset cleanup failure video=%s: %v", video.ID, markErr)
+		}
+		log.Printf("[scriptcrawler] duplicate asset cleanup video=%s: %v", video.ID, err)
+		return
+	}
+	if err := c.cfg.Catalog.CompleteDuplicateAssetCleanupJob(ctx, video.ID); err != nil {
+		log.Printf("[scriptcrawler] complete duplicate asset cleanup video=%s: %v", video.ID, err)
+	}
 }
 
 // RestoreRequestedVideos scans the crawler's retained local video directory

@@ -1142,6 +1142,10 @@ func (c *Catalog) ListCrawlerSourceIDs(ctx context.Context, kind, driveID string
 // source IDs are included in future seen files so scripts can skip them before
 // the backend downloads the same duplicate content again.
 func (c *Catalog) MarkCrawlerSourceSeen(ctx context.Context, kind, driveID, sourceID, status, canonicalVideoID, sampledSHA256 string, size int64) error {
+	return markCrawlerSourceSeen(ctx, c.db, kind, driveID, sourceID, status, canonicalVideoID, sampledSHA256, size)
+}
+
+func markCrawlerSourceSeen(ctx context.Context, exec videoRowExecer, kind, driveID, sourceID, status, canonicalVideoID, sampledSHA256 string, size int64) error {
 	kind = strings.TrimSpace(kind)
 	driveID = strings.TrimSpace(driveID)
 	sourceID = strings.TrimSpace(sourceID)
@@ -1159,7 +1163,7 @@ func (c *Catalog) MarkCrawlerSourceSeen(ctx context.Context, kind, driveID, sour
 		size = 0
 	}
 	now := time.Now().UnixMilli()
-	_, err := c.db.ExecContext(ctx, `
+	_, err := exec.ExecContext(ctx, `
 INSERT INTO crawler_seen_sources (
   kind, drive_id, source_id, status, canonical_video_id, sampled_sha256, size_bytes, first_seen_at, last_seen_at
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -1269,11 +1273,7 @@ func (c *Catalog) DeleteVideoWithTombstoneOptions(ctx context.Context, id string
 	if options.SourceDeleted {
 		return c.DeleteVideo(ctx, id)
 	}
-	options.Reason = normalizeDeletedVideoReason(options.Reason)
-	options.CanonicalVideoID = strings.TrimSpace(options.CanonicalVideoID)
-	if options.Reason != DeletedVideoReasonDuplicate {
-		options.CanonicalVideoID = ""
-	}
+	options = normalizeDeleteVideoTombstoneOptions(options)
 	tx, err := c.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -1284,6 +1284,28 @@ func (c *Catalog) DeleteVideoWithTombstoneOptions(ctx context.Context, id string
 	if err != nil {
 		return err
 	}
+	if err := deleteVideoWithTombstoneTx(ctx, tx, restoreVideo, options); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func normalizeDeleteVideoTombstoneOptions(options DeleteVideoTombstoneOptions) DeleteVideoTombstoneOptions {
+	options.Reason = normalizeDeletedVideoReason(options.Reason)
+	options.CanonicalVideoID = strings.TrimSpace(options.CanonicalVideoID)
+	if options.Reason != DeletedVideoReasonDuplicate {
+		options.CanonicalVideoID = ""
+	}
+	return options
+}
+
+// deleteVideoWithTombstoneTx moves one already-loaded video into the tombstone
+// table. Owning the transaction in the caller lets a full dedupe plan redirect
+// references and remove every group member atomically.
+func deleteVideoWithTombstoneTx(ctx context.Context, tx *sql.Tx, restoreVideo *Video, options DeleteVideoTombstoneOptions) error {
+	if restoreVideo == nil {
+		return sql.ErrNoRows
+	}
 	restorePayloadData, err := buildDeletedVideoRestorePayload(ctx, tx, restoreVideo)
 	if err != nil {
 		return fmt.Errorf("catalog: encode deleted video restore payload: %w", err)
@@ -1293,7 +1315,7 @@ func (c *Catalog) DeleteVideoWithTombstoneOptions(ctx context.Context, id string
 	restoreVideo.ContentHash = normalizeContentHash(restoreVideo.ContentHash)
 
 	// 先记录这次视频关联的 tag_id，便于事务末尾清理孤儿自动生成标签。
-	tagIDs, err := collectVideoTagIDs(ctx, tx, id)
+	tagIDs, err := collectVideoTagIDs(ctx, tx, restoreVideo.ID)
 	if err != nil {
 		return err
 	}
@@ -1322,16 +1344,16 @@ ON CONFLICT(id) DO UPDATE SET
 		options.Reason, boolToInt(options.SourceDeleted), options.CanonicalVideoID, restorePayload, now); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM video_tags WHERE video_id = ?`, id); err != nil {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM video_tags WHERE video_id = ?`, restoreVideo.ID); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM video_shares WHERE video_id = ?`, id); err != nil {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM video_shares WHERE video_id = ?`, restoreVideo.ID); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM video_reaction_visits WHERE video_id = ?`, id); err != nil {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM video_reaction_visits WHERE video_id = ?`, restoreVideo.ID); err != nil {
 		return err
 	}
-	res, err := tx.ExecContext(ctx, `DELETE FROM videos WHERE id = ?`, id)
+	res, err := tx.ExecContext(ctx, `DELETE FROM videos WHERE id = ?`, restoreVideo.ID)
 	if err != nil {
 		return err
 	}
@@ -1341,7 +1363,7 @@ ON CONFLICT(id) DO UPDATE SET
 	if err := pruneOrphanGeneratedTagsByID(ctx, tx, tagIDs); err != nil {
 		return err
 	}
-	return tx.Commit()
+	return nil
 }
 
 func (c *Catalog) DeleteVideo(ctx context.Context, id string) error {
