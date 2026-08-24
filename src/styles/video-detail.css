@@ -2100,6 +2100,10 @@
 
 /* ---------- Recommended rail ---------- */
 .vd-rail {
+  /* 148px thumbnail at 16:9 + 24px vertical padding + 1px divider. Keep the
+   * off-screen size exact: current-item positioning reads offsets while
+   * content-visibility is still skipping distant collection rows. */
+  --vd-rail-collection-row-height: 108.25px;
   min-width: 0;
   display: flex;
   flex-direction: column;
@@ -2242,7 +2246,7 @@
 
 .vd-rail__collection-item {
   content-visibility: auto;
-  contain-intrinsic-block-size: 108px;
+  contain-intrinsic-block-size: var(--vd-rail-collection-row-height);
 }
 
 .vd-rail__collection-loading {
@@ -2628,6 +2632,8 @@
   }
 
   .vd-rail {
+    /* 200px thumbnail at 16:9 + the same padding and divider. */
+    --vd-rail-collection-row-height: 137.5px;
     border-top: 1px solid var(--border-subtle);
     padding-top: var(--space-5);
   }

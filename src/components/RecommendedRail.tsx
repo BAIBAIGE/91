@@ -38,12 +38,57 @@ type Props = {
 
 const HOVER_DELAY_MS = 300;
 const HOVER_POINTER_QUERY = "(hover: hover) and (pointer: fine)";
+const COLLECTION_POSITION_MAX_FRAMES = 8;
+const COLLECTION_POSITION_STABLE_FRAMES = 2;
+const COLLECTION_POSITION_TOLERANCE_PX = 1;
 
 function useIsActivePreview(videoID: string): boolean {
   return useSyncExternalStore(
     previewController.subscribe,
     () => previewController.getActiveId() === videoID,
     () => false
+  );
+}
+
+/**
+ * Moves one item toward the vertical center of its own scroll container.
+ * Returns true only when no further movement is possible or necessary and the
+ * item is actually visible. Repeating this across a few frames lets skipped
+ * content-visibility rows settle without relying on a fixed timeout.
+ */
+function alignCollectionItem(
+  list: HTMLUListElement,
+  current: HTMLLIElement
+): boolean {
+  if (list.clientHeight <= 0) return false;
+
+  const listRect = list.getBoundingClientRect();
+  const currentRect = current.getBoundingClientRect();
+  if (listRect.height <= 0 || currentRect.height <= 0) return false;
+
+  const centerDelta =
+    currentRect.top + currentRect.height / 2 -
+    (listRect.top + listRect.height / 2);
+  const previousScrollTop = list.scrollTop;
+  const maxScrollTop = Math.max(0, list.scrollHeight - list.clientHeight);
+  const nextScrollTop = Math.min(
+    maxScrollTop,
+    Math.max(0, previousScrollTop + centerDelta)
+  );
+
+  if (
+    Math.abs(nextScrollTop - previousScrollTop) >
+    COLLECTION_POSITION_TOLERANCE_PX
+  ) {
+    list.scrollTop = nextScrollTop;
+    return false;
+  }
+
+  return (
+    currentRect.bottom >
+      listRect.top + COLLECTION_POSITION_TOLERANCE_PX &&
+    currentRect.top <
+      listRect.bottom - COLLECTION_POSITION_TOLERANCE_PX
   );
 }
 
@@ -129,15 +174,28 @@ export function RecommendedRail({ videos, videoId, collection }: Props) {
     ) {
       return;
     }
-    const frame = window.requestAnimationFrame(() => {
+    let frame = 0;
+    let attempts = 0;
+    let stableFrames = 0;
+
+    const positionCurrentItem = () => {
       const list = collectionListRef.current;
       const current = currentCollectionItemRef.current;
-      if (!list || !current) return;
-      list.scrollTop = Math.max(
-        0,
-        current.offsetTop - list.clientHeight / 2 + current.clientHeight / 2
-      );
-    });
+      attempts += 1;
+      stableFrames =
+        list && current && alignCollectionItem(list, current)
+          ? stableFrames + 1
+          : 0;
+
+      if (
+        attempts < COLLECTION_POSITION_MAX_FRAMES &&
+        stableFrames < COLLECTION_POSITION_STABLE_FRAMES
+      ) {
+        frame = window.requestAnimationFrame(positionCurrentItem);
+      }
+    };
+
+    frame = window.requestAnimationFrame(positionCurrentItem);
     return () => window.cancelAnimationFrame(frame);
   }, [collectionViewActive, data, videoId]);
 

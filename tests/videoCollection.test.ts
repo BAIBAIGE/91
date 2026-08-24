@@ -267,11 +267,31 @@ test("desktop collection stays bounded and positions the current video", () => {
   );
   assert.match(
     stylesSource,
-    /\.vd-rail__collection-item\s*\{[\s\S]*?content-visibility:\s*auto;/
+    /\.vd-rail__collection-item\s*\{[\s\S]*?content-visibility:\s*auto;[\s\S]*?contain-intrinsic-block-size:\s*var\(--vd-rail-collection-row-height\);/
+  );
+  assert.match(
+    stylesSource,
+    /\.vd-rail\s*\{[\s\S]*?--vd-rail-collection-row-height:\s*108\.25px;/
+  );
+  assert.match(
+    stylesSource,
+    /@media \(max-width:\s*1024px\)[\s\S]*?\.vd-rail\s*\{[\s\S]*?--vd-rail-collection-row-height:\s*137\.5px;/
   );
   assert.match(
     railSource,
-    /current\.offsetTop - list\.clientHeight \/ 2 \+ current\.clientHeight \/ 2/
+    /function alignCollectionItem\([\s\S]*?current\.getBoundingClientRect\(\)[\s\S]*?list\.scrollHeight - list\.clientHeight[\s\S]*?list\.scrollTop = nextScrollTop/
+  );
+  assert.match(
+    railSource,
+    /COLLECTION_POSITION_MAX_FRAMES\s*=\s*8[\s\S]*?COLLECTION_POSITION_STABLE_FRAMES\s*=\s*2/
+  );
+  assert.match(
+    railSource,
+    /stableFrames =\s*list && current && alignCollectionItem\(list, current\)[\s\S]*?stableFrames < COLLECTION_POSITION_STABLE_FRAMES[\s\S]*?requestAnimationFrame\(positionCurrentItem\)/
+  );
+  assert.match(
+    railSource,
+    /return \(\) => window\.cancelAnimationFrame\(frame\)/
   );
   assert.doesNotMatch(
     railSource,
