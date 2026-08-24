@@ -14,6 +14,10 @@ const railSource = readFileSync(
   new URL("../src/components/RecommendedRail.tsx", import.meta.url),
   "utf8"
 );
+const railSkeletonSource = readFileSync(
+  new URL("../src/components/VideoRailSkeleton.tsx", import.meta.url),
+  "utf8"
+);
 const collectionHookSource = readFileSync(
   new URL("../src/lib/useLazyVideoCollection.ts", import.meta.url),
   "utf8"
@@ -135,11 +139,12 @@ test("recommendation rail omits retired quality metadata", () => {
 });
 
 test("desktop collection loading state renders six skeleton cards", () => {
+  assert.match(railSource, /<VideoRailRowsSkeleton \/>/);
   assert.match(
-    railSource,
+    railSkeletonSource,
     /className="vd-rail__collection-loading"[\s\S]*?Array\.from\(\{ length: 6 \}\)[\s\S]*?className="vd-rail__loading-row"/
   );
-  assert.doesNotMatch(railSource, />\s*正在加载相关合集…\s*</);
+  assert.doesNotMatch(railSkeletonSource, />\s*正在加载相关合集…\s*</);
   assert.match(
     stylesSource,
     /\.vd-rail__loading-row\s*\{[\s\S]*?grid-template-columns:\s*148px minmax\(0, 1fr\);/
@@ -152,11 +157,11 @@ test("desktop collection loading state renders six skeleton cards", () => {
 
 test("recommendation loading cards use two top-aligned text bars", () => {
   assert.match(
-    railSource,
+    railSkeletonSource,
     /className="vd-rail__loading-body">\s*<span \/>\s*<span \/>\s*<\/span>/
   );
   assert.doesNotMatch(
-    railSource,
+    railSkeletonSource,
     /className="vd-rail__loading-body">\s*(?:<span \/>\s*){3}/
   );
   assert.match(

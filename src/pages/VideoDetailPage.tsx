@@ -6,16 +6,15 @@ import {
   useParams,
 } from "react-router";
 import { AppShell } from "@/components/AppShell";
+import { VideoDetailLoading } from "@/components/VideoDetailLoading";
 import { VideoPlayer } from "@/components/VideoPlayer";
 import { VideoActions } from "@/components/VideoActions";
 import { VideoMetaHeader } from "@/components/VideoMetaHeader";
 import { VideoInfoPanel } from "@/components/VideoInfoPanel";
 import { MobileVideoCollection } from "@/components/MobileVideoCollection";
+import { RecommendedRail } from "@/components/RecommendedRail";
 import {
-  RecommendedRail,
-  VideoRailSkeleton,
-} from "@/components/RecommendedRail";
-import {
+  consumePrefetchedVideoDetail,
   deleteVideo,
   fetchTags,
   fetchVideoDetail,
@@ -127,7 +126,12 @@ function VideoDetailContent({ id }: { id?: string }) {
 
     // 命中快照时保留当前画面，在后台静默校验最新详情和标签。
     // 字幕只在用户打开播放器的字幕菜单后请求。
-    Promise.all([fetchVideoDetail(id), fetchTags()]).then(
+    const prefetchedDetail = consumePrefetchedVideoDetail(id);
+    const detailRequest = prefetchedDetail
+      ? prefetchedDetail.then((value) => value ?? fetchVideoDetail(id))
+      : fetchVideoDetail(id);
+
+    Promise.all([detailRequest, fetchTags()]).then(
       ([d, tagList]) => {
         if (!active) return;
         let stableDetail = withStableRelatedVideos(d);
@@ -242,53 +246,7 @@ function VideoDetailContent({ id }: { id?: string }) {
   }, [id]);
 
   if (loading) {
-    return (
-      <AppShell mobileAutoHideNav>
-        <div className="vd-page">
-          <div className="vd-ambient" aria-hidden="true" />
-          <div className="container vd-page__inner">
-            <div
-              className="vd-layout vd-skeleton"
-              aria-busy="true"
-              aria-label="视频详情加载中"
-            >
-              <div className="vd-main">
-                <div className="vd-skeleton__player" />
-
-                <div className="vd-skeleton__summary">
-                  <div className="vd-skeleton__chips">
-                    <span className="vd-skeleton__chip" />
-                    <span className="vd-skeleton__chip" />
-                    <span className="vd-skeleton__chip" />
-                    <span className="vd-skeleton__chip vd-skeleton__chip--mobile-hidden" />
-                  </div>
-                  <div className="vd-skeleton__title" />
-                  <div className="vd-skeleton__actions">
-                    <span className="vd-skeleton__action--like" />
-                    <span className="vd-skeleton__action--dislike" />
-                    <span className="vd-skeleton__action--share" />
-                    {isAdmin && (
-                      <span className="vd-skeleton__action--delete" />
-                    )}
-                  </div>
-                </div>
-
-                <div className="vd-skeleton__info">
-                  <span className="vd-skeleton__section-head" />
-                  <div className="vd-skeleton__tag-row">
-                    <span />
-                    <span />
-                    <span />
-                  </div>
-                </div>
-              </div>
-
-              <VideoRailSkeleton />
-            </div>
-          </div>
-        </div>
-      </AppShell>
-    );
+    return <VideoDetailLoading isAdmin={isAdmin} />;
   }
 
   if (!detail) {

@@ -75,6 +75,73 @@ export function fetchVideoDetail(id: string): Promise<VideoDetail | null> {
   );
 }
 
+const VIDEO_DETAIL_PREFETCH_TTL_MS = 30_000;
+const VIDEO_DETAIL_PREFETCH_LIMIT = 20;
+
+type PrefetchedVideoDetail = {
+  expiresAt: number;
+  request: Promise<VideoDetail | null>;
+};
+
+const prefetchedVideoDetailsByID = new Map<string, PrefetchedVideoDetail>();
+
+/**
+ * Start the small detail JSON request from the card's pointer-down event. The
+ * route module can load at the same time and consume this request after mount.
+ */
+export function prefetchVideoDetail(id: string): Promise<VideoDetail | null> {
+  const now = Date.now();
+  pruneVideoDetailPrefetches(now);
+  const existing = prefetchedVideoDetailsByID.get(id);
+  if (existing && existing.expiresAt > now) return existing.request;
+
+  const request = fetchVideoDetail(id);
+  const entry = {
+    expiresAt: now + VIDEO_DETAIL_PREFETCH_TTL_MS,
+    request,
+  };
+  prefetchedVideoDetailsByID.set(id, entry);
+  trimVideoDetailPrefetches();
+
+  void request.then((detail) => {
+    if (
+      detail === null &&
+      prefetchedVideoDetailsByID.get(id)?.request === request
+    ) {
+      prefetchedVideoDetailsByID.delete(id);
+    }
+  });
+  return request;
+}
+
+/**
+ * A prefetched response is navigation-scoped rather than a second long-lived
+ * detail cache. Consume it once so later background validation still reaches
+ * the server and can observe edits.
+ */
+export function consumePrefetchedVideoDetail(
+  id: string
+): Promise<VideoDetail | null> | null {
+  const entry = prefetchedVideoDetailsByID.get(id);
+  prefetchedVideoDetailsByID.delete(id);
+  if (!entry || entry.expiresAt <= Date.now()) return null;
+  return entry.request;
+}
+
+function pruneVideoDetailPrefetches(now: number) {
+  for (const [id, entry] of prefetchedVideoDetailsByID) {
+    if (entry.expiresAt <= now) prefetchedVideoDetailsByID.delete(id);
+  }
+}
+
+function trimVideoDetailPrefetches() {
+  while (prefetchedVideoDetailsByID.size > VIDEO_DETAIL_PREFETCH_LIMIT) {
+    const oldestID = prefetchedVideoDetailsByID.keys().next().value;
+    if (!oldestID) return;
+    prefetchedVideoDetailsByID.delete(oldestID);
+  }
+}
+
 export async function fetchVideoCollection(
   id: string,
   options: { signal?: AbortSignal; includePreview?: boolean } = {}
