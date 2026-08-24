@@ -1025,6 +1025,9 @@ func (a *App) attachDriveConfigUnlocked(ctx context.Context, d *catalog.Drive, r
 	// instance before initialization so a failed remount cannot silently keep
 	// serving or scanning with credentials the user just replaced.
 	a.retireDriveRuntime(d.ID)
+	if d.Kind == scriptcrawler.Kind && !scriptcrawler.IsConfigured(d.Credentials) {
+		return nil
+	}
 
 	var drv drives.Drive
 	switch d.Kind {

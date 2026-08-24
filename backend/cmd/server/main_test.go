@@ -1902,6 +1902,46 @@ func TestNightlyTargetsComeFromCatalogBeforeDriveAttach(t *testing.T) {
 	}
 }
 
+func TestAttachDriveSkipsUnconfiguredScriptCrawler(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	cat, err := catalog.Open(filepath.Join(root, "catalog.db"))
+	if err != nil {
+		t.Fatalf("open catalog: %v", err)
+	}
+	t.Cleanup(func() { _ = cat.Close() })
+
+	drive := &catalog.Drive{
+		ID:     "crawler-deleted",
+		Kind:   scriptcrawler.Kind,
+		Name:   "Deleted Crawler",
+		RootID: "/",
+		Credentials: map[string]string{
+			"upload_drive_id": "pikpak",
+		},
+		TeaserEnabled: true,
+	}
+	if err := cat.UpsertDrive(ctx, drive); err != nil {
+		t.Fatalf("seed deleted crawler: %v", err)
+	}
+	previewDir := filepath.Join(root, "previews")
+	app := &App{
+		cat:            cat,
+		cfg:            &config.Config{Storage: config.Storage{LocalPreviewDir: previewDir}},
+		registry:       proxy.NewRegistry(),
+		scriptCrawlers: make(map[string]*scriptcrawler.Crawler),
+	}
+	if err := app.attachDrive(ctx, drive); err != nil {
+		t.Fatalf("attach deleted crawler: %v", err)
+	}
+	if _, ok := app.registry.Get(drive.ID); ok {
+		t.Fatal("unconfigured crawler was registered")
+	}
+	if _, err := os.Stat(app.scriptCrawlerDriveDir(drive.ID)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("unconfigured crawler storage stat error = %v, want not exist", err)
+	}
+}
+
 func TestAttachDriveRejectsUnknownKind(t *testing.T) {
 	ctx := context.Background()
 	cat, err := catalog.Open(t.TempDir() + "/catalog.db")

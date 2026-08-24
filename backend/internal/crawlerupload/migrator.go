@@ -778,7 +778,7 @@ func (m *Migrator) migrationPlan(ctx context.Context, d drives.Drive) (migration
 		return migrationPlan{}, false
 	}
 	row, err := m.getDrive(ctx, d.ID())
-	if err != nil || row == nil || row.Kind != scriptcrawler.Kind {
+	if err != nil || row == nil || row.Kind != scriptcrawler.Kind || !scriptcrawler.IsConfigured(row.Credentials) {
 		return migrationPlan{}, false
 	}
 	targetID := strings.TrimSpace(row.Credentials["upload_drive_id"])

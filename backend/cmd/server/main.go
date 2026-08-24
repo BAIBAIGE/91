@@ -210,6 +210,21 @@ func main() {
 	if _, err := app.normalizeLegacyThumbnailFiles(ctx); err != nil {
 		log.Printf("[thumbnail-maintenance] migration failed: %v", err)
 	}
+	legacyCrawlerStats, err := app.cleanupLegacyDeletedCrawlers(ctx)
+	if err != nil {
+		log.Printf(
+			"[scriptcrawler-maintenance] cleanup incomplete removed_crawlers=%d removed_videos=%d: %v",
+			legacyCrawlerStats.RemovedCrawlers,
+			legacyCrawlerStats.RemovedVideos,
+			err,
+		)
+	} else if legacyCrawlerStats.RemovedCrawlers > 0 {
+		log.Printf(
+			"[scriptcrawler-maintenance] removed legacy deleted crawlers=%d videos=%d",
+			legacyCrawlerStats.RemovedCrawlers,
+			legacyCrawlerStats.RemovedVideos,
+		)
+	}
 	app.loadTheme(ctx)
 	if removed, err := app.cleanupOrphanDriveVideos(ctx); err != nil {
 		log.Printf("[cleanup] orphan drive videos: %v", err)

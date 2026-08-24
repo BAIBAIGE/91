@@ -41,8 +41,7 @@ func isSupportedDriveKind(kind string) bool {
 func isConfiguredCrawlerDrive(d *catalog.Drive) bool {
 	return d != nil &&
 		isCrawlerDriveKind(d.Kind) &&
-		d.Credentials != nil &&
-		strings.TrimSpace(d.Credentials["script_path"]) != ""
+		scriptcrawler.IsConfigured(d.Credentials)
 }
 
 func (a *AdminServer) removeImportedCrawlerScript(d *catalog.Drive) (bool, error) {
@@ -199,7 +198,7 @@ func mergeScriptCrawlerCredentials(existing *catalog.Drive, incoming map[string]
 			}
 		}
 	}
-	if strings.TrimSpace(merged["script_path"]) == "" {
+	if !scriptcrawler.IsConfigured(merged) {
 		return nil, fmt.Errorf("脚本爬虫必须填写 script_path")
 	}
 	delete(merged, "builtin")

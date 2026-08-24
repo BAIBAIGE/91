@@ -307,7 +307,7 @@ func (a *App) listCrawlerDriveIDs(ctx context.Context) []string {
 	}
 	out := make([]string, 0, len(all))
 	for _, d := range all {
-		if d == nil || d.Kind != scriptcrawler.Kind || strings.TrimSpace(d.Credentials["script_path"]) == "" {
+		if d == nil || d.Kind != scriptcrawler.Kind || !scriptcrawler.IsConfigured(d.Credentials) {
 			continue
 		}
 		if parseBoolDefault(strings.TrimSpace(d.Credentials["paused"]), false) {

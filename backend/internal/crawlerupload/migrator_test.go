@@ -406,6 +406,48 @@ func TestRunOnceRequiresPerCrawlerUploadTarget(t *testing.T) {
 	}
 }
 
+func TestRunOnceIgnoresUnconfiguredScriptCrawler(t *testing.T) {
+	ctx := context.Background()
+	cat := setupCatalog(t)
+	src := setupScriptCrawler(t, "crawler-deleted")
+	target := newFakeUploadDrive("target-drive", "pikpak", "target-root")
+	reg := newFakeRegistry()
+	reg.Add(src)
+	reg.Add(target)
+
+	if err := cat.UpsertDrive(ctx, &catalog.Drive{
+		ID:     src.ID(),
+		Kind:   scriptcrawler.Kind,
+		Name:   "Deleted Crawler",
+		RootID: "/",
+		Credentials: map[string]string{
+			"upload_drive_id": target.ID(),
+		},
+		TeaserEnabled: true,
+	}); err != nil {
+		t.Fatalf("upsert deleted crawler drive: %v", err)
+	}
+	videoID := writeCrawlerVideo(t, cat, src, "source-ghost", ".mp4", []byte("video payload"), true)
+
+	m := New(Config{Catalog: cat, Registry: reg})
+	if err := m.RunOnce(ctx); err != nil {
+		t.Fatalf("run once: %v", err)
+	}
+	if target.uploadCalls != 0 {
+		t.Fatalf("upload calls = %d, want deleted crawler ignored", target.uploadCalls)
+	}
+	got, err := cat.GetVideo(ctx, videoID)
+	if err != nil {
+		t.Fatalf("get untouched video: %v", err)
+	}
+	if got.DriveID != src.ID() {
+		t.Fatalf("drive_id = %q, want deleted crawler source %q", got.DriveID, src.ID())
+	}
+	if _, err := os.Stat(filepath.Join(src.VideosDir(), "source-ghost.mp4")); err != nil {
+		t.Fatalf("deleted crawler local video changed: %v", err)
+	}
+}
+
 func TestRunOnceReconcilesRemoteWriteAfterCatalogCrashWithoutReupload(t *testing.T) {
 	ctx := context.Background()
 	cat := setupCatalog(t)

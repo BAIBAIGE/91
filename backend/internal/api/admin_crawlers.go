@@ -367,7 +367,7 @@ func (a *AdminServer) generateCrawlerID(ctx context.Context, name string) (strin
 		if d == nil {
 			continue
 		}
-		if isCrawlerDriveKind(d.Kind) && strings.TrimSpace(d.Credentials["script_path"]) == "" {
+		if isCrawlerDriveKind(d.Kind) && !scriptcrawler.IsConfigured(d.Credentials) {
 			continue
 		}
 		used[d.ID] = true
@@ -705,7 +705,7 @@ func safeCrawlerScriptFileName(raw string) (string, error) {
 func (a *AdminServer) handleRunCrawler(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	d, err := a.Catalog.GetDrive(r.Context(), id)
-	if err != nil || d == nil || !isCrawlerDriveKind(d.Kind) || d.Credentials == nil || strings.TrimSpace(d.Credentials["script_path"]) == "" {
+	if err != nil || d == nil || !isCrawlerDriveKind(d.Kind) || !scriptcrawler.IsConfigured(d.Credentials) {
 		http.Error(w, "crawler not found", http.StatusNotFound)
 		return
 	}
