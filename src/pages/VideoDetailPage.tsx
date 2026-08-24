@@ -257,10 +257,10 @@ function VideoDetailContent({ id }: { id?: string }) {
 
                 <div className="vd-skeleton__summary">
                   <div className="vd-skeleton__chips">
-                    <span className="vd-skeleton__chip vd-skeleton__chip--source" />
                     <span className="vd-skeleton__chip" />
-                    <span className="vd-skeleton__chip vd-skeleton__chip--plain" />
-                    <span className="vd-skeleton__chip vd-skeleton__chip--plain" />
+                    <span className="vd-skeleton__chip" />
+                    <span className="vd-skeleton__chip" />
+                    <span className="vd-skeleton__chip vd-skeleton__chip--mobile-hidden" />
                   </div>
                   <div className="vd-skeleton__title" />
                   <div className="vd-skeleton__actions">
@@ -275,8 +275,6 @@ function VideoDetailContent({ id }: { id?: string }) {
 
                 <div className="vd-skeleton__info">
                   <span className="vd-skeleton__section-head" />
-                  <span className="vd-skeleton__line" />
-                  <span className="vd-skeleton__line vd-skeleton__line--short" />
                   <div className="vd-skeleton__tag-row">
                     <span />
                     <span />

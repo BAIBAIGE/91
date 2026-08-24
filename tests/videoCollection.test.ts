@@ -150,6 +150,56 @@ test("desktop collection loading state renders six skeleton cards", () => {
   );
 });
 
+test("recommendation loading cards use two top-aligned text bars", () => {
+  assert.match(
+    railSource,
+    /className="vd-rail__loading-body">\s*<span \/>\s*<span \/>\s*<\/span>/
+  );
+  assert.doesNotMatch(
+    railSource,
+    /className="vd-rail__loading-body">\s*(?:<span \/>\s*){3}/
+  );
+  assert.match(
+    stylesSource,
+    /\.vd-rail__loading-row\s*\{[^}]*align-items:\s*start;/s
+  );
+  assert.match(
+    stylesSource,
+    /\.vd-rail__loading-body\s*>\s*span\s*\{[^}]*width:\s*100%;[^}]*height:\s*13px;/s
+  );
+  assert.match(
+    stylesSource,
+    /\.vd-rail__loading-body\s*>\s*span:nth-child\(2\)\s*\{[^}]*width:\s*75%;/s
+  );
+});
+
+test("mobile collection loading cards match the two-bar skeleton", () => {
+  assert.match(
+    componentSource,
+    /className="vd-collection-sheet__skeleton-body">\s*<span \/>\s*<span \/>\s*<\/span>/
+  );
+  assert.doesNotMatch(
+    componentSource,
+    /className="vd-collection-sheet__skeleton-body">\s*(?:<span \/>\s*){3}/
+  );
+  assert.match(
+    stylesSource,
+    /\.vd-collection-sheet__skeleton-row\s*\{[^}]*align-items:\s*start;/s
+  );
+  assert.match(
+    stylesSource,
+    /\.vd-collection-sheet__skeleton-body span\s*\{[^}]*width:\s*100%;[^}]*height:\s*13px;/s
+  );
+  assert.match(
+    stylesSource,
+    /\.vd-collection-sheet__skeleton-body span:nth-child\(2\)\s*\{[^}]*width:\s*75%;/s
+  );
+  assert.doesNotMatch(
+    stylesSource,
+    /\.vd-collection-sheet__skeleton-body span:nth-child\(3\)/
+  );
+});
+
 test("desktop collection stays bounded and positions the current video", () => {
   assert.match(
     stylesSource,

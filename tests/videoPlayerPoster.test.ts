@@ -294,6 +294,39 @@ test("detail loading skeleton matches current desktop video page layout", () => 
   );
 });
 
+test("detail loading skeleton keeps metadata bars uniform and concise", () => {
+  const chipMatches =
+    detailPageSource.match(
+      /<span className="vd-skeleton__chip(?: [^"]+)?" \/>/g
+    ) ?? [];
+  assert.equal(chipMatches.length, 4);
+  assert.match(
+    detailPageSource,
+    /vd-skeleton__chip vd-skeleton__chip--mobile-hidden/
+  );
+  assert.doesNotMatch(
+    detailPageSource,
+    /vd-skeleton__chip--(?:source|plain)/
+  );
+  assert.match(
+    detailCss,
+    /\.vd-skeleton__chip\s*\{[^}]*width:\s*88px;[^}]*height:\s*18px;[^}]*border-radius:\s*var\(--radius-sm\)/s
+  );
+  assert.match(
+    detailCss,
+    /@media \(max-width:\s*480px\)\s*\{[\s\S]*?\.vd-skeleton__chip--mobile-hidden\s*\{[^}]*display:\s*none/s
+  );
+});
+
+test("detail info skeleton omits the two description lines", () => {
+  assert.match(
+    detailPageSource,
+    /className="vd-skeleton__info"[\s\S]*?vd-skeleton__section-head[\s\S]*?vd-skeleton__tag-row/
+  );
+  assert.doesNotMatch(detailPageSource, /vd-skeleton__line/);
+  assert.doesNotMatch(detailCss, /\.vd-skeleton__line/);
+});
+
 test("detail loading skeleton actions stay inside mobile viewport", () => {
   assert.match(
     detailCss,

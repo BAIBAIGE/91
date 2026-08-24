@@ -637,7 +637,6 @@ function CollectionLoading() {
           <span className="vd-collection-sheet__skeleton-body">
             <span />
             <span />
-            <span />
           </span>
         </div>
       ))}

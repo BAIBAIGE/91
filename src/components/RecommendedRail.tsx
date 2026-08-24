@@ -312,7 +312,6 @@ function CollectionRailState({
           <span className="vd-rail__loading-body">
             <span />
             <span />
-            <span />
           </span>
         </div>
       ))}
