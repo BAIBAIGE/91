@@ -109,6 +109,53 @@ test("desktop recommendation rail offers recommendation and collection tabs", ()
   );
 });
 
+test("desktop tab switches preserve both list instances", () => {
+  assert.match(
+    railSource,
+    /className="vd-rail__tabpanel vd-rail__tabpanel--recommended"[\s\S]*?hidden=\{showCollection\}/
+  );
+  assert.match(
+    railSource,
+    /className="vd-rail__tabpanel vd-rail__tabpanel--collection"[\s\S]*?hidden=\{!showCollection\}/
+  );
+  assert.match(railSource, /const recommendedItems = useMemo\(/);
+  assert.match(railSource, /const collectionItems = useMemo\(/);
+  assert.match(
+    railSource,
+    /const RecommendedItem = memo\(\s*forwardRef<HTMLLIElement, RailItemProps>/
+  );
+  assert.doesNotMatch(railSource, /\{showCollection \? \(/);
+  assert.match(
+    railSource,
+    /previewController\.setActiveId\(null\);\s*setActiveView\(nextView\)/
+  );
+  assert.match(
+    railSource,
+    /collectionViewActive \|\|[\s\S]*?collectionLoadStartedFor === videoId/
+  );
+  assert.match(
+    railSource,
+    /nextView === "collection"[\s\S]*?setCollectionLoadStartedFor\(videoId\)/
+  );
+});
+
+test("desktop collection creates thumbnail resources only near the viewport", () => {
+  assert.match(
+    railSource,
+    /const \[thumbnailActivated, setThumbnailActivated\] = useState\([\s\S]*?variant !== "collection"[\s\S]*?if \(inView\) setThumbnailActivated\(true\)/
+  );
+  assert.match(
+    railSource,
+    /<VideoThumbnail[\s\S]*?src=\{video\.thumbnail\}[\s\S]*?enabled=\{thumbnailActivated\}/
+  );
+  assert.match(
+    railSource,
+    /function useIsActivePreview\(videoID: string\): boolean[\s\S]*?previewController\.getActiveId\(\) === videoID/
+  );
+  assert.doesNotMatch(railSource, /function useActivePreviewId/);
+  assert.doesNotMatch(railSource, /media\.addEventListener\("change", update\)/);
+});
+
 test("desktop collection requests previews and reuses recommendation preview behavior", () => {
   assert.match(dataSource, /options\.includePreview \? "\?preview=1" : ""/);
   assert.match(
@@ -225,6 +272,10 @@ test("desktop collection stays bounded and positions the current video", () => {
   assert.match(
     railSource,
     /current\.offsetTop - list\.clientHeight \/ 2 \+ current\.clientHeight \/ 2/
+  );
+  assert.doesNotMatch(
+    railSource,
+    /collectionScrollPositionRef|handleCollectionScroll/
   );
   assert.match(railSource, /aria-current=\{current \? "page" : undefined\}/);
   assert.match(

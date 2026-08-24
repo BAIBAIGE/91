@@ -1,8 +1,10 @@
 import {
   forwardRef,
+  memo,
   useCallback,
   useEffect,
   useId,
+  useMemo,
   useRef,
   useState,
   useSyncExternalStore,
@@ -35,12 +37,13 @@ type Props = {
 };
 
 const HOVER_DELAY_MS = 300;
+const HOVER_POINTER_QUERY = "(hover: hover) and (pointer: fine)";
 
-function useActivePreviewId(): string | null {
+function useIsActivePreview(videoID: string): boolean {
   return useSyncExternalStore(
     previewController.subscribe,
-    previewController.getActiveId,
-    () => null
+    () => previewController.getActiveId() === videoID,
+    () => false
   );
 }
 
@@ -64,9 +67,17 @@ export function RecommendedRail({ videos, videoId, collection }: Props) {
       ? window.matchMedia("(min-width: 769px)").matches
       : false
   );
+  const [collectionLoadStartedFor, setCollectionLoadStartedFor] = useState<
+    string | null
+  >(() => (!hasRecommendations && hasCollection ? videoId : null));
+  const collectionViewActive =
+    desktop && hasCollection && activeView === "collection";
+  const collectionLoadEnabled =
+    collectionViewActive ||
+    (desktop && hasCollection && collectionLoadStartedFor === videoId);
   const { data, error, retry } = useLazyVideoCollection(
     videoId,
-    desktop && hasCollection && activeView === "collection",
+    collectionLoadEnabled,
     { includePreview: true }
   );
   const tabGroupId = useId();
@@ -112,8 +123,7 @@ export function RecommendedRail({ videos, videoId, collection }: Props) {
 
   useEffect(() => {
     if (
-      !desktop ||
-      activeView !== "collection" ||
+      !collectionViewActive ||
       !data ||
       data.items.length === 0
     ) {
@@ -129,12 +139,15 @@ export function RecommendedRail({ videos, videoId, collection }: Props) {
       );
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [activeView, data, desktop]);
-
-  if (!hasRecommendations && !hasCollection) return null;
+  }, [collectionViewActive, data, videoId]);
 
   function selectView(nextView: RailView) {
     if (nextView === "recommended" && !hasRecommendations) return;
+    if (nextView === activeView) return;
+    if (nextView === "collection") {
+      setCollectionLoadStartedFor(videoId);
+    }
+    previewController.setActiveId(null);
     setActiveView(nextView);
   }
 
@@ -148,13 +161,43 @@ export function RecommendedRail({ videos, videoId, collection }: Props) {
     }
     if (!nextView) return;
     event.preventDefault();
-    setActiveView(nextView);
+    selectView(nextView);
     const nextRef =
       nextView === "recommended" ? recommendedTabRef : collectionTabRef;
     nextRef.current?.focus();
   }
 
   const showCollection = hasCollection && activeView === "collection";
+  const recommendedItems = useMemo(
+    () =>
+      videos.map((video) => (
+        <RecommendedItem
+          key={video.id}
+          video={video}
+          returnPath={returnPath}
+        />
+      )),
+    [returnPath, videos]
+  );
+  const collectionItems = useMemo(
+    () =>
+      data?.items.map((video) => {
+        const current = video.id === videoId;
+        return (
+          <RecommendedItem
+            key={video.id}
+            ref={current ? currentCollectionItemRef : undefined}
+            video={video}
+            current={current}
+            returnPath={returnPath}
+            variant="collection"
+          />
+        );
+      }),
+    [data, returnPath, videoId]
+  );
+
+  if (!hasRecommendations && !hasCollection) return null;
 
   return (
     <aside
@@ -207,12 +250,23 @@ export function RecommendedRail({ videos, videoId, collection }: Props) {
         <h2 className="vd-rail__head-title">推荐视频</h2>
       </header>
 
-      {showCollection ? (
+      <div
+        id={hasCollection ? recommendedPanelId : undefined}
+        className="vd-rail__tabpanel vd-rail__tabpanel--recommended"
+        role={hasCollection ? "tabpanel" : undefined}
+        aria-labelledby={hasCollection ? recommendedTabId : undefined}
+        hidden={showCollection}
+      >
+        <ul className="vd-rail__list">{recommendedItems}</ul>
+      </div>
+
+      {hasCollection && (
         <div
           id={collectionPanelId}
           className="vd-rail__tabpanel vd-rail__tabpanel--collection"
           role="tabpanel"
           aria-labelledby={collectionTabId}
+          hidden={!showCollection}
         >
           {!data && !error ? (
             <VideoRailRowsSkeleton />
@@ -233,38 +287,9 @@ export function RecommendedRail({ videos, videoId, collection }: Props) {
               className="vd-rail__list vd-rail__collection-list"
               aria-label={`${data.name}，共 ${data.total} 个视频`}
             >
-              {data.items.map((video) => {
-                const current = video.id === videoId;
-                return (
-                  <RecommendedItem
-                    key={video.id}
-                    ref={current ? currentCollectionItemRef : undefined}
-                    video={video}
-                    current={current}
-                    returnPath={returnPath}
-                    variant="collection"
-                  />
-                );
-              })}
+              {collectionItems}
             </ul>
           )}
-        </div>
-      ) : (
-        <div
-          id={hasCollection ? recommendedPanelId : undefined}
-          className="vd-rail__tabpanel vd-rail__tabpanel--recommended"
-          role={hasCollection ? "tabpanel" : undefined}
-          aria-labelledby={hasCollection ? recommendedTabId : undefined}
-        >
-          <ul className="vd-rail__list">
-            {videos.map((video) => (
-              <RecommendedItem
-                key={video.id}
-                video={video}
-                returnPath={returnPath}
-              />
-            ))}
-          </ul>
         </div>
       )}
     </aside>
@@ -278,9 +303,10 @@ type RailItemProps = {
   variant?: "recommended" | "collection";
 };
 
-const RecommendedItem = forwardRef<HTMLLIElement, RailItemProps>(
-  RecommendedItemContent
+const RecommendedItem = memo(
+  forwardRef<HTMLLIElement, RailItemProps>(RecommendedItemContent)
 );
+RecommendedItem.displayName = "RecommendedItem";
 
 function RecommendedItemContent(
   {
@@ -294,14 +320,16 @@ function RecommendedItemContent(
   const [previewState, setPreviewState] = useState<PreviewState>("idle");
   const [shouldRenderPreview, setShouldRenderPreview] = useState(false);
   const [progress, setProgress] = useState(0);
+  const [thumbnailActivated, setThumbnailActivated] = useState(
+    variant !== "collection"
+  );
 
   const rootRef = useRef<HTMLLIElement | null>(null);
   const hoverTimerRef = useRef<number | null>(null);
   const lastPointerTypeRef = useRef<string>("");
-  const canHoverRef = useRef(true);
   const videoRef = useRef<HTMLVideoElement | null>(null);
 
-  const activeId = useActivePreviewId();
+  const previewIsActive = useIsActivePreview(video.id);
   const inView = useInViewport(rootRef);
   const setRootRef = useCallback(
     (node: HTMLLIElement | null) => {
@@ -317,11 +345,17 @@ function RecommendedItemContent(
 
   // 全局预览换卡时立即清理
   useEffect(() => {
-    if (activeId !== video.id && shouldRenderPreview) {
+    if (!previewIsActive && shouldRenderPreview) {
       cleanup();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeId, video.id]);
+  }, [previewIsActive, video.id]);
+
+  // 合集可能包含大量视频。浏览器原生 lazy 阈值较大，仍可能一次请求几十张图；
+  // 先等卡片进入共享视口观察范围，再创建图片资源，并在首次激活后保留它。
+  useEffect(() => {
+    if (inView) setThumbnailActivated(true);
+  }, [inView]);
 
   // 离开视口立即停
   useEffect(() => {
@@ -337,17 +371,6 @@ function RecommendedItemContent(
       cleanup();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // 检测当前设备是否支持 hover（鼠标 vs 触屏）
-  useEffect(() => {
-    const media = window.matchMedia("(hover: hover) and (pointer: fine)");
-    const update = () => {
-      canHoverRef.current = media.matches;
-    };
-    update();
-    media.addEventListener("change", update);
-    return () => media.removeEventListener("change", update);
   }, []);
 
   function cleanup() {
@@ -418,11 +441,11 @@ function RecommendedItemContent(
   }
 
   function handleClickCapture(event: React.MouseEvent<HTMLAnchorElement>) {
-    const previewActive = activeId === video.id && shouldRenderPreview;
+    const previewActive = previewIsActive && shouldRenderPreview;
     if (
       !shouldInterceptPreviewTap({
         pointerType: lastPointerTypeRef.current,
-        canHover: canHoverRef.current,
+        canHover: window.matchMedia(HOVER_POINTER_QUERY).matches,
         previewActive,
       })
     ) {
@@ -456,7 +479,10 @@ function RecommendedItemContent(
         onClick={current ? (event) => event.preventDefault() : undefined}
       >
         <div className="vd-rail__thumb">
-          <VideoThumbnail src={video.thumbnail} />
+          <VideoThumbnail
+            src={video.thumbnail}
+            enabled={thumbnailActivated}
+          />
           {shouldRenderPreview && video.previewSrc && (
             <PreviewVideo
               ref={videoRef}

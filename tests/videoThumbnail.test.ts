@@ -52,6 +52,15 @@ test("cached thumbnails reconcile completion before they can remain hidden", () 
   assert.doesNotMatch(thumbnailSource, /setState\(src \? "loading" : "failed"\)/);
 });
 
+test("deferred thumbnails do not create an image resource", () => {
+  assert.match(thumbnailSource, /enabled\?: boolean/);
+  assert.match(thumbnailSource, /enabled = true/);
+  assert.match(
+    thumbnailSource,
+    /if \(!enabled\) \{[\s\S]*?className="thumb-placeholder"[\s\S]*?data-state="deferred"[\s\S]*?return \(\s*<ThumbnailResource/
+  );
+});
+
 test("only likely first-viewport thumbnails receive eager and high priority hints", () => {
   assert.match(thumbnailSource, /loading=\{eager \|\| highPriority \? "eager" : "lazy"\}/);
   assert.match(thumbnailSource, /fetchPriority=\{highPriority \? "high" : "auto"\}/);
