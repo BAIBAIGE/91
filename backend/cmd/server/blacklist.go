@@ -554,49 +554,6 @@ func (a *App) removeScriptCrawlerStorageForDelete(driveID string) error {
 	return nil
 }
 
-func (a *App) cleanupOrphanDriveVideos(ctx context.Context) (int, error) {
-	if a == nil || a.cat == nil {
-		return 0, nil
-	}
-	items, err := a.cat.ListVideosWithMissingDrive(ctx)
-	if err != nil {
-		return 0, err
-	}
-	if len(items) == 0 {
-		return 0, nil
-	}
-
-	localDir := ""
-	if a.cfg != nil {
-		localDir = a.cfg.Storage.LocalPreviewDir
-	}
-	persistence.RLock()
-	defer persistence.RUnlock()
-	for _, v := range items {
-		if err := ctx.Err(); err != nil {
-			return 0, err
-		}
-		if err := removeLocalVideoAssets(localDir, v); err != nil {
-			return 0, fmt.Errorf("remove local assets for orphan %s: %w", v.ID, err)
-		}
-	}
-
-	removed := 0
-	for _, v := range items {
-		if err := ctx.Err(); err != nil {
-			return removed, err
-		}
-		if err := a.cat.DeleteVideo(ctx, v.ID); err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				continue
-			}
-			return removed, fmt.Errorf("delete orphan catalog video %s: %w", v.ID, err)
-		}
-		removed++
-	}
-	return removed, nil
-}
-
 func (a *App) videosForDriveDelete(ctx context.Context, d *catalog.Drive) ([]*catalog.Video, error) {
 	if d == nil {
 		return nil, nil

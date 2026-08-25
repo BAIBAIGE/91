@@ -3360,7 +3360,7 @@ func TestRemoveScriptCrawlerStorageForDeleteRejectsPathsOutsideDriveRoot(t *test
 	}
 }
 
-func TestCleanupOrphanDriveVideosRemovesRowsAndGeneratedAssets(t *testing.T) {
+func TestMissingDriveInspectionPreservesRowsAndGeneratedAssets(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
 	localDir := filepath.Join(root, "previews")
@@ -3424,26 +3424,22 @@ func TestCleanupOrphanDriveVideosRemovesRowsAndGeneratedAssets(t *testing.T) {
 		}
 	}
 
-	app := &App{
-		cfg: &config.Config{Storage: config.Storage{LocalPreviewDir: localDir}},
-		cat: cat,
-	}
-	removed, err := app.cleanupOrphanDriveVideos(ctx)
+	orphans, err := cat.ListVideosWithMissingDrive(ctx)
 	if err != nil {
-		t.Fatalf("cleanup orphan videos: %v", err)
+		t.Fatalf("inspect orphan videos: %v", err)
 	}
-	if removed != 1 {
-		t.Fatalf("removed = %d, want 1", removed)
+	if len(orphans) != 1 || orphans[0].ID != "p123-123-orphan" {
+		t.Fatalf("orphans = %#v", orphans)
 	}
-	if _, err := cat.GetVideo(ctx, "p123-123-orphan"); err != sql.ErrNoRows {
-		t.Fatalf("orphan video lookup error = %v, want sql.ErrNoRows", err)
+	if _, err := cat.GetVideo(ctx, "p123-123-orphan"); err != nil {
+		t.Fatalf("orphan video was removed: %v", err)
 	}
 	if _, err := cat.GetVideo(ctx, "pikpak-active"); err != nil {
 		t.Fatalf("active video missing: %v", err)
 	}
 	for _, path := range []string{previewPath, thumbPath} {
-		if _, err := os.Stat(path); !os.IsNotExist(err) {
-			t.Fatalf("orphan asset %s still exists, stat err=%v", path, err)
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("orphan asset %s was removed: %v", path, err)
 		}
 	}
 }

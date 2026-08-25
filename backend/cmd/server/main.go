@@ -226,10 +226,13 @@ func main() {
 		)
 	}
 	app.loadTheme(ctx)
-	if removed, err := app.cleanupOrphanDriveVideos(ctx); err != nil {
-		log.Printf("[cleanup] orphan drive videos: %v", err)
-	} else if removed > 0 {
-		log.Printf("[cleanup] removed %d orphan drive videos", removed)
+	if orphans, err := app.cat.ListVideosWithMissingDrive(ctx); err != nil {
+		log.Printf("[catalog-maintenance] inspect orphan drive videos: %v", err)
+	} else if len(orphans) > 0 {
+		log.Printf(
+			"[catalog-maintenance] preserved %d videos with missing drive metadata; assets are removed only by an explicit drive deletion",
+			len(orphans),
+		)
 	}
 	if err := app.attachLocalUpload(ctx); err != nil {
 		log.Printf("[local-upload] attach failed: %v", err)
