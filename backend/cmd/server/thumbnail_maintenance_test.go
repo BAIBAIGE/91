@@ -9,9 +9,11 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/video-site/backend/internal/catalog"
 	"github.com/video-site/backend/internal/config"
+	"github.com/video-site/backend/internal/preview"
 )
 
 func TestNormalizeLegacyThumbnailFilesConvertsAndMarksMigration(t *testing.T) {
@@ -107,5 +109,265 @@ func TestNormalizeLegacyThumbnailFilesDoesNotMarkFailedMigration(t *testing.T) {
 	marker, markerErr := cat.GetSetting(ctx, thumbnailJPEGNormalizationSetting, "")
 	if markerErr != nil || marker != "" {
 		t.Fatalf("migration marker = %q err=%v, want unset", marker, markerErr)
+	}
+}
+
+func TestReconcileMissingLocalThumbnailFilesRepairsOnlyMissingGeneratedAssets(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	previewDir := filepath.Join(root, "previews")
+	thumbDir := filepath.Join(previewDir, "thumbs")
+	if err := os.MkdirAll(thumbDir, 0o755); err != nil {
+		t.Fatalf("mkdir thumbnails: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(thumbDir, "present.jpg"), []byte("jpeg"), 0o644); err != nil {
+		t.Fatalf("write present thumbnail: %v", err)
+	}
+
+	cat, err := catalog.Open(filepath.Join(root, "catalog.db"))
+	if err != nil {
+		t.Fatalf("open catalog: %v", err)
+	}
+	defer cat.Close()
+	now := time.Now()
+	for _, video := range []*catalog.Video{
+		{
+			ID: "present", DriveID: "drive", FileID: "present-file", Title: "Present",
+			ThumbnailURL: "/p/thumb/present", PublishedAt: now, CreatedAt: now, UpdatedAt: now,
+		},
+		{
+			ID: "missing", DriveID: "drive", FileID: "missing-file", Title: "Missing",
+			ThumbnailURL: "/p/thumb/missing", PublishedAt: now, CreatedAt: now, UpdatedAt: now,
+		},
+		{
+			ID: "remote", DriveID: "drive", FileID: "remote-file", Title: "Remote",
+			ThumbnailURL: "https://example.test/remote.jpg", PublishedAt: now, CreatedAt: now, UpdatedAt: now,
+		},
+	} {
+		if err := cat.UpsertVideo(ctx, video); err != nil {
+			t.Fatalf("seed %s: %v", video.ID, err)
+		}
+	}
+
+	app := &App{cat: cat, cfg: &config.Config{Storage: config.Storage{LocalPreviewDir: previewDir}}}
+	stats, err := app.reconcileMissingLocalThumbnailFiles(ctx)
+	if err != nil {
+		t.Fatalf("reconcile local thumbnails: %v", err)
+	}
+	if stats != (localAssetReconciliationStats{Scanned: 2, Present: 1, Missing: 1, Reset: 1}) {
+		t.Fatalf("stats = %+v", stats)
+	}
+
+	present, err := cat.GetVideo(ctx, "present")
+	if err != nil {
+		t.Fatalf("get present video: %v", err)
+	}
+	if present.ThumbnailURL != "/p/thumb/present" {
+		t.Fatalf("present thumbnail = %q", present.ThumbnailURL)
+	}
+	missing, err := cat.GetVideo(ctx, "missing")
+	if err != nil {
+		t.Fatalf("get missing video: %v", err)
+	}
+	if missing.ThumbnailURL != "" || !missing.ThumbnailUpdatedAt.IsZero() {
+		t.Fatalf("missing thumbnail = %q updated=%v", missing.ThumbnailURL, missing.ThumbnailUpdatedAt)
+	}
+	remote, err := cat.GetVideo(ctx, "remote")
+	if err != nil {
+		t.Fatalf("get remote video: %v", err)
+	}
+	if remote.ThumbnailURL != "https://example.test/remote.jpg" {
+		t.Fatalf("remote thumbnail = %q", remote.ThumbnailURL)
+	}
+	pending, err := cat.ListVideosByThumbnailStatus(ctx, "drive", "pending", 0)
+	if err != nil {
+		t.Fatalf("list pending thumbnails: %v", err)
+	}
+	if len(pending) != 1 || pending[0].ID != "missing" {
+		t.Fatalf("pending thumbnails = %#v, want missing only", pending)
+	}
+
+	second, err := app.reconcileMissingLocalThumbnailFiles(ctx)
+	if err != nil {
+		t.Fatalf("second reconciliation: %v", err)
+	}
+	if second != (localAssetReconciliationStats{Scanned: 1, Present: 1}) {
+		t.Fatalf("second stats = %+v", second)
+	}
+}
+
+func TestReconcileMissingLocalPreviewFilesQueuesOnlyInvalidReadyReferences(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	previewDir := filepath.Join(root, "previews")
+	if err := os.MkdirAll(previewDir, 0o755); err != nil {
+		t.Fatalf("mkdir previews: %v", err)
+	}
+	presentPath := filepath.Join(previewDir, "present.mp4")
+	if err := os.WriteFile(presentPath, []byte("preview"), 0o644); err != nil {
+		t.Fatalf("write present preview: %v", err)
+	}
+	zeroPath := filepath.Join(previewDir, "zero.mp4")
+	if err := os.WriteFile(zeroPath, nil, 0o644); err != nil {
+		t.Fatalf("write zero preview: %v", err)
+	}
+
+	cat, err := catalog.Open(filepath.Join(root, "catalog.db"))
+	if err != nil {
+		t.Fatalf("open catalog: %v", err)
+	}
+	defer cat.Close()
+	now := time.Now()
+	for _, video := range []*catalog.Video{
+		{
+			ID: "present", DriveID: "drive", FileID: "present-file", Title: "Present",
+			PreviewLocal: presentPath, PreviewStatus: "ready", PublishedAt: now, CreatedAt: now, UpdatedAt: now,
+		},
+		{
+			ID: "missing", DriveID: "drive", FileID: "missing-file", Title: "Missing",
+			PreviewLocal: filepath.Join(previewDir, "missing.mp4"), PreviewStatus: "ready", PublishedAt: now, CreatedAt: now, UpdatedAt: now,
+		},
+		{
+			ID: "zero", DriveID: "drive", FileID: "zero-file", Title: "Zero",
+			PreviewLocal: zeroPath, PreviewStatus: "ready", PublishedAt: now, CreatedAt: now, UpdatedAt: now,
+		},
+		{
+			ID: "outside", DriveID: "drive", FileID: "outside-file", Title: "Outside",
+			PreviewLocal: filepath.Join(root, "outside.mp4"), PreviewStatus: "ready", PublishedAt: now, CreatedAt: now, UpdatedAt: now,
+		},
+		{
+			ID: "already-pending", DriveID: "drive", FileID: "pending-file", Title: "Pending",
+			PreviewStatus: "pending", PublishedAt: now, CreatedAt: now, UpdatedAt: now,
+		},
+	} {
+		if err := cat.UpsertVideo(ctx, video); err != nil {
+			t.Fatalf("seed %s: %v", video.ID, err)
+		}
+	}
+
+	app := &App{cat: cat, cfg: &config.Config{Storage: config.Storage{LocalPreviewDir: previewDir}}}
+	stats, err := app.reconcileMissingLocalPreviewFiles(ctx)
+	if err != nil {
+		t.Fatalf("reconcile local previews: %v", err)
+	}
+	if stats != (localAssetReconciliationStats{Scanned: 4, Present: 1, Missing: 3, Reset: 3}) {
+		t.Fatalf("stats = %+v", stats)
+	}
+
+	present, err := cat.GetVideo(ctx, "present")
+	if err != nil {
+		t.Fatalf("get present: %v", err)
+	}
+	if present.PreviewStatus != "ready" || present.PreviewLocal != presentPath {
+		t.Fatalf("present preview status=%q local=%q", present.PreviewStatus, present.PreviewLocal)
+	}
+	for _, videoID := range []string{"missing", "zero", "outside"} {
+		video, err := cat.GetVideo(ctx, videoID)
+		if err != nil {
+			t.Fatalf("get %s: %v", videoID, err)
+		}
+		if video.PreviewStatus != "pending" || video.PreviewLocal != "" || !video.PreviewUpdatedAt.IsZero() {
+			t.Fatalf("%s preview status=%q local=%q updated=%v", videoID, video.PreviewStatus, video.PreviewLocal, video.PreviewUpdatedAt)
+		}
+	}
+
+	second, err := app.reconcileMissingLocalPreviewFiles(ctx)
+	if err != nil {
+		t.Fatalf("second reconciliation: %v", err)
+	}
+	if second != (localAssetReconciliationStats{Scanned: 1, Present: 1}) {
+		t.Fatalf("second stats = %+v", second)
+	}
+}
+
+func TestRunStartupLocalAssetMaintenanceRequeuesBeforeSlowDriveAttachmentFinishes(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	root := t.TempDir()
+	previewDir := filepath.Join(root, "previews")
+	cat, err := catalog.Open(filepath.Join(root, "catalog.db"))
+	if err != nil {
+		t.Fatalf("open catalog: %v", err)
+	}
+	defer cat.Close()
+	seedDriveWithTeaser(t, cat, "drive-id", true)
+
+	now := time.Now()
+	video := &catalog.Video{
+		ID:            "missing-assets",
+		DriveID:       "drive-id",
+		FileID:        "missing-file",
+		Title:         "Missing Assets",
+		ThumbnailURL:  "/p/thumb/missing-assets",
+		PreviewLocal:  filepath.Join(previewDir, "missing-assets.mp4"),
+		PreviewStatus: "ready",
+		PublishedAt:   now,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}
+	if err := cat.UpsertVideo(ctx, video); err != nil {
+		t.Fatalf("seed video: %v", err)
+	}
+
+	drive := &serverFakeDrive{}
+	generator := &serverFakeTeaserGenerator{}
+	previewWorker := preview.NewWorker(generator, cat, drive)
+	thumbnailWorker := preview.NewThumbWorker(generator, cat, drive)
+	app := &App{
+		cat:          cat,
+		cfg:          &config.Config{Storage: config.Storage{LocalPreviewDir: previewDir}},
+		workers:      map[string]*preview.Worker{"drive-id": previewWorker},
+		thumbWorkers: map[string]*preview.ThumbWorker{"drive-id": thumbnailWorker},
+	}
+
+	driveAttachDone := make(chan struct{})
+	maintenanceDone := make(chan struct{})
+	go func() {
+		defer close(maintenanceDone)
+		app.runStartupLocalAssetMaintenance(ctx, driveAttachDone)
+	}()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		stored, getErr := cat.GetVideo(ctx, video.ID)
+		if getErr != nil {
+			t.Fatalf("get reconciled video: %v", getErr)
+		}
+		if stored.ThumbnailURL == "" && stored.PreviewStatus == "pending" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("assets were not reset: thumbnail=%q preview_status=%q", stored.ThumbnailURL, stored.PreviewStatus)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	select {
+	case <-maintenanceDone:
+		t.Fatal("maintenance completed before initial drive attachment")
+	default:
+	}
+	deadline = time.Now().Add(2 * time.Second)
+	for thumbnailWorker.Status().QueueLength != 1 || previewWorker.Status().QueueLength != 1 {
+		if time.Now().After(deadline) {
+			t.Fatalf(
+				"queues waited for drive attachment: thumbnail=%d preview=%d",
+				thumbnailWorker.Status().QueueLength,
+				previewWorker.Status().QueueLength,
+			)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	close(driveAttachDone)
+	select {
+	case <-maintenanceDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("maintenance did not finish after drive attachment")
+	}
+	if got := thumbnailWorker.Status().QueueLength; got != 1 {
+		t.Fatalf("thumbnail queue length after final rescan = %d, want deduplicated 1", got)
+	}
+	if got := previewWorker.Status().QueueLength; got != 1 {
+		t.Fatalf("preview queue length after final rescan = %d, want deduplicated 1", got)
 	}
 }

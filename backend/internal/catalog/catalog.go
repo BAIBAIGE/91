@@ -892,6 +892,185 @@ func (c *Catalog) ListVideosByThumbnailStatus(ctx context.Context, driveID, stat
 	return out, nil
 }
 
+// LocalThumbnailReference is a snapshot of the persisted ownership link
+// between a video and its generated thumbnail. ThumbnailVersion is used as a
+// compare-and-swap token so a filesystem check cannot clear a thumbnail that
+// was regenerated after the snapshot was read.
+type LocalThumbnailReference struct {
+	VideoID          string
+	ThumbnailVersion int64
+}
+
+// ListCanonicalLocalThumbnailReferences returns videos whose persisted
+// thumbnail points at the generated local asset owned by that same video. The
+// catalog deliberately does not inspect the filesystem; the application layer
+// owns that boundary and decides which references no longer have a backing
+// file.
+func (c *Catalog) ListCanonicalLocalThumbnailReferences(ctx context.Context) ([]LocalThumbnailReference, error) {
+	rows, err := c.db.QueryContext(ctx, `
+		SELECT id, COALESCE(thumbnail_updated_at, 0)
+		  FROM videos
+		 WHERE thumbnail_url = '/p/thumb/' || id
+		 ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	references := make([]LocalThumbnailReference, 0)
+	for rows.Next() {
+		var reference LocalThumbnailReference
+		if err := rows.Scan(&reference.VideoID, &reference.ThumbnailVersion); err != nil {
+			return nil, err
+		}
+		references = append(references, reference)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return references, nil
+}
+
+// ResetMissingLocalThumbnails atomically returns stale generated-thumbnail
+// references to the normal pending state. The URL and version guards preserve
+// a thumbnail that may have been refreshed by a concurrent worker after the
+// caller inspected the filesystem.
+func (c *Catalog) ResetMissingLocalThumbnails(ctx context.Context, references []LocalThumbnailReference) (int, error) {
+	if len(references) == 0 {
+		return 0, nil
+	}
+	tx, err := c.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+
+	statement, err := tx.PrepareContext(ctx, `
+		UPDATE videos
+		   SET thumbnail_url = '',
+		       thumbnail_updated_at = 0,
+		       thumbnail_status = 'pending',
+		       thumbnail_failures = 0
+		 WHERE id = ?
+		   AND thumbnail_url = '/p/thumb/' || id
+		   AND COALESCE(thumbnail_updated_at, 0) = ?`)
+	if err != nil {
+		return 0, err
+	}
+	defer statement.Close()
+
+	seen := make(map[string]struct{}, len(references))
+	reset := 0
+	for _, reference := range references {
+		if _, duplicate := seen[reference.VideoID]; duplicate {
+			continue
+		}
+		seen[reference.VideoID] = struct{}{}
+		result, err := statement.ExecContext(ctx, reference.VideoID, reference.ThumbnailVersion)
+		if err != nil {
+			return 0, err
+		}
+		affected, err := result.RowsAffected()
+		if err != nil {
+			return 0, err
+		}
+		reset += int(affected)
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return reset, nil
+}
+
+// LocalPreviewReference is the persisted ownership link between a video and
+// its generated teaser file. Filesystem validation belongs to the application
+// layer because the catalog must not depend on one host's storage layout.
+type LocalPreviewReference struct {
+	VideoID      string
+	PreviewLocal string
+}
+
+// ListReadyLocalPreviewReferences returns teaser files that the catalog claims
+// are ready. A ready row without a local path cannot be validated here and is
+// intentionally excluded; UpdatePreview never creates that state.
+func (c *Catalog) ListReadyLocalPreviewReferences(ctx context.Context) ([]LocalPreviewReference, error) {
+	rows, err := c.db.QueryContext(ctx, `
+		SELECT id, preview_local
+		  FROM videos
+		 WHERE COALESCE(preview_status, 'pending') = 'ready'
+		   AND TRIM(COALESCE(preview_local, '')) != ''
+		 ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	references := make([]LocalPreviewReference, 0)
+	for rows.Next() {
+		var reference LocalPreviewReference
+		if err := rows.Scan(&reference.VideoID, &reference.PreviewLocal); err != nil {
+			return nil, err
+		}
+		references = append(references, reference)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return references, nil
+}
+
+// ResetMissingLocalPreviews atomically returns stale ready references to the
+// normal generation queue. The exact-path guard protects a teaser that may
+// have been regenerated after the application inspected the filesystem.
+func (c *Catalog) ResetMissingLocalPreviews(ctx context.Context, references []LocalPreviewReference) (int, error) {
+	if len(references) == 0 {
+		return 0, nil
+	}
+	tx, err := c.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+
+	statement, err := tx.PrepareContext(ctx, `
+		UPDATE videos
+		   SET preview_file_id = '',
+		       preview_local = '',
+		       preview_updated_at = 0,
+		       preview_status = 'pending',
+		       updated_at = ?
+		 WHERE id = ?
+		   AND COALESCE(preview_status, 'pending') = 'ready'
+		   AND preview_local = ?`)
+	if err != nil {
+		return 0, err
+	}
+	defer statement.Close()
+
+	seen := make(map[string]struct{}, len(references))
+	reset := 0
+	now := time.Now().UnixMilli()
+	for _, reference := range references {
+		if _, duplicate := seen[reference.VideoID]; duplicate {
+			continue
+		}
+		seen[reference.VideoID] = struct{}{}
+		result, err := statement.ExecContext(ctx, now, reference.VideoID, reference.PreviewLocal)
+		if err != nil {
+			return 0, err
+		}
+		affected, err := result.RowsAffected()
+		if err != nil {
+			return 0, err
+		}
+		reset += int(affected)
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return reset, nil
+}
+
 // ListVideosNeedingThumbnail returns videos that still need thumbnail-worker work.
 // Besides missing thumbnails, this includes videos with an existing thumbnail but
 // missing duration metadata, because the thumbnail worker probes duration while

@@ -1962,6 +1962,41 @@ func (a *App) scheduleDriveGenerationEnqueue(
 	}()
 }
 
+// scheduleRegisteredDriveGenerationEnqueues takes a stable snapshot of the
+// currently attached workers and asks each drive to rescan its catalog-backed
+// queues. It is used after background maintenance changes ready rows back to
+// pending; later lazy attachments still perform their own normal initial scan.
+func (a *App) scheduleRegisteredDriveGenerationEnqueues(ctx context.Context) {
+	type generationWorkers struct {
+		preview   *preview.Worker
+		thumbnail *preview.ThumbWorker
+	}
+
+	a.mu.Lock()
+	workersByDrive := make(map[string]generationWorkers, len(a.workers)+len(a.thumbWorkers))
+	for driveID, worker := range a.workers {
+		pair := workersByDrive[driveID]
+		pair.preview = worker
+		workersByDrive[driveID] = pair
+	}
+	for driveID, worker := range a.thumbWorkers {
+		pair := workersByDrive[driveID]
+		pair.thumbnail = worker
+		workersByDrive[driveID] = pair
+	}
+	a.mu.Unlock()
+
+	driveIDs := make([]string, 0, len(workersByDrive))
+	for driveID := range workersByDrive {
+		driveIDs = append(driveIDs, driveID)
+	}
+	sort.Strings(driveIDs)
+	for _, driveID := range driveIDs {
+		workers := workersByDrive[driveID]
+		a.scheduleDriveGenerationEnqueue(ctx, driveID, workers.preview, workers.thumbnail)
+	}
+}
+
 func (a *App) enqueuePending(ctx context.Context, driveID string, w *preview.Worker) {
 	release, _, admitted := a.driveOperationGate(driveID).beginTask(ctx, driveTaskScopePreview)
 	if !admitted {

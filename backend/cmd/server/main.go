@@ -106,6 +106,15 @@ func main() {
 	if err := os.MkdirAll(cfg.Storage.LocalPreviewDir, 0o755); err != nil {
 		log.Fatalf("mkdir preview dir: %v", err)
 	}
+	assetLease, err := acquireAssetDirectoryLease(cfg.Storage.LocalPreviewDir, cfg.Storage.DBPath)
+	if err != nil {
+		log.Fatalf("acquire generated asset directory lease: %v", err)
+	}
+	defer func() {
+		if closeErr := assetLease.Close(); closeErr != nil {
+			log.Printf("release generated asset directory lease: %v", closeErr)
+		}
+	}()
 
 	cat, err := catalog.Open(cfg.Storage.DBPath)
 	if err != nil {
@@ -207,9 +216,6 @@ func main() {
 		log.Fatalf("apply initial live configuration: %v", err)
 	}
 
-	if _, err := app.normalizeLegacyThumbnailFiles(ctx); err != nil {
-		log.Printf("[thumbnail-maintenance] migration failed: %v", err)
-	}
 	legacyCrawlerStats, err := app.cleanupLegacyDeletedCrawlers(ctx)
 	if err != nil {
 		log.Printf(
@@ -536,7 +542,12 @@ func main() {
 			log.Fatalf("server error: %v", err)
 		}
 	}()
-	go app.attachExistingDrives(ctx)
+	driveAttachDone := make(chan struct{})
+	go func() {
+		defer close(driveAttachDone)
+		app.attachExistingDrives(ctx)
+	}()
+	go app.runStartupLocalAssetMaintenance(ctx, driveAttachDone)
 	go app.migrateHiddenVideosToTombstone(ctx)
 
 	// 等待退出信号或恢复任务要求的受控重启。
