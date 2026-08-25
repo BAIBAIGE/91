@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 
 type Props = {
   src: string;
@@ -7,9 +7,7 @@ type Props = {
   enabled?: boolean;
 };
 
-type ThumbnailState = "loading" | "retrying" | "ready" | "failed";
-
-const MAX_LOCAL_THUMBNAIL_RETRIES = 8;
+type ThumbnailState = "loading" | "ready" | "failed";
 
 export function VideoThumbnail({
   src,
@@ -46,44 +44,15 @@ function ThumbnailResource({
   highPriority = false,
 }: Props) {
   const [state, setState] = useState<ThumbnailState>(src ? "loading" : "failed");
-  const [retry, setRetry] = useState(0);
-  const retryTimerRef = useRef<number | null>(null);
   const imageRef = useRef<HTMLImageElement | null>(null);
 
-  useEffect(() => {
-    return clearRetryTimer;
-  }, []);
-
-  function clearRetryTimer() {
-    if (retryTimerRef.current !== null) {
-      window.clearTimeout(retryTimerRef.current);
-      retryTimerRef.current = null;
-    }
-  }
-
   function handleLoad() {
-    clearRetryTimer();
     setState("ready");
   }
 
   function handleError() {
-    const canRetry =
-      src.startsWith("/p/thumb/") && retry < MAX_LOCAL_THUMBNAIL_RETRIES;
-    if (!canRetry) {
-      clearRetryTimer();
-      setState("failed");
-      return;
-    }
-    if (retryTimerRef.current !== null) return;
-
-    setState("retrying");
-    retryTimerRef.current = window.setTimeout(() => {
-      retryTimerRef.current = null;
-      setRetry((current) => current + 1);
-    }, Math.min(1000 + retry * 750, 5000));
+    setState("failed");
   }
-
-  const thumbnailSrc = retry === 0 ? src : withRetryParam(src, retry);
 
   // A cached image can finish between DOM insertion and React's passive effects,
   // and some browsers do not replay that load event. Reconcile the DOM state
@@ -96,7 +65,7 @@ function ThumbnailResource({
     } else {
       handleError();
     }
-  }, [thumbnailSrc]);
+  }, [src]);
 
   return (
     <>
@@ -108,9 +77,8 @@ function ThumbnailResource({
       {src && (
         <img
           ref={imageRef}
-          key={thumbnailSrc}
           className={`thumb-image ${state === "ready" ? "is-ready" : ""}`}
-          src={thumbnailSrc}
+          src={src}
           alt=""
           loading={eager || highPriority ? "eager" : "lazy"}
           fetchPriority={highPriority ? "high" : "auto"}
@@ -121,9 +89,4 @@ function ThumbnailResource({
       )}
     </>
   );
-}
-
-function withRetryParam(src: string, retry: number): string {
-  const sep = src.includes("?") ? "&" : "?";
-  return `${src}${sep}r=${retry}`;
 }

@@ -159,8 +159,7 @@
   );
 }
 
-.thumb-placeholder[data-state="loading"]::after,
-.thumb-placeholder[data-state="retrying"]::after {
+.thumb-placeholder[data-state="loading"]::after {
   animation: thumbnail-loading-sweep 1.5s ease-in-out infinite;
 }
 

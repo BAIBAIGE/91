@@ -24,10 +24,9 @@ const css = readFileSync(
 );
 
 test("video thumbnails hide failed images behind a stable lifecycle placeholder", () => {
-  assert.match(thumbnailSource, /type ThumbnailState = "loading" \| "retrying" \| "ready" \| "failed"/);
-  assert.match(thumbnailSource, /src\.startsWith\("\/p\/thumb\/"\)/);
-  assert.match(thumbnailSource, /retry < MAX_LOCAL_THUMBNAIL_RETRIES/);
+  assert.match(thumbnailSource, /type ThumbnailState = "loading" \| "ready" \| "failed"/);
   assert.match(thumbnailSource, /setState\("failed"\)/);
+  assert.doesNotMatch(thumbnailSource, /setTimeout|MAX_LOCAL_THUMBNAIL_RETRIES|withRetryParam/);
   assert.match(thumbnailSource, /className={`thumb-image \$\{state === "ready" \? "is-ready" : ""\}`}/);
   assert.match(cardSource, /<VideoThumbnail[\s\S]*?src=\{video\.thumbnail\}/);
   assert.doesNotMatch(cardSource, /<VideoThumbnail[\s\S]*?key=\{video\.thumbnail\}/);
