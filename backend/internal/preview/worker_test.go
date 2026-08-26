@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -267,6 +268,10 @@ func TestPreviewWorkerRunsConfiguredConsumersConcurrently(t *testing.T) {
 	}
 
 	release := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseGenerator := func() {
+		releaseOnce.Do(func() { close(release) })
+	}
 	gen := &blockingTeaserGenerator{
 		started: make(chan struct{}, len(videos)),
 		release: release,
@@ -279,6 +284,18 @@ func TestPreviewWorkerRunsConfiguredConsumersConcurrently(t *testing.T) {
 		worker.Run(runCtx)
 		close(runDone)
 	}()
+	// seedPreviewTestVideo registered the catalog cleanup first. Test cleanups
+	// run in reverse order, so this always stops the worker before the catalog
+	// is closed, including assertion-failure paths.
+	t.Cleanup(func() {
+		cancel()
+		releaseGenerator()
+		select {
+		case <-runDone:
+		case <-time.After(time.Second):
+			t.Error("preview worker did not stop during test cleanup")
+		}
+	})
 
 	for _, video := range videos {
 		if !worker.EnqueueBlocking(runCtx, video) {
@@ -298,7 +315,7 @@ func TestPreviewWorkerRunsConfiguredConsumersConcurrently(t *testing.T) {
 		t.Fatalf("status while blocked = %#v, want three active tasks and no queued tasks", status)
 	}
 
-	close(release)
+	releaseGenerator()
 	waitCtx, waitCancel := context.WithTimeout(ctx, 2*time.Second)
 	defer waitCancel()
 	if err := worker.WaitIdle(waitCtx); err != nil {
