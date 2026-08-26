@@ -123,7 +123,7 @@ func (c *Crawler) findContentDuplicate(ctx context.Context, source *catalog.Vide
 			sourceSig = sig
 		}
 
-		candidateSig, err := mediasim.ExtractTeaserFrameSignature(ctx, c.cfg.FFmpegPath, teaserPath)
+		candidateSig, err := c.loadCandidateTeaserSignature(ctx, candidate.ID, teaserPath)
 		if err != nil {
 			log.Printf("[scriptcrawler] drive=%s source_id=%s candidate=%s teaser signature failed: %v", c.cfg.Driver.ID(), source.ID, candidate.ID, err)
 			continue
@@ -148,4 +148,26 @@ func (c *Crawler) findContentDuplicate(ctx context.Context, source *catalog.Vide
 		}
 	}
 	return nil, nil
+}
+
+func (c *Crawler) loadCandidateTeaserSignature(ctx context.Context, videoID, teaserPath string) (*mediasim.FrameSignature, error) {
+	localDir := strings.TrimSpace(c.cfg.LocalPreviewDir)
+	cachePath := ""
+	if localDir != "" {
+		cachePath = mediaasset.FrameSignaturePath(localDir, videoID)
+		if signature, cached := mediasim.LoadCachedTeaserSignature(cachePath, teaserPath); cached {
+			return signature, nil
+		}
+	}
+
+	signature, err := mediasim.ExtractTeaserFrameSignature(ctx, c.cfg.FFmpegPath, teaserPath)
+	if err != nil {
+		return nil, err
+	}
+	if cachePath != "" && signature != nil && signature.InformativeFrames() >= mediasim.ContentDuplicateMinComparisons {
+		if err := mediasim.StoreCachedTeaserSignature(cachePath, teaserPath, signature); err != nil {
+			log.Printf("[scriptcrawler] candidate=%s content signature cache write: %v", videoID, err)
+		}
+	}
+	return signature, nil
 }

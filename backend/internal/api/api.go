@@ -1132,7 +1132,7 @@ func (s *Server) handleSubtitleFile(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) visibleVideo(w http.ResponseWriter, r *http.Request, id string) (*catalog.Video, bool) {
-	v, err := s.Catalog.GetVideo(r.Context(), id)
+	v, err := s.videoByPublicID(r.Context(), id)
 	if err != nil || v.Hidden {
 		writeErr(w, http.StatusNotFound, sql.ErrNoRows)
 		return nil, false
@@ -1142,7 +1142,7 @@ func (s *Server) visibleVideo(w http.ResponseWriter, r *http.Request, id string)
 
 func (s *Server) handleUploadedVideo(w http.ResponseWriter, r *http.Request) {
 	videoID := routeParam(r, "videoID")
-	v, err := s.Catalog.GetVideo(r.Context(), videoID)
+	v, err := s.videoByPublicID(r.Context(), videoID)
 	if err != nil || v.Hidden || v.DriveID != localUploadDriveID {
 		http.NotFound(w, r)
 		return
@@ -1152,7 +1152,7 @@ func (s *Server) handleUploadedVideo(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handlePreview(w http.ResponseWriter, r *http.Request) {
 	videoID := routeParam(r, "videoID")
-	v, err := s.Catalog.GetVideo(r.Context(), videoID)
+	v, err := s.videoByPublicID(r.Context(), videoID)
 	if err != nil {
 		http.NotFound(w, r)
 		return
@@ -1161,7 +1161,13 @@ func (s *Server) handlePreview(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleThumb(w http.ResponseWriter, r *http.Request) {
-	s.serveVideoThumb(w, r, routeParam(r, "videoID"))
+	videoID := routeParam(r, "videoID")
+	if s.Catalog != nil {
+		if resolvedID, err := s.Catalog.ResolveVideoID(r.Context(), videoID); err == nil {
+			videoID = resolvedID
+		}
+	}
+	s.serveVideoThumb(w, r, videoID)
 }
 
 // ---------- helpers ----------

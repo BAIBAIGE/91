@@ -111,13 +111,10 @@ func TestMigratedRuntimeSettingsCanBeRemovedFromSQLite(t *testing.T) {
 	if err := cat.SetSetting(ctx, legacyNightlyStartTimeSetting, "03:20"); err != nil {
 		t.Fatal(err)
 	}
-	if err := cat.SetSetting(ctx, obsoleteDuplicateReviewEnabledSetting, "false"); err != nil {
-		t.Fatal(err)
-	}
 	if err := cat.SetSetting(ctx, legacyBuiltinTagsEnabledSetting, "false"); err != nil {
 		t.Fatal(err)
 	}
-	if err := cat.DeleteSettings(ctx, legacyNightlyStartTimeSetting, legacyBuiltinTagsEnabledSetting, obsoleteDuplicateReviewEnabledSetting); err != nil {
+	if err := cat.DeleteSettings(ctx, legacyNightlyStartTimeSetting, legacyBuiltinTagsEnabledSetting); err != nil {
 		t.Fatal(err)
 	}
 	legacy, err := loadLegacyRuntimeSettings(ctx, cat)

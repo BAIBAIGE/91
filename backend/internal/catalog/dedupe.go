@@ -45,8 +45,9 @@ type DuplicateVideoReplacement struct {
 }
 
 // ApplyDuplicateVideoDeletions atomically applies a finalized hard-dedupe plan.
-// Generated files are intentionally not touched here; durable cleanup jobs are
-// committed alongside the tombstones and processed after this method returns.
+// User state and durable references are merged into each canonical row before
+// duplicate rows are retired. Generated files are intentionally not touched
+// here; cleanup jobs are committed with the tombstones and processed later.
 func (c *Catalog) ApplyDuplicateVideoDeletions(ctx context.Context, deletions []DuplicateVideoDeletion) error {
 	if len(deletions) == 0 {
 		return nil
@@ -112,42 +113,8 @@ func (c *Catalog) ApplyDuplicateVideoDeletions(ctx context.Context, deletions []
 		}
 	}
 
-	// Redirect historical references before inserting this plan's tombstones.
-	// Every target is final, so chains cannot be created by this transaction.
 	for _, deletion := range normalized {
-		if _, err := tx.ExecContext(ctx, `
-UPDATE deleted_videos
-   SET canonical_video_id = ?
- WHERE reason = ?
-   AND canonical_video_id = ?`, deletion.CanonicalVideoID, DeletedVideoReasonDuplicate, deletion.VideoID); err != nil {
-			return err
-		}
-		if _, err := tx.ExecContext(ctx, `
-UPDATE crawler_seen_sources
-   SET canonical_video_id = ?
- WHERE canonical_video_id = ?`, deletion.CanonicalVideoID, deletion.VideoID); err != nil {
-			return err
-		}
-	}
-
-	now := time.Now().UnixMilli()
-	for _, deletion := range normalized {
-		video := videos[deletion.VideoID]
-		if err := deleteVideoWithTombstoneTx(ctx, tx, video, DeleteVideoTombstoneOptions{
-			Reason:           DeletedVideoReasonDuplicate,
-			CanonicalVideoID: deletion.CanonicalVideoID,
-		}); err != nil {
-			return err
-		}
-		if _, err := tx.ExecContext(ctx, `
-INSERT INTO duplicate_asset_cleanup_jobs (
-  video_id, preview_local, attempts, last_error, created_at, updated_at
-) VALUES (?, ?, 0, '', ?, ?)
-ON CONFLICT(video_id) DO UPDATE SET
-  preview_local = excluded.preview_local,
-  attempts = 0,
-  last_error = '',
-  updated_at = excluded.updated_at`, video.ID, strings.TrimSpace(video.PreviewLocal), now, now); err != nil {
+		if err := mergeAndRetireDuplicateVideoTx(ctx, tx, videos[deletion.VideoID], deletion.CanonicalVideoID); err != nil {
 			return err
 		}
 	}
@@ -196,35 +163,7 @@ func (c *Catalog) ReplaceDuplicateVideo(ctx context.Context, replacement Duplica
 	if _, err := upsertVideoRow(ctx, tx, replacement.NewVideo); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `
-UPDATE deleted_videos
-   SET canonical_video_id = ?
- WHERE reason = ?
-   AND canonical_video_id = ?`, newID, DeletedVideoReasonDuplicate, oldID); err != nil {
-		return err
-	}
-	if _, err := tx.ExecContext(ctx, `
-UPDATE crawler_seen_sources
-   SET canonical_video_id = ?
- WHERE canonical_video_id = ?`, newID, oldID); err != nil {
-		return err
-	}
-	if err := deleteVideoWithTombstoneTx(ctx, tx, oldVideo, DeleteVideoTombstoneOptions{
-		Reason:           DeletedVideoReasonDuplicate,
-		CanonicalVideoID: newID,
-	}); err != nil {
-		return err
-	}
-	now := time.Now().UnixMilli()
-	if _, err := tx.ExecContext(ctx, `
-INSERT INTO duplicate_asset_cleanup_jobs (
-  video_id, preview_local, attempts, last_error, created_at, updated_at
-) VALUES (?, ?, 0, '', ?, ?)
-ON CONFLICT(video_id) DO UPDATE SET
-  preview_local = excluded.preview_local,
-  attempts = 0,
-  last_error = '',
-  updated_at = excluded.updated_at`, oldVideo.ID, strings.TrimSpace(oldVideo.PreviewLocal), now, now); err != nil {
+	if err := mergeAndRetireDuplicateVideoTx(ctx, tx, oldVideo, newID); err != nil {
 		return err
 	}
 	if source := replacement.CrawlerSource; source != nil {
@@ -233,6 +172,238 @@ ON CONFLICT(video_id) DO UPDATE SET
 		}
 	}
 	return tx.Commit()
+}
+
+// ResolveVideoID maps a public video ID through duplicate tombstones to the
+// current live row. Catalog.GetVideo deliberately keeps its strict row lookup
+// semantics; callers opt into alias resolution only at public read boundaries.
+func (c *Catalog) ResolveVideoID(ctx context.Context, id string) (string, error) {
+	current := strings.TrimSpace(id)
+	if current == "" {
+		return "", sql.ErrNoRows
+	}
+	seen := make(map[string]struct{})
+	for depth := 0; depth < 64; depth++ {
+		if _, duplicate := seen[current]; duplicate {
+			return "", sql.ErrNoRows
+		}
+		seen[current] = struct{}{}
+
+		var liveID string
+		err := c.db.QueryRowContext(ctx, `SELECT id FROM videos WHERE id = ?`, current).Scan(&liveID)
+		if err == nil {
+			return liveID, nil
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return "", err
+		}
+
+		var next string
+		err = c.db.QueryRowContext(ctx, `
+SELECT canonical_video_id
+  FROM deleted_videos
+ WHERE id = ?
+   AND reason = ?`, current, DeletedVideoReasonDuplicate).Scan(&next)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return "", sql.ErrNoRows
+			}
+			return "", err
+		}
+		current = strings.TrimSpace(next)
+		if current == "" {
+			return "", sql.ErrNoRows
+		}
+	}
+	return "", sql.ErrNoRows
+}
+
+func mergeAndRetireDuplicateVideoTx(ctx context.Context, tx *sql.Tx, duplicate *Video, canonicalID string) error {
+	if duplicate == nil {
+		return sql.ErrNoRows
+	}
+	canonicalID = strings.TrimSpace(canonicalID)
+	if canonicalID == "" || canonicalID == duplicate.ID {
+		return errors.New("catalog: duplicate merge requires distinct video IDs")
+	}
+	if err := mergeDuplicateVideoStateTx(ctx, tx, duplicate, canonicalID); err != nil {
+		return err
+	}
+	if err := redirectDuplicateVideoReferencesTx(ctx, tx, duplicate.ID, canonicalID); err != nil {
+		return err
+	}
+	if err := deleteVideoWithTombstoneTx(ctx, tx, duplicate, DeleteVideoTombstoneOptions{
+		Reason:           DeletedVideoReasonDuplicate,
+		CanonicalVideoID: canonicalID,
+	}); err != nil {
+		return err
+	}
+	return enqueueDuplicateAssetCleanupTx(ctx, tx, duplicate)
+}
+
+func mergeDuplicateVideoStateTx(ctx context.Context, tx *sql.Tx, duplicate *Video, canonicalID string) error {
+	if err := mergeDuplicateVideoTagsTx(ctx, tx, duplicate.ID, canonicalID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `
+INSERT INTO video_reaction_visits (video_id, visit_id, reaction, created_at, updated_at)
+SELECT ?, visit_id, reaction, created_at, updated_at
+  FROM video_reaction_visits
+ WHERE video_id = ?
+ON CONFLICT(video_id, visit_id) DO UPDATE SET
+  reaction = CASE
+    WHEN excluded.updated_at > video_reaction_visits.updated_at THEN excluded.reaction
+    ELSE video_reaction_visits.reaction
+  END,
+  created_at = MIN(video_reaction_visits.created_at, excluded.created_at),
+  updated_at = MAX(video_reaction_visits.updated_at, excluded.updated_at)`, canonicalID, duplicate.ID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE video_shares SET video_id = ? WHERE video_id = ?`, canonicalID, duplicate.ID); err != nil {
+		return err
+	}
+
+	now := time.Now().UnixMilli()
+	res, err := tx.ExecContext(ctx, `
+UPDATE videos
+   SET views = COALESCE(views, 0) + ?,
+       last_viewed_at = MAX(COALESCE(last_viewed_at, 0), ?),
+       favorites = COALESCE(favorites, 0) + ?,
+       comments = COALESCE(comments, 0) + ?,
+       likes = COALESCE(likes, 0) + ?,
+       last_liked_at = MAX(COALESCE(last_liked_at, 0), ?),
+       dislikes = COALESCE(dislikes, 0) + ?,
+       updated_at = ?
+ WHERE id = ?`,
+		duplicate.Views,
+		unixMilliOrZero(duplicate.LastViewedAt),
+		duplicate.Favorites,
+		duplicate.Comments,
+		duplicate.Likes,
+		unixMilliOrZero(duplicate.LastLikedAt),
+		duplicate.Dislikes,
+		now,
+		canonicalID,
+	)
+	if err != nil {
+		return err
+	}
+	if affected, err := res.RowsAffected(); err == nil && affected == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+func mergeDuplicateVideoTagsTx(ctx context.Context, tx *sql.Tx, duplicateID, canonicalID string) error {
+	type assignment struct {
+		tagID     int64
+		source    string
+		evidence  string
+		createdAt int64
+	}
+	rows, err := tx.QueryContext(ctx, `
+SELECT tag_id, COALESCE(source, ''), COALESCE(evidence, ''), created_at
+  FROM video_tags
+ WHERE video_id = ?`, duplicateID)
+	if err != nil {
+		return err
+	}
+	assignments := make([]assignment, 0)
+	for rows.Next() {
+		var item assignment
+		if err := rows.Scan(&item.tagID, &item.source, &item.evidence, &item.createdAt); err != nil {
+			rows.Close()
+			return err
+		}
+		assignments = append(assignments, item)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+
+	for _, incoming := range assignments {
+		var existingSource, existingEvidence string
+		err := tx.QueryRowContext(ctx, `
+SELECT COALESCE(source, ''), COALESCE(evidence, '')
+  FROM video_tags
+ WHERE video_id = ? AND tag_id = ?`, canonicalID, incoming.tagID).Scan(&existingSource, &existingEvidence)
+		if errors.Is(err, sql.ErrNoRows) {
+			if _, err := tx.ExecContext(ctx, `
+INSERT INTO video_tags (video_id, tag_id, source, evidence, created_at)
+VALUES (?, ?, ?, ?, ?)`, canonicalID, incoming.tagID, normalizeVideoTagSource(incoming.source), incoming.evidence, incoming.createdAt); err != nil {
+				return err
+			}
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		// The canonical assignment wins ties; only a stronger source (for
+		// example manual over auto) may replace its metadata during a merge.
+		if videoTagAssignmentPriority(incoming.source) <= videoTagAssignmentPriority(existingSource) {
+			continue
+		}
+		evidence := incoming.evidence
+		if evidence == "" {
+			evidence = existingEvidence
+		}
+		if _, err := tx.ExecContext(ctx, `
+UPDATE video_tags
+   SET source = ?, evidence = ?
+ WHERE video_id = ? AND tag_id = ?`, normalizeVideoTagSource(incoming.source), evidence, canonicalID, incoming.tagID); err != nil {
+			return err
+		}
+	}
+
+	var duplicateManual, canonicalManual int
+	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(tags_manual, 0) FROM videos WHERE id = ?`, duplicateID).Scan(&duplicateManual); err != nil {
+		return err
+	}
+	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(tags_manual, 0) FROM videos WHERE id = ?`, canonicalID).Scan(&canonicalManual); err != nil {
+		return err
+	}
+	return syncVideoTagsJSONTx(ctx, tx, canonicalID, duplicateManual != 0 || canonicalManual != 0)
+}
+
+func redirectDuplicateVideoReferencesTx(ctx context.Context, tx *sql.Tx, duplicateID, canonicalID string) error {
+	if _, err := tx.ExecContext(ctx, `
+UPDATE deleted_videos
+   SET canonical_video_id = ?
+ WHERE reason = ?
+   AND canonical_video_id = ?`, canonicalID, DeletedVideoReasonDuplicate, duplicateID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `
+UPDATE crawler_seen_sources
+   SET canonical_video_id = ?
+ WHERE canonical_video_id = ?`, canonicalID, duplicateID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `
+UPDATE remote_upload_jobs
+   SET completed_video_id = ?
+ WHERE completed_video_id = ?`, canonicalID, duplicateID); err != nil {
+		return err
+	}
+	return nil
+}
+
+func enqueueDuplicateAssetCleanupTx(ctx context.Context, tx *sql.Tx, video *Video) error {
+	now := time.Now().UnixMilli()
+	_, err := tx.ExecContext(ctx, `
+INSERT INTO duplicate_asset_cleanup_jobs (
+  video_id, preview_local, attempts, last_error, created_at, updated_at
+) VALUES (?, ?, 0, '', ?, ?)
+ON CONFLICT(video_id) DO UPDATE SET
+  preview_local = excluded.preview_local,
+  attempts = 0,
+  last_error = '',
+  updated_at = excluded.updated_at`, video.ID, strings.TrimSpace(video.PreviewLocal), now, now)
+	return err
 }
 
 func (c *Catalog) ListDuplicateAssetCleanupJobs(ctx context.Context, limit int) ([]DuplicateAssetCleanupJob, error) {

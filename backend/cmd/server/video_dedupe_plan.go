@@ -15,6 +15,10 @@ import (
 	"github.com/video-site/backend/internal/persistence"
 )
 
+// contentSignatureExtractor allows channel tests to inject deterministic
+// signatures; production uses ffmpeg.
+var contentSignatureExtractor = mediasim.ExtractTeaserFrameSignature
+
 func (a *App) buildDuplicateMaintenancePlan(ctx context.Context, localDir string, videos []*catalog.Video, channels dedupe.Channels) (dedupe.Plan, error) {
 	candidates := make([]dedupe.Candidate, 0, len(videos))
 	for _, video := range videos {
@@ -122,7 +126,7 @@ func (a *App) applyDuplicateMaintenancePlan(ctx context.Context, localDir string
 		return fmt.Errorf("apply duplicate plan after retries: %w", applyErr)
 	}
 	for _, action := range plan.Actions {
-		log.Printf("[dedupe-maintenance] %s duplicate deleted id=%s canonical=%s", action.Stage, action.VideoID, action.CanonicalVideoID)
+		log.Printf("[dedupe-maintenance] %s duplicate merged id=%s canonical=%s", action.Stage, action.VideoID, action.CanonicalVideoID)
 	}
 	return a.cleanupPendingDuplicateAssetsLocked(ctx, localDir)
 }

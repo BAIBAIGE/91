@@ -286,14 +286,6 @@ func (m *Manager) MigrateLegacyRuntimeSettings(legacy LegacyRuntimeSettings) (bo
 		changed = true
 	}
 
-	if dedupe, exists := mappingValue(document, "dedupe"); exists {
-		if deleteMappingValue(dedupe, "duplicate_review_enabled") {
-			changed = true
-		}
-		if len(dedupe.Content) == 0 && deleteMappingValue(document, "dedupe") {
-			changed = true
-		}
-	}
 	// Drive definitions have always been persisted and loaded from SQLite. Any
 	// YAML drives node is therefore dead configuration and can contain stale
 	// credentials. Remove the complete node regardless of whether it is empty.

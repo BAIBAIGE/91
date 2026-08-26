@@ -71,18 +71,13 @@ func main() {
 	}
 	printPlan(plan, videosByID)
 	if !*apply {
-		fmt.Printf("\n将删除 %d 个视频（只读预演，加 -apply 执行）。\n", len(plan.Actions))
+		fmt.Printf("\n将合并并移除 %d 个重复视频行（只读预演，加 -apply 执行）。\n", len(plan.Actions))
 		return
 	}
 	if err := applyPlan(ctx, cat, localAbs, plan); err != nil {
 		log.Fatalf("apply content dedupe plan: %v", err)
 	}
-	fmt.Printf("\n已删除 %d 个视频。\n", len(plan.Actions))
-	if dropped, err := cat.DropLegacyDuplicateReviewTable(ctx); err != nil {
-		fmt.Fprintf(os.Stderr, "移除旧复核队列表失败: %v\n", err)
-	} else if dropped {
-		fmt.Println("旧复核队列表已在自动去重完成后移除。")
-	}
+	fmt.Printf("\n已合并并移除 %d 个重复视频行。\n", len(plan.Actions))
 }
 
 func contentCandidates(localDir string, videos []*catalog.Video) ([]dedupe.Candidate, map[string]*catalog.Video) {

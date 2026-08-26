@@ -2584,6 +2584,47 @@ func TestHandleVideoDetailIncludesDriveKindLabel(t *testing.T) {
 	}
 }
 
+func TestHandleVideoDetailResolvesDuplicatePublicID(t *testing.T) {
+	ctx := context.Background()
+	cat, err := catalog.Open(t.TempDir() + "/catalog.db")
+	if err != nil {
+		t.Fatalf("open catalog: %v", err)
+	}
+	t.Cleanup(func() { _ = cat.Close() })
+
+	now := time.Now()
+	duplicate := &catalog.Video{ID: "old-public-id", DriveID: "drive", FileID: "old", Title: "Old", PublishedAt: now, CreatedAt: now}
+	canonical := &catalog.Video{ID: "canonical-id", DriveID: "drive", FileID: "canonical", Title: "Canonical", PublishedAt: now, CreatedAt: now.Add(time.Second)}
+	for _, video := range []*catalog.Video{duplicate, canonical} {
+		if err := cat.UpsertVideo(ctx, video); err != nil {
+			t.Fatalf("seed %s: %v", video.ID, err)
+		}
+	}
+	if err := cat.ApplyDuplicateVideoDeletions(ctx, []catalog.DuplicateVideoDeletion{{
+		VideoID:                    duplicate.ID,
+		CanonicalVideoID:           canonical.ID,
+		ExpectedUpdatedAt:          duplicate.UpdatedAt.UnixMilli(),
+		CanonicalExpectedUpdatedAt: canonical.UpdatedAt.UnixMilli(),
+	}}); err != nil {
+		t.Fatalf("merge duplicate: %v", err)
+	}
+
+	req := requestWithVideoID(http.MethodGet, "/api/video/old-public-id", duplicate.ID, strings.NewReader(``))
+	rr := httptest.NewRecorder()
+	(&Server{Catalog: cat}).handleVideoDetail(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rr.Code, rr.Body.String())
+	}
+	var got VideoDetailDTO
+	if err := json.NewDecoder(rr.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.ID != canonical.ID || got.Href != "/video/canonical-id" {
+		t.Fatalf("resolved video = id:%q href:%q", got.ID, got.Href)
+	}
+}
+
 func TestHandleVideoDetailRecommendationsPreferReadyThumbnails(t *testing.T) {
 	ctx := context.Background()
 	cat, err := catalog.Open(t.TempDir() + "/catalog.db")

@@ -52,10 +52,6 @@ test("configuration panel is a dedicated protected admin route", () => {
   assert.match(appSource, /path="settings"[\s\S]*?<SettingsPage \/>/);
   assert.match(layoutSource, /to="\/admin\/settings"/);
   assert.match(layoutSource, />配置面板</);
-  assert.doesNotMatch(appSource, /duplicate-reviews|DuplicateReviewsPage/);
-  assert.doesNotMatch(layoutSource, /重复复核|duplicate-reviews/);
-  assert.doesNotMatch(apiSource, /DuplicateReviewPair|listDuplicateReviews|resolveDuplicateReview/);
-  assert.doesNotMatch(adminCss, /admin-duperev/);
 });
 
 test("configuration panel groups typed fields from the real YAML document", () => {
@@ -92,7 +88,6 @@ test("configuration panel groups typed fields from the real YAML document", () =
   assert.match(pageSource, /api\.getConfigYAML\(\)/);
   assert.match(pageSource, /api\.updateConfigYAML\(pendingSave\.after, pendingSave\.version\)/);
   assert.match(pageSource, /有未保存更改/);
-  assert.doesNotMatch(pageSource, /重复复核|duplicateReviewEnabled|duplicate_review_enabled/);
   assert.match(apiSource, /If-Match/);
   assert.match(apiSource, /ConfigConflictError/);
   assert.match(apiSource, /nightlyTimezone: string/);

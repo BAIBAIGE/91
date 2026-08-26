@@ -72,6 +72,7 @@ type CrawlerConfig struct {
 	ScriptPath           string
 	WorkDir              string
 	CommonThumbDir       string
+	LocalPreviewDir      string
 	ProxyURL             string
 	ConfigJSON           string
 	DisablePreview       bool

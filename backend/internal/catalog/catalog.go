@@ -4108,30 +4108,6 @@ func (c *Catalog) DeleteSettings(ctx context.Context, keys ...string) error {
 	return tx.Commit()
 }
 
-// DropLegacyDuplicateReviewTable retires the queue left by releases that sent
-// the 0.80-0.92 content-similarity band to manual review. Callers invoke this
-// only after a successful content-deduplication pass under the new automatic
-// threshold, so removing the queue can never replace processing its videos.
-func (c *Catalog) DropLegacyDuplicateReviewTable(ctx context.Context) (bool, error) {
-	var exists int
-	if err := c.db.QueryRowContext(ctx, `
-		SELECT COUNT(*) FROM sqlite_master
-		WHERE type = 'table' AND name = 'duplicate_review_pairs'
-	`).Scan(&exists); err != nil {
-		return false, err
-	}
-	if exists == 0 {
-		return false, nil
-	}
-	// IF EXISTS keeps the migration idempotent even if a maintenance command and
-	// the server reach this boundary at the same time after both observed the
-	// legacy table.
-	if _, err := c.db.ExecContext(ctx, `DROP TABLE IF EXISTS duplicate_review_pairs`); err != nil {
-		return false, err
-	}
-	return true, nil
-}
-
 // ---------- helpers ----------
 
 const allVideoCols = `

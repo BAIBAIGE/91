@@ -13,6 +13,7 @@ import (
 
 	"github.com/video-site/backend/internal/catalog"
 	"github.com/video-site/backend/internal/config"
+	"github.com/video-site/backend/internal/dedupe"
 	"github.com/video-site/backend/internal/mediasim"
 )
 
@@ -27,6 +28,25 @@ func syntheticFrames(seed int64) [][]byte {
 		frames[i] = frame
 	}
 	return frames
+}
+
+func applyContentMaintenanceForTest(ctx context.Context, app *App, localDir string, videos []*catalog.Video) (dedupe.Plan, error) {
+	current := make([]*catalog.Video, 0, len(videos))
+	for _, video := range videos {
+		stored, err := app.cat.GetVideo(ctx, video.ID)
+		if err != nil {
+			return dedupe.Plan{}, err
+		}
+		current = append(current, stored)
+	}
+	plan, err := app.buildDuplicateMaintenancePlan(ctx, localDir, current, dedupe.ChannelContent)
+	if err != nil {
+		return dedupe.Plan{}, err
+	}
+	if err := app.applyDuplicateMaintenancePlan(ctx, localDir, plan); err != nil {
+		return dedupe.Plan{}, err
+	}
+	return plan, nil
 }
 
 func TestCleanupContentDuplicateVideos(t *testing.T) {
@@ -118,19 +138,19 @@ func TestCleanupContentDuplicateVideos(t *testing.T) {
 		cfg: &config.Config{Storage: config.Storage{LocalPreviewDir: localDir}},
 		cat: cat,
 	}
-	deleted := map[string]struct{}{}
-	stats, err := app.cleanupContentDuplicateVideos(ctx, localDir, videos, deleted)
+	plan, err := applyContentMaintenanceForTest(ctx, app, localDir, videos)
 	if err != nil {
 		t.Fatalf("cleanup content duplicates: %v", err)
 	}
+	stats := plan.Stats.Content
 	if stats.Candidates != 3 {
 		t.Fatalf("candidates = %d, want 3 (short video must be excluded)", stats.Candidates)
 	}
 	if stats.Groups != 1 || stats.Deleted != 1 {
 		t.Fatalf("stats = %+v, want 1 group / 1 deleted", stats)
 	}
-	if _, ok := deleted["video-compressed"]; !ok {
-		t.Fatalf("compressed duplicate not deleted, deleted=%v", deleted)
+	if canonicalID := plan.Redirects["video-compressed"]; canonicalID != "video-original" {
+		t.Fatalf("compressed duplicate canonical = %q, want video-original", canonicalID)
 	}
 
 	if _, err := cat.GetVideo(ctx, "video-compressed"); err != sql.ErrNoRows {
@@ -225,11 +245,11 @@ func TestCleanupContentDuplicateVideosFormerReviewBandDeletes(t *testing.T) {
 		cfg: &config.Config{Storage: config.Storage{LocalPreviewDir: localDir}},
 		cat: cat,
 	}
-	deleted := map[string]struct{}{}
-	stats, err := app.cleanupContentDuplicateVideos(ctx, localDir, videos, deleted)
+	plan, err := applyContentMaintenanceForTest(ctx, app, localDir, videos)
 	if err != nil {
 		t.Fatalf("cleanup: %v", err)
 	}
+	stats := plan.Stats.Content
 	if stats.Deleted != 1 || stats.Groups != 1 {
 		t.Fatalf("stats = %+v, want former review-band pair auto-deduplicated", stats)
 	}
@@ -298,11 +318,11 @@ func TestCleanupContentDuplicateVideosNearMissDoesNotDelete(t *testing.T) {
 		cfg: &config.Config{Storage: config.Storage{LocalPreviewDir: localDir}},
 		cat: cat,
 	}
-	deleted := map[string]struct{}{}
-	stats, err := app.cleanupContentDuplicateVideos(ctx, localDir, videos, deleted)
+	plan, err := applyContentMaintenanceForTest(ctx, app, localDir, videos)
 	if err != nil {
 		t.Fatalf("cleanup content duplicates: %v", err)
 	}
+	stats := plan.Stats.Content
 	if stats.Deleted != 0 || stats.Groups != 0 {
 		t.Fatalf("stats = %+v, want no deletions", stats)
 	}

@@ -26,8 +26,6 @@ func TestManagerMigratesLegacyValuesIntoYAMLWithoutDiscardingUnknownNodes(t *tes
 nightly:
   # legacy schedule comment
   cron_hour: 3
-dedupe:
-  duplicate_review_enabled: false
 # obsolete template placeholder
 drives: []
 future_section:
@@ -61,9 +59,6 @@ future_section:
 	if !strings.Contains(text, "timezone: Asia/Shanghai") {
 		t.Fatalf("nightly timezone was not made explicit:\n%s", text)
 	}
-	if strings.Contains(text, "duplicate_review_enabled") || strings.Contains(text, "dedupe:") {
-		t.Fatalf("retired duplicate-review setting remains:\n%s", text)
-	}
 	if strings.Contains(text, "drives:") || strings.Contains(text, "obsolete template placeholder") {
 		t.Fatalf("retired empty drive placeholder remains:\n%s", text)
 	}
@@ -77,7 +72,7 @@ future_section:
 }
 
 func TestManagerYAMLValuesWinOverLegacySQLiteValues(t *testing.T) {
-	manager, path := newManagerForTest(t, "nightly:\n  start_time: \"02:10\"\n  cron_hour: 7\ntags:\n  builtin_pack_enabled: true\ndedupe:\n  duplicate_review_enabled: true\n")
+	manager, path := newManagerForTest(t, "nightly:\n  start_time: \"02:10\"\n  cron_hour: 7\ntags:\n  builtin_pack_enabled: true\n")
 	start := "22:45"
 	builtinTagsEnabled := false
 	_, err := manager.MigrateLegacyRuntimeSettings(LegacyRuntimeSettings{
@@ -92,7 +87,7 @@ func TestManagerYAMLValuesWinOverLegacySQLiteValues(t *testing.T) {
 		t.Fatalf("live settings = %#v, want YAML %#v", got, want)
 	}
 	data, _ := os.ReadFile(path)
-	if strings.Contains(string(data), "cron_hour:") || strings.Contains(string(data), "duplicate_review_enabled") {
+	if strings.Contains(string(data), "cron_hour:") {
 		t.Fatalf("retired fields remain:\n%s", data)
 	}
 }

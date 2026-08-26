@@ -1220,7 +1220,6 @@ func (a *App) attachLocalUpload(ctx context.Context) error {
 	if err := drv.Init(ctx); err != nil {
 		return err
 	}
-	a.maintainLocalUploadFileNames(ctx)
 	a.registry.Set(drv.ID(), drv)
 
 	a.startDriveGenerationWorkers(ctx, drv.ID(), drv, true)
@@ -1374,20 +1373,21 @@ func (a *App) attachScriptCrawler(d *catalog.Drive, drv *scriptcrawler.Driver) {
 
 	driveID := d.ID
 	c := scriptcrawler.NewCrawler(scriptcrawler.CrawlerConfig{
-		Driver:         drv,
-		Catalog:        a.cat,
-		GetDriveConfig: a.activeDriveConfig,
-		CrawlerName:    d.Name,
-		Protocol:       protocol,
-		PythonPath:     pythonPath,
-		FFmpegPath:     a.cfg.Preview.FFmpegPath,
-		FFprobePath:    a.cfg.Preview.FFprobePath,
-		ScriptPath:     scriptPath,
-		WorkDir:        workDir,
-		CommonThumbDir: a.commonThumbsDir(),
-		ProxyURL:       proxyURL,
-		ConfigJSON:     configJSON,
-		DisablePreview: !d.TeaserEnabled,
+		Driver:          drv,
+		Catalog:         a.cat,
+		GetDriveConfig:  a.activeDriveConfig,
+		CrawlerName:     d.Name,
+		Protocol:        protocol,
+		PythonPath:      pythonPath,
+		FFmpegPath:      a.cfg.Preview.FFmpegPath,
+		FFprobePath:     a.cfg.Preview.FFprobePath,
+		ScriptPath:      scriptPath,
+		WorkDir:         workDir,
+		CommonThumbDir:  a.commonThumbsDir(),
+		LocalPreviewDir: a.cfg.Storage.LocalPreviewDir,
+		ProxyURL:        proxyURL,
+		ConfigJSON:      configJSON,
+		DisablePreview:  !d.TeaserEnabled,
 		OnProgress: func(progress scriptcrawler.CrawlProgress) {
 			scanned := progress.Checked
 			if scanned < progress.TotalEntries {

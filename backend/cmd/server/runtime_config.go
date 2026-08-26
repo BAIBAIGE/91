@@ -9,10 +9,9 @@ import (
 )
 
 const (
-	legacyNightlyStartTimeSetting         = "automation.nightly_start_time"
-	legacyBuiltinTagsEnabledSetting       = "tags.builtin_pack_enabled"
-	obsoleteDuplicateReviewEnabledSetting = "dedupe.duplicate_review_enabled"
-	legacySettingMissing                  = "\x00video-site-config-setting-missing\x00"
+	legacyNightlyStartTimeSetting   = "automation.nightly_start_time"
+	legacyBuiltinTagsEnabledSetting = "tags.builtin_pack_enabled"
+	legacySettingMissing            = "\x00video-site-config-setting-missing\x00"
 )
 
 func (a *App) liveConfigSettings() config.LiveSettings {

@@ -19,14 +19,28 @@ func TestApplyDuplicateVideoDeletionsIsAtomicAndRetargetsReferences(t *testing.T
 
 	now := time.Date(2026, 8, 23, 0, 0, 0, 0, time.UTC)
 	videos := []*Video{
-		{ID: "old-a", DriveID: "drive", FileID: "a", PreviewLocal: "/previews/a.mp4", Size: 100, PublishedAt: now, CreatedAt: now},
-		{ID: "old-b", DriveID: "drive", FileID: "b", PreviewLocal: "/previews/b.mp4", Size: 100, PublishedAt: now, CreatedAt: now.Add(time.Second)},
-		{ID: "final", DriveID: "drive", FileID: "c", Size: 200, PublishedAt: now, CreatedAt: now.Add(2 * time.Second)},
+		{ID: "old-a", DriveID: "drive", FileID: "a", PreviewLocal: "/previews/a.mp4", Size: 100, Tags: []string{"loser-a", "shared"}, Views: 3, Favorites: 1, Comments: 2, Likes: 4, Dislikes: 1, LastViewedAt: now.Add(time.Minute), LastLikedAt: now.Add(2 * time.Minute), PublishedAt: now, CreatedAt: now},
+		{ID: "old-b", DriveID: "drive", FileID: "b", PreviewLocal: "/previews/b.mp4", Size: 100, Tags: []string{"loser-b"}, Views: 5, Favorites: 2, Comments: 1, Likes: 2, Dislikes: 3, LastViewedAt: now.Add(3 * time.Minute), LastLikedAt: now.Add(4 * time.Minute), PublishedAt: now, CreatedAt: now.Add(time.Second)},
+		{ID: "final", DriveID: "drive", FileID: "c", Size: 200, Tags: []string{"canonical", "shared"}, Views: 7, Favorites: 3, Comments: 4, Likes: 6, Dislikes: 2, PublishedAt: now, CreatedAt: now.Add(2 * time.Second)},
 	}
 	for _, video := range videos {
 		if err := cat.UpsertVideo(ctx, video); err != nil {
 			t.Fatalf("seed %s: %v", video.ID, err)
 		}
+	}
+	for i, video := range videos {
+		stored, err := cat.GetVideo(ctx, video.ID)
+		if err != nil {
+			t.Fatalf("reload %s: %v", video.ID, err)
+		}
+		videos[i] = stored
+	}
+	if _, err := cat.db.ExecContext(ctx, `
+UPDATE video_tags
+   SET source = 'auto'
+ WHERE video_id = 'final'
+   AND tag_id = (SELECT id FROM tags WHERE label = 'shared')`); err != nil {
+		t.Fatalf("downgrade canonical shared tag for merge test: %v", err)
 	}
 	if _, err := cat.db.ExecContext(ctx, `
 INSERT INTO deleted_videos (id, reason, canonical_video_id, deleted_at)
@@ -35,6 +49,26 @@ VALUES ('historical', 'duplicate', 'old-a', 1)`); err != nil {
 	}
 	if err := cat.MarkCrawlerSourceSeen(ctx, "scriptcrawler", "crawler", "source", "duplicate", "old-a", "", 0); err != nil {
 		t.Fatalf("seed crawler seen: %v", err)
+	}
+	if _, err := cat.db.ExecContext(ctx, `
+INSERT INTO video_reaction_visits (video_id, visit_id, reaction, created_at, updated_at)
+VALUES
+  ('old-a', 'visit-old-a-0001', 'like', 1, 1),
+  ('old-b', 'visit-old-b-0001', 'dislike', 2, 2),
+  ('final', 'visit-final-0001', 'like', 3, 3),
+  ('old-a', 'visit-shared-0001', 'dislike', 4, 5),
+  ('final', 'visit-shared-0001', 'like', 4, 4)`); err != nil {
+		t.Fatalf("seed reactions: %v", err)
+	}
+	if _, err := cat.db.ExecContext(ctx, `
+INSERT INTO video_shares (id, token_hash, video_id, created_at)
+VALUES ('share-a', 'token-a', 'old-a', 1), ('share-b', 'token-b', 'old-b', 2)`); err != nil {
+		t.Fatalf("seed shares: %v", err)
+	}
+	if _, err := cat.db.ExecContext(ctx, `
+INSERT INTO remote_upload_jobs (id, state, completed_video_id, created_at, updated_at)
+VALUES ('upload-a', 'completed', 'old-a', 1, 1)`); err != nil {
+		t.Fatalf("seed upload history: %v", err)
 	}
 
 	if err := cat.ApplyDuplicateVideoDeletions(ctx, []DuplicateVideoDeletion{
@@ -48,8 +82,28 @@ VALUES ('historical', 'duplicate', 'old-a', 1)`); err != nil {
 			t.Fatalf("video %s still exists: %v", id, err)
 		}
 	}
-	if _, err := cat.GetVideo(ctx, "final"); err != nil {
+	final, err := cat.GetVideo(ctx, "final")
+	if err != nil {
 		t.Fatalf("final canonical missing: %v", err)
+	}
+	if final.Views != 15 || final.Favorites != 6 || final.Comments != 7 || final.Likes != 12 || final.Dislikes != 6 {
+		t.Fatalf("merged counters = views:%d favorites:%d comments:%d likes:%d dislikes:%d", final.Views, final.Favorites, final.Comments, final.Likes, final.Dislikes)
+	}
+	for _, label := range []string{"canonical", "shared", "loser-a", "loser-b"} {
+		if !containsString(final.Tags, label) {
+			t.Fatalf("merged tags = %#v, missing %q", final.Tags, label)
+		}
+	}
+	var sharedTagSource string
+	if err := cat.db.QueryRowContext(ctx, `
+SELECT vt.source
+  FROM video_tags vt
+  JOIN tags t ON t.id = vt.tag_id
+ WHERE vt.video_id = 'final' AND t.label = 'shared'`).Scan(&sharedTagSource); err != nil {
+		t.Fatalf("read shared tag source: %v", err)
+	}
+	if sharedTagSource != "manual" {
+		t.Fatalf("shared tag source = %q, want stronger manual assignment", sharedTagSource)
 	}
 	var historicalCanonical string
 	if err := cat.db.QueryRowContext(ctx, `SELECT canonical_video_id FROM deleted_videos WHERE id = 'historical'`).Scan(&historicalCanonical); err != nil {
@@ -64,6 +118,39 @@ VALUES ('historical', 'duplicate', 'old-a', 1)`); err != nil {
 	}
 	if seenCanonical != "final" {
 		t.Fatalf("crawler canonical = %q, want final", seenCanonical)
+	}
+	for _, id := range []string{"old-a", "old-b", "historical"} {
+		resolved, err := cat.ResolveVideoID(ctx, id)
+		if err != nil || resolved != "final" {
+			t.Fatalf("ResolveVideoID(%q) = %q, %v; want final", id, resolved, err)
+		}
+	}
+	var mergedShares, mergedReactions, staleReactions int
+	if err := cat.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM video_shares WHERE video_id = 'final'`).Scan(&mergedShares); err != nil {
+		t.Fatalf("count merged shares: %v", err)
+	}
+	if err := cat.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM video_reaction_visits WHERE video_id = 'final'`).Scan(&mergedReactions); err != nil {
+		t.Fatalf("count merged reactions: %v", err)
+	}
+	if err := cat.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM video_reaction_visits WHERE video_id IN ('old-a', 'old-b')`).Scan(&staleReactions); err != nil {
+		t.Fatalf("count stale reactions: %v", err)
+	}
+	if mergedShares != 2 || mergedReactions != 4 || staleReactions != 0 {
+		t.Fatalf("merged relations = shares:%d reactions:%d stale_reactions:%d", mergedShares, mergedReactions, staleReactions)
+	}
+	var sharedReaction string
+	if err := cat.db.QueryRowContext(ctx, `SELECT reaction FROM video_reaction_visits WHERE video_id = 'final' AND visit_id = 'visit-shared-0001'`).Scan(&sharedReaction); err != nil {
+		t.Fatalf("read merged reaction: %v", err)
+	}
+	if sharedReaction != "dislike" {
+		t.Fatalf("merged reaction = %q, want latest dislike", sharedReaction)
+	}
+	var completedVideoID string
+	if err := cat.db.QueryRowContext(ctx, `SELECT completed_video_id FROM remote_upload_jobs WHERE id = 'upload-a'`).Scan(&completedVideoID); err != nil {
+		t.Fatalf("read upload history: %v", err)
+	}
+	if completedVideoID != "final" {
+		t.Fatalf("upload history video = %q, want final", completedVideoID)
 	}
 	jobs, err := cat.ListDuplicateAssetCleanupJobs(ctx, 10)
 	if err != nil {
@@ -113,9 +200,13 @@ func TestReplaceDuplicateVideoPublishesNewCanonicalAtomically(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = cat.Close() })
 	now := time.Date(2026, 8, 23, 0, 0, 0, 0, time.UTC)
-	old := &Video{ID: "old", DriveID: "crawler-a", FileID: "old.mp4", Size: 100, PreviewLocal: "/previews/old.mp4", PublishedAt: now, CreatedAt: now}
+	old := &Video{ID: "old", DriveID: "crawler-a", FileID: "old.mp4", Size: 100, PreviewLocal: "/previews/old.mp4", Tags: []string{"old-tag"}, Views: 4, Likes: 2, PublishedAt: now, CreatedAt: now}
 	if err := cat.UpsertVideo(ctx, old); err != nil {
 		t.Fatalf("seed old: %v", err)
+	}
+	old, err = cat.GetVideo(ctx, old.ID)
+	if err != nil {
+		t.Fatalf("reload old: %v", err)
 	}
 	newVideo := &Video{ID: "new", DriveID: "crawler-a", FileID: "new.mp4", Size: 200, PublishedAt: now, CreatedAt: now.Add(time.Second)}
 	if err := cat.ReplaceDuplicateVideo(ctx, DuplicateVideoReplacement{
@@ -131,8 +222,11 @@ func TestReplaceDuplicateVideoPublishesNewCanonicalAtomically(t *testing.T) {
 	if _, err := cat.GetVideo(ctx, old.ID); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("old video still exists: %v", err)
 	}
-	if got, err := cat.GetVideo(ctx, newVideo.ID); err != nil || got.Size != 200 {
+	if got, err := cat.GetVideo(ctx, newVideo.ID); err != nil || got.Size != 200 || got.Views != 4 || got.Likes != 2 || !containsString(got.Tags, "old-tag") {
 		t.Fatalf("new canonical = %#v, err=%v", got, err)
+	}
+	if resolved, err := cat.ResolveVideoID(ctx, old.ID); err != nil || resolved != newVideo.ID {
+		t.Fatalf("old public ID resolves to %q, %v; want %q", resolved, err, newVideo.ID)
 	}
 	deleted, _, err := cat.ListDeletedVideos(ctx, ListParams{Page: 1, PageSize: 10})
 	if err != nil || len(deleted) != 1 || deleted[0].ID != old.ID || deleted[0].CanonicalVideoID != newVideo.ID {
@@ -145,4 +239,13 @@ func TestReplaceDuplicateVideoPublishesNewCanonicalAtomically(t *testing.T) {
 	if seenCanonical != newVideo.ID || status != "imported" {
 		t.Fatalf("crawler seen canonical=%q status=%q", seenCanonical, status)
 	}
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
