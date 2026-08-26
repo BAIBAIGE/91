@@ -263,12 +263,22 @@ type Scanner struct {
 }
 
 type Preview struct {
-	Enabled         bool   `yaml:"enabled"`
-	FFmpegPath      string `yaml:"ffmpeg_path"`
-	FFprobePath     string `yaml:"ffprobe_path"`
-	DurationSeconds int    `yaml:"duration_seconds"`
-	Width           int    `yaml:"width"`
-	Segments        int    `yaml:"segments"`
+	Enabled            bool           `yaml:"enabled"`
+	FFmpegPath         string         `yaml:"ffmpeg_path"`
+	FFprobePath        string         `yaml:"ffprobe_path"`
+	DurationSeconds    int            `yaml:"duration_seconds"`
+	Width              int            `yaml:"width"`
+	Segments           int            `yaml:"segments"`
+	ConcurrencyByDrive map[string]int `yaml:"concurrency_by_drive,omitempty"`
+}
+
+const maxPreviewConcurrencyPerDrive = 16
+
+func (p Preview) ConcurrencyForDrive(driveID string) int {
+	if concurrency := p.ConcurrencyByDrive[strings.TrimSpace(driveID)]; concurrency > 0 {
+		return concurrency
+	}
+	return 1
 }
 
 type Proxy struct {
@@ -416,6 +426,27 @@ func (c *Config) applyDefaults() error {
 	}
 	if c.Preview.Segments == 0 {
 		c.Preview.Segments = 3
+	}
+	if len(c.Preview.ConcurrencyByDrive) > 0 {
+		normalized := make(map[string]int, len(c.Preview.ConcurrencyByDrive))
+		for rawDriveID, concurrency := range c.Preview.ConcurrencyByDrive {
+			driveID := strings.TrimSpace(rawDriveID)
+			if driveID == "" {
+				return errors.New("preview.concurrency_by_drive contains an empty drive ID")
+			}
+			if concurrency < 1 || concurrency > maxPreviewConcurrencyPerDrive {
+				return fmt.Errorf(
+					"preview.concurrency_by_drive.%s must be between 1 and %d",
+					driveID,
+					maxPreviewConcurrencyPerDrive,
+				)
+			}
+			if _, exists := normalized[driveID]; exists {
+				return fmt.Errorf("preview.concurrency_by_drive contains duplicate drive ID %q", driveID)
+			}
+			normalized[driveID] = concurrency
+		}
+		c.Preview.ConcurrencyByDrive = normalized
 	}
 	if c.Nightly.CronHour <= 0 || c.Nightly.CronHour > 23 {
 		c.Nightly.CronHour = 1

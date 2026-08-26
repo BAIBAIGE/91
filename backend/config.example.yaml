@@ -64,6 +64,8 @@ preview:
   segments: 3
   # 预览视频宽度
   width: 480
+  # 每个网盘的预览生成并发数；未列出的网盘保持单路生成，最大 16。
+  concurrency_by_drive: {}
 
 proxy:
   # 是否允许播放器为“三屏画面”请求服务端全量中转视频流。

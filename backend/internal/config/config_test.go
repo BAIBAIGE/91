@@ -229,6 +229,34 @@ scanner:
 	}
 }
 
+func TestPreviewConcurrencyByDrive(t *testing.T) {
+	cfg, err := Parse([]byte(`
+preview:
+  concurrency_by_drive:
+    " 115 ": 3
+`))
+	if err != nil {
+		t.Fatalf("parse config: %v", err)
+	}
+	if got := cfg.Preview.ConcurrencyForDrive("115"); got != 3 {
+		t.Fatalf("115 preview concurrency = %d, want 3", got)
+	}
+	if got := cfg.Preview.ConcurrencyForDrive("onedrive"); got != 1 {
+		t.Fatalf("unconfigured preview concurrency = %d, want 1", got)
+	}
+}
+
+func TestPreviewConcurrencyByDriveRejectsInvalidValue(t *testing.T) {
+	_, err := Parse([]byte(`
+preview:
+  concurrency_by_drive:
+    "115": 17
+`))
+	if err == nil || !strings.Contains(err.Error(), "must be between 1 and 16") {
+		t.Fatalf("parse error = %v, want concurrency validation error", err)
+	}
+}
+
 func TestLoadDefaultNightlyCronHour(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(path, []byte(`{}`), 0o644); err != nil {

@@ -1003,6 +1003,9 @@ type Worker struct {
 	Gen     TeaserGenerator
 	Catalog *catalog.Catalog
 	Drive   drives.Drive
+	// Concurrency is the number of consumers sharing this worker's deduplicated
+	// queue. Values below one preserve the default single-consumer behavior.
+	Concurrency int
 	// TaskGuard holds application-level task admission for the complete provider
 	// operation. A nil release means this worker belongs to a retired runtime
 	// generation and the queued item must remain pending for its replacement.
@@ -1012,7 +1015,7 @@ type Worker struct {
 
 	RateLimitCooldown time.Duration
 	rateLimit         rateLimitState
-	activity          taskActivity
+	activities        taskActivities
 }
 
 func NewWorker(gen TeaserGenerator, cat *catalog.Catalog, drv drives.Drive) *Worker {
@@ -1095,6 +1098,11 @@ type taskActivity struct {
 	currentTitle string
 }
 
+type taskActivities struct {
+	mu     sync.Mutex
+	titles map[string]string
+}
+
 type videoQueue struct {
 	mu  sync.Mutex
 	ids map[string]struct{}
@@ -1142,11 +1150,18 @@ func (q *videoQueue) idsSnapshot() []string {
 }
 
 func (q *videoQueue) lengthExcluding(currentID string) int {
+	if currentID == "" {
+		return q.lengthExcludingIDs(nil)
+	}
+	return q.lengthExcludingIDs([]string{currentID})
+}
+
+func (q *videoQueue) lengthExcludingIDs(activeIDs []string) int {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	n := len(q.ids)
-	if currentID != "" {
-		if _, ok := q.ids[currentID]; ok {
+	for _, activeID := range activeIDs {
+		if _, ok := q.ids[activeID]; ok {
 			n--
 		}
 	}
@@ -1179,6 +1194,44 @@ func (a *taskActivity) current() (string, string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.currentID, a.currentTitle
+}
+
+func (a *taskActivities) start(v *catalog.Video) {
+	if v == nil || v.ID == "" {
+		return
+	}
+	a.mu.Lock()
+	if a.titles == nil {
+		a.titles = make(map[string]string)
+	}
+	a.titles[v.ID] = v.Title
+	a.mu.Unlock()
+}
+
+func (a *taskActivities) done(videoID string) {
+	if videoID == "" {
+		return
+	}
+	a.mu.Lock()
+	delete(a.titles, videoID)
+	a.mu.Unlock()
+}
+
+func (a *taskActivities) snapshot() (string, []string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if len(a.titles) == 0 {
+		return "", nil
+	}
+	activeIDs := make([]string, 0, len(a.titles))
+	currentTitle := ""
+	for id, title := range a.titles {
+		activeIDs = append(activeIDs, id)
+		if currentTitle == "" {
+			currentTitle = title
+		}
+	}
+	return currentTitle, activeIDs
 }
 
 func (s *rateLimitState) active(now time.Time) (time.Time, bool, bool) {
@@ -1264,8 +1317,8 @@ func (w *Worker) Status() TaskStatus {
 	if w == nil {
 		return TaskStatus{State: "idle"}
 	}
-	currentID, _ := w.activity.current()
-	return taskStatus(&w.activity, &w.rateLimit, w.queue.lengthExcluding(currentID))
+	currentTitle, activeIDs := w.activities.snapshot()
+	return taskStatus(currentTitle, len(activeIDs) > 0, &w.rateLimit, w.queue.lengthExcludingIDs(activeIDs))
 }
 
 func (w *Worker) ActiveVideoIDs() []string {
@@ -1279,8 +1332,8 @@ func (w *ThumbWorker) Status() TaskStatus {
 	if w == nil {
 		return TaskStatus{State: "idle"}
 	}
-	currentID, _ := w.activity.current()
-	return taskStatus(&w.activity, &w.rateLimit, w.queue.lengthExcluding(currentID))
+	currentID, currentTitle := w.activity.current()
+	return taskStatus(currentTitle, currentID != "", &w.rateLimit, w.queue.lengthExcluding(currentID))
 }
 
 // WaitIdle 阻塞直到 worker 队列为空且当前没有正在处理的任务。
@@ -1325,7 +1378,7 @@ func waitQueueIdle(ctx context.Context, q *videoQueue) error {
 	}
 }
 
-func taskStatus(activity *taskActivity, rateLimit *rateLimitState, queueLength int) TaskStatus {
+func taskStatus(currentTitle string, active bool, rateLimit *rateLimitState, queueLength int) TaskStatus {
 	if queueLength < 0 {
 		queueLength = 0
 	}
@@ -1338,10 +1391,9 @@ func taskStatus(activity *taskActivity, rateLimit *rateLimitState, queueLength i
 		status.CooldownUntil = until
 		return status
 	}
-	_, title := activity.current()
-	if title != "" {
+	if active {
 		status.State = "generating"
-		status.CurrentTitle = title
+		status.CurrentTitle = currentTitle
 		return status
 	}
 	if queueLength > 0 {
@@ -1352,6 +1404,31 @@ func taskStatus(activity *taskActivity, rateLimit *rateLimitState, queueLength i
 
 // Run 阻塞运行直到 ctx 取消
 func (w *Worker) Run(ctx context.Context) {
+	concurrency := w.Concurrency
+	if concurrency < 1 {
+		concurrency = 1
+	}
+	if concurrency == 1 {
+		w.run(ctx)
+		return
+	}
+	driveID := ""
+	if w.Drive != nil {
+		driveID = w.Drive.ID()
+	}
+	log.Printf("[preview] drive=%s concurrency=%d", driveID, concurrency)
+	var consumers sync.WaitGroup
+	consumers.Add(concurrency)
+	for i := 0; i < concurrency; i++ {
+		go func() {
+			defer consumers.Done()
+			w.run(ctx)
+		}()
+	}
+	consumers.Wait()
+}
+
+func (w *Worker) run(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
@@ -1408,8 +1485,8 @@ func (w *Worker) processQueued(ctx context.Context, v *catalog.Video) {
 	if err != nil || current.Hidden {
 		return
 	}
-	w.activity.start(current)
-	defer w.activity.done()
+	w.activities.start(current)
+	defer w.activities.done(current.ID)
 	if !waitForRateLimitCooldown(ctx, &w.rateLimit, "preview", w.Drive) {
 		return
 	}

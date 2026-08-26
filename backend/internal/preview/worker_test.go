@@ -3,6 +3,7 @@ package preview
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -248,6 +249,75 @@ func TestPreviewWorkerDeduplicatesQueuedVideos(t *testing.T) {
 	worker.processQueued(ctx, queued)
 	if !worker.Enqueue(video) {
 		t.Fatal("enqueue after processing returned false, want true")
+	}
+}
+
+func TestPreviewWorkerRunsConfiguredConsumersConcurrently(t *testing.T) {
+	ctx := context.Background()
+	cat, first := seedPreviewTestVideo(t, "preview-concurrent-1")
+	videos := []*catalog.Video{first}
+	for i := 2; i <= 3; i++ {
+		video := *first
+		video.ID = fmt.Sprintf("preview-concurrent-%d", i)
+		video.FileID = fmt.Sprintf("file-id-%d", i)
+		if err := cat.UpsertVideo(ctx, &video); err != nil {
+			t.Fatalf("seed video %d: %v", i, err)
+		}
+		videos = append(videos, &video)
+	}
+
+	release := make(chan struct{})
+	gen := &blockingTeaserGenerator{
+		started: make(chan struct{}, len(videos)),
+		release: release,
+	}
+	worker := NewWorker(gen, cat, &concurrentPreviewDrive{})
+	worker.Concurrency = 3
+	runCtx, cancel := context.WithCancel(ctx)
+	runDone := make(chan struct{})
+	go func() {
+		worker.Run(runCtx)
+		close(runDone)
+	}()
+
+	for _, video := range videos {
+		if !worker.EnqueueBlocking(runCtx, video) {
+			t.Fatalf("enqueue %s returned false", video.ID)
+		}
+	}
+	for range videos {
+		select {
+		case <-gen.started:
+		case <-time.After(2 * time.Second):
+			cancel()
+			t.Fatal("three preview tasks did not start concurrently")
+		}
+	}
+	status := worker.Status()
+	if status.State != "generating" || status.QueueLength != 0 {
+		t.Fatalf("status while blocked = %#v, want three active tasks and no queued tasks", status)
+	}
+
+	close(release)
+	waitCtx, waitCancel := context.WithTimeout(ctx, 2*time.Second)
+	defer waitCancel()
+	if err := worker.WaitIdle(waitCtx); err != nil {
+		t.Fatalf("wait for concurrent worker: %v", err)
+	}
+	cancel()
+	select {
+	case <-runDone:
+	case <-time.After(time.Second):
+		t.Fatal("worker did not stop after cancellation")
+	}
+	for _, video := range videos {
+		stored, err := cat.GetVideo(ctx, video.ID)
+		if err != nil {
+			t.Fatalf("get %s: %v", video.ID, err)
+		}
+		if stored.PreviewStatus != "ready" {
+			t.Fatalf("preview status for %s = %q, want ready", video.ID, stored.PreviewStatus)
+		}
 	}
 }
 
@@ -912,6 +982,41 @@ type fakeTeaserGenerator struct {
 	refreshCalls  int
 	generateErrs  []error
 	generatedURLs []string
+}
+
+type blockingTeaserGenerator struct {
+	started chan struct{}
+	release <-chan struct{}
+}
+
+func (g *blockingTeaserGenerator) Probe(context.Context, *drives.StreamLink) (float64, error) {
+	return 60, nil
+}
+
+func (g *blockingTeaserGenerator) Generate(ctx context.Context, _ *drives.StreamLink, _ float64) (string, error) {
+	select {
+	case g.started <- struct{}{}:
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
+	select {
+	case <-g.release:
+		return "/tmp/source-teaser.mp4", nil
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
+}
+
+func (g *blockingTeaserGenerator) MoveToLocal(_ string, videoID string) (string, error) {
+	return "/tmp/" + videoID + ".mp4", nil
+}
+
+type concurrentPreviewDrive struct {
+	previewFakeDrive
+}
+
+func (d *concurrentPreviewDrive) StreamURL(_ context.Context, fileID string) (*drives.StreamLink, error) {
+	return &drives.StreamLink{URL: "https://video.example/" + fileID}, nil
 }
 
 func (g *fakeTeaserGenerator) Probe(context.Context, *drives.StreamLink) (float64, error) {

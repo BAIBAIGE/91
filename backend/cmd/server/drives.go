@@ -1241,6 +1241,9 @@ func (a *App) newDriveGenerationWorkers(drv drives.Drive) (*preview.Worker, *pre
 	}
 	gen := preview.New(previewCfg)
 	previewWorker := preview.NewWorker(gen, a.cat, drv)
+	if a.cfg != nil {
+		previewWorker.Concurrency = a.cfg.Preview.ConcurrencyForDrive(drv.ID())
+	}
 	thumbWorker := preview.NewThumbWorker(gen, a.cat, drv)
 	if cooldown := generationCooldownForDrive(drv); cooldown > 0 {
 		previewWorker.RateLimitCooldown = cooldown
