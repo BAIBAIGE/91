@@ -243,9 +243,6 @@ func TestRunPipelineHonoursPhaseOrder(t *testing.T) {
 			rec.push("restore:" + id)
 			return nil
 		},
-		RunLocalUploadMaintenance: func(context.Context) {
-			rec.push("local-upload-maintenance")
-		},
 		RunDedupeAssetCleanup: func(context.Context) error {
 			rec.push("dedupe-cleanup")
 			return nil
@@ -269,7 +266,6 @@ func TestRunPipelineHonoursPhaseOrder(t *testing.T) {
 		"wait-idle", // after phase 2
 		"migrate",
 		"restore:sp-1",
-		"local-upload-maintenance",
 		"dedupe-cleanup",
 		"tag-maintenance",
 	}
@@ -316,9 +312,6 @@ func TestRunScanAllOnlyScansConfiguredDrivesAndDedupes(t *testing.T) {
 		RestoreCrawlerVideos: func(_ context.Context, id string) error {
 			rec.push("restore:" + id)
 			return nil
-		},
-		RunLocalUploadMaintenance: func(context.Context) {
-			rec.push("local-upload-maintenance")
 		},
 		RunDedupeAssetCleanup: func(context.Context) error {
 			rec.push("dedupe-cleanup")
@@ -377,9 +370,6 @@ func TestRunPipelineSkipsMigrationWhenNoCrawler(t *testing.T) {
 			rec.push("migrate")
 			return nil
 		},
-		RunLocalUploadMaintenance: func(context.Context) {
-			rec.push("local-upload-maintenance")
-		},
 		RunDedupeAssetCleanup: func(context.Context) error {
 			rec.push("dedupe-cleanup")
 			return nil
@@ -397,22 +387,15 @@ func TestRunPipelineSkipsMigrationWhenNoCrawler(t *testing.T) {
 			t.Fatalf("phase 2/3 should be skipped when no crawler, got call %q", c)
 		}
 	}
-	foundLocalUploadMaintenance := false
 	foundCleanup := false
 	foundTagMaintenance := false
 	for _, c := range rec.snapshot() {
-		if c == "local-upload-maintenance" {
-			foundLocalUploadMaintenance = true
-		}
 		if c == "dedupe-cleanup" {
 			foundCleanup = true
 		}
 		if c == "tag-maintenance" {
 			foundTagMaintenance = true
 		}
-	}
-	if !foundLocalUploadMaintenance {
-		t.Fatalf("local-upload maintenance should still run when crawler is absent; calls=%v", rec.snapshot())
 	}
 	if !foundCleanup {
 		t.Fatalf("dedupe cleanup should still run when crawler is absent; calls=%v", rec.snapshot())
@@ -437,13 +420,12 @@ func TestRunPipelineExitsWhenContextCancelledMidPhase(t *testing.T) {
 				cancel()
 			}
 		},
-		ListCrawlerDrives:         func(context.Context) []string { return []string{"x"} },
-		RunCrawlerCrawl:           func(context.Context, string) { rec.push("crawl") },
-		WaitPreviewQueuesIdle:     func(context.Context) error { rec.push("wait-idle"); return nil },
-		RunMigration:              func(context.Context) error { rec.push("migrate"); return nil },
-		RunLocalUploadMaintenance: func(context.Context) { rec.push("local-upload-maintenance") },
-		RunDedupeAssetCleanup:     func(context.Context) error { rec.push("dedupe-cleanup"); return nil },
-		RunTagMaintenance:         func(context.Context) error { rec.push("tag-maintenance"); return nil },
+		ListCrawlerDrives:     func(context.Context) []string { return []string{"x"} },
+		RunCrawlerCrawl:       func(context.Context, string) { rec.push("crawl") },
+		WaitPreviewQueuesIdle: func(context.Context) error { rec.push("wait-idle"); return nil },
+		RunMigration:          func(context.Context) error { rec.push("migrate"); return nil },
+		RunDedupeAssetCleanup: func(context.Context) error { rec.push("dedupe-cleanup"); return nil },
+		RunTagMaintenance:     func(context.Context) error { rec.push("tag-maintenance"); return nil },
 	})
 
 	r.runPipeline(ctx)
@@ -458,7 +440,7 @@ func TestRunPipelineExitsWhenContextCancelledMidPhase(t *testing.T) {
 		if c == "crawl" || c == "migrate" {
 			t.Fatalf("subsequent phase should not run after cancel, got call %q", c)
 		}
-		if c == "local-upload-maintenance" || c == "dedupe-cleanup" {
+		if c == "dedupe-cleanup" {
 			t.Fatalf("dedupe cleanup should not run after cancel, got call %q", c)
 		}
 		if c == "tag-maintenance" {

@@ -14,8 +14,7 @@
 //	Phase 3: crawler local video → cloud upload (single sweep, captcha cooldown still
 //	         honored within this call)
 //	Phase 4: scan crawler local directories and restore user-requested videos
-//	Phase 5: legacy local-upload filename maintenance
-//	Phase 6: full-library duplicate video maintenance:
+//	Phase 5: full-library duplicate video maintenance:
 //	         exact size+sampled_sha256, title/duration/thumbnail, then content-frame dedupe
 //
 // The pipeline runs until all phases finish, the process exits, or an admin
@@ -103,10 +102,6 @@ type Config struct {
 	// RestoreCrawlerVideos scans one crawler's retained local source directory
 	// after new-video generation and upload have completed.
 	RestoreCrawlerVideos func(ctx context.Context, driveID string) error
-
-	// RunLocalUploadMaintenance migrates legacy local-upload filenames. It runs
-	// only in the scheduled pipeline, never as part of an administrator scan-all.
-	RunLocalUploadMaintenance func(ctx context.Context)
 
 	// RunDedupeAssetCleanup runs full-library duplicate video maintenance. It
 	// removes duplicate catalog rows and local generated assets, but never
@@ -503,9 +498,8 @@ func (r *Runner) runPipeline(ctx context.Context) {
 	}
 	if len(crawlerIDs) == 0 {
 		log.Printf("[nightly] phase 2/3 skipped: no crawler configured")
-		r.runLocalUploadMaintenancePhase(ctx, "nightly", "phase 5")
-		r.runDedupeAssetCleanupPhase(ctx, "nightly", "phase 6")
-		r.runTagMaintenancePhase(ctx, "nightly", "phase 7")
+		r.runDedupeAssetCleanupPhase(ctx, "nightly", "phase 5")
+		r.runTagMaintenancePhase(ctx, "nightly", "phase 6")
 		return
 	}
 	log.Printf("[nightly] phase 2: crawling %d crawler drive(s)", len(crawlerIDs))
@@ -546,9 +540,8 @@ func (r *Runner) runPipeline(ctx context.Context) {
 		}
 	}
 
-	r.runLocalUploadMaintenancePhase(ctx, "nightly", "phase 5")
-	r.runDedupeAssetCleanupPhase(ctx, "nightly", "phase 6")
-	r.runTagMaintenancePhase(ctx, "nightly", "phase 7")
+	r.runDedupeAssetCleanupPhase(ctx, "nightly", "phase 5")
+	r.runTagMaintenancePhase(ctx, "nightly", "phase 6")
 }
 
 // runScanAllPipeline is the manual admin workflow: configured cloud drives are
@@ -621,17 +614,6 @@ func (r *Runner) runTagMaintenancePhase(ctx context.Context, component, phase st
 	if err := r.cfg.RunTagMaintenance(ctx); err != nil {
 		log.Printf("[%s] %s tag maintenance: %v", component, phase, err)
 	}
-}
-
-func (r *Runner) runLocalUploadMaintenancePhase(ctx context.Context, component, phase string) {
-	if r.cfg.RunLocalUploadMaintenance == nil {
-		return
-	}
-	if r.shouldStop(ctx, component, phase) {
-		return
-	}
-	log.Printf("[%s] %s: local-upload filename maintenance", component, phase)
-	r.cfg.RunLocalUploadMaintenance(ctx)
 }
 
 func (r *Runner) runDedupeAssetCleanupPhase(ctx context.Context, component, phase string) {
