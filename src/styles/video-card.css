@@ -436,14 +436,19 @@
   top: 8px;
   right: 8px;
   z-index: 4;
-  padding: 3px 8px;
-  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: max-content;
+  padding: 3px 6px;
+  border-radius: var(--radius-xs);
   background: var(--accent);
   color: var(--text-on-accent);
   font-size: var(--font-xs);
+  line-height: 1;
   font-weight: var(--weight-bold);
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  letter-spacing: 0;
+  white-space: nowrap;
   box-shadow: 0 4px 12px var(--accent-glow);
 }
 
@@ -889,11 +894,14 @@
     font-size: var(--font-sm);
   }
 
-  .source-badge,
-  .preview-tag {
+  .source-badge {
     font-size: 10px;
     height: 20px;
     padding: 0 6px;
+  }
+
+  .preview-tag {
+    font-size: 10px;
   }
 }
 

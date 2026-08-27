@@ -77,6 +77,12 @@ func TestVideoSourceKeepsDirectStreamForMp4(t *testing.T) {
 	}
 }
 
+func TestDriveKindLabelUsesCompactP115Name(t *testing.T) {
+	if got := driveKindLabel("p115"); got != "115网盘" {
+		t.Fatalf("p115 source label = %q, want 115网盘", got)
+	}
+}
+
 func TestPlaybackMediaTypeDescribesSelectedResource(t *testing.T) {
 	tests := []struct {
 		name  string

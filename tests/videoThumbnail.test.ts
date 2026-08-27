@@ -84,3 +84,16 @@ test("preview loading uses an indeterminate indicator instead of fake progress",
   assert.match(css, /@keyframes preview-loading/);
   assert.doesNotMatch(css, /@keyframes preview-progress[\s\S]*?width:\s*100%/);
 });
+
+test("preview badge tightly wraps its label", () => {
+  const rule = css.match(/\.preview-tag\s*\{[^}]*\}/s)?.[0] ?? "";
+  assert.match(rule, /display:\s*inline-flex/);
+  assert.match(rule, /width:\s*max-content/);
+  assert.match(rule, /padding:\s*3px 6px/);
+  assert.match(rule, /line-height:\s*1/);
+  assert.match(rule, /letter-spacing:\s*0/);
+  assert.doesNotMatch(
+    css,
+    /\.source-badge,\s*\.preview-tag\s*\{[^}]*height:/s
+  );
+});

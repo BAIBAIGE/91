@@ -283,7 +283,7 @@ export const VideoCard = memo(function VideoCard({
 });
 
 // 从后端返回的 sourceLabel 推断网盘类型（用于颜色标识）。
-// 后端目前会下发中文名（"夸克网盘" / "115 网盘" / "PikPak" / "联通网盘" / "OneDrive"）
+// 后端目前会下发中文名（"夸克网盘" / "115网盘" / "PikPak" / "联通网盘" / "OneDrive"）
 // 或英文 kind。两边都尝试匹配；都没匹配上时返回空字符串，CSS 会回落到默认色。
 function sourceKindFromLabel(label: string): string {
   const value = label.toLowerCase();

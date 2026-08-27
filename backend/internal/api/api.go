@@ -1605,7 +1605,7 @@ func driveKindLabel(kind string) string {
 	case "quark":
 		return "夸克网盘"
 	case "p115":
-		return "115 网盘"
+		return "115网盘"
 	case "p123":
 		return "123网盘"
 	case "pikpak":
