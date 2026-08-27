@@ -53,7 +53,7 @@ export type VideoCollectionItem = Pick<
   VideoItem,
   "id" | "href" | "title" | "thumbnail" | "duration" | "views" | "publishedAt"
 > & {
-  /** Present only when the desktop collection requests preview metadata. */
+  /** Present only when a collection view requests preview metadata. */
   previewSrc?: string;
 };
 

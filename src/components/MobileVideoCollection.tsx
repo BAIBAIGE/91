@@ -1,5 +1,6 @@
 import {
   forwardRef,
+  useCallback,
   useEffect,
   useId,
   useMemo,
@@ -10,14 +11,23 @@ import type { PointerEvent as ReactPointerEvent } from "react";
 import { createPortal } from "react-dom";
 import { Link, useLocation } from "react-router";
 import { ArrowUpDown, ChevronRight, Eye, X } from "lucide-react";
+import type {
+  PreviewState,
+  VideoCollectionItem,
+  VideoCollectionSummary,
+} from "@/types";
 import { formatCount } from "@/lib/format";
+import { previewController } from "@/lib/previewController";
+import { shouldInterceptPreviewTap } from "@/lib/previewIntent";
 import { useDocumentScrollLock } from "@/lib/useDocumentScrollLock";
+import { useInViewport } from "@/lib/useInViewport";
+import { useIsActivePreview } from "@/lib/useIsActivePreview";
 import { useLazyVideoCollection } from "@/lib/useLazyVideoCollection";
 import {
   resolveVideoReturnPath,
   routeToPath,
 } from "@/lib/videoReturnPath";
-import type { VideoCollectionItem, VideoCollectionSummary } from "@/types";
+import { PreviewVideo } from "./PreviewVideo";
 import { VideoThumbnail } from "./VideoThumbnail";
 
 type Props = {
@@ -59,7 +69,11 @@ const SHEET_DISMISS_ANIMATION_MS = 180;
  */
 export function MobileVideoCollection({ videoId, collection }: Props) {
   const [open, setOpen] = useState(false);
-  const { data, loading, error, retry } = useLazyVideoCollection(videoId, open);
+  const { data, loading, error, retry } = useLazyVideoCollection(
+    videoId,
+    open,
+    { includePreview: true }
+  );
   const [ascending, setAscending] = useState(true);
   const titleId = useId();
   const triggerRef = useRef<HTMLButtonElement | null>(null);
@@ -584,25 +598,139 @@ type CollectionItemProps = {
 const CollectionItem = forwardRef<HTMLLIElement, CollectionItemProps>(
   function CollectionItem(
     { video, current, returnPath, onSelect },
-    ref
+    forwardedRef
   ) {
+    const [previewState, setPreviewState] = useState<PreviewState>("idle");
+    const [shouldRenderPreview, setShouldRenderPreview] = useState(false);
+    const [progress, setProgress] = useState(0);
+    const rootRef = useRef<HTMLLIElement | null>(null);
+    const videoRef = useRef<HTMLVideoElement | null>(null);
+    const lastPointerTypeRef = useRef("");
+    const previewIsActive = useIsActivePreview(video.id);
+    const inView = useInViewport(rootRef);
+    const setRootRef = useCallback(
+      (node: HTMLLIElement | null) => {
+        rootRef.current = node;
+        if (typeof forwardedRef === "function") {
+          forwardedRef(node);
+        } else if (forwardedRef) {
+          forwardedRef.current = node;
+        }
+      },
+      [forwardedRef]
+    );
+
+    useEffect(() => {
+      if (!previewIsActive && shouldRenderPreview) cleanupPreview();
+      // cleanupPreview intentionally reads the current media ref and state.
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [previewIsActive, video.id]);
+
+    useEffect(() => {
+      if (!inView && shouldRenderPreview) cleanupPreview();
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [inView]);
+
+    useEffect(() => {
+      return () => cleanupPreview();
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
+    function cleanupPreview() {
+      const element = videoRef.current;
+      if (element) {
+        try {
+          element.pause();
+          element.removeAttribute("src");
+          element.load();
+        } catch {
+          // The media element may already be detached while the sheet closes.
+        }
+      }
+      setShouldRenderPreview(false);
+      setPreviewState("idle");
+      setProgress(0);
+      if (previewController.getActiveId() === video.id) {
+        previewController.setActiveId(null);
+      }
+    }
+
+    function startPreview() {
+      if (!video.previewSrc) return;
+      previewController.setActiveId(video.id);
+      setShouldRenderPreview(true);
+      setPreviewState("loading");
+    }
+
+    function handleClickCapture(event: React.MouseEvent<HTMLAnchorElement>) {
+      if (!video.previewSrc) return;
+      const previewActive = previewIsActive && shouldRenderPreview;
+      if (
+        !shouldInterceptPreviewTap({
+          pointerType: lastPointerTypeRef.current,
+          canHover: window.matchMedia("(hover: hover) and (pointer: fine)")
+            .matches,
+          previewActive,
+        })
+      ) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      startPreview();
+    }
+
     return (
-      <li ref={ref} className="vd-collection-item">
+      <li
+        ref={setRootRef}
+        className="vd-collection-item"
+        onPointerDown={(event) => {
+          lastPointerTypeRef.current = event.pointerType;
+        }}
+      >
         <Link
           to={video.href}
           state={{ from: returnPath }}
           className="vd-collection-item__link"
           aria-current={current ? "page" : undefined}
+          onClickCapture={handleClickCapture}
           onClick={onSelect}
         >
           <div className="vd-collection-item__thumb">
             <VideoThumbnail src={video.thumbnail} />
-            {video.duration && (
+            {shouldRenderPreview && video.previewSrc && (
+              <PreviewVideo
+                ref={videoRef}
+                src={video.previewSrc}
+                state={previewState}
+                onCanPlay={() => setPreviewState("playing")}
+                onError={() => setPreviewState("error")}
+                onTimeUpdate={setProgress}
+              />
+            )}
+            {previewState === "loading" && <span className="preview-loader" />}
+            {previewState === "error" && (
+              <span className="preview-error">预览加载失败</span>
+            )}
+            {previewState === "playing" && (
+              <>
+                <div className="preview-progress" aria-hidden="true">
+                  <div
+                    className="preview-progress__bar"
+                    style={{ width: `${Math.min(100, progress * 100)}%` }}
+                  />
+                </div>
+                <span className="preview-tag" aria-hidden="true">
+                  预览
+                </span>
+              </>
+            )}
+            {video.duration && previewState !== "playing" && (
               <span className="vd-collection-item__duration">
                 {video.duration}
               </span>
             )}
-            {current && (
+            {current && previewState !== "playing" && (
               <span className="vd-collection-item__current-thumb">
                 当前视频
               </span>

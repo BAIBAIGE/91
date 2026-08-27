@@ -7,7 +7,6 @@ import {
   useMemo,
   useRef,
   useState,
-  useSyncExternalStore,
 } from "react";
 import { Link, useLocation } from "react-router";
 import { Eye } from "lucide-react";
@@ -24,6 +23,7 @@ import {
   shouldStartInstantPreview,
 } from "@/lib/previewIntent";
 import { useInViewport } from "@/lib/useInViewport";
+import { useIsActivePreview } from "@/lib/useIsActivePreview";
 import { useLazyVideoCollection } from "@/lib/useLazyVideoCollection";
 import { resolveVideoReturnPath, routeToPath } from "@/lib/videoReturnPath";
 import { PreviewVideo } from "./PreviewVideo";
@@ -41,14 +41,6 @@ const HOVER_POINTER_QUERY = "(hover: hover) and (pointer: fine)";
 const COLLECTION_POSITION_MAX_FRAMES = 8;
 const COLLECTION_POSITION_STABLE_FRAMES = 2;
 const COLLECTION_POSITION_TOLERANCE_PX = 1;
-
-function useIsActivePreview(videoID: string): boolean {
-  return useSyncExternalStore(
-    previewController.subscribe,
-    () => previewController.getActiveId() === videoID,
-    () => false
-  );
-}
 
 /**
  * Moves one item toward the vertical center of its own scroll container.
@@ -265,12 +257,16 @@ export function RecommendedRail({ videos, videoId, collection }: Props) {
       aria-label={hasCollection ? "视频推荐与相关合集" : "推荐视频"}
     >
       {hasCollection && (
-        <div className="vd-rail__tabs" role="tablist" aria-label="视频列表">
+        <div
+          className="content-tabs vd-rail__tabs"
+          role="tablist"
+          aria-label="视频列表"
+        >
           <button
             ref={recommendedTabRef}
             id={recommendedTabId}
             type="button"
-            className="vd-rail__tab"
+            className="content-tabs__tab vd-rail__tab"
             role="tab"
             aria-selected={activeView === "recommended"}
             aria-controls={recommendedPanelId}
@@ -285,7 +281,7 @@ export function RecommendedRail({ videos, videoId, collection }: Props) {
             ref={collectionTabRef}
             id={collectionTabId}
             type="button"
-            className="vd-rail__tab"
+            className="content-tabs__tab vd-rail__tab"
             role="tab"
             aria-selected={showCollection}
             aria-controls={collectionPanelId}

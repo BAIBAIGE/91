@@ -22,6 +22,10 @@ const collectionHookSource = readFileSync(
   new URL("../src/lib/useLazyVideoCollection.ts", import.meta.url),
   "utf8"
 );
+const activePreviewHookSource = readFileSync(
+  new URL("../src/lib/useIsActivePreview.ts", import.meta.url),
+  "utf8"
+);
 const dataSource = readFileSync(
   new URL("../src/data/videos.ts", import.meta.url),
   "utf8"
@@ -56,7 +60,7 @@ test("collection items load lazily through one shared resource", () => {
   );
   assert.match(
     componentSource,
-    /useLazyVideoCollection\(videoId, open\)/
+    /useLazyVideoCollection\(\s*videoId,\s*open,\s*\{ includePreview: true \}\s*\)/
   );
   assert.match(
     collectionHookSource,
@@ -81,20 +85,21 @@ test("desktop recommendation rail offers recommendation and collection tabs", ()
   );
   assert.match(
     railSource,
-    /className="vd-rail__tabs" role="tablist"[\s\S]*?>\s*推荐视频\s*<[\s\S]*?>\s*相关合集\s*</
+    /className="content-tabs vd-rail__tabs"[\s\S]*?role="tablist"[\s\S]*?>\s*推荐视频\s*<[\s\S]*?>\s*相关合集\s*</
   );
   assert.match(
     railSource,
     /desktop && hasCollection && activeView === "collection"/
   );
   assert.match(
-    stylesSource,
-    /\.vd-rail__tab\s*\{[\s\S]*?min-height:\s*34px;[\s\S]*?padding:\s*0 12px;[\s\S]*?font-size:\s*var\(--font-sm\);/
+    railSource,
+    /className="content-tabs__tab vd-rail__tab"[\s\S]*?aria-selected=\{activeView === "recommended"\}/
   );
   assert.match(
-    stylesSource,
-    /\.vd-rail__tab\[aria-selected="true"\]\s*\{[\s\S]*?background:\s*var\(--text-strong\);/
+    railSource,
+    /className="content-tabs__tab vd-rail__tab"[\s\S]*?aria-selected=\{showCollection\}/
   );
+  assert.doesNotMatch(stylesSource, /\.vd-rail__tab\[aria-selected="true"\]/);
   assert.match(
     stylesSource,
     /\.vd-rail__head\.vd-rail__head--mobile-only\s*\{\s*display:\s*none;/
@@ -149,14 +154,15 @@ test("desktop collection creates thumbnail resources only near the viewport", ()
     /<VideoThumbnail[\s\S]*?src=\{video\.thumbnail\}[\s\S]*?enabled=\{thumbnailActivated\}/
   );
   assert.match(
-    railSource,
+    activePreviewHookSource,
     /function useIsActivePreview\(videoID: string\): boolean[\s\S]*?previewController\.getActiveId\(\) === videoID/
   );
+  assert.match(railSource, /import \{ useIsActivePreview \}/);
   assert.doesNotMatch(railSource, /function useActivePreviewId/);
   assert.doesNotMatch(railSource, /media\.addEventListener\("change", update\)/);
 });
 
-test("desktop collection requests previews and reuses recommendation preview behavior", () => {
+test("desktop and mobile collections request previews and share preview behavior", () => {
   assert.match(dataSource, /options\.includePreview \? "\?preview=1" : ""/);
   assert.match(
     railSource,
@@ -172,8 +178,22 @@ test("desktop collection requests previews and reuses recommendation preview beh
   );
   assert.match(
     componentSource,
-    /useLazyVideoCollection\(videoId, open\)/
+    /useLazyVideoCollection\(\s*videoId,\s*open,\s*\{ includePreview: true \}\s*\)/
   );
+  assert.match(
+    componentSource,
+    /function CollectionItem\([\s\S]*?video\.previewSrc[\s\S]*?<PreviewVideo/
+  );
+  assert.match(
+    componentSource,
+    /onPointerDown=\{\(event\)[\s\S]*?lastPointerTypeRef\.current = event\.pointerType[\s\S]*?onClickCapture=\{handleClickCapture\}/
+  );
+  assert.match(
+    componentSource,
+    /shouldInterceptPreviewTap\([\s\S]*?previewActive/
+  );
+  assert.match(componentSource, /previewController\.setActiveId\(video\.id\)/);
+  assert.match(componentSource, /import \{ useIsActivePreview \}/);
 });
 
 test("recommendation rail omits retired quality metadata", () => {
@@ -255,7 +275,7 @@ test("mobile collection loading cards match the two-bar skeleton", () => {
 test("desktop collection stays bounded and positions the current video", () => {
   assert.match(
     stylesSource,
-    /\.vd-rail__collection-list,\s*\.vd-rail__collection-loading\s*\{[\s\S]*?max-height:/
+    /\.vd-rail__collection-list,\s*\.vd-rail__collection-loading\s*\{[\s\S]*?max-height:\s*calc\(var\(--vd-rail-collection-row-height\) \* 6\);/
   );
   assert.match(
     stylesSource,

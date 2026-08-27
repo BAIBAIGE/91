@@ -13,7 +13,7 @@ const HOME_FEED_TABS: { key: HomeFeedKey; label: string }[] = [
 
 export const HomeFeedTabs = memo(function HomeFeedTabs({ feed, onChange }: Props) {
   return (
-    <div className="home-feed-tabs" role="tablist" aria-label="首页视频">
+    <div className="content-tabs home-feed-tabs" role="tablist" aria-label="首页视频">
       {HOME_FEED_TABS.map((tab) => {
         const active = tab.key === feed;
         return (
@@ -22,7 +22,7 @@ export const HomeFeedTabs = memo(function HomeFeedTabs({ feed, onChange }: Props
             type="button"
             role="tab"
             aria-selected={active}
-            className={`home-feed-tabs__tab ${active ? "is-active" : ""}`}
+            className="content-tabs__tab home-feed-tabs__tab"
             onClick={() => onChange(tab.key)}
           >
             {tab.label}

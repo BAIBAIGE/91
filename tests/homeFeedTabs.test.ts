@@ -57,12 +57,12 @@ test("the home tabs are an accessible tab list with the random feed first", () =
   assert.match(tabsSource, /role="tablist"/);
   assert.match(tabsSource, /role="tab"/);
   assert.match(tabsSource, /aria-selected=\{active\}/);
-  assert.match(tabsSource, /className=\{`home-feed-tabs__tab \$\{active \? "is-active" : ""\}`\}/);
+  assert.match(tabsSource, /className="content-tabs__tab home-feed-tabs__tab"/);
 
-  const tabs = ruleBody(layoutCss, ".home-feed-tabs");
+  const tabs = ruleBody(layoutCss, ".content-tabs");
   assert.match(tabs, /display\s*:\s*flex/);
   assert.match(tabs, /border-bottom\s*:\s*1px solid var\(--border-subtle\)/);
-  const activeUnderline = ruleBody(layoutCss, ".home-feed-tabs__tab.is-active::after");
+  const activeUnderline = ruleBody(layoutCss, '.content-tabs__tab[aria-selected="true"]::after');
   assert.match(activeUnderline, /background\s*:\s*var\(--accent-gradient\)/);
 });
 

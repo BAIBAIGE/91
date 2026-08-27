@@ -2,13 +2,13 @@ export function VideoRailSkeleton() {
   return (
     <aside className="vd-rail" aria-label="视频列表加载中" aria-busy="true">
       <div
-        className="vd-rail__tabs vd-rail__tabs--loading"
+        className="content-tabs vd-rail__tabs vd-rail__tabs--loading"
         aria-hidden="true"
       >
-        <span className="vd-rail__tab" aria-selected="true">
+        <span className="content-tabs__tab vd-rail__tab" aria-selected="true">
           推荐视频
         </span>
-        <span className="vd-rail__tab">相关合集</span>
+        <span className="content-tabs__tab vd-rail__tab">相关合集</span>
       </div>
       <header className="vd-rail__head vd-rail__head--mobile-only">
         <span className="vd-rail__head-icon" aria-hidden="true">

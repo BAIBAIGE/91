@@ -2111,12 +2111,7 @@
 }
 
 .vd-rail__tabs {
-  display: flex;
-  align-items: center;
-  gap: 8px;
   overflow-x: auto;
-  padding: 6px 0 10px;
-  border-bottom: 1px solid var(--border-default);
   scrollbar-width: none;
 }
 
@@ -2126,44 +2121,6 @@
 
 .vd-rail__tabs--loading {
   pointer-events: none;
-}
-
-.vd-rail__tab {
-  min-height: 34px;
-  display: inline-flex;
-  flex: 0 0 auto;
-  align-items: center;
-  justify-content: center;
-  padding: 0 12px;
-  border: 1px solid transparent;
-  border-radius: 8px;
-  background: var(--bg-elevated);
-  color: var(--text-default);
-  font-size: var(--font-sm);
-  font-weight: var(--weight-bold);
-  line-height: 1;
-  transition: background var(--transition-fast), color var(--transition-fast),
-    border-color var(--transition-fast);
-}
-
-.vd-rail__tab:hover:not(:disabled):not([aria-selected="true"]) {
-  border-color: var(--border-strong);
-  color: var(--text-strong);
-}
-
-.vd-rail__tab[aria-selected="true"] {
-  background: var(--text-strong);
-  color: var(--bg-page);
-}
-
-.vd-rail__tab:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-
-.vd-rail__tab:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
 }
 
 .vd-rail__head.vd-rail__head--mobile-only {
@@ -2227,7 +2184,9 @@
 
 .vd-rail__collection-list,
 .vd-rail__collection-loading {
-  max-height: min(720px, calc(100vh - 140px));
+  /* Match the six-item recommendation rail while keeping the full collection
+   * available through the list's own vertical scroll. */
+  max-height: calc(var(--vd-rail-collection-row-height) * 6);
 }
 
 .vd-rail__collection-list {

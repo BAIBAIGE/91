@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import { Link, useLocation } from "react-router";
 import type { PreviewState, VideoItem } from "@/types";
 import { prefetchVideoDetail } from "@/data/videos";
@@ -8,6 +8,7 @@ import {
   shouldStartInstantPreview,
 } from "@/lib/previewIntent";
 import { useInViewport } from "@/lib/useInViewport";
+import { useIsActivePreview } from "@/lib/useIsActivePreview";
 import { preloadVideoDetailPage } from "@/lib/videoDetailRoute";
 import { formatCount } from "@/lib/format";
 import { isVideoReturnPath, routeToPath } from "@/lib/videoReturnPath";
@@ -21,14 +22,6 @@ type Props = {
 };
 
 const HOVER_DELAY_MS = 300;
-
-function useIsActivePreview(videoID: string): boolean {
-  return useSyncExternalStore(
-    previewController.subscribe,
-    () => previewController.getActiveId() === videoID,
-    () => false
-  );
-}
 
 export const VideoCard = memo(function VideoCard({
   video,
