@@ -3,7 +3,9 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
   consumePrefetchedVideoDetail,
+  consumePrefetchedVideoRecommendations,
   prefetchVideoDetail,
+  prefetchVideoRecommendations,
 } from "../src/data/videos.ts";
 
 const appSource = readFileSync(
@@ -43,7 +45,7 @@ test("video detail route preloads once and always has a visible route fallback",
   assert.match(gridSource, /useEffect\(\(\) => \{\s*scheduleVideoDetailPagePreload\(\)/);
 });
 
-test("video cards start route and detail-data work before navigation commits", () => {
+test("video cards start independent detail and recommendation requests for confirmed navigation", () => {
   assert.match(
     cardSource,
     /function prepareDetailNavigation\(\) \{\s*preloadVideoDetailPage\(\);\s*void prefetchVideoDetail\(video\.id\)/
@@ -53,9 +55,72 @@ test("video cards start route and detail-data work before navigation commits", (
     /function handlePointerDown[\s\S]*?prepareDetailNavigation\(\)/
   );
   assert.match(
-    detailPageSource,
-    /const prefetchedDetail = consumePrefetchedVideoDetail\(id\)[\s\S]*?Promise\.all\(\[detailRequest, fetchTags\(\)\]\)/
+    cardSource,
+    /function prepareConfirmedDetailNavigation\(\) \{\s*prepareDetailNavigation\(\);\s*void prefetchVideoRecommendations\(video\.id\)/
   );
+  assert.match(
+    cardSource,
+    /if \(\s*!shouldInterceptPreviewTap\([\s\S]*?prepareConfirmedDetailNavigation\(\);\s*return;[\s\S]*?event\.preventDefault\(\);[\s\S]*?startTouchPreviewIntent\(\)/
+  );
+  assert.match(
+    detailPageSource,
+    /const prefetchedDetail = consumePrefetchedVideoDetail\(id\)[\s\S]*?detailRequest\.then\(\(d\) =>[\s\S]*?setDetail\(stableDetail\);[\s\S]*?setLoading\(false\)/
+  );
+  assert.match(
+    detailPageSource,
+    /const prefetchedRecommendations =[\s\S]*?consumePrefetchedVideoRecommendations\(id\)[\s\S]*?const recommendationsRequest =[\s\S]*?fetchVideoRecommendations\(id, \{ signal: controller\.signal \}\)/
+  );
+  assert.doesNotMatch(detailPageSource, /Promise\.all\(\[detailRequest, fetchTags\(\)\]\)/);
+  assert.doesNotMatch(
+    detailPageSource,
+    /Promise\.all\(\[[^\]]*detailRequest[^\]]*recommendationsRequest/
+  );
+  assert.match(
+    detailPageSource,
+    /if \(!isAdmin\) \{[\s\S]*?return;[\s\S]*?fetchTags\(\)/
+  );
+});
+
+test("a touch preview intent delays media creation but still arms navigation", () => {
+  assert.match(
+    cardSource,
+    /function startTouchPreviewIntent\(\)[\s\S]*?touchPreviewArmedRef\.current = true;[\s\S]*?setPreviewState\("intent"\);[\s\S]*?window\.setTimeout\([\s\S]*?startPreviewNow\(\{ requireInView: false \}\);[\s\S]*?TOUCH_PREVIEW_DELAY_MS/
+  );
+  assert.match(
+    cardSource,
+    /const previewActive =[\s\S]*?touchPreviewArmedRef\.current \|\| shouldRenderPreview[\s\S]*?cleanup\(\);[\s\S]*?prepareConfirmedDetailNavigation\(\)/
+  );
+  const touchPreviewIntentBlock = cardSource.match(
+    /function startTouchPreviewIntent\(\)([\s\S]*?)\n  function clearPreviewIntentTimer/
+  )?.[1];
+  assert.ok(touchPreviewIntentBlock);
+  assert.doesNotMatch(touchPreviewIntentBlock, /prefetchVideoRecommendations/);
+});
+
+test("recommendation prefetch is shared and consumed by one navigation", async () => {
+  const originalFetch = globalThis.fetch;
+  const videoID = "recommendation-prefetch-navigation-test";
+  let requestCount = 0;
+  globalThis.fetch = async (input) => {
+    requestCount += 1;
+    assert.match(String(input), /\/api\/video\/recommendation-prefetch-navigation-test\/recommendations$/);
+    return new Response(JSON.stringify([{ id: "recommended-video" }]), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  };
+
+  try {
+    const first = prefetchVideoRecommendations(videoID);
+    const second = prefetchVideoRecommendations(videoID);
+    assert.strictEqual(second, first);
+    assert.strictEqual(consumePrefetchedVideoRecommendations(videoID), first);
+    assert.equal(consumePrefetchedVideoRecommendations(videoID), null);
+    assert.equal((await first)[0]?.id, "recommended-video");
+    assert.equal(requestCount, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test("detail-data prefetch is shared and consumed by one navigation", async () => {

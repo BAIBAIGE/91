@@ -38,7 +38,7 @@ const stylesSource = readFileSync(
 test("video detail renders a directory collection only when it has siblings", () => {
   assert.match(
     detailSource,
-    /detail\.collection && detail\.collection\.total > 1[\s\S]*?<MobileVideoCollection[\s\S]*?videoId=\{detail\.id\}/
+    /collectionSummary && \([\s\S]*?<MobileVideoCollection[\s\S]*?videoId=\{detail\.id\}[\s\S]*?collection=\{collectionSummary\}/
   );
   assert.match(componentSource, />合集</);
   assert.match(componentSource, /collection\.currentIndex\}\/\{collection\.total/);
@@ -54,6 +54,15 @@ test("video detail renders a directory collection only when it has siblings", ()
 });
 
 test("collection items load lazily through one shared resource", () => {
+  assert.match(
+    dataSource,
+    /`\/api\/video\/\$\{encodeURIComponent\(id\)\}\/collection\/summary`/
+  );
+  assert.match(
+    detailSource,
+    /if \(!id \|\| !detail\?\.collectionCandidate\) \{[\s\S]*?return;[\s\S]*?fetchVideoCollectionSummary\(id, \{ signal: controller\.signal \}\)/
+  );
+  assert.match(detailSource, /cachedCollectionSummariesByID/);
   assert.match(
     dataSource,
     /`\/api\/video\/\$\{encodeURIComponent\(id\)\}\/collection\$\{previewQuery\}`/
@@ -81,7 +90,7 @@ test("collection items load lazily through one shared resource", () => {
 test("desktop recommendation rail offers recommendation and collection tabs", () => {
   assert.match(
     detailSource,
-    /<RecommendedRail[\s\S]*?videos=\{detail\.relatedVideos\}[\s\S]*?videoId=\{detail\.id\}[\s\S]*?collection=\{detail\.collection\}/
+    /<RecommendedRail[\s\S]*?videos=\{recommendations\}[\s\S]*?videoId=\{detail\.id\}[\s\S]*?collection=\{collectionSummary \?\? undefined\}[\s\S]*?recommendationsLoading=\{recommendationsLoading\}[\s\S]*?recommendationsError=\{recommendationsError\}/
   );
   assert.match(
     railSource,
@@ -111,6 +120,25 @@ test("desktop recommendation rail offers recommendation and collection tabs", ()
   assert.match(
     stylesSource,
     /@media \(max-width:\s*768px\)[\s\S]*?\.vd-rail--collection-only,\s*\.vd-rail__tabs,\s*\.vd-rail__tabpanel--collection\s*\{\s*display:\s*none;/
+  );
+});
+
+test("recommendation loading and failures stay inside the independent rail", () => {
+  assert.match(
+    railSource,
+    /recommendationsLoading && !hasRecommendations \? \([\s\S]*?<VideoRailRowsSkeleton label="正在加载推荐视频" \/>/
+  );
+  assert.match(
+    railSource,
+    /recommendationsError && !hasRecommendations \? \([\s\S]*?role="alert"[\s\S]*?onClick=\{onRetryRecommendations\}/
+  );
+  assert.match(
+    detailSource,
+    /onRetryRecommendations=\{\(\) =>\s*setRecommendationsLoadVersion\(\(version\) => version \+ 1\)/
+  );
+  assert.doesNotMatch(
+    detailSource,
+    /Promise\.all\(\[[^\]]*detailRequest[^\]]*recommendationsRequest/
   );
 });
 
@@ -194,6 +222,14 @@ test("desktop and mobile collections request previews and share preview behavior
   );
   assert.match(componentSource, /previewController\.setActiveId\(video\.id\)/);
   assert.match(componentSource, /import \{ useIsActivePreview \}/);
+  assert.match(
+    componentSource,
+    /function startTouchPreviewIntent\(\)[\s\S]*?setPreviewState\("intent"\)[\s\S]*?window\.setTimeout\([\s\S]*?setShouldRenderPreview\(true\)[\s\S]*?TOUCH_PREVIEW_DELAY_MS/
+  );
+  assert.match(
+    railSource,
+    /function startTouchPreviewIntent\(\)[\s\S]*?setPreviewState\("intent"\)[\s\S]*?window\.setTimeout\([\s\S]*?TOUCH_PREVIEW_DELAY_MS/
+  );
 });
 
 test("recommendation rail omits retired quality metadata", () => {

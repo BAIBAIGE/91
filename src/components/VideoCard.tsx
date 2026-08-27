@@ -1,11 +1,15 @@
 import { memo, useEffect, useRef, useState } from "react";
 import { Link, useLocation } from "react-router";
 import type { PreviewState, VideoItem } from "@/types";
-import { prefetchVideoDetail } from "@/data/videos";
+import {
+  prefetchVideoDetail,
+  prefetchVideoRecommendations,
+} from "@/data/videos";
 import { previewController } from "@/lib/previewController";
 import {
   shouldInterceptPreviewTap,
   shouldStartInstantPreview,
+  TOUCH_PREVIEW_DELAY_MS,
 } from "@/lib/previewIntent";
 import { useInViewport } from "@/lib/useInViewport";
 import { useIsActivePreview } from "@/lib/useIsActivePreview";
@@ -39,7 +43,8 @@ export const VideoCard = memo(function VideoCard({
     : undefined;
 
   const rootRef = useRef<HTMLElement | null>(null);
-  const hoverTimerRef = useRef<number | null>(null);
+  const previewIntentTimerRef = useRef<number | null>(null);
+  const touchPreviewArmedRef = useRef(false);
   const lastPointerTypeRef = useRef<string>("");
   const canHoverRef = useRef(true);
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -49,7 +54,10 @@ export const VideoCard = memo(function VideoCard({
 
   // 当全局活跃卡片不是自己时，立刻停止预览
   useEffect(() => {
-    if (!previewIsActive && shouldRenderPreview) {
+    if (
+      !previewIsActive &&
+      (shouldRenderPreview || touchPreviewArmedRef.current)
+    ) {
       cleanup();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -57,7 +65,7 @@ export const VideoCard = memo(function VideoCard({
 
   // 离开视口时停止预览
   useEffect(() => {
-    if (!inView && shouldRenderPreview) {
+    if (!inView && (shouldRenderPreview || touchPreviewArmedRef.current)) {
       cleanup();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -82,10 +90,8 @@ export const VideoCard = memo(function VideoCard({
   }, []);
 
   function cleanup() {
-    if (hoverTimerRef.current) {
-      window.clearTimeout(hoverTimerRef.current);
-      hoverTimerRef.current = null;
-    }
+    clearPreviewIntentTimer();
+    touchPreviewArmedRef.current = false;
 
     const el = videoRef.current;
     if (el) {
@@ -109,21 +115,41 @@ export const VideoCard = memo(function VideoCard({
 
   function startPreviewIntent() {
     if (!inView) return;
-    if (hoverTimerRef.current) return;
+    if (previewIntentTimerRef.current) return;
     setPreviewState("intent");
 
-    hoverTimerRef.current = window.setTimeout(() => {
-      hoverTimerRef.current = null;
+    previewIntentTimerRef.current = window.setTimeout(() => {
+      previewIntentTimerRef.current = null;
       startPreviewNow({ requireInView: true });
     }, HOVER_DELAY_MS);
   }
 
+  function startTouchPreviewIntent() {
+    clearPreviewIntentTimer();
+    touchPreviewArmedRef.current = true;
+    previewController.setActiveId(video.id);
+    setPreviewState("intent");
+    previewIntentTimerRef.current = window.setTimeout(() => {
+      previewIntentTimerRef.current = null;
+      if (
+        !touchPreviewArmedRef.current ||
+        previewController.getActiveId() !== video.id
+      ) {
+        return;
+      }
+      startPreviewNow({ requireInView: false });
+    }, TOUCH_PREVIEW_DELAY_MS);
+  }
+
+  function clearPreviewIntentTimer() {
+    if (previewIntentTimerRef.current === null) return;
+    window.clearTimeout(previewIntentTimerRef.current);
+    previewIntentTimerRef.current = null;
+  }
+
   function startPreviewNow(options: { requireInView: boolean }) {
     if (options.requireInView && !inView) return;
-    if (hoverTimerRef.current) {
-      window.clearTimeout(hoverTimerRef.current);
-      hoverTimerRef.current = null;
-    }
+    clearPreviewIntentTimer();
     previewController.setActiveId(video.id);
     setShouldRenderPreview(true);
     setPreviewState("loading");
@@ -155,13 +181,20 @@ export const VideoCard = memo(function VideoCard({
     void prefetchVideoDetail(video.id);
   }
 
+  function prepareConfirmedDetailNavigation() {
+    prepareDetailNavigation();
+    void prefetchVideoRecommendations(video.id);
+  }
+
   function handleFocus() {
     preloadVideoDetailPage();
     startPreviewIntent();
   }
 
   function handleClickCapture(event: React.MouseEvent<HTMLAnchorElement>) {
-    const previewActive = previewIsActive && shouldRenderPreview;
+    const previewActive =
+      previewController.getActiveId() === video.id &&
+      (touchPreviewArmedRef.current || shouldRenderPreview);
     if (
       !shouldInterceptPreviewTap({
         pointerType: lastPointerTypeRef.current,
@@ -169,12 +202,13 @@ export const VideoCard = memo(function VideoCard({
         previewActive,
       })
     ) {
-      prepareDetailNavigation();
+      if (touchPreviewArmedRef.current && !shouldRenderPreview) cleanup();
+      prepareConfirmedDetailNavigation();
       return;
     }
     event.preventDefault();
     event.stopPropagation();
-    startPreviewNow({ requireInView: false });
+    startTouchPreviewIntent();
   }
 
   return (

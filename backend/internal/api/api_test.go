@@ -2606,7 +2606,7 @@ func TestHandleVideoDetailResolvesDuplicatePublicID(t *testing.T) {
 	}
 }
 
-func TestHandleVideoDetailRecommendationsPreferReadyThumbnails(t *testing.T) {
+func TestHandleVideoRecommendationsAreIndependentAndPreferReadyThumbnails(t *testing.T) {
 	ctx := context.Background()
 	cat, err := catalog.Open(t.TempDir() + "/catalog.db")
 	if err != nil {
@@ -2664,26 +2664,53 @@ func TestHandleVideoDetailRecommendationsPreferReadyThumbnails(t *testing.T) {
 		}
 	}
 
-	req := requestWithVideoID(http.MethodGet, "/api/video/current-video", "current-video", strings.NewReader(``))
+	server := &Server{Catalog: cat}
+	detailReq := requestWithVideoID(http.MethodGet, "/api/video/current-video", "current-video", strings.NewReader(``))
+	detailRR := httptest.NewRecorder()
+	server.handleVideoDetail(detailRR, detailReq)
+	if detailRR.Code != http.StatusOK {
+		t.Fatalf("detail status = %d, body = %s", detailRR.Code, detailRR.Body.String())
+	}
+	var detailPayload map[string]json.RawMessage
+	if err := json.NewDecoder(detailRR.Body).Decode(&detailPayload); err != nil {
+		t.Fatalf("decode detail: %v", err)
+	}
+	if _, found := detailPayload["relatedVideos"]; found {
+		t.Fatal("core detail response still contains relatedVideos")
+	}
+
+	req := requestWithVideoID(http.MethodGet, "/api/video/current-video/recommendations", "current-video", strings.NewReader(``))
 	rr := httptest.NewRecorder()
-	(&Server{Catalog: cat}).handleVideoDetail(rr, req)
+	server.handleVideoRecommendations(rr, req)
 
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", rr.Code, rr.Body.String())
 	}
-	var got VideoDetailDTO
-	if err := json.NewDecoder(rr.Body).Decode(&got); err != nil {
+	responseBody := rr.Body.Bytes()
+	var got []VideoCardDTO
+	if err := json.Unmarshal(responseBody, &got); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if len(got.RelatedVideos) != 6 {
-		t.Fatalf("related videos = %d, want 6; items=%#v", len(got.RelatedVideos), got.RelatedVideos)
+	if len(got) != 6 {
+		t.Fatalf("related videos = %d, want 6; items=%#v", len(got), got)
 	}
-	for _, item := range got.RelatedVideos {
+	for _, item := range got {
 		if !strings.HasPrefix(item.ID, "ready-related-") {
-			t.Fatalf("related returned %q before ready thumbnails; items=%#v", item.ID, got.RelatedVideos)
+			t.Fatalf("related returned %q before ready thumbnails; items=%#v", item.ID, got)
 		}
 		if !strings.HasPrefix(item.Thumbnail, "https://thumb.example/") {
 			t.Fatalf("thumbnail for %q = %q, want ready thumbnail URL", item.ID, item.Thumbnail)
+		}
+	}
+	var compactPayload []map[string]json.RawMessage
+	if err := json.Unmarshal(responseBody, &compactPayload); err != nil {
+		t.Fatalf("decode compact payload: %v", err)
+	}
+	for _, item := range compactPayload {
+		for _, unusedField := range []string{"tags", "favorites", "comments", "likes", "dislikes"} {
+			if _, found := item[unusedField]; found {
+				t.Fatalf("recommendation card still contains unused field %q", unusedField)
+			}
 		}
 	}
 }

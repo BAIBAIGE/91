@@ -4,7 +4,12 @@ import test from "node:test";
 import {
   shouldInterceptPreviewTap,
   shouldStartInstantPreview,
+  TOUCH_PREVIEW_DELAY_MS,
 } from "../src/lib/previewIntent.ts";
+
+test("touch preview media waits 200ms after the first tap intent", () => {
+  assert.equal(TOUCH_PREVIEW_DELAY_MS, 200);
+});
 
 test("touch tap starts preview instead of navigating when preview is idle", () => {
   assert.equal(

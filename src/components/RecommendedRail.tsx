@@ -21,6 +21,7 @@ import { previewController } from "@/lib/previewController";
 import {
   shouldInterceptPreviewTap,
   shouldStartInstantPreview,
+  TOUCH_PREVIEW_DELAY_MS,
 } from "@/lib/previewIntent";
 import { useInViewport } from "@/lib/useInViewport";
 import { useIsActivePreview } from "@/lib/useIsActivePreview";
@@ -34,6 +35,9 @@ type Props = {
   videos: VideoItem[];
   videoId: string;
   collection?: VideoCollectionSummary;
+  recommendationsLoading?: boolean;
+  recommendationsError?: string;
+  onRetryRecommendations?: () => void;
 };
 
 const HOVER_DELAY_MS = 300;
@@ -93,11 +97,20 @@ type RailView = "recommended" | "collection";
  * 不直接复用 VideoCard：那个组件结构是上下两段（缩略图 + 标题/meta），而这里需要
  * 左右横排的紧凑布局，覆盖样式会很乱。推荐项继续复用同一套预览基础设施。
  */
-export function RecommendedRail({ videos, videoId, collection }: Props) {
+export function RecommendedRail({
+  videos,
+  videoId,
+  collection,
+  recommendationsLoading = false,
+  recommendationsError = "",
+  onRetryRecommendations,
+}: Props) {
   const hasRecommendations = Array.isArray(videos) && videos.length > 0;
+  const recommendationPanelAvailable =
+    recommendationsLoading || hasRecommendations || !!recommendationsError;
   const hasCollection = !!collection && collection.total > 1;
   const [activeView, setActiveView] = useState<RailView>(() =>
-    hasRecommendations ? "recommended" : "collection"
+    recommendationPanelAvailable ? "recommended" : "collection"
   );
   const [desktop, setDesktop] = useState(() =>
     typeof window !== "undefined"
@@ -106,7 +119,7 @@ export function RecommendedRail({ videos, videoId, collection }: Props) {
   );
   const [collectionLoadStartedFor, setCollectionLoadStartedFor] = useState<
     string | null
-  >(() => (!hasRecommendations && hasCollection ? videoId : null));
+  >(() => (!recommendationPanelAvailable && hasCollection ? videoId : null));
   const collectionViewActive =
     desktop && hasCollection && activeView === "collection";
   const collectionLoadEnabled =
@@ -137,26 +150,26 @@ export function RecommendedRail({ videos, videoId, collection }: Props) {
     if (!hasCollection && activeView === "collection") {
       setActiveView("recommended");
     } else if (
-      !hasRecommendations &&
-      hasCollection &&
-      activeView === "recommended"
+      activeView === "recommended" &&
+      !recommendationPanelAvailable &&
+      hasCollection
     ) {
       setActiveView("collection");
     }
-  }, [activeView, hasCollection, hasRecommendations]);
+  }, [activeView, hasCollection, recommendationPanelAvailable]);
 
   useEffect(() => {
     const media = window.matchMedia("(min-width: 769px)");
     const handleChange = () => {
       setDesktop(media.matches);
-      if (!media.matches && hasRecommendations) {
+      if (!media.matches && recommendationPanelAvailable) {
         setActiveView("recommended");
       }
     };
     handleChange();
     media.addEventListener("change", handleChange);
     return () => media.removeEventListener("change", handleChange);
-  }, [hasRecommendations]);
+  }, [recommendationPanelAvailable]);
 
   useEffect(() => {
     if (
@@ -192,7 +205,7 @@ export function RecommendedRail({ videos, videoId, collection }: Props) {
   }, [collectionViewActive, data, videoId]);
 
   function selectView(nextView: RailView) {
-    if (nextView === "recommended" && !hasRecommendations) return;
+    if (nextView === "recommended" && !recommendationPanelAvailable) return;
     if (nextView === activeView) return;
     if (nextView === "collection") {
       setCollectionLoadStartedFor(videoId);
@@ -202,7 +215,7 @@ export function RecommendedRail({ videos, videoId, collection }: Props) {
   }
 
   function handleTabKeyDown(event: React.KeyboardEvent<HTMLButtonElement>) {
-    if (!hasRecommendations) return;
+    if (!recommendationPanelAvailable) return;
     let nextView: RailView | null = null;
     if (event.key === "ArrowLeft" || event.key === "Home") {
       nextView = "recommended";
@@ -247,12 +260,12 @@ export function RecommendedRail({ videos, videoId, collection }: Props) {
     [data, returnPath, videoId]
   );
 
-  if (!hasRecommendations && !hasCollection) return null;
+  if (!recommendationPanelAvailable && !hasCollection) return null;
 
   return (
     <aside
       className={`vd-rail${
-        hasRecommendations ? "" : " vd-rail--collection-only"
+        recommendationPanelAvailable ? "" : " vd-rail--collection-only"
       }`}
       aria-label={hasCollection ? "视频推荐与相关合集" : "推荐视频"}
     >
@@ -271,7 +284,7 @@ export function RecommendedRail({ videos, videoId, collection }: Props) {
             aria-selected={activeView === "recommended"}
             aria-controls={recommendedPanelId}
             tabIndex={activeView === "recommended" ? 0 : -1}
-            disabled={!hasRecommendations}
+            disabled={!recommendationPanelAvailable}
             onClick={() => selectView("recommended")}
             onKeyDown={handleTabKeyDown}
           >
@@ -311,7 +324,20 @@ export function RecommendedRail({ videos, videoId, collection }: Props) {
         aria-labelledby={hasCollection ? recommendedTabId : undefined}
         hidden={showCollection}
       >
-        <ul className="vd-rail__list">{recommendedItems}</ul>
+        {recommendationsLoading && !hasRecommendations ? (
+          <VideoRailRowsSkeleton label="正在加载推荐视频" />
+        ) : recommendationsError && !hasRecommendations ? (
+          <div className="vd-rail__state" role="alert">
+            <span>{recommendationsError}</span>
+            {onRetryRecommendations && (
+              <button type="button" onClick={onRetryRecommendations}>
+                重新加载
+              </button>
+            )}
+          </div>
+        ) : (
+          <ul className="vd-rail__list">{recommendedItems}</ul>
+        )}
       </div>
 
       {hasCollection && (
@@ -379,7 +405,8 @@ function RecommendedItemContent(
   );
 
   const rootRef = useRef<HTMLLIElement | null>(null);
-  const hoverTimerRef = useRef<number | null>(null);
+  const previewIntentTimerRef = useRef<number | null>(null);
+  const touchPreviewArmedRef = useRef(false);
   const lastPointerTypeRef = useRef<string>("");
   const videoRef = useRef<HTMLVideoElement | null>(null);
 
@@ -399,7 +426,10 @@ function RecommendedItemContent(
 
   // 全局预览换卡时立即清理
   useEffect(() => {
-    if (!previewIsActive && shouldRenderPreview) {
+    if (
+      !previewIsActive &&
+      (shouldRenderPreview || touchPreviewArmedRef.current)
+    ) {
       cleanup();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -413,7 +443,7 @@ function RecommendedItemContent(
 
   // 离开视口立即停
   useEffect(() => {
-    if (!inView && shouldRenderPreview) {
+    if (!inView && (shouldRenderPreview || touchPreviewArmedRef.current)) {
       cleanup();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -428,10 +458,8 @@ function RecommendedItemContent(
   }, []);
 
   function cleanup() {
-    if (hoverTimerRef.current) {
-      window.clearTimeout(hoverTimerRef.current);
-      hoverTimerRef.current = null;
-    }
+    clearPreviewIntentTimer();
+    touchPreviewArmedRef.current = false;
 
     const el = videoRef.current;
     if (el) {
@@ -455,21 +483,42 @@ function RecommendedItemContent(
 
   function startPreviewIntent() {
     if (!video.previewSrc || !inView) return;
-    if (hoverTimerRef.current) return;
+    if (previewIntentTimerRef.current) return;
     setPreviewState("intent");
-    hoverTimerRef.current = window.setTimeout(() => {
-      hoverTimerRef.current = null;
+    previewIntentTimerRef.current = window.setTimeout(() => {
+      previewIntentTimerRef.current = null;
       startPreviewNow({ requireInView: true });
     }, HOVER_DELAY_MS);
+  }
+
+  function startTouchPreviewIntent() {
+    if (!video.previewSrc) return;
+    clearPreviewIntentTimer();
+    touchPreviewArmedRef.current = true;
+    previewController.setActiveId(video.id);
+    setPreviewState("intent");
+    previewIntentTimerRef.current = window.setTimeout(() => {
+      previewIntentTimerRef.current = null;
+      if (
+        !touchPreviewArmedRef.current ||
+        previewController.getActiveId() !== video.id
+      ) {
+        return;
+      }
+      startPreviewNow({ requireInView: false });
+    }, TOUCH_PREVIEW_DELAY_MS);
+  }
+
+  function clearPreviewIntentTimer() {
+    if (previewIntentTimerRef.current === null) return;
+    window.clearTimeout(previewIntentTimerRef.current);
+    previewIntentTimerRef.current = null;
   }
 
   function startPreviewNow(options: { requireInView: boolean }) {
     if (!video.previewSrc) return;
     if (options.requireInView && !inView) return;
-    if (hoverTimerRef.current) {
-      window.clearTimeout(hoverTimerRef.current);
-      hoverTimerRef.current = null;
-    }
+    clearPreviewIntentTimer();
     previewController.setActiveId(video.id);
     setShouldRenderPreview(true);
     setPreviewState("loading");
@@ -495,7 +544,9 @@ function RecommendedItemContent(
   }
 
   function handleClickCapture(event: React.MouseEvent<HTMLAnchorElement>) {
-    const previewActive = previewIsActive && shouldRenderPreview;
+    const previewActive =
+      previewController.getActiveId() === video.id &&
+      (touchPreviewArmedRef.current || shouldRenderPreview);
     if (
       !shouldInterceptPreviewTap({
         pointerType: lastPointerTypeRef.current,
@@ -503,11 +554,12 @@ function RecommendedItemContent(
         previewActive,
       })
     ) {
+      if (touchPreviewArmedRef.current && !shouldRenderPreview) cleanup();
       return;
     }
     event.preventDefault();
     event.stopPropagation();
-    startPreviewNow({ requireInView: false });
+    startTouchPreviewIntent();
   }
 
   const author = "author" in video ? video.author : "";

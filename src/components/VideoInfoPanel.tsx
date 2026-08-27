@@ -7,6 +7,9 @@ import type { TagItem, VideoDetail } from "@/types";
 type Props = {
   video: VideoDetail;
   availableTags?: TagItem[];
+  availableTagsLoading?: boolean;
+  availableTagsError?: string;
+  onRetryAvailableTags?: () => void;
   tagSaving?: boolean;
   onTagsChange?: (tags: string[]) => Promise<void>;
 };
@@ -24,6 +27,9 @@ type Props = {
 export function VideoInfoPanel({
   video,
   availableTags = [],
+  availableTagsLoading = false,
+  availableTagsError = "",
+  onRetryAvailableTags,
   tagSaving = false,
   onTagsChange,
 }: Props) {
@@ -120,7 +126,24 @@ export function VideoInfoPanel({
             </header>
 
             <div className="vd-tag-editor__grid">
-              {sortedAvailable.length === 0 ? (
+              {availableTagsLoading ? (
+                <div className="vd-tag-editor__empty" role="status">
+                  正在加载标签…
+                </div>
+              ) : availableTagsError ? (
+                <div className="vd-tag-editor__empty" role="alert">
+                  <span>{availableTagsError}</span>
+                  {onRetryAvailableTags && (
+                    <button
+                      type="button"
+                      className="vd-tag-editor__retry"
+                      onClick={onRetryAvailableTags}
+                    >
+                      重新加载
+                    </button>
+                  )}
+                </div>
+              ) : sortedAvailable.length === 0 ? (
                 <div className="vd-tag-editor__empty">暂无可用标签</div>
               ) : (
                 sortedAvailable.map((tag) => {
@@ -164,7 +187,9 @@ export function VideoInfoPanel({
                 type="button"
                 className="vd-tag-editor__btn is-primary"
                 onClick={saveTags}
-                disabled={tagSaving}
+                disabled={
+                  tagSaving || availableTagsLoading || !!availableTagsError
+                }
               >
                 {tagSaving ? "保存中..." : "保存"}
               </button>

@@ -12,7 +12,7 @@ import (
 	"github.com/video-site/backend/internal/catalog"
 )
 
-func TestVideoDetailAndCollectionUseSameNaturalDirectoryOrder(t *testing.T) {
+func TestVideoDetailDefersCollectionAndSummaryMatchesNaturalDirectoryOrder(t *testing.T) {
 	ctx := context.Background()
 	cat, err := catalog.Open(t.TempDir() + "/catalog.db")
 	if err != nil {
@@ -62,11 +62,27 @@ func TestVideoDetailAndCollectionUseSameNaturalDirectoryOrder(t *testing.T) {
 	if err := json.NewDecoder(detailRecorder.Body).Decode(&detail); err != nil {
 		t.Fatalf("decode detail: %v", err)
 	}
-	if detail.Collection == nil {
-		t.Fatal("detail collection is nil")
+	if !detail.CollectionCandidate {
+		t.Fatal("detail collection candidate is false")
 	}
-	if detail.Collection.Name != "Data Structures" || detail.Collection.Total != 3 || detail.Collection.CurrentIndex != 2 {
-		t.Fatalf("detail collection = %#v", detail.Collection)
+
+	summaryRequest := requestWithVideoID(
+		http.MethodGet,
+		"/api/video/episode-2/collection/summary",
+		"episode-2",
+		strings.NewReader(""),
+	)
+	summaryRecorder := httptest.NewRecorder()
+	server.handleVideoCollectionSummary(summaryRecorder, summaryRequest)
+	if summaryRecorder.Code != http.StatusOK {
+		t.Fatalf("summary status = %d, body = %s", summaryRecorder.Code, summaryRecorder.Body.String())
+	}
+	var summary VideoCollectionSummary
+	if err := json.NewDecoder(summaryRecorder.Body).Decode(&summary); err != nil {
+		t.Fatalf("decode summary: %v", err)
+	}
+	if summary.Name != "Data Structures" || summary.Total != 3 || summary.CurrentIndex != 2 {
+		t.Fatalf("collection summary = %#v", summary)
 	}
 
 	collectionRequest := requestWithVideoID(
@@ -147,8 +163,22 @@ func TestVideoDetailOmitsCollectionForVideoWithoutDirectory(t *testing.T) {
 	if err := json.NewDecoder(recorder.Body).Decode(&detail); err != nil {
 		t.Fatalf("decode detail: %v", err)
 	}
-	if detail.Collection != nil {
-		t.Fatalf("collection = %#v, empty parent IDs must not be grouped", detail.Collection)
+	if detail.CollectionCandidate {
+		t.Fatal("empty parent IDs must not be collection candidates")
+	}
+
+	summaryRequest := requestWithVideoID(http.MethodGet, "/api/video/loose-1/collection/summary", "loose-1", strings.NewReader(""))
+	summaryRecorder := httptest.NewRecorder()
+	(&Server{Catalog: cat}).handleVideoCollectionSummary(summaryRecorder, summaryRequest)
+	if summaryRecorder.Code != http.StatusOK {
+		t.Fatalf("summary status = %d, body = %s", summaryRecorder.Code, summaryRecorder.Body.String())
+	}
+	var summary VideoCollectionSummary
+	if err := json.NewDecoder(summaryRecorder.Body).Decode(&summary); err != nil {
+		t.Fatalf("decode summary: %v", err)
+	}
+	if summary.Total != 0 || summary.CurrentIndex != 0 || summary.Name != "" {
+		t.Fatalf("empty-directory summary = %#v", summary)
 	}
 }
 

@@ -4,6 +4,8 @@ export type PreviewIntentInput = {
   previewActive: boolean;
 };
 
+export const TOUCH_PREVIEW_DELAY_MS = 200;
+
 export function shouldInterceptPreviewTap(input: PreviewIntentInput): boolean {
   return isTouchLike(input.pointerType, input.canHover) && !input.previewActive;
 }

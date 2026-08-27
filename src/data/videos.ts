@@ -1,5 +1,6 @@
 import type {
   VideoCollection,
+  VideoCollectionSummary,
   VideoDetail,
   VideoItem,
   VideoSubtitle,
@@ -222,6 +223,90 @@ function trimVideoDetailPrefetches() {
   }
 }
 
+export async function fetchVideoRecommendations(
+  id: string,
+  options: { signal?: AbortSignal } = {}
+): Promise<VideoItem[]> {
+  const items = await apiGet<VideoItem[]>(
+    `/api/video/${encodeURIComponent(id)}/recommendations`,
+    options
+  );
+  if (!Array.isArray(items)) {
+    throw new Error("Invalid video recommendations response");
+  }
+  return items;
+}
+
+const VIDEO_RECOMMENDATIONS_PREFETCH_TTL_MS = 30_000;
+const VIDEO_RECOMMENDATIONS_PREFETCH_LIMIT = 20;
+
+type PrefetchedVideoRecommendations = {
+  expiresAt: number;
+  request: Promise<VideoItem[]>;
+};
+
+const prefetchedVideoRecommendationsByID = new Map<
+  string,
+  PrefetchedVideoRecommendations
+>();
+
+/**
+ * Start recommendations only after a click is confirmed as navigation. Their
+ * request runs beside the core detail request but never joins its loading state.
+ */
+export function prefetchVideoRecommendations(
+  id: string
+): Promise<VideoItem[]> {
+  const now = Date.now();
+  pruneVideoRecommendationPrefetches(now);
+  const existing = prefetchedVideoRecommendationsByID.get(id);
+  if (existing && existing.expiresAt > now) return existing.request;
+
+  const request = fetchVideoRecommendations(id);
+  prefetchedVideoRecommendationsByID.set(id, {
+    expiresAt: now + VIDEO_RECOMMENDATIONS_PREFETCH_TTL_MS,
+    request,
+  });
+  trimVideoRecommendationPrefetches();
+
+  // Attach a rejection observer immediately: navigation may take long enough
+  // for a failed prefetch to settle before the detail component consumes it.
+  void request.catch(() => {
+    if (prefetchedVideoRecommendationsByID.get(id)?.request === request) {
+      prefetchedVideoRecommendationsByID.delete(id);
+    }
+  });
+  return request;
+}
+
+export function consumePrefetchedVideoRecommendations(
+  id: string
+): Promise<VideoItem[]> | null {
+  const entry = prefetchedVideoRecommendationsByID.get(id);
+  prefetchedVideoRecommendationsByID.delete(id);
+  if (!entry || entry.expiresAt <= Date.now()) return null;
+  return entry.request;
+}
+
+function pruneVideoRecommendationPrefetches(now: number) {
+  for (const [id, entry] of prefetchedVideoRecommendationsByID) {
+    if (entry.expiresAt <= now) {
+      prefetchedVideoRecommendationsByID.delete(id);
+    }
+  }
+}
+
+function trimVideoRecommendationPrefetches() {
+  while (
+    prefetchedVideoRecommendationsByID.size >
+    VIDEO_RECOMMENDATIONS_PREFETCH_LIMIT
+  ) {
+    const oldestID = prefetchedVideoRecommendationsByID.keys().next().value;
+    if (!oldestID) return;
+    prefetchedVideoRecommendationsByID.delete(oldestID);
+  }
+}
+
 export async function fetchVideoCollection(
   id: string,
   options: { signal?: AbortSignal; includePreview?: boolean } = {}
@@ -262,6 +347,30 @@ export async function fetchVideoCollection(
     throw new Error("Invalid video collection response");
   }
   return collection;
+}
+
+export async function fetchVideoCollectionSummary(
+  id: string,
+  options: { signal?: AbortSignal } = {}
+): Promise<VideoCollectionSummary | null> {
+  const summary = await apiGet<VideoCollectionSummary>(
+    `/api/video/${encodeURIComponent(id)}/collection/summary`,
+    options
+  );
+  if (
+    !summary ||
+    typeof summary.name !== "string" ||
+    !Number.isInteger(summary.total) ||
+    summary.total < 0 ||
+    !Number.isInteger(summary.currentIndex) ||
+    summary.currentIndex < 0 ||
+    (summary.total === 0 && summary.currentIndex !== 0) ||
+    (summary.total > 0 &&
+      (summary.currentIndex < 1 || summary.currentIndex > summary.total))
+  ) {
+    throw new Error("Invalid video collection summary response");
+  }
+  return summary.total > 1 ? summary : null;
 }
 
 export function fetchVideoSubtitles(id: string): Promise<VideoSubtitle[]> {
@@ -512,10 +621,9 @@ export function fetchTags(): Promise<TagItem[]> {
       if (requestVersion === tagCacheVersion) cachedTags = tags;
       return tags;
     })
-    .catch(() => cachedTags ?? [])
     .finally(() => {
       if (pendingTags === request) pendingTags = null;
-  });
+    });
   pendingTags = request;
   return request;
 }

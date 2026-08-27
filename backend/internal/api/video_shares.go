@@ -294,8 +294,7 @@ func (s *Server) mapSharedVideoDetail(ctx context.Context, v *catalog.Video, sha
 			Name:   v.Author,
 			Badges: []string{},
 		},
-		RelatedVideos: []VideoDTO{},
-		CommentsList:  []Comment{},
+		CommentsList: []Comment{},
 	}
 }
 

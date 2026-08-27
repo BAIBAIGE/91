@@ -67,31 +67,27 @@ func BenchmarkCatalogPublicReads20K(b *testing.B) {
 		}
 	})
 
-	b.Run("list_tag_without_total_related_pool", func(b *testing.B) {
+	b.Run("recommendation_tag_candidates_48", func(b *testing.B) {
 		b.ReportAllocs()
 		for i := 0; i < b.N; i++ {
-			if _, _, err := cat.ListVideos(ctx, ListParams{
-				Tag:                "benchmark",
-				Sort:               "latest",
+			if _, err := cat.ListRecommendationCandidates(ctx, RecommendationCandidateParams{
+				Tags:               []string{"benchmark"},
+				ExcludeIDs:         ids[:4],
 				ThumbnailReadyOnly: true,
-				SkipTotal:          true,
-				Page:               1,
-				PageSize:           30,
+				Limit:              48,
 			}); err != nil {
 				b.Fatal(err)
 			}
 		}
 	})
 
-	b.Run("list_global_without_total_related_pool", func(b *testing.B) {
+	b.Run("recommendation_global_candidates_48", func(b *testing.B) {
 		b.ReportAllocs()
 		for i := 0; i < b.N; i++ {
-			if _, _, err := cat.ListVideos(ctx, ListParams{
-				Sort:               "latest",
+			if _, err := cat.ListRecommendationCandidates(ctx, RecommendationCandidateParams{
+				ExcludeIDs:         ids[:4],
 				ThumbnailReadyOnly: true,
-				SkipTotal:          true,
-				Page:               1,
-				PageSize:           200,
+				Limit:              48,
 			}); err != nil {
 				b.Fatal(err)
 			}

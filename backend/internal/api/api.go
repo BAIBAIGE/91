@@ -167,16 +167,15 @@ type TagDTO struct {
 
 type VideoDetailDTO struct {
 	VideoDTO
-	VideoSrc      string                  `json:"videoSrc"`
-	MediaType     string                  `json:"mediaType,omitempty"`
-	Poster        string                  `json:"poster"`
-	Description   string                  `json:"description"`
-	EmbedURL      string                  `json:"embedUrl"`
-	Points        int                     `json:"points,omitempty"`
-	AuthorProfile AuthorProfile           `json:"authorProfile"`
-	Collection    *VideoCollectionSummary `json:"collection,omitempty"`
-	RelatedVideos []VideoDTO              `json:"relatedVideos"`
-	CommentsList  []Comment               `json:"commentsList"`
+	VideoSrc            string        `json:"videoSrc"`
+	MediaType           string        `json:"mediaType,omitempty"`
+	Poster              string        `json:"poster"`
+	Description         string        `json:"description"`
+	EmbedURL            string        `json:"embedUrl"`
+	Points              int           `json:"points,omitempty"`
+	AuthorProfile       AuthorProfile `json:"authorProfile"`
+	CollectionCandidate bool          `json:"collectionCandidate,omitempty"`
+	CommentsList        []Comment     `json:"commentsList"`
 }
 
 type VideoCollectionSummary struct {
@@ -252,6 +251,8 @@ func (s *Server) RegisterRoutes(r chi.Router, a *auth.Authenticator) {
 		r.Get("/api/list", s.handleList)
 		r.Get("/api/feed", s.handleVideoFeed)
 		r.Get("/api/video/{id}", s.handleVideoDetail)
+		r.Get("/api/video/{id}/recommendations", s.handleVideoRecommendations)
+		r.Get("/api/video/{id}/collection/summary", s.handleVideoCollectionSummary)
 		r.Get("/api/video/{id}/collection", s.handleVideoCollection)
 		r.Get("/api/video/{id}/subtitles", s.handleVideoSubtitles)
 		r.Post("/api/video/{id}/share", s.handleCreateVideoShare)
@@ -421,8 +422,6 @@ func (s *Server) handleVideoDetail(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, err)
 		return
 	}
-	related := s.pickRelatedVideos(r.Context(), v, 6)
-	collection, _, _ := s.videoCollection(r.Context(), v)
 	dto := mapVideo(v)
 	if d, err := s.Catalog.GetDrive(r.Context(), v.DriveID); err == nil {
 		dto.SourceLabel = driveKindLabel(d.Kind)
@@ -441,13 +440,43 @@ func (s *Server) handleVideoDetail(w http.ResponseWriter, r *http.Request) {
 			Href:   "/author/" + v.Author,
 			Badges: []string{},
 		},
-		Collection:    collection,
-		RelatedVideos: mapVideos(related),
-		CommentsList:  []Comment{},
+		CollectionCandidate: strings.TrimSpace(v.ParentID) != "",
+		CommentsList:        []Comment{},
 	}
-	// 推荐每次随机生成，禁止浏览器和中间层缓存详情响应
+	// Reactions and editable metadata must stay fresh across detail navigations.
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, detail)
+}
+
+func (s *Server) handleVideoRecommendations(w http.ResponseWriter, r *http.Request) {
+	v, err := s.availableVideo(r.Context(), routeParam(r, "id"))
+	if err != nil {
+		writeErr(w, http.StatusNotFound, err)
+		return
+	}
+	related := s.pickRelatedVideos(r.Context(), v, 6)
+	// Recommendations are randomized per uncached request. Keep their cache
+	// policy independent from the core detail resource.
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, mapVideoSummaries(related))
+}
+
+func (s *Server) handleVideoCollectionSummary(w http.ResponseWriter, r *http.Request) {
+	v, err := s.availableVideo(r.Context(), routeParam(r, "id"))
+	if err != nil {
+		writeErr(w, http.StatusNotFound, err)
+		return
+	}
+	summary, err := s.videoCollectionSummary(r.Context(), v)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	if summary == nil {
+		summary = &VideoCollectionSummary{}
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, summary)
 }
 
 func (s *Server) handleVideoCollection(w http.ResponseWriter, r *http.Request) {
@@ -475,9 +504,8 @@ func (s *Server) handleVideoCollection(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// videoCollection builds a directory-backed collection in one canonical order.
-// The detail response keeps only its lightweight summary; the full item list is
-// loaded through /collection when either collection UI is opened.
+// videoCollection builds the complete directory-backed collection only for
+// collection UIs. The detail endpoint never calls this full-object path.
 func (s *Server) videoCollection(ctx context.Context, current *catalog.Video) (*VideoCollectionSummary, []*catalog.Video, error) {
 	if current == nil || strings.TrimSpace(current.ParentID) == "" {
 		return nil, nil, nil
@@ -521,19 +549,95 @@ func (s *Server) videoCollection(ctx context.Context, current *catalog.Video) (*
 	}, items, nil
 }
 
+// videoCollectionSummary keeps collection ordering work outside the video
+// detail request and hydrates only the fields needed for the summary.
+func (s *Server) videoCollectionSummary(ctx context.Context, current *catalog.Video) (*VideoCollectionSummary, error) {
+	if current == nil || strings.TrimSpace(current.ParentID) == "" {
+		return nil, nil
+	}
+	items, err := s.Catalog.ListVisibleVideoCollectionOrderByDirectory(
+		ctx,
+		current.DriveID,
+		current.ParentID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	if len(items) < 2 {
+		return nil, nil
+	}
+	sort.Slice(items, func(i, j int) bool {
+		return naturalVideoCollectionFieldsLess(
+			items[i].FileName,
+			items[i].Title,
+			items[i].ID,
+			items[i].CreatedAt,
+			items[j].FileName,
+			items[j].Title,
+			items[j].ID,
+			items[j].CreatedAt,
+		)
+	})
+	currentIndex := 0
+	for index, item := range items {
+		if item.ID == current.ID {
+			currentIndex = index + 1
+			break
+		}
+	}
+	if currentIndex == 0 {
+		return nil, nil
+	}
+	name := strings.TrimSpace(current.DirName)
+	if name == "" {
+		for _, item := range items {
+			if strings.TrimSpace(item.DirName) != "" {
+				name = strings.TrimSpace(item.DirName)
+				break
+			}
+		}
+	}
+	if name == "" {
+		name = "同目录视频"
+	}
+	return &VideoCollectionSummary{
+		Name:         name,
+		Total:        len(items),
+		CurrentIndex: currentIndex,
+	}, nil
+}
+
 func naturalVideoCollectionLess(left, right *catalog.Video) bool {
 	if left == nil || right == nil {
 		return left != nil
 	}
-	leftName := firstNonEmptyString(left.FileName, left.Title, left.ID)
-	rightName := firstNonEmptyString(right.FileName, right.Title, right.ID)
+	return naturalVideoCollectionFieldsLess(
+		left.FileName,
+		left.Title,
+		left.ID,
+		left.CreatedAt,
+		right.FileName,
+		right.Title,
+		right.ID,
+		right.CreatedAt,
+	)
+}
+
+func naturalVideoCollectionFieldsLess(
+	leftFileName, leftTitle, leftID string,
+	leftCreatedAt time.Time,
+	rightFileName, rightTitle, rightID string,
+	rightCreatedAt time.Time,
+) bool {
+	leftName := firstNonEmptyString(leftFileName, leftTitle, leftID)
+	rightName := firstNonEmptyString(rightFileName, rightTitle, rightID)
 	if compared := naturalCompare(leftName, rightName); compared != 0 {
 		return compared < 0
 	}
-	if !left.CreatedAt.Equal(right.CreatedAt) {
-		return left.CreatedAt.Before(right.CreatedAt)
+	if !leftCreatedAt.Equal(rightCreatedAt) {
+		return leftCreatedAt.Before(rightCreatedAt)
 	}
-	return left.ID < right.ID
+	return leftID < rightID
 }
 
 // naturalCompare compares ASCII digit runs numerically while keeping all other
@@ -614,10 +718,13 @@ func firstNonEmptyString(values ...string) string {
 	return ""
 }
 
+const recommendationCandidateWindow = 48
+
 // pickRelatedVideos 选 total 个推荐视频。
 // 一半来自同标签命中，剩下用全库随机补齐；两段都优先取已有封面的视频，
-// 不够时再回退到未生成封面的候选。结果不会重复，也不会包含当前视频。
-func (s *Server) pickRelatedVideos(ctx context.Context, current *catalog.Video, total int) []*catalog.Video {
+// 不够时再回退到未生成封面的候选。每一段只读取一个固定大小的卡片摘要池，
+// 结果不会重复，也不会包含当前视频。
+func (s *Server) pickRelatedVideos(ctx context.Context, current *catalog.Video, total int) []*catalog.VideoSummary {
 	if total <= 0 || current == nil {
 		return nil
 	}
@@ -626,21 +733,22 @@ func (s *Server) pickRelatedVideos(ctx context.Context, current *catalog.Video, 
 		tagQuota = 1
 	}
 
-	picked := make([]*catalog.Video, 0, total)
+	picked := make([]*catalog.VideoSummary, 0, total)
 	seen := map[string]struct{}{current.ID: {}}
+	candidateLimit := max(total, recommendationCandidateWindow)
 
-	// 1) 同标签候选：先取已有封面的候选，数量不够再从全部候选里补。
+	// 1) 所有标签合并成一次候选查询；不再按标签重复查询公共列表。
 	if tagQuota > 0 && len(current.Tags) > 0 {
 		picked = appendRandomRelated(
 			picked,
-			s.relatedTagPool(ctx, current.Tags, seen, true),
+			s.recommendationPool(ctx, current.Tags, seen, true, candidateLimit),
 			tagQuota,
 			seen,
 		)
 		if len(picked) < tagQuota {
 			picked = appendRandomRelated(
 				picked,
-				s.relatedTagPool(ctx, current.Tags, seen, false),
+				s.recommendationPool(ctx, current.Tags, seen, false, candidateLimit),
 				tagQuota,
 				seen,
 			)
@@ -651,7 +759,7 @@ func (s *Server) pickRelatedVideos(ctx context.Context, current *catalog.Video, 
 	if len(picked) < total {
 		picked = appendRandomRelated(
 			picked,
-			s.relatedListPool(ctx, seen, true, 200),
+			s.recommendationPool(ctx, nil, seen, true, candidateLimit),
 			total,
 			seen,
 		)
@@ -659,7 +767,7 @@ func (s *Server) pickRelatedVideos(ctx context.Context, current *catalog.Video, 
 	if len(picked) < total {
 		picked = appendRandomRelated(
 			picked,
-			s.relatedListPool(ctx, seen, false, 200),
+			s.recommendationPool(ctx, nil, seen, false, candidateLimit),
 			total,
 			seen,
 		)
@@ -668,68 +776,34 @@ func (s *Server) pickRelatedVideos(ctx context.Context, current *catalog.Video, 
 	return picked
 }
 
-func (s *Server) relatedTagPool(ctx context.Context, tags []string, seen map[string]struct{}, readyOnly bool) []*catalog.Video {
-	var pool []*catalog.Video
-	poolSeen := make(map[string]struct{})
-	for _, tag := range tags {
-		if tag == "" {
-			continue
-		}
-		items, _, err := s.Catalog.ListVideos(ctx, catalog.ListParams{
-			Tag:                   tag,
-			Sort:                  "latest",
-			Page:                  1,
-			PageSize:              30,
-			ThumbnailReadyOnly:    readyOnly,
-			PreferReadyThumbnails: !readyOnly,
-			SkipTotal:             true,
-		})
-		if err != nil {
-			continue
-		}
-		for _, v := range items {
-			if v == nil {
-				continue
-			}
-			if _, ok := seen[v.ID]; ok {
-				continue
-			}
-			if _, ok := poolSeen[v.ID]; ok {
-				continue
-			}
-			poolSeen[v.ID] = struct{}{}
-			pool = append(pool, v)
-		}
-	}
-	return pool
-}
-
-func (s *Server) relatedListPool(ctx context.Context, seen map[string]struct{}, readyOnly bool, pageSize int) []*catalog.Video {
-	items, _, err := s.Catalog.ListVideos(ctx, catalog.ListParams{
-		Sort:                  "latest",
-		Page:                  1,
-		PageSize:              pageSize,
-		ThumbnailReadyOnly:    readyOnly,
-		PreferReadyThumbnails: !readyOnly,
-		SkipTotal:             true,
+func (s *Server) recommendationPool(
+	ctx context.Context,
+	tags []string,
+	seen map[string]struct{},
+	readyOnly bool,
+	limit int,
+) []*catalog.VideoSummary {
+	items, err := s.Catalog.ListRecommendationCandidates(ctx, catalog.RecommendationCandidateParams{
+		Tags:               tags,
+		ExcludeIDs:         recommendationSeenIDs(seen),
+		ThumbnailReadyOnly: readyOnly,
+		Limit:              limit,
 	})
 	if err != nil {
 		return nil
 	}
-	pool := make([]*catalog.Video, 0, len(items))
-	for _, v := range items {
-		if v == nil {
-			continue
-		}
-		if _, ok := seen[v.ID]; ok {
-			continue
-		}
-		pool = append(pool, v)
-	}
-	return pool
+	return items
 }
 
-func appendRandomRelated(picked []*catalog.Video, pool []*catalog.Video, targetLen int, seen map[string]struct{}) []*catalog.Video {
+func recommendationSeenIDs(seen map[string]struct{}) []string {
+	ids := make([]string, 0, len(seen))
+	for id := range seen {
+		ids = append(ids, id)
+	}
+	return ids
+}
+
+func appendRandomRelated(picked []*catalog.VideoSummary, pool []*catalog.VideoSummary, targetLen int, seen map[string]struct{}) []*catalog.VideoSummary {
 	if len(picked) >= targetLen || len(pool) == 0 {
 		return picked
 	}

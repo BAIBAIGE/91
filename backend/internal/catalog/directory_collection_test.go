@@ -50,6 +50,23 @@ func TestListVisibleVideosByDirectoryScopesAndFiltersCollection(t *testing.T) {
 	if len(items) != 2 || items[0].ID != "episode-1" || items[1].ID != "episode-2" {
 		t.Fatalf("directory items = %#v, want episode-1 and episode-2", videoIDs(items))
 	}
+	orderItems, err := cat.ListVisibleVideoCollectionOrderByDirectory(ctx, "drive-a", "folder-a")
+	if err != nil {
+		t.Fatalf("list directory order fields: %v", err)
+	}
+	if len(orderItems) != 2 {
+		t.Fatalf("directory order fields = %d items, want 2", len(orderItems))
+	}
+	orderIDs := map[string]bool{}
+	for _, item := range orderItems {
+		orderIDs[item.ID] = true
+		if item.FileName == "" || item.Title == "" || item.DirName != "Series" || item.CreatedAt.IsZero() {
+			t.Fatalf("incomplete directory order item = %#v", item)
+		}
+	}
+	if !orderIDs["episode-1"] || !orderIDs["episode-2"] {
+		t.Fatalf("directory order IDs = %#v", orderIDs)
+	}
 
 	empty, err := cat.ListVisibleVideosByDirectory(ctx, "drive-a", "")
 	if err != nil {
@@ -57,6 +74,13 @@ func TestListVisibleVideosByDirectoryScopesAndFiltersCollection(t *testing.T) {
 	}
 	if len(empty) != 0 {
 		t.Fatalf("empty parent items = %#v, want no pseudo collection", videoIDs(empty))
+	}
+	orderEmpty, err := cat.ListVisibleVideoCollectionOrderByDirectory(ctx, "drive-a", "")
+	if err != nil {
+		t.Fatalf("list empty directory order fields: %v", err)
+	}
+	if len(orderEmpty) != 0 {
+		t.Fatalf("empty parent order fields = %#v, want no pseudo collection", orderEmpty)
 	}
 }
 

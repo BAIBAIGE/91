@@ -70,8 +70,8 @@ export type VideoDetail = VideoItem & {
   embedUrl: string;
   points?: number;
   authorProfile: AuthorProfile;
-  collection?: VideoCollectionSummary;
-  relatedVideos: VideoItem[];
+  /** The source row has a directory; its collection summary loads separately. */
+  collectionCandidate?: boolean;
   commentsList: CommentItem[];
 };
 

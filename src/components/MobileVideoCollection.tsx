@@ -18,7 +18,10 @@ import type {
 } from "@/types";
 import { formatCount } from "@/lib/format";
 import { previewController } from "@/lib/previewController";
-import { shouldInterceptPreviewTap } from "@/lib/previewIntent";
+import {
+  shouldInterceptPreviewTap,
+  TOUCH_PREVIEW_DELAY_MS,
+} from "@/lib/previewIntent";
 import { useDocumentScrollLock } from "@/lib/useDocumentScrollLock";
 import { useInViewport } from "@/lib/useInViewport";
 import { useIsActivePreview } from "@/lib/useIsActivePreview";
@@ -605,6 +608,8 @@ const CollectionItem = forwardRef<HTMLLIElement, CollectionItemProps>(
     const [progress, setProgress] = useState(0);
     const rootRef = useRef<HTMLLIElement | null>(null);
     const videoRef = useRef<HTMLVideoElement | null>(null);
+    const previewIntentTimerRef = useRef<number | null>(null);
+    const touchPreviewArmedRef = useRef(false);
     const lastPointerTypeRef = useRef("");
     const previewIsActive = useIsActivePreview(video.id);
     const inView = useInViewport(rootRef);
@@ -621,13 +626,20 @@ const CollectionItem = forwardRef<HTMLLIElement, CollectionItemProps>(
     );
 
     useEffect(() => {
-      if (!previewIsActive && shouldRenderPreview) cleanupPreview();
+      if (
+        !previewIsActive &&
+        (shouldRenderPreview || touchPreviewArmedRef.current)
+      ) {
+        cleanupPreview();
+      }
       // cleanupPreview intentionally reads the current media ref and state.
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [previewIsActive, video.id]);
 
     useEffect(() => {
-      if (!inView && shouldRenderPreview) cleanupPreview();
+      if (!inView && (shouldRenderPreview || touchPreviewArmedRef.current)) {
+        cleanupPreview();
+      }
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [inView]);
 
@@ -637,6 +649,8 @@ const CollectionItem = forwardRef<HTMLLIElement, CollectionItemProps>(
     }, []);
 
     function cleanupPreview() {
+      clearPreviewIntentTimer();
+      touchPreviewArmedRef.current = false;
       const element = videoRef.current;
       if (element) {
         try {
@@ -655,16 +669,36 @@ const CollectionItem = forwardRef<HTMLLIElement, CollectionItemProps>(
       }
     }
 
-    function startPreview() {
+    function startTouchPreviewIntent() {
       if (!video.previewSrc) return;
+      clearPreviewIntentTimer();
+      touchPreviewArmedRef.current = true;
       previewController.setActiveId(video.id);
-      setShouldRenderPreview(true);
-      setPreviewState("loading");
+      setPreviewState("intent");
+      previewIntentTimerRef.current = window.setTimeout(() => {
+        previewIntentTimerRef.current = null;
+        if (
+          !touchPreviewArmedRef.current ||
+          previewController.getActiveId() !== video.id
+        ) {
+          return;
+        }
+        setShouldRenderPreview(true);
+        setPreviewState("loading");
+      }, TOUCH_PREVIEW_DELAY_MS);
+    }
+
+    function clearPreviewIntentTimer() {
+      if (previewIntentTimerRef.current === null) return;
+      window.clearTimeout(previewIntentTimerRef.current);
+      previewIntentTimerRef.current = null;
     }
 
     function handleClickCapture(event: React.MouseEvent<HTMLAnchorElement>) {
       if (!video.previewSrc) return;
-      const previewActive = previewIsActive && shouldRenderPreview;
+      const previewActive =
+        previewController.getActiveId() === video.id &&
+        (touchPreviewArmedRef.current || shouldRenderPreview);
       if (
         !shouldInterceptPreviewTap({
           pointerType: lastPointerTypeRef.current,
@@ -673,11 +707,14 @@ const CollectionItem = forwardRef<HTMLLIElement, CollectionItemProps>(
           previewActive,
         })
       ) {
+        if (touchPreviewArmedRef.current && !shouldRenderPreview) {
+          cleanupPreview();
+        }
         return;
       }
       event.preventDefault();
       event.stopPropagation();
-      startPreview();
+      startTouchPreviewIntent();
     }
 
     return (

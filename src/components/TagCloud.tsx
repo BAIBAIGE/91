@@ -51,6 +51,9 @@ export const TagCloud = memo(function TagCloud({
       .then((list) => {
         if (active) setTags(list);
       })
+      .catch(() => {
+        if (active) setTags([]);
+      })
       .finally(() => {
         if (active) setLoaded(true);
       });

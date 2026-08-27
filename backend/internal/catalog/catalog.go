@@ -185,6 +185,28 @@ type VideoSummary struct {
 	PublishedAt        time.Time
 }
 
+// RecommendationCandidateParams describes one bounded recommendation pool.
+// Tags are matched as a single "any tag" filter so callers do not need to run
+// one public-list query per tag. Empty Tags selects from the whole public
+// library.
+type RecommendationCandidateParams struct {
+	Tags               []string
+	ExcludeIDs         []string
+	ThumbnailReadyOnly bool
+	Limit              int
+}
+
+// VideoCollectionOrderItem is the smallest projection needed to calculate a
+// video's position in a naturally sorted directory collection. Summary
+// requests use it instead of hydrating full Video persistence objects.
+type VideoCollectionOrderItem struct {
+	ID        string
+	FileName  string
+	Title     string
+	DirName   string
+	CreatedAt time.Time
+}
+
 func (c *Catalog) UpsertVideo(ctx context.Context, v *Video) error {
 	existed := c.videoExists(ctx, v.ID)
 	storedTags, err := upsertVideoRow(ctx, c.db, v)
@@ -1117,10 +1139,7 @@ func (c *Catalog) ListVisibleVideosByDirectory(ctx context.Context, driveID, par
 		   AND videos.parent_id = ?
 		   AND COALESCE(videos.hidden, 0) = 0
 		   AND `+activeDriveWhereSQL+`
-		   AND `+uniqueVideoWhereSQL+`
-		 ORDER BY COALESCE(NULLIF(videos.file_name, ''), videos.title) COLLATE NOCASE ASC,
-		          videos.created_at ASC,
-		          videos.id ASC`,
+		   AND `+uniqueVideoWhereSQL,
 		driveID, parentID)
 	if err != nil {
 		return nil, err
@@ -1135,6 +1154,50 @@ func (c *Catalog) ListVisibleVideosByDirectory(ctx context.Context, driveID, par
 		out = append(out, v)
 	}
 	return out, rows.Err()
+}
+
+// ListVisibleVideoCollectionOrderByDirectory returns only the fields required
+// to calculate a public directory collection's natural order and summary.
+func (c *Catalog) ListVisibleVideoCollectionOrderByDirectory(ctx context.Context, driveID, parentID string) ([]VideoCollectionOrderItem, error) {
+	driveID = strings.TrimSpace(driveID)
+	parentID = strings.TrimSpace(parentID)
+	if driveID == "" || parentID == "" {
+		return []VideoCollectionOrderItem{}, nil
+	}
+	rows, err := c.db.QueryContext(ctx,
+		`SELECT videos.id,
+		        COALESCE(videos.file_name, ''),
+		        videos.title,
+		        COALESCE(videos.dir_name, ''),
+		        videos.created_at
+		   FROM videos
+		  WHERE videos.drive_id = ?
+		    AND videos.parent_id = ?
+		    AND COALESCE(videos.hidden, 0) = 0
+		    AND `+activeDriveWhereSQL+`
+		    AND `+uniqueVideoWhereSQL,
+		driveID, parentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]VideoCollectionOrderItem, 0)
+	for rows.Next() {
+		var item VideoCollectionOrderItem
+		var createdAt int64
+		if err := rows.Scan(
+			&item.ID,
+			&item.FileName,
+			&item.Title,
+			&item.DirName,
+			&createdAt,
+		); err != nil {
+			return nil, err
+		}
+		item.CreatedAt = time.UnixMilli(createdAt)
+		items = append(items, item)
+	}
+	return items, rows.Err()
 }
 
 // ListVideoMaintenanceCandidates returns all current catalog videos without the
@@ -2776,6 +2839,79 @@ COALESCE(videos.thumbnail_updated_at, 0), COALESCE(videos.preview_updated_at, 0)
 COALESCE(videos.views, 0), COALESCE(videos.badges, '[]'), videos.published_at
 `
 
+// ListRecommendationCandidates loads one small, latest-first candidate window
+// using the same public visibility and deduplication rules as video listings.
+// It deliberately returns VideoSummary rather than the full persistence model:
+// recommendation cards do not need hashes, storage paths, processing state or
+// descriptions.
+func (c *Catalog) ListRecommendationCandidates(ctx context.Context, p RecommendationCandidateParams) ([]*VideoSummary, error) {
+	if p.Limit <= 0 {
+		return nil, nil
+	}
+
+	tags := uniqueStrings(cleanLabels(p.Tags))
+	excluded := cleanVideoIDs(p.ExcludeIDs)
+	where := []string{
+		"COALESCE(videos.hidden, 0) = 0",
+		activeDriveWhereSQL,
+		uniqueVideoWhereSQL,
+	}
+	args := make([]any, 0, len(tags)+len(excluded)+1)
+
+	if p.ThumbnailReadyOnly {
+		where = append(where, "COALESCE(videos.thumbnail_url, '') != ''")
+	}
+	if len(tags) > 0 {
+		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(tags)), ",")
+		where = append(where, `videos.id IN (
+			SELECT representative.representative_id
+			  FROM video_tags vt
+			  JOIN tags tag_filter ON tag_filter.id = vt.tag_id
+			  JOIN videos tagged ON tagged.id = vt.video_id
+			  JOIN video_dedup_representatives representative
+			    ON representative.video_id = tagged.id
+			 WHERE tag_filter.label COLLATE NOCASE IN (`+placeholders+`)
+			   AND COALESCE(tagged.hidden, 0) = 0
+		)`)
+		for _, tag := range tags {
+			args = append(args, tag)
+		}
+	}
+	if len(excluded) > 0 {
+		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(excluded)), ",")
+		where = append(where, "videos.id NOT IN ("+placeholders+")")
+		for _, id := range excluded {
+			args = append(args, id)
+		}
+	}
+	args = append(args, p.Limit)
+
+	rows, err := c.db.QueryContext(ctx,
+		`SELECT `+videoSummaryCols+` FROM videos
+		  WHERE `+strings.Join(where, " AND ")+`
+		  ORDER BY videos.published_at DESC, videos.id ASC
+		  LIMIT ?`,
+		args...,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]*VideoSummary, 0, p.Limit)
+	for rows.Next() {
+		video, err := scanVideoSummary(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, video)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // VisibleVideoSummariesByIDs loads only the fields rendered by public video
 // cards. Detail, playback and maintenance fields deliberately stay out of this
 // hot path. Results retain the caller's snapshot order.
@@ -2805,31 +2941,10 @@ func (c *Catalog) VisibleVideoSummariesByIDs(ctx context.Context, ids []string) 
 
 	byID := make(map[string]*VideoSummary, len(cleaned))
 	for rows.Next() {
-		video := &VideoSummary{}
-		var thumbnailUpdatedAt, previewUpdatedAt, publishedAt int64
-		var badgesJSON string
-		if err := rows.Scan(
-			&video.ID,
-			&video.Title,
-			&video.Author,
-			&video.DurationSeconds,
-			&video.ThumbnailURL,
-			&thumbnailUpdatedAt,
-			&previewUpdatedAt,
-			&video.Views,
-			&badgesJSON,
-			&publishedAt,
-		); err != nil {
+		video, err := scanVideoSummary(rows)
+		if err != nil {
 			return nil, err
 		}
-		_ = json.Unmarshal([]byte(badgesJSON), &video.Badges)
-		if thumbnailUpdatedAt > 0 {
-			video.ThumbnailUpdatedAt = time.UnixMilli(thumbnailUpdatedAt)
-		}
-		if previewUpdatedAt > 0 {
-			video.PreviewUpdatedAt = time.UnixMilli(previewUpdatedAt)
-		}
-		video.PublishedAt = time.UnixMilli(publishedAt)
 		byID[video.ID] = video
 	}
 	if err := rows.Err(); err != nil {
@@ -4040,6 +4155,35 @@ const dynamicUniqueVideoWhereSQL = `((COALESCE(videos.content_hash, '') = ''
 
 type rowScanner interface {
 	Scan(dest ...any) error
+}
+
+func scanVideoSummary(row rowScanner) (*VideoSummary, error) {
+	video := &VideoSummary{}
+	var thumbnailUpdatedAt, previewUpdatedAt, publishedAt int64
+	var badgesJSON string
+	if err := row.Scan(
+		&video.ID,
+		&video.Title,
+		&video.Author,
+		&video.DurationSeconds,
+		&video.ThumbnailURL,
+		&thumbnailUpdatedAt,
+		&previewUpdatedAt,
+		&video.Views,
+		&badgesJSON,
+		&publishedAt,
+	); err != nil {
+		return nil, err
+	}
+	_ = json.Unmarshal([]byte(badgesJSON), &video.Badges)
+	if thumbnailUpdatedAt > 0 {
+		video.ThumbnailUpdatedAt = time.UnixMilli(thumbnailUpdatedAt)
+	}
+	if previewUpdatedAt > 0 {
+		video.PreviewUpdatedAt = time.UnixMilli(previewUpdatedAt)
+	}
+	video.PublishedAt = time.UnixMilli(publishedAt)
+	return video, nil
 }
 
 func scanVideo(row rowScanner) (*Video, error) {
