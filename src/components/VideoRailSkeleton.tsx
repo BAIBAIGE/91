@@ -1,3 +1,5 @@
+import { VideoRailMobileHeading } from "./VideoRailMobileHeading";
+
 export function VideoRailSkeleton() {
   return (
     <aside className="vd-rail" aria-label="视频列表加载中" aria-busy="true">
@@ -10,13 +12,7 @@ export function VideoRailSkeleton() {
         </span>
         <span className="content-tabs__tab vd-rail__tab">相关合集</span>
       </div>
-      <header className="vd-rail__head vd-rail__head--mobile-only">
-        <span className="vd-rail__head-icon" aria-hidden="true">
-          <span />
-          <span />
-        </span>
-        <h2 className="vd-rail__head-title">推荐视频</h2>
-      </header>
+      <VideoRailMobileHeading />
       <VideoRailRowsSkeleton label="正在加载视频列表" />
     </aside>
   );

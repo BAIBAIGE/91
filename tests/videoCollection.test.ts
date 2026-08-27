@@ -18,6 +18,10 @@ const railSkeletonSource = readFileSync(
   new URL("../src/components/VideoRailSkeleton.tsx", import.meta.url),
   "utf8"
 );
+const railMobileHeadingSource = readFileSync(
+  new URL("../src/components/VideoRailMobileHeading.tsx", import.meta.url),
+  "utf8"
+);
 const collectionHookSource = readFileSync(
   new URL("../src/lib/useLazyVideoCollection.ts", import.meta.url),
   "utf8"
@@ -114,9 +118,20 @@ test("desktop recommendation rail always uses tabs while mobile keeps its headin
   );
   assert.doesNotMatch(stylesSource, /\.vd-rail__tab\[aria-selected="true"\]/);
   assert.match(
-    railSource,
+    railMobileHeadingSource,
     /<header className="vd-rail__head vd-rail__head--mobile-only">/
   );
+  assert.match(
+    railMobileHeadingSource,
+    /import \{ ListCollapse \} from "lucide-react";[\s\S]*?<ListCollapse className="vd-rail__head-icon" aria-hidden="true" \/>/
+  );
+  assert.match(railSource, /<VideoRailMobileHeading \/>/);
+  assert.match(railSkeletonSource, /<VideoRailMobileHeading \/>/);
+  assert.match(
+    stylesSource,
+    /\.vd-rail__head-icon\s*\{[^}]*flex:\s*0 0 24px;[^}]*width:\s*24px;[^}]*height:\s*24px;/s
+  );
+  assert.doesNotMatch(stylesSource, /\.vd-rail__head-icon span/);
   assert.match(
     stylesSource,
     /\.vd-rail__head\.vd-rail__head--mobile-only\s*\{\s*display:\s*none;/

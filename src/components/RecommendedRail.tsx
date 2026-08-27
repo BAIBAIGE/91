@@ -28,6 +28,7 @@ import { useIsActivePreview } from "@/lib/useIsActivePreview";
 import { useLazyVideoCollection } from "@/lib/useLazyVideoCollection";
 import { resolveVideoReturnPath, routeToPath } from "@/lib/videoReturnPath";
 import { PreviewVideo } from "./PreviewVideo";
+import { VideoRailMobileHeading } from "./VideoRailMobileHeading";
 import { VideoRailRowsSkeleton } from "./VideoRailSkeleton";
 import { VideoThumbnail } from "./VideoThumbnail";
 
@@ -308,13 +309,7 @@ export function RecommendedRail({
         </button>
       </div>
 
-      <header className="vd-rail__head vd-rail__head--mobile-only">
-        <span className="vd-rail__head-icon" aria-hidden="true">
-          <span />
-          <span />
-        </span>
-        <h2 className="vd-rail__head-title">推荐视频</h2>
-      </header>
+      <VideoRailMobileHeading />
 
       <div
         id={recommendedPanelId}
