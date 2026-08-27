@@ -1203,9 +1203,6 @@ func (a *App) newDriveGenerationWorkers(drv drives.Drive) (*preview.Worker, *pre
 	}
 	gen := preview.New(previewCfg)
 	previewWorker := preview.NewWorker(gen, a.cat, drv)
-	if a.cfg != nil {
-		previewWorker.Concurrency = a.cfg.Preview.ConcurrencyForDrive(drv.ID())
-	}
 	thumbWorker := preview.NewThumbWorker(gen, a.cat, drv)
 	previewWorker.OnPreviewReady = func(video *catalog.Video) {
 		if !thumbWorker.EnqueueFollowUp(video) {
@@ -1416,6 +1413,7 @@ func (a *App) registerPreviewWorkersWithOptions(ctx context.Context, driveID str
 		old()
 	}
 	if worker != nil {
+		worker.SetConcurrency(a.previewConcurrencyLocked())
 		a.workers[driveID] = worker
 	} else {
 		delete(a.workers, driveID)

@@ -28,6 +28,7 @@ type LiveSettings struct {
 	NightlyStartTime   string `json:"nightlyStartTime"`
 	NightlyTimezone    string `json:"nightlyTimezone"`
 	BuiltinTagsEnabled bool   `json:"builtinTagsEnabled"`
+	PreviewConcurrency int    `json:"previewConcurrency"`
 }
 
 // LegacyRuntimeSettings carries values written by the short-lived SQLite
@@ -82,6 +83,7 @@ func DefaultLiveSettings() LiveSettings {
 		NightlyStartTime:   DefaultNightlyStartTime,
 		NightlyTimezone:    DefaultNightlyTimezone,
 		BuiltinTagsEnabled: DefaultBuiltinTagsEnabled,
+		PreviewConcurrency: DefaultPreviewConcurrency,
 	}
 }
 
@@ -94,6 +96,7 @@ func liveSettingsFromConfig(cfg *Config) LiveSettings {
 		NightlyStartTime:   cfg.Nightly.StartTime,
 		NightlyTimezone:    cfg.Nightly.Timezone,
 		BuiltinTagsEnabled: cfg.Tags.IsBuiltinPackEnabled(),
+		PreviewConcurrency: cfg.Preview.Concurrency,
 	}
 }
 
@@ -466,6 +469,7 @@ func removeLiveDocumentValues(document any) {
 	removeNestedValue(root, "nightly", "timezone")
 	removeNestedValue(root, "nightly", "disabled")
 	removeNestedValue(root, "tags", "builtin_pack_enabled")
+	removeNestedValue(root, "preview", "concurrency")
 }
 
 func removeNestedValue(root map[string]any, section, key string) {

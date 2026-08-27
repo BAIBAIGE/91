@@ -357,7 +357,7 @@ func TestPreviewWorkerRunsConfiguredConsumersConcurrently(t *testing.T) {
 		release: release,
 	}
 	worker := NewWorker(gen, cat, &concurrentPreviewDrive{})
-	worker.Concurrency = 3
+	worker.SetConcurrency(3)
 	runCtx, cancel := context.WithCancel(ctx)
 	runDone := make(chan struct{})
 	go func() {
@@ -415,6 +415,70 @@ func TestPreviewWorkerRunsConfiguredConsumersConcurrently(t *testing.T) {
 		if stored.PreviewStatus != "ready" {
 			t.Fatalf("preview status for %s = %q, want ready", video.ID, stored.PreviewStatus)
 		}
+	}
+}
+
+func TestPreviewWorkerAppliesConcurrencyUpdatesWhileRunning(t *testing.T) {
+	ctx := context.Background()
+	cat, first := seedPreviewTestVideo(t, "preview-resize-1")
+	second := *first
+	second.ID = "preview-resize-2"
+	second.FileID = "preview-resize-file-2"
+	if err := cat.UpsertVideo(ctx, &second); err != nil {
+		t.Fatalf("seed second video: %v", err)
+	}
+
+	release := make(chan struct{})
+	gen := &blockingTeaserGenerator{
+		started: make(chan struct{}, 2),
+		release: release,
+	}
+	worker := NewWorker(gen, cat, &concurrentPreviewDrive{})
+	worker.SetConcurrency(1)
+	runCtx, cancel := context.WithCancel(ctx)
+	runDone := make(chan struct{})
+	go func() {
+		worker.Run(runCtx)
+		close(runDone)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-runDone:
+		case <-time.After(time.Second):
+			t.Error("preview worker did not stop during test cleanup")
+		}
+	})
+
+	if !worker.EnqueueBlocking(runCtx, first) || !worker.EnqueueBlocking(runCtx, &second) {
+		t.Fatal("enqueue preview resize videos failed")
+	}
+	select {
+	case <-gen.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first preview task did not start")
+	}
+	select {
+	case <-gen.started:
+		t.Fatal("second preview task started before concurrency increased")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	worker.SetConcurrency(2)
+	if got := worker.CurrentConcurrency(); got != 2 {
+		t.Fatalf("current concurrency = %d, want 2", got)
+	}
+	select {
+	case <-gen.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("second preview task did not start after concurrency increased")
+	}
+	close(release)
+
+	waitCtx, waitCancel := context.WithTimeout(ctx, 2*time.Second)
+	defer waitCancel()
+	if err := worker.WaitIdle(waitCtx); err != nil {
+		t.Fatalf("wait for resized worker: %v", err)
 	}
 }
 

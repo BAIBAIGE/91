@@ -1268,9 +1268,6 @@ type Worker struct {
 	// OnPreviewReady lets the application schedule dependent local-asset work
 	// without coupling this worker to a concrete thumbnail worker.
 	OnPreviewReady func(*catalog.Video)
-	// Concurrency is the number of consumers sharing this worker's deduplicated
-	// queue. Values below one preserve the default single-consumer behavior.
-	Concurrency int
 	// TaskGuard holds application-level task admission for the complete provider
 	// operation. A nil release means this worker belongs to a retired runtime
 	// generation and the queued item must remain pending for its replacement.
@@ -1281,15 +1278,35 @@ type Worker struct {
 	RateLimitCooldown time.Duration
 	rateLimit         rateLimitState
 	activities        taskActivities
+	concurrency       workerConcurrency
 }
 
 func NewWorker(gen TeaserGenerator, cat *catalog.Catalog, drv drives.Drive) *Worker {
-	return &Worker{
+	w := &Worker{
 		Gen:     gen,
 		Catalog: cat,
 		Drive:   drv,
 		ch:      make(chan *catalog.Video, defaultWorkerQueueSize),
 	}
+	w.SetConcurrency(1)
+	return w
+}
+
+// SetConcurrency changes this drive's preview generation concurrency. It is
+// safe to call while Run is active. Work already in flight is allowed to
+// finish; newly admitted work observes the updated limit.
+func (w *Worker) SetConcurrency(concurrency int) {
+	if w == nil {
+		return
+	}
+	w.concurrency.setLimit(concurrency)
+}
+
+func (w *Worker) CurrentConcurrency() int {
+	if w == nil {
+		return 1
+	}
+	return w.concurrency.currentLimit()
 }
 
 func (w *Worker) Enqueue(v *catalog.Video) bool {
@@ -1700,42 +1717,27 @@ func taskStatus(currentTitle string, active bool, rateLimit *rateLimitState, que
 
 // Run 阻塞运行直到 ctx 取消
 func (w *Worker) Run(ctx context.Context) {
-	concurrency := w.Concurrency
-	if concurrency < 1 {
-		concurrency = 1
-	}
-	if concurrency == 1 {
-		w.run(ctx)
-		return
-	}
-	driveID := ""
-	if w.Drive != nil {
-		driveID = w.Drive.ID()
-	}
-	log.Printf("[preview] drive=%s concurrency=%d", driveID, concurrency)
-	var consumers sync.WaitGroup
-	consumers.Add(concurrency)
-	for i := 0; i < concurrency; i++ {
-		go func() {
-			defer consumers.Done()
-			w.run(ctx)
-		}()
-	}
-	consumers.Wait()
-}
-
-func (w *Worker) run(ctx context.Context) {
+	var tasks sync.WaitGroup
+	defer tasks.Wait()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case v := <-w.ch:
-			w.processQueued(ctx, v)
-			select {
-			case <-ctx.Done():
+			if !w.concurrency.acquire(ctx) {
+				w.queue.release(v)
 				return
-			case <-time.After(500 * time.Millisecond):
 			}
+			tasks.Add(1)
+			go func(video *catalog.Video) {
+				defer tasks.Done()
+				defer w.concurrency.release()
+				w.processQueued(ctx, video)
+				select {
+				case <-ctx.Done():
+				case <-time.After(500 * time.Millisecond):
+				}
+			}(v)
 		}
 	}
 }

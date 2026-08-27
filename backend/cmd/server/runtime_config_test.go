@@ -9,6 +9,7 @@ import (
 	"github.com/video-site/backend/internal/catalog"
 	"github.com/video-site/backend/internal/config"
 	"github.com/video-site/backend/internal/nightly"
+	"github.com/video-site/backend/internal/preview"
 )
 
 func TestConfigSavePersistsAndHotUpdatesRuntimeSettings(t *testing.T) {
@@ -27,10 +28,12 @@ func TestConfigSavePersistsAndHotUpdatesRuntimeSettings(t *testing.T) {
 		t.Fatal(err)
 	}
 	tagCacheInvalidations := 0
+	previewWorker := preview.NewWorker(nil, nil, nil)
 	app := &App{
 		cat:           cat,
 		configManager: manager,
 		onTagsChanged: func() { tagCacheInvalidations++ },
+		workers:       map[string]*preview.Worker{"drive-a": previewWorker},
 	}
 	app.nightlyRunner = nightly.New(nightly.Config{
 		Settings:  cat,
@@ -48,7 +51,7 @@ func TestConfigSavePersistsAndHotUpdatesRuntimeSettings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	next, err := manager.ReplaceYAML([]byte("nightly:\n  disabled: true\n  start_time: \"00:45\"\n  timezone: Asia/Shanghai\ntags:\n  builtin_pack_enabled: false\n"), version)
+	next, err := manager.ReplaceYAML([]byte("nightly:\n  disabled: true\n  start_time: \"00:45\"\n  timezone: Asia/Shanghai\ntags:\n  builtin_pack_enabled: false\npreview:\n  concurrency: 4\n"), version)
 	if err != nil {
 		t.Fatalf("replace config: %v", err)
 	}
@@ -69,6 +72,17 @@ func TestConfigSavePersistsAndHotUpdatesRuntimeSettings(t *testing.T) {
 	}
 	if next.Settings.BuiltinTagsEnabled {
 		t.Fatalf("updated settings = %#v, want built-in tags disabled", next.Settings)
+	}
+	if next.RestartRequired {
+		t.Fatal("preview concurrency should hot update without a restart")
+	}
+	if next.Settings.PreviewConcurrency != 4 || previewWorker.CurrentConcurrency() != 4 {
+		t.Fatalf("preview concurrency settings/worker = %d/%d, want 4/4", next.Settings.PreviewConcurrency, previewWorker.CurrentConcurrency())
+	}
+	lateWorker := preview.NewWorker(nil, nil, nil)
+	app.registerPreviewWorkersWithOptions(context.Background(), "drive-b", lateWorker, nil, nil, nil, false)
+	if got := lateWorker.CurrentConcurrency(); got != 4 {
+		t.Fatalf("late attached drive preview concurrency = %d, want 4", got)
 	}
 	enabled, err := cat.BuiltinTagsEnabled(context.Background())
 	if err != nil || enabled {

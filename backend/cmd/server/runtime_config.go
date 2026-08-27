@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"log"
 
 	"github.com/video-site/backend/internal/catalog"
 	"github.com/video-site/backend/internal/config"
@@ -36,6 +37,7 @@ func (a *App) applyLiveConfig(ctx context.Context, settings config.LiveSettings)
 			return fmt.Errorf("update nightly schedule: %w", err)
 		}
 	}
+	a.applyPreviewConcurrency(settings.PreviewConcurrency)
 	if a.cat == nil {
 		return nil
 	}
@@ -53,6 +55,36 @@ func (a *App) applyLiveConfig(ctx context.Context, settings config.LiveSettings)
 		a.startTagRetag(ctx)
 	}
 	return nil
+}
+
+func (a *App) previewConcurrencyLocked() int {
+	if a.previewConcurrency < 1 {
+		return config.DefaultPreviewConcurrency
+	}
+	return a.previewConcurrency
+}
+
+// applyPreviewConcurrency copies one configuration value to every drive's
+// independent preview worker. Holding a.mu across both the stored value and
+// worker updates makes concurrent drive attachment observe either the old or
+// the new complete configuration, never a missed transition.
+func (a *App) applyPreviewConcurrency(concurrency int) {
+	if a == nil {
+		return
+	}
+	if concurrency < 1 {
+		concurrency = config.DefaultPreviewConcurrency
+	}
+	a.mu.Lock()
+	previous := a.previewConcurrencyLocked()
+	a.previewConcurrency = concurrency
+	for _, worker := range a.workers {
+		worker.SetConcurrency(concurrency)
+	}
+	a.mu.Unlock()
+	if previous != concurrency {
+		log.Printf("[preview] per-drive concurrency updated from=%d to=%d", previous, concurrency)
+	}
 }
 
 func loadLegacyRuntimeSettings(ctx context.Context, cat *catalog.Catalog) (config.LegacyRuntimeSettings, error) {

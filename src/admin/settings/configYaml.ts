@@ -15,6 +15,7 @@ export type SettingsDraft = {
   nightlyStartTime: string;
   nightlyTimezone: string;
   builtinTagsEnabled: boolean;
+  previewConcurrency: number;
 };
 
 export type VisualField = keyof SettingsDraft;
@@ -24,7 +25,11 @@ export const DEFAULT_DRAFT: SettingsDraft = {
   nightlyStartTime: "01:00",
   nightlyTimezone: "Asia/Shanghai",
   builtinTagsEnabled: true,
+  previewConcurrency: 1,
 };
+
+export const MIN_PREVIEW_CONCURRENCY = 1;
+export const MAX_PREVIEW_CONCURRENCY = 5;
 
 type ParsedMap = YAMLMap<ParsedNode, ParsedNode | null>;
 type ParsedPair = Pair<ParsedNode, ParsedNode | null>;
@@ -112,6 +117,31 @@ function draftFromDocument(document: ReturnType<typeof configDocument>): Setting
     nightlyDisabled = configuredDisabled;
   }
 
+  const previewNode = document.get("preview", true);
+  if (
+    previewNode !== undefined &&
+    previewNode !== null &&
+    !isMap(previewNode) &&
+    !(isScalar(previewNode) && previewNode.value === null)
+  ) {
+    throw new Error("preview 必须是映射对象");
+  }
+  const configuredPreviewConcurrency = document.getIn(["preview", "concurrency"]);
+  let previewConcurrency = DEFAULT_DRAFT.previewConcurrency;
+  if (configuredPreviewConcurrency !== undefined && configuredPreviewConcurrency !== null) {
+    if (
+      typeof configuredPreviewConcurrency !== "number" ||
+      !Number.isInteger(configuredPreviewConcurrency) ||
+      configuredPreviewConcurrency < MIN_PREVIEW_CONCURRENCY ||
+      configuredPreviewConcurrency > MAX_PREVIEW_CONCURRENCY
+    ) {
+      throw new Error(
+        `preview.concurrency 必须是 ${MIN_PREVIEW_CONCURRENCY}-${MAX_PREVIEW_CONCURRENCY} 之间的整数`
+      );
+    }
+    previewConcurrency = configuredPreviewConcurrency;
+  }
+
   const tagsNode = document.get("tags", true);
   if (
     tagsNode !== undefined &&
@@ -134,6 +164,7 @@ function draftFromDocument(document: ReturnType<typeof configDocument>): Setting
     nightlyStartTime,
     nightlyTimezone,
     builtinTagsEnabled,
+    previewConcurrency,
   };
 }
 
@@ -655,6 +686,103 @@ function builtinTagsEnabledEdits(
   );
 }
 
+function replaceIntegerPairValue(
+  source: string,
+  pair: ParsedPair,
+  value: number,
+  path: string
+): SourceEdit {
+  const node = pair.value;
+  if (node && !isScalar(node)) {
+    throw new Error(`${path} 必须是整数`);
+  }
+  if (node && node.value !== null && typeof node.value !== "number") {
+    throw new Error(`${path} 必须是整数`);
+  }
+  const rendered = String(value);
+
+  if (node?.range && node.range[0] < node.range[1]) {
+    return {
+      start: node.range[0],
+      end: node.range[1],
+      text: rendered,
+    };
+  }
+
+  if (!isScalar(pair.key)) {
+    throw new Error(`无法定位 ${path} 的键名`);
+  }
+  const keyRange = requiredRange(pair.key, path);
+  const endOfLine = lineEndIncludingBreak(source, keyRange[1]);
+  const colon = source.indexOf(":", keyRange[1]);
+  if (colon === -1 || colon >= endOfLine) {
+    throw new Error(`无法定位 ${path} 的值`);
+  }
+
+  let whitespaceEnd = colon + 1;
+  while (source[whitespaceEnd] === " " || source[whitespaceEnd] === "\t") {
+    whitespaceEnd += 1;
+  }
+  const commentGap = source[whitespaceEnd] === "#" ? " " : "";
+  return {
+    start: colon + 1,
+    end: whitespaceEnd,
+    text: ` ${rendered}${commentGap}`,
+  };
+}
+
+function previewConcurrencyEdits(
+  source: string,
+  document: ReturnType<typeof configDocument>,
+  value: number
+): SourceEdit[] {
+  const root = isMap(document.contents) ? (document.contents as ParsedMap) : null;
+  const previewPair = root ? findPair(root, "preview") : undefined;
+  const entry = `concurrency: ${value}`;
+  if (!previewPair) {
+    if (root && isFlowMap(root)) {
+      return [insertFlowMapEntry(source, root, `preview: { ${entry} }`)];
+    }
+    const position = root?.range?.[2] ?? document.range?.[1] ?? source.length;
+    return [insertLinesAtBoundary(source, position, ["preview:", `  ${entry}`])];
+  }
+
+  const previewNode = previewPair.value;
+  if (
+    !previewNode ||
+    (isScalar(previewNode) &&
+      previewNode.value === null &&
+      (!previewNode.range || previewNode.range[0] === previewNode.range[1]))
+  ) {
+    return [insertAfterEmptyMapKey(source, previewPair, entry, "preview")];
+  }
+  if (isScalar(previewNode) && previewNode.value === null) {
+    const range = requiredRange(previewNode, "preview");
+    return [{ start: range[0], end: range[1], text: `{ ${entry} }` }];
+  }
+  if (!isMap(previewNode)) {
+    throw new Error("preview 必须是映射对象");
+  }
+
+  const preview = previewNode as ParsedMap;
+  const concurrencyPair = findPair(preview, "concurrency");
+  if (concurrencyPair) {
+    return [
+      replaceIntegerPairValue(
+        source,
+        concurrencyPair,
+        value,
+        "preview.concurrency"
+      ),
+    ];
+  }
+  return [
+    isFlowMap(preview)
+      ? insertFlowMapEntry(source, preview, entry)
+      : insertBlockMapEntry(source, preview, entry, "preview"),
+  ];
+}
+
 function applySourceEdits(source: string, edits: readonly SourceEdit[]) {
   const ordered = [...edits].sort((left, right) => right.start - left.start);
   let boundary = source.length;
@@ -702,6 +830,13 @@ export function applyVisualFields(
       nightlyTimezoneEdits(updated, document, draft.nightlyTimezone)
     );
   }
+  if (fields.has("previewConcurrency")) {
+    const document = configDocument(updated);
+    updated = applySourceEdits(
+      updated,
+      previewConcurrencyEdits(updated, document, draft.previewConcurrency)
+    );
+  }
   if (fields.has("builtinTagsEnabled")) {
     const document = configDocument(updated);
     updated = applySourceEdits(
@@ -729,6 +864,9 @@ export function changedVisualFields(saved: SettingsDraft, draft: SettingsDraft) 
   }
   if (saved.builtinTagsEnabled !== draft.builtinTagsEnabled) {
     fields.add("builtinTagsEnabled");
+  }
+  if (saved.previewConcurrency !== draft.previewConcurrency) {
+    fields.add("previewConcurrency");
   }
   return fields;
 }

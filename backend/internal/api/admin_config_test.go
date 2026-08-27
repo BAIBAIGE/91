@@ -46,7 +46,7 @@ func TestConfigYAMLPutValidatesPersistsAndPublishes(t *testing.T) {
 	get := httptest.NewRecorder()
 	server.handleGetConfigYAML(get, httptest.NewRequest(http.MethodGet, "/admin/api/config.yaml", nil))
 
-	candidate := "# keep\nnightly:\n  disabled: true\n  start_time: \"00:45\"\n  timezone: Asia/Shanghai\ntags:\n  builtin_pack_enabled: false\nfuture:\n  value: keep\n"
+	candidate := "# keep\nnightly:\n  disabled: true\n  start_time: \"00:45\"\n  timezone: Asia/Shanghai\ntags:\n  builtin_pack_enabled: false\npreview:\n  concurrency: 3\nfuture:\n  value: keep\n"
 	request := httptest.NewRequest(http.MethodPut, "/admin/api/config.yaml", strings.NewReader(candidate))
 	request.Header.Set("If-Match", get.Header().Get("ETag"))
 	recorder := httptest.NewRecorder()
@@ -73,6 +73,9 @@ func TestConfigYAMLPutValidatesPersistsAndPublishes(t *testing.T) {
 	}
 	if response.Settings.BuiltinTagsEnabled {
 		t.Fatalf("published settings = %#v, want built-in tags disabled", response.Settings)
+	}
+	if response.Settings.PreviewConcurrency != 3 {
+		t.Fatalf("published settings = %#v, want preview concurrency 3", response.Settings)
 	}
 	written, err := os.ReadFile(path)
 	if err != nil {

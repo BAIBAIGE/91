@@ -229,30 +229,40 @@ scanner:
 	}
 }
 
-func TestPreviewConcurrencyByDrive(t *testing.T) {
+func TestPreviewConcurrency(t *testing.T) {
 	cfg, err := Parse([]byte(`
 preview:
-  concurrency_by_drive:
-    " 115 ": 3
+  concurrency: 3
 `))
 	if err != nil {
 		t.Fatalf("parse config: %v", err)
 	}
-	if got := cfg.Preview.ConcurrencyForDrive("115"); got != 3 {
-		t.Fatalf("115 preview concurrency = %d, want 3", got)
+	if got := cfg.Preview.Concurrency; got != 3 {
+		t.Fatalf("preview concurrency = %d, want 3", got)
 	}
-	if got := cfg.Preview.ConcurrencyForDrive("onedrive"); got != 1 {
-		t.Fatalf("unconfigured preview concurrency = %d, want 1", got)
+	maximum, err := Parse([]byte("preview:\n  concurrency: 5\n"))
+	if err != nil {
+		t.Fatalf("parse maximum preview concurrency: %v", err)
+	}
+	if got := maximum.Preview.Concurrency; got != MaxPreviewConcurrency {
+		t.Fatalf("maximum preview concurrency = %d, want %d", got, MaxPreviewConcurrency)
+	}
+
+	defaults, err := Parse([]byte(`{}`))
+	if err != nil {
+		t.Fatalf("parse default config: %v", err)
+	}
+	if got := defaults.Preview.Concurrency; got != DefaultPreviewConcurrency {
+		t.Fatalf("default preview concurrency = %d, want %d", got, DefaultPreviewConcurrency)
 	}
 }
 
-func TestPreviewConcurrencyByDriveRejectsInvalidValue(t *testing.T) {
+func TestPreviewConcurrencyRejectsInvalidValue(t *testing.T) {
 	_, err := Parse([]byte(`
 preview:
-  concurrency_by_drive:
-    "115": 17
+  concurrency: 6
 `))
-	if err == nil || !strings.Contains(err.Error(), "must be between 1 and 16") {
+	if err == nil || !strings.Contains(err.Error(), "must be between 1 and 5") {
 		t.Fatalf("parse error = %v, want concurrency validation error", err)
 	}
 }

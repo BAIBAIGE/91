@@ -25,6 +25,10 @@ type App struct {
 	workers            map[string]*preview.Worker
 	thumbWorkers       map[string]*preview.ThumbWorker
 	fingerprintWorkers map[string]*fingerprint.Worker
+	// previewConcurrency is the per-drive preview worker limit copied from the
+	// single live preview.concurrency setting. It is guarded by mu so worker
+	// registration and live updates cannot miss each other.
+	previewConcurrency int
 	cancels            map[string]context.CancelFunc
 	// scriptCrawlers 按 driveID 索引，每个脚本爬虫 drive 独立一个 Crawler。
 	scriptCrawlers map[string]*scriptcrawler.Crawler

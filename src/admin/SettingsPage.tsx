@@ -8,6 +8,7 @@ import {
 import {
   Check,
   Clock3,
+  Film,
   Loader2,
   RefreshCw,
   SlidersHorizontal,
@@ -27,6 +28,8 @@ import { useAdminRouteRevalidation } from "./AdminRouteCache";
 import { SettingsRow, SettingsSection } from "./settings/SettingsSection";
 import {
   DEFAULT_DRAFT,
+  MAX_PREVIEW_CONCURRENCY,
+  MIN_PREVIEW_CONCURRENCY,
   applyVisualFields,
   changedVisualFields,
   isValidStartTime,
@@ -49,7 +52,7 @@ type PendingSave = {
 };
 
 type EditorTab = "visual" | "source";
-type SectionID = "config-automation" | "config-tags";
+type SectionID = "config-automation" | "config-preview" | "config-tags";
 
 const NIGHTLY_TIMEZONE_OPTIONS = [
   "Asia/Shanghai",
@@ -60,6 +63,11 @@ const NIGHTLY_TIMEZONE_OPTIONS = [
   "America/New_York",
   "America/Los_Angeles",
 ] as const;
+
+const PREVIEW_CONCURRENCY_OPTIONS = Array.from(
+  { length: MAX_PREVIEW_CONCURRENCY - MIN_PREVIEW_CONCURRENCY + 1 },
+  (_, index) => MIN_PREVIEW_CONCURRENCY + index
+);
 
 const SECTION_META: Array<{
   id: SectionID;
@@ -74,8 +82,14 @@ const SECTION_META: Array<{
     icon: Clock3,
   },
   {
-    id: "config-tags",
+    id: "config-preview",
     index: "02",
+    title: "预览视频",
+    icon: Film,
+  },
+  {
+    id: "config-tags",
+    index: "03",
     title: "内置标签",
     icon: Tags,
   },
@@ -107,6 +121,10 @@ export function SettingsPage() {
   dirtyRef.current = dirty;
   const timeValid = isValidStartTime(draft.nightlyStartTime);
   const timezoneValid = isValidTimezone(draft.nightlyTimezone);
+  const previewConcurrencyValid =
+    Number.isInteger(draft.previewConcurrency) &&
+    draft.previewConcurrency >= MIN_PREVIEW_CONCURRENCY &&
+    draft.previewConcurrency <= MAX_PREVIEW_CONCURRENCY;
   const timezoneIsBuiltIn = NIGHTLY_TIMEZONE_OPTIONS.some(
     (timezone) => timezone === draft.nightlyTimezone
   );
@@ -213,7 +231,16 @@ export function SettingsPage() {
 
   async function prepareSave(event: FormEvent) {
     event.preventDefault();
-    if (!loaded || !dirty || !timeValid || !timezoneValid || sourceError || saving) return;
+    if (
+      !loaded ||
+      !dirty ||
+      !timeValid ||
+      !timezoneValid ||
+      !previewConcurrencyValid ||
+      sourceError ||
+      saving
+    )
+      return;
     try {
       parseConfig(workingYAML);
     } catch (error) {
@@ -558,10 +585,58 @@ export function SettingsPage() {
                   </SettingsRow>
                 </SettingsSection>
               )}
+              {activeSection === "config-preview" && (
+                <SettingsSection
+                  id="config-preview"
+                  index="02"
+                  icon={<Film size={16} />}
+                  title="预览视频"
+                  description="统一控制每个存储生成预览视频的并发数"
+                >
+                  <SettingsRow
+                    label="并发数"
+                    description="请根据服务器性能和网盘API并发风控适当调整，最高不要超过3"
+                    descriptionID="preview-concurrency-description"
+                    htmlFor="preview-concurrency"
+                    layout="inline"
+                  >
+                    <div className="admin-config-control admin-config-control--picker">
+                      <div
+                        className={`admin-config-picker-field admin-config-picker-field--concurrency${
+                          !previewConcurrencyValid ? " is-invalid" : ""
+                        }${controlsDisabled ? " is-disabled" : ""}`}
+                      >
+                        <span className="admin-config-picker-field__value" aria-hidden="true">
+                          {draft.previewConcurrency}
+                        </span>
+                        <select
+                          id="preview-concurrency"
+                          value={draft.previewConcurrency}
+                          disabled={controlsDisabled}
+                          aria-invalid={!previewConcurrencyValid}
+                          aria-describedby="preview-concurrency-description"
+                          onChange={(event) =>
+                            updateVisualField(
+                              "previewConcurrency",
+                              Number(event.target.value)
+                            )
+                          }
+                        >
+                          {PREVIEW_CONCURRENCY_OPTIONS.map((concurrency) => (
+                            <option key={concurrency} value={concurrency}>
+                              {concurrency}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+                  </SettingsRow>
+                </SettingsSection>
+              )}
               {activeSection === "config-tags" && (
                 <SettingsSection
                   id="config-tags"
-                  index="02"
+                  index="03"
                   icon={<Tags size={16} />}
                   title="内置标签"
                   description="管理系统内置标签"
@@ -637,6 +712,7 @@ export function SettingsPage() {
               !dirty ||
               !timeValid ||
               !timezoneValid ||
+              !previewConcurrencyValid ||
               Boolean(sourceError)
             }
             title="预览并保存配置"

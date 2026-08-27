@@ -5832,6 +5832,11 @@ body.admin-mobile-nav-open {
   padding: 0 8px;
 }
 
+.admin-config-picker-field--concurrency {
+  width: 72px;
+  padding: 0 9px;
+}
+
 .admin-config-picker-field:not(.is-disabled):hover {
   border-color: color-mix(in srgb, var(--text-strong) 38%, var(--border-default));
   background: var(--bg-surface);

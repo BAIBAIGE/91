@@ -1240,6 +1240,7 @@ export type ConfigSaveResult = {
     nightlyStartTime: string;
     nightlyTimezone: string;
     builtinTagsEnabled: boolean;
+    previewConcurrency: number;
   };
 };
 

@@ -93,6 +93,25 @@ test("configuration panel groups typed fields from the real YAML document", () =
   assert.match(apiSource, /nightlyTimezone: string/);
 });
 
+test("preview concurrency is a per-storage hot-reloadable visual setting", () => {
+  assert.match(pageSource, /id: "config-preview"/);
+  assert.match(pageSource, /title="预览视频"/);
+  assert.match(pageSource, /统一控制每个存储生成预览视频的并发数/);
+  assert.match(pageSource, /label="并发数"/);
+  assert.match(pageSource, /请根据服务器性能和网盘API并发风控适当调整，最高不要超过3/);
+  assert.match(pageSource, /id="preview-concurrency"/);
+  assert.match(pageSource, /PREVIEW_CONCURRENCY_OPTIONS\.map/);
+  assert.match(
+    pageSource,
+    /updateVisualField\(\s*"previewConcurrency",\s*Number\(event\.target\.value\)/
+  );
+  assert.match(configYamlSource, /previewConcurrency: number/);
+  assert.match(configYamlSource, /\["preview", "concurrency"\]/);
+  assert.match(configYamlSource, /previewConcurrencyEdits/);
+  assert.match(apiSource, /previewConcurrency: number/);
+  assert.match(adminCss, /\.admin-config-picker-field--concurrency\s*\{/);
+});
+
 test("nightly schedule stop switch uses the shared YAML save flow", () => {
   assert.match(pageSource, /\n\s+label="停止定时任务"/);
   assert.doesNotMatch(pageSource, /开启后不再自动执行每日任务/);
@@ -356,6 +375,7 @@ test("configuration section navigation directly renders the selected panel", () 
   assert.match(pageSource, /aria-selected=\{activeSection === section\.id\}/);
   assert.match(pageSource, /onClick=\{\(\) => setActiveSection\(section\.id\)\}/);
   assert.match(pageSource, /activeSection === "config-automation"/);
+  assert.match(pageSource, /activeSection === "config-preview"/);
   assert.match(pageSource, /activeSection === "config-tags"/);
   assert.doesNotMatch(pageSource, /activeSection === "config-dedupe"/);
   assert.doesNotMatch(pageSource, /scrollTo\(/);
@@ -376,6 +396,7 @@ test("compact configuration rows stay inline on mobile", () => {
 
   assert.match(markup, /class="admin-config-row admin-config-row--inline"/);
   assert.match(pageSource, /label="启动时间"[\s\S]*?layout="inline"/);
+  assert.match(pageSource, /label="并发数"[\s\S]*?layout="inline"/);
   assert.match(pageSource, /label="内置标签"[\s\S]*?layout="inline"/);
   assert.match(
     adminCss,
