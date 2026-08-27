@@ -87,7 +87,7 @@ test("collection items load lazily through one shared resource", () => {
   assert.match(dataSource, /collection\.total !== collection\.items\.length/);
 });
 
-test("desktop recommendation rail offers recommendation and collection tabs", () => {
+test("desktop recommendation rail always uses tabs while mobile keeps its heading", () => {
   assert.match(
     detailSource,
     /<RecommendedRail[\s\S]*?videos=\{recommendations\}[\s\S]*?videoId=\{detail\.id\}[\s\S]*?collection=\{collectionSummary \?\? undefined\}[\s\S]*?recommendationsLoading=\{recommendationsLoading\}[\s\S]*?recommendationsError=\{recommendationsError\}/
@@ -95,6 +95,10 @@ test("desktop recommendation rail offers recommendation and collection tabs", ()
   assert.match(
     railSource,
     /className="content-tabs vd-rail__tabs"[\s\S]*?role="tablist"[\s\S]*?>\s*推荐视频\s*<[\s\S]*?>\s*相关合集\s*</
+  );
+  assert.doesNotMatch(
+    railSource,
+    /\{hasCollection && \(\s*<div[\s\S]*?className="content-tabs vd-rail__tabs"/
   );
   assert.match(
     railSource,
@@ -106,20 +110,24 @@ test("desktop recommendation rail offers recommendation and collection tabs", ()
   );
   assert.match(
     railSource,
-    /className="content-tabs__tab vd-rail__tab"[\s\S]*?aria-selected=\{showCollection\}/
+    /className="content-tabs__tab vd-rail__tab"[\s\S]*?aria-selected=\{showCollection\}[\s\S]*?disabled=\{!hasCollection\}/
   );
   assert.doesNotMatch(stylesSource, /\.vd-rail__tab\[aria-selected="true"\]/);
+  assert.match(
+    railSource,
+    /<header className="vd-rail__head vd-rail__head--mobile-only">/
+  );
   assert.match(
     stylesSource,
     /\.vd-rail__head\.vd-rail__head--mobile-only\s*\{\s*display:\s*none;/
   );
   assert.match(
     stylesSource,
-    /@media \(max-width:\s*768px\)[\s\S]*?\.vd-rail__head\.vd-rail__head--mobile-only\s*\{\s*display:\s*flex;/
+    /@media \(max-width:\s*480px\)[\s\S]*?\.vd-rail__head\.vd-rail__head--mobile-only\s*\{\s*display:\s*flex;/
   );
   assert.match(
     stylesSource,
-    /@media \(max-width:\s*768px\)[\s\S]*?\.vd-rail--collection-only,\s*\.vd-rail__tabs,\s*\.vd-rail__tabpanel--collection\s*\{\s*display:\s*none;/
+    /@media \(max-width:\s*480px\)[\s\S]*?\.vd-rail--collection-only,\s*\.vd-rail__tabs,\s*\.vd-rail__tabpanel--collection\s*\{\s*display:\s*none;/
   );
 });
 

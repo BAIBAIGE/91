@@ -91,8 +91,8 @@ function alignCollectionItem(
 type RailView = "recommended" | "collection";
 
 /**
- * 详情页右侧 / 移动端下方的视频列表。桌面端有合集时可在推荐与同目录
- * 合集之间切换；移动端继续只显示推荐，合集由专用底部浮窗负责。
+ * 详情页右侧 / 移动端下方的视频列表。桌面端始终使用推荐 / 合集标签栏，
+ * 合集可用时允许切换；移动端保持单标题推荐列表，合集由专用底部浮窗负责。
  *
  * 不直接复用 VideoCard：那个组件结构是上下两段（缩略图 + 标题/meta），而这里需要
  * 左右横排的紧凑布局，覆盖样式会很乱。推荐项继续复用同一套预览基础设施。
@@ -206,6 +206,7 @@ export function RecommendedRail({
 
   function selectView(nextView: RailView) {
     if (nextView === "recommended" && !recommendationPanelAvailable) return;
+    if (nextView === "collection" && !hasCollection) return;
     if (nextView === activeView) return;
     if (nextView === "collection") {
       setCollectionLoadStartedFor(videoId);
@@ -223,6 +224,7 @@ export function RecommendedRail({
       nextView = "collection";
     }
     if (!nextView) return;
+    if (nextView === "collection" && !hasCollection) return;
     event.preventDefault();
     selectView(nextView);
     const nextRef =
@@ -267,49 +269,46 @@ export function RecommendedRail({
       className={`vd-rail${
         recommendationPanelAvailable ? "" : " vd-rail--collection-only"
       }`}
-      aria-label={hasCollection ? "视频推荐与相关合集" : "推荐视频"}
+      aria-label="视频推荐与相关合集"
     >
-      {hasCollection && (
-        <div
-          className="content-tabs vd-rail__tabs"
-          role="tablist"
-          aria-label="视频列表"
-        >
-          <button
-            ref={recommendedTabRef}
-            id={recommendedTabId}
-            type="button"
-            className="content-tabs__tab vd-rail__tab"
-            role="tab"
-            aria-selected={activeView === "recommended"}
-            aria-controls={recommendedPanelId}
-            tabIndex={activeView === "recommended" ? 0 : -1}
-            disabled={!recommendationPanelAvailable}
-            onClick={() => selectView("recommended")}
-            onKeyDown={handleTabKeyDown}
-          >
-            推荐视频
-          </button>
-          <button
-            ref={collectionTabRef}
-            id={collectionTabId}
-            type="button"
-            className="content-tabs__tab vd-rail__tab"
-            role="tab"
-            aria-selected={showCollection}
-            aria-controls={collectionPanelId}
-            tabIndex={showCollection ? 0 : -1}
-            onClick={() => selectView("collection")}
-            onKeyDown={handleTabKeyDown}
-          >
-            相关合集
-          </button>
-        </div>
-      )}
-
-      <header
-        className={`vd-rail__head${hasCollection ? " vd-rail__head--mobile-only" : ""}`}
+      <div
+        className="content-tabs vd-rail__tabs"
+        role="tablist"
+        aria-label="视频列表"
       >
+        <button
+          ref={recommendedTabRef}
+          id={recommendedTabId}
+          type="button"
+          className="content-tabs__tab vd-rail__tab"
+          role="tab"
+          aria-selected={activeView === "recommended"}
+          aria-controls={recommendedPanelId}
+          tabIndex={activeView === "recommended" ? 0 : -1}
+          disabled={!recommendationPanelAvailable}
+          onClick={() => selectView("recommended")}
+          onKeyDown={handleTabKeyDown}
+        >
+          推荐视频
+        </button>
+        <button
+          ref={collectionTabRef}
+          id={collectionTabId}
+          type="button"
+          className="content-tabs__tab vd-rail__tab"
+          role="tab"
+          aria-selected={showCollection}
+          aria-controls={collectionPanelId}
+          tabIndex={showCollection ? 0 : -1}
+          disabled={!hasCollection}
+          onClick={() => selectView("collection")}
+          onKeyDown={handleTabKeyDown}
+        >
+          相关合集
+        </button>
+      </div>
+
+      <header className="vd-rail__head vd-rail__head--mobile-only">
         <span className="vd-rail__head-icon" aria-hidden="true">
           <span />
           <span />
@@ -318,10 +317,10 @@ export function RecommendedRail({
       </header>
 
       <div
-        id={hasCollection ? recommendedPanelId : undefined}
+        id={recommendedPanelId}
         className="vd-rail__tabpanel vd-rail__tabpanel--recommended"
-        role={hasCollection ? "tabpanel" : undefined}
-        aria-labelledby={hasCollection ? recommendedTabId : undefined}
+        role="tabpanel"
+        aria-labelledby={recommendedTabId}
         hidden={showCollection}
       >
         {recommendationsLoading && !hasRecommendations ? (
