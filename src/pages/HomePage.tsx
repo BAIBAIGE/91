@@ -77,10 +77,15 @@ export default function HomePage() {
     [activeSearchQuery, activeTag, batchSize, searchSort]
   );
   const activeFeedSource = hasActiveFilter ? filterFeedSource : feedSource;
+  const isRandomRecommendationFeed =
+    !hasActiveFilter && feed === "recommend";
   const restoreTarget = useListingRestoreTarget({
     historyKey: location.key,
     queryKey: activeFeedSource.key,
     pageSize: activeFeedSource.batchSize,
+    // 随机快照只在当前 Document 内恢复：进详情再后退仍保持现场，浏览器
+    // 刷新生成新 Document 后则从空 token 开始重新随机。
+    feedSnapshotScope: isRandomRecommendationFeed ? "document" : "session",
   });
   const homeFeed = useInfiniteListing(activeFeedSource, {
     restoreCount: restoreTarget.count,
@@ -126,7 +131,7 @@ export default function HomePage() {
     reloadFeed();
   }, [reloadFeed]);
 
-  const showRefresh = !hasActiveFilter && feed === "recommend";
+  const showRefresh = isRandomRecommendationFeed;
   const refreshing = showRefresh && homeFeed.initialLoading;
 
   const handleSearchSortChange = useCallback(

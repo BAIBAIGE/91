@@ -8,10 +8,14 @@ export const LISTING_SCROLL_STORAGE_PREFIX = "listing_scroll_v1:";
 /** 恢复现场时一次最多补回多少条，避免深滚后的返回打出一个超大请求。 */
 export const MAX_RESTORE_ITEMS = 240;
 
+export type FeedSnapshotRestoreScope = "session" | "document";
+
 export type ListingScrollEntry = {
   queryKey: string;
   /** 服务端不可变快照；为空时恢复到同一查询的新快照。 */
   feedToken: string;
+  /** 写入记录的 Document 实例；用于区分 SPA 后退和整页刷新。 */
+  documentID?: string;
   /** 保存现场时已经请求过的条目数。 */
   requestedCount: number;
   scrollY: number;
@@ -38,6 +42,10 @@ export function parseListingScrollEntry(
       typeof parsed.queryKey !== "string" ||
       (parsed.feedToken !== undefined && typeof parsed.feedToken !== "string") ||
       (typeof parsed.feedToken === "string" && parsed.feedToken.length > 128) ||
+      (parsed.documentID !== undefined &&
+        (typeof parsed.documentID !== "string" ||
+          parsed.documentID.length === 0 ||
+          parsed.documentID.length > 128)) ||
       !Number.isInteger(parsed.requestedCount) ||
       parsed.requestedCount <= 0 ||
       !Number.isFinite(parsed.scrollY) ||
@@ -48,6 +56,7 @@ export function parseListingScrollEntry(
     return {
       queryKey: parsed.queryKey,
       feedToken: parsed.feedToken ?? "",
+      ...(parsed.documentID ? { documentID: parsed.documentID } : {}),
       requestedCount: parsed.requestedCount,
       scrollY: parsed.scrollY,
     };
@@ -131,9 +140,19 @@ export function resolveRestoreScrollY(
 
 export function resolveRestoreFeedToken(
   entry: ListingScrollEntry | null,
-  queryKey: string
+  queryKey: string,
+  options: {
+    scope?: FeedSnapshotRestoreScope;
+    documentID?: string;
+  } = {}
 ): string {
   if (!entry || entry.queryKey !== queryKey) return "";
+  if (
+    options.scope === "document" &&
+    (!options.documentID || entry.documentID !== options.documentID)
+  ) {
+    return "";
+  }
   return entry.feedToken;
 }
 

@@ -43,7 +43,12 @@ test("home page refresh button shares back-to-top slot until back-to-top is visi
   // 刷新只对随机推荐有意义：最新视频是时间序，重抽一轮没有区别。
   assert.match(
     homePageSource,
-    /const showRefresh = !hasActiveFilter && feed === "recommend";/
+    /const isRandomRecommendationFeed =\s*!hasActiveFilter && feed === "recommend";/
+  );
+  assert.match(homePageSource, /const showRefresh = isRandomRecommendationFeed;/);
+  assert.match(
+    homePageSource,
+    /feedSnapshotScope: isRandomRecommendationFeed \? "document" : "session"/
   );
   assert.match(homePageSource, /const refreshing = showRefresh && homeFeed\.initialLoading;/);
   assert.match(homePageSource, /\{showRefresh && \(/);

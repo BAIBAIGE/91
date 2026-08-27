@@ -7,6 +7,7 @@ import {
   resolveRestoreFeedToken,
   resolveRestoreScrollY,
   writeListingScrollEntry,
+  type FeedSnapshotRestoreScope,
   type ListingScrollStorage,
 } from "@/lib/listingScrollRestore";
 
@@ -20,6 +21,13 @@ import {
 
 // 内容还没渲染够时滚不到目标位置，按帧重试；超过上限就放弃，避免死循环。
 const RESTORE_MAX_FRAMES = 90;
+
+// 模块实例与当前 Document 同寿命：SPA 路由往返时保持不变，浏览器刷新后
+// 会生成新值，因此可以只让易变快照在当前 Document 内恢复。
+const LISTING_DOCUMENT_ID =
+  typeof globalThis.crypto?.randomUUID === "function"
+    ? globalThis.crypto.randomUUID()
+    : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 
 function sessionStorageOrNull(): ListingScrollStorage | null {
   try {
@@ -35,6 +43,7 @@ export type ListingRestoreTarget = {
   count: number;
   feedToken: string;
   scrollY: number;
+  feedSnapshotScope: FeedSnapshotRestoreScope;
 };
 
 /**
@@ -45,12 +54,15 @@ export function useListingRestoreTarget(input: {
   historyKey: string;
   queryKey: string;
   pageSize: number;
+  feedSnapshotScope?: FeedSnapshotRestoreScope;
 }): ListingRestoreTarget {
   const targetRef = useRef<ListingRestoreTarget | null>(null);
+  const feedSnapshotScope = input.feedSnapshotScope ?? "session";
   if (
     !targetRef.current ||
     targetRef.current.historyKey !== input.historyKey ||
-    targetRef.current.queryKey !== input.queryKey
+    targetRef.current.queryKey !== input.queryKey ||
+    targetRef.current.feedSnapshotScope !== feedSnapshotScope
   ) {
     const entry = readListingScrollEntry(
       sessionStorageOrNull(),
@@ -64,8 +76,12 @@ export function useListingRestoreTarget(input: {
         queryKey: input.queryKey,
         pageSize: input.pageSize,
       }),
-      feedToken: resolveRestoreFeedToken(entry, input.queryKey),
+      feedToken: resolveRestoreFeedToken(entry, input.queryKey, {
+        scope: feedSnapshotScope,
+        documentID: LISTING_DOCUMENT_ID,
+      }),
       scrollY: resolveRestoreScrollY(entry, input.queryKey),
+      feedSnapshotScope,
     };
   }
   return targetRef.current;
@@ -177,6 +193,7 @@ export function useListingScrollRestore({
       writeListingScrollEntry(sessionStorageOrNull(), session.historyKey, {
         queryKey: session.queryKey,
         feedToken: session.feedToken,
+        documentID: LISTING_DOCUMENT_ID,
         requestedCount: session.requestedCount,
         scrollY,
       });

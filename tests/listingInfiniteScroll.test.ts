@@ -215,6 +215,14 @@ test("browser history navigation restores both the loaded batches and the positi
   assert.match(scrollRestoreHookSource, /if \(session\.pendingScrollY > 0 \|\| session\.requestedCount <= 0\) return;/);
   assert.match(
     scrollRestoreHookSource,
+    /resolveRestoreFeedToken\(entry, input\.queryKey, \{[\s\S]*?scope: feedSnapshotScope,[\s\S]*?documentID: LISTING_DOCUMENT_ID/
+  );
+  assert.match(
+    scrollRestoreHookSource,
+    /writeListingScrollEntry\([\s\S]*?documentID: LISTING_DOCUMENT_ID/
+  );
+  assert.match(
+    scrollRestoreHookSource,
     /window\.addEventListener\("pagehide", handlePageHide\)/
   );
   // 卸载时列表 DOM 已被详情页顶掉，window.scrollY 会被压缩，只能用滚动时记下的值。

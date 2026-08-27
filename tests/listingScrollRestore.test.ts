@@ -17,6 +17,7 @@ import {
 
 const QUERY_KEY = 'listing:["","","hot"]';
 const FEED_TOKEN = "snapshot-token";
+const DOCUMENT_ID = "document-1";
 
 function memoryStorage(): ListingScrollStorage & { map: Map<string, string> } {
   const map = new Map<string, string>();
@@ -45,6 +46,7 @@ test("a saved entry round-trips through storage under its history key", () => {
   writeListingScrollEntry(storage, "history-1", {
     queryKey: QUERY_KEY,
     feedToken: FEED_TOKEN,
+    documentID: DOCUMENT_ID,
     requestedCount: 60,
     scrollY: 1_800,
   });
@@ -52,6 +54,7 @@ test("a saved entry round-trips through storage under its history key", () => {
   assert.deepEqual(readListingScrollEntry(storage, "history-1"), {
     queryKey: QUERY_KEY,
     feedToken: FEED_TOKEN,
+    documentID: DOCUMENT_ID,
     requestedCount: 60,
     scrollY: 1_800,
   });
@@ -174,6 +177,7 @@ test("the restore position only applies to the query it was saved for", () => {
   const entry = {
     queryKey: QUERY_KEY,
     feedToken: FEED_TOKEN,
+    documentID: DOCUMENT_ID,
     requestedCount: 60,
     scrollY: 1_200,
   };
@@ -183,6 +187,50 @@ test("the restore position only applies to the query it was saved for", () => {
   assert.equal(resolveRestoreFeedToken(entry, 'listing:["","","latest"]'), "");
   assert.equal(resolveRestoreScrollY(null, QUERY_KEY), 0);
   assert.equal(resolveRestoreFeedToken(null, QUERY_KEY), "");
+});
+
+test("document-scoped snapshots survive SPA returns but not browser reloads", () => {
+  const entry = {
+    queryKey: "home:recommend",
+    feedToken: FEED_TOKEN,
+    documentID: DOCUMENT_ID,
+    requestedCount: 36,
+    scrollY: 1_200,
+  };
+
+  assert.equal(
+    resolveRestoreFeedToken(entry, "home:recommend", {
+      scope: "document",
+      documentID: DOCUMENT_ID,
+    }),
+    FEED_TOKEN,
+    "同一个 Document 内从详情页后退时继续使用原随机快照"
+  );
+  assert.equal(
+    resolveRestoreFeedToken(entry, "home:recommend", {
+      scope: "document",
+      documentID: "document-after-reload",
+    }),
+    "",
+    "浏览器刷新创建新 Document 后必须生成新的随机快照"
+  );
+  assert.equal(
+    resolveRestoreFeedToken(
+      { ...entry, documentID: undefined },
+      "home:recommend",
+      { scope: "document", documentID: DOCUMENT_ID }
+    ),
+    "",
+    "旧版本中没有 Document 标识的记录不能复用随机快照"
+  );
+  assert.equal(
+    resolveRestoreFeedToken(entry, "home:recommend", {
+      scope: "session",
+      documentID: "document-after-reload",
+    }),
+    FEED_TOKEN,
+    "确定性列表仍可跨刷新恢复快照"
+  );
 });
 
 test("restoring waits until the document is tall enough to reach the position", () => {
