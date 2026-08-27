@@ -331,7 +331,7 @@ func TestBlacklistRestorePolicies(t *testing.T) {
 }
 
 // 取消拉黑本地上传时记录当场重建，且标题、作者、标签这些用户数据都要跟着回来
-// ——墓碑里存的是完整的 restore payload。派生资源（封面/预览/转码产物）在拉黑
+// ——墓碑里存的是完整的 restore payload。派生资源（封面/预览）在拉黑
 // 时已被删除，必须重置为待生成，否则会指向不存在的文件。
 func TestRemoveDeletedVideoDirectRestoresLocalUploadLosslessly(t *testing.T) {
 	ctx := context.Background()
@@ -348,8 +348,7 @@ func TestRemoveDeletedVideoDirectRestoresLocalUploadLosslessly(t *testing.T) {
 		Tags: []string{"标签一", "标签二"}, Description: "简介", DurationSeconds: 42,
 		Size: 4096, Ext: "mp4",
 		ThumbnailURL: "/p/thumb/local-upload-rich", PreviewLocal: "/data/previews/local-upload-rich.mp4",
-		PreviewStatus: "ready", TranscodeStatus: "ready", TranscodedFileID: "transcoded.mp4",
-		TranscodedSize: 2048, Views: 7, Likes: 3,
+		PreviewStatus: "ready", Views: 7, Likes: 3,
 		PublishedAt: now, CreatedAt: now, UpdatedAt: now,
 	}); err != nil {
 		t.Fatalf("seed video: %v", err)
@@ -392,9 +391,6 @@ func TestRemoveDeletedVideoDirectRestoresLocalUploadLosslessly(t *testing.T) {
 		restored.PreviewStatus != "pending" {
 		t.Fatalf("derived assets not reset: thumb=%q preview=%q status=%q",
 			restored.ThumbnailURL, restored.PreviewLocal, restored.PreviewStatus)
-	}
-	if restored.TranscodeStatus != "" || restored.TranscodedFileID != "" || restored.TranscodedSize != 0 {
-		t.Fatalf("transcode state not reset: %#v", restored)
 	}
 	if deleted, err := cat.IsVideoDeleted(ctx, "local-upload-rich"); err != nil || deleted {
 		t.Fatalf("tombstone still present after restore: deleted=%v err=%v", deleted, err)

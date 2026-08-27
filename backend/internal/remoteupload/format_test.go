@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"github.com/video-site/backend/internal/catalog"
-	"github.com/video-site/backend/internal/transcode"
 )
 
 func TestSupportedExtensionUsesProbeAndSourceHints(t *testing.T) {
@@ -29,7 +28,7 @@ func TestSupportedExtensionUsesProbeAndSourceHints(t *testing.T) {
 				FinalURL:    parseTestURL(t, test.finalURL),
 			}
 			got, err := supportedExtension(
-				transcode.MediaInfo{FormatName: test.format, VideoCodecs: []string{"h264"}},
+				mediaInfo{FormatName: test.format, VideoCodecs: []string{"h264"}},
 				metadata,
 			)
 			if err != nil {
@@ -42,7 +41,7 @@ func TestSupportedExtensionUsesProbeAndSourceHints(t *testing.T) {
 	}
 
 	if _, err := supportedExtension(
-		transcode.MediaInfo{FormatName: "mpegts", VideoCodecs: []string{"h264"}},
+		mediaInfo{FormatName: "mpegts", VideoCodecs: []string{"h264"}},
 		downloadMetadata{},
 	); err == nil {
 		t.Fatal("unsupported probe format was accepted")

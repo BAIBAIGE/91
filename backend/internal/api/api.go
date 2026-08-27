@@ -1507,28 +1507,15 @@ func thumbnailURLFor(videoID, thumbnail string, updatedAt time.Time) string {
 	return base + "?v=" + strconv.FormatInt(updatedAt.UnixMilli(), 10)
 }
 
-// transcodedSource 在视频有就绪的浏览器兼容性转码产物时返回产物的播放地址。
-// 产物和原始文件在同一个 drive 上，走同一条 /p/stream 代理/302 链路。
-func transcodedSource(v *catalog.Video) (string, bool) {
-	if v.TranscodeStatus == "ready" && v.TranscodedFileID != "" && v.DriveID != localUploadDriveID {
-		return fmt.Sprintf("/p/stream/%s/%s", pathSegment(v.DriveID), pathSegment(v.TranscodedFileID)), true
-	}
-	return "", false
-}
-
 func (s *Server) videoSource(v *catalog.Video) string {
 	src, _ := s.videoSourceAndSize(v)
 	return src
 }
 
-// playbackMediaType describes the resource selected by videoSource. A ready
-// transcode is always an MP4 even when the original catalog entry was MKV/AVI.
+// playbackMediaType describes the original resource selected by videoSource.
 func playbackMediaType(v *catalog.Video) string {
 	if v == nil {
 		return ""
-	}
-	if v.TranscodeStatus == "ready" && v.TranscodedFileID != "" {
-		return "video/mp4"
 	}
 	switch strings.ToLower(strings.TrimPrefix(strings.TrimSpace(v.Ext), ".")) {
 	case "mp4", "m4v":
@@ -1538,33 +1525,24 @@ func playbackMediaType(v *catalog.Video) string {
 	}
 }
 
-// videoSourceAndSize 返回实际播放资源的地址和同一资源的字节数。转码就绪时
-// 播放的是转码产物，因此不能继续沿用原文件大小来估算码率。
+// videoSourceAndSize 返回原始播放资源的地址和字节数。
 func (s *Server) videoSourceAndSize(v *catalog.Video) (string, int64) {
 	if v.DriveID == localUploadDriveID {
 		return "/p/upload/" + pathSegment(v.ID), v.Size
 	}
 	if driveID, fileID, ok := videoStreamTarget(v); ok {
-		size := v.Size
-		if v.TranscodeStatus == "ready" && fileID == v.TranscodedFileID && v.TranscodedFileID != "" {
-			size = v.TranscodedSize
-		}
-		return fmt.Sprintf("/p/stream/%s/%s", pathSegment(driveID), pathSegment(fileID)), size
+		return fmt.Sprintf("/p/stream/%s/%s", pathSegment(driveID), pathSegment(fileID)), v.Size
 	}
 	return fmt.Sprintf("/p/stream/%s/%s", pathSegment(v.DriveID), pathSegment(v.FileID)), v.Size
 }
 
-// videoStreamTarget returns the exact drive/file pair used by the browser-facing
-// /p/stream URL. Shorts link prewarming must use the transcoded file when present,
-// otherwise it would warm a different cache entry from the one playback requests.
+// videoStreamTarget returns the original drive/file pair used by the
+// browser-facing /p/stream URL.
 func videoStreamTarget(v *catalog.Video) (driveID, fileID string, ok bool) {
 	if v == nil || v.DriveID == localUploadDriveID || v.DriveID == "" {
 		return "", "", false
 	}
 	fileID = v.FileID
-	if v.TranscodeStatus == "ready" && v.TranscodedFileID != "" {
-		fileID = v.TranscodedFileID
-	}
 	if fileID == "" {
 		return "", "", false
 	}
@@ -1576,9 +1554,6 @@ func videoStreamTarget(v *catalog.Video) (driveID, fileID string, ok bool) {
 func videoSource(v *catalog.Video) string {
 	if v.DriveID == localUploadDriveID {
 		return "/p/upload/" + pathSegment(v.ID)
-	}
-	if src, ok := transcodedSource(v); ok {
-		return src
 	}
 	return fmt.Sprintf("/p/stream/%s/%s", pathSegment(v.DriveID), pathSegment(v.FileID))
 }

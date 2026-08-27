@@ -78,21 +78,6 @@ UPDATE videos
 	if err := c.addColumnIfMissing(ctx, "videos", "last_liked_at", "INTEGER DEFAULT 0"); err != nil {
 		return err
 	}
-	// videos.transcode_*：浏览器兼容性转码状态。
-	// status：''=未检测 / pending=已入队 / ready=已转码 / skipped=检测后无需转码 / failed=失败。
-	// transcoded_file_id 指向转码产物在同一 drive 上的 fileID，播放源优先使用它。
-	if err := c.addColumnIfMissing(ctx, "videos", "transcode_status", "TEXT DEFAULT ''"); err != nil {
-		return err
-	}
-	if err := c.addColumnIfMissing(ctx, "videos", "transcode_error", "TEXT DEFAULT ''"); err != nil {
-		return err
-	}
-	if err := c.addColumnIfMissing(ctx, "videos", "transcoded_file_id", "TEXT DEFAULT ''"); err != nil {
-		return err
-	}
-	if err := c.addColumnIfMissing(ctx, "videos", "transcoded_size", "INTEGER DEFAULT 0"); err != nil {
-		return err
-	}
 	// 目录身份用于同目录合集。非常早期的库可能还没有 parent_id；先补身份列，
 	// 再补仅用于展示和标签匹配的目录名。
 	if err := c.addColumnIfMissing(ctx, "videos", "parent_id", "TEXT DEFAULT ''"); err != nil {
@@ -127,6 +112,12 @@ UPDATE videos
 	// quality 曾被扫盘统一写成 HD，并不代表真实分辨率；完整退役该无效元数据。
 	if err := c.dropColumnIfExists(ctx, "videos", "quality"); err != nil {
 		return err
+	}
+	// 浏览器兼容性转码已整体退役；老库不再保留任务状态和产物引用。
+	for _, column := range []string{"transcode_status", "transcode_error", "transcoded_file_id", "transcoded_size"} {
+		if err := c.dropColumnIfExists(ctx, "videos", column); err != nil {
+			return err
+		}
 	}
 	if err := c.ensureBaseVideoIndexes(ctx); err != nil {
 		return err
@@ -652,11 +643,28 @@ func (c *Catalog) dropColumnIfExists(ctx context.Context, table, column string) 
 	if _, err = c.db.ExecContext(ctx, `ALTER TABLE `+table+` DROP COLUMN `+column); err == nil {
 		return nil
 	}
-	if table == "videos" && (strings.EqualFold(column, "category") || strings.EqualFold(column, "llm_tagged_at") || strings.EqualFold(column, "quality")) {
+	if table == "videos" && isRetiredVideoColumn(column) {
 		log.Printf("[catalog] native drop column videos.%s failed, rebuilding videos table with current columns: %v", column, err)
 		return c.rebuildVideosTableWithCurrentColumns(ctx)
 	}
 	return err
+}
+
+func isRetiredVideoColumn(column string) bool {
+	for _, retired := range []string{
+		"category",
+		"llm_tagged_at",
+		"quality",
+		"transcode_status",
+		"transcode_error",
+		"transcoded_file_id",
+		"transcoded_size",
+	} {
+		if strings.EqualFold(column, retired) {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *Catalog) ensureBaseVideoIndexes(ctx context.Context) error {
@@ -1069,10 +1077,6 @@ var currentVideoColumnNames = []string{
 	"preview_local",
 	"preview_updated_at",
 	"preview_status",
-	"transcode_status",
-	"transcode_error",
-	"transcoded_file_id",
-	"transcoded_size",
 	"views",
 	"last_viewed_at",
 	"favorites",
@@ -1116,10 +1120,6 @@ CREATE TABLE videos_schema_rebuild_new (
     preview_local      TEXT,
     preview_updated_at INTEGER DEFAULT 0,
     preview_status     TEXT DEFAULT 'pending',
-    transcode_status   TEXT DEFAULT '',
-    transcode_error    TEXT DEFAULT '',
-    transcoded_file_id TEXT DEFAULT '',
-    transcoded_size    INTEGER DEFAULT 0,
     views              INTEGER DEFAULT 0,
     last_viewed_at     INTEGER DEFAULT 0,
     favorites          INTEGER DEFAULT 0,

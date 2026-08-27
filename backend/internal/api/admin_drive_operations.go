@@ -359,35 +359,6 @@ func (a *AdminServer) handleStopDriveTasks(w http.ResponseWriter, r *http.Reques
 	})
 }
 
-// handleStartDriveTranscode 手动开启某盘的浏览器兼容性转码。
-// 转码默认不开启、从不自动运行；本接口是唯一入口。
-func (a *AdminServer) handleStartDriveTranscode(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
-	if a.OnStartDriveTranscode == nil {
-		writeErr(w, http.StatusNotImplemented, errors.New("transcode not supported"))
-		return
-	}
-	accepted, message := a.OnStartDriveTranscode(id)
-	writeJSON(w, http.StatusAccepted, map[string]any{
-		"ok":       true,
-		"accepted": accepted,
-		"message":  message,
-	})
-}
-
-// handleStopDriveTranscode 手动停止某盘正在进行的转码任务。
-func (a *AdminServer) handleStopDriveTranscode(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
-	stopped := false
-	if a.OnStopDriveTranscode != nil {
-		stopped = a.OnStopDriveTranscode(id)
-	}
-	writeJSON(w, http.StatusAccepted, map[string]any{
-		"ok":      true,
-		"stopped": stopped,
-	})
-}
-
 func (a *AdminServer) p123QRClient() *p123.QRClient {
 	return p123.NewQRClient(p123.QRConfig{
 		UserAPIBaseURL: a.P123UserAPIBaseURL,

@@ -62,7 +62,6 @@ function isDriveBusy(d: api.AdminDrive) {
     d.thumbnailGenerationStatus,
     d.previewGenerationStatus,
     d.fingerprintGenerationStatus,
-    d.transcodeGenerationStatus,
   ].some((status) => {
     const state = status?.state || "idle";
     return state !== "idle";
@@ -91,7 +90,6 @@ export function DrivesPage() {
   const [regenFailedThumbId, setRegenFailedThumbId] = useState("");
   const [regenFailedFingerprintId, setRegenFailedFingerprintId] = useState("");
   const [togglingTeaserId, setTogglingTeaserId] = useState("");
-  const [togglingTranscodeId, setTogglingTranscodeId] = useState("");
   const [scanningAll, setScanningAll] = useState(false);
   const [stoppingAll, setStoppingAll] = useState(false);
   const [trackingScanAll, setTrackingScanAll] = useState(false);
@@ -528,41 +526,6 @@ export function DrivesPage() {
     }
   }
 
-  async function handleStartTranscode(d: api.AdminDrive) {
-    setTogglingTranscodeId(d.id);
-    try {
-      const resp = await api.startDriveTranscode(d.id);
-      if (resp.accepted) {
-        show(`已开始「${d.name || d.id}」的视频转码`, "success");
-      } else {
-        show(resp.message || "转码任务未能开启", "info");
-      }
-      refreshDriveList();
-    } catch (e) {
-      show(e instanceof Error ? e.message : "开启失败", "error");
-    } finally {
-      setTogglingTranscodeId("");
-    }
-  }
-
-  async function handleStopTranscode(d: api.AdminDrive) {
-    setTogglingTranscodeId(d.id);
-    try {
-      const resp = await api.stopDriveTranscode(d.id);
-      show(
-        resp.stopped
-          ? `已停止「${d.name || d.id}」的视频转码`
-          : `「${d.name || d.id}」没有正在运行的转码任务`,
-        "success"
-      );
-      refreshDriveList();
-    } catch (e) {
-      show(e instanceof Error ? e.message : "停止失败", "error");
-    } finally {
-      setTogglingTranscodeId("");
-    }
-  }
-
   const selectedDrive = useMemo(() => {
     return selectedDriveId ? list.find((d) => d.id === selectedDriveId) : null;
   }, [selectedDriveId, list]);
@@ -729,13 +692,10 @@ export function DrivesPage() {
               regenFailedThumbId={regenFailedThumbId}
               regenFailedFingerprintId={regenFailedFingerprintId}
               togglingTeaserId={togglingTeaserId}
-              togglingTranscodeId={togglingTranscodeId}
               onToggleTeaser={() => handleToggleTeaser(d)}
               onRegenFailed={() => handleRegenFailed(d)}
               onRegenFailedThumbnails={() => handleRegenFailedThumbnails(d)}
               onRegenFailedFingerprints={() => handleRegenFailedFingerprints(d)}
-              onStartTranscode={() => handleStartTranscode(d)}
-              onStopTranscode={() => handleStopTranscode(d)}
             />
 
             <div className="admin-detail-card">

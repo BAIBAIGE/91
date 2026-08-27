@@ -15,7 +15,6 @@ const DRIVE_GENERATION_SECTIONS = [
   { label: "封面", showCounts: true },
   { label: "预览视频", showCounts: true },
   { label: "视频指纹", showCounts: true },
-  { label: "转码", showCounts: true },
 ];
 const EMPTY_VALUE = "\u00a0";
 
@@ -160,7 +159,7 @@ export function DriveDetailLoading({ onBack }: { onBack: () => void }) {
             </div>
 
             <div className="admin-detail-actions admin-generation-actions">
-              {["继续生成封面", "继续生成预览视频", "继续生成指纹", "开始转码"].map(
+              {["继续生成封面", "继续生成预览视频", "继续生成指纹"].map(
                 (label) => (
                   <button key={label} type="button" className="admin-btn" disabled>
                     <span>{label}</span>

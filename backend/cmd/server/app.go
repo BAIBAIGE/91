@@ -13,7 +13,6 @@ import (
 	"github.com/video-site/backend/internal/nightly"
 	"github.com/video-site/backend/internal/preview"
 	"github.com/video-site/backend/internal/proxy"
-	"github.com/video-site/backend/internal/transcode"
 )
 
 type App struct {
@@ -88,13 +87,6 @@ type App struct {
 	// uploadProgress 跟踪脚本爬虫迁移到云盘时的实时上传状态。
 	uploadProgressMu sync.Mutex
 	uploadProgress   map[string]driveUploadProgress
-
-	// transcodeMu 保护 transcodeWorkers / transcodeCancels。
-	// 浏览器兼容性转码每盘最多一个任务，且只能由管理员手动开启
-	// （不随扫盘/夜间流水线自动运行），手动停止或处理完即从 map 清除。
-	transcodeMu      sync.Mutex
-	transcodeWorkers map[string]*transcode.Worker
-	transcodeCancels map[string]context.CancelFunc
 
 	// blacklistSourceDeleteMu protects the one-at-a-time background job that
 	// removes source files for tombstoned videos. The job reads tombstones from

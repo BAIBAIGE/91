@@ -57,8 +57,8 @@ type guangYaReadSeekAt interface {
 
 // prepareUploadBody establishes the invariant required by reliable multipart
 // retries: every byte range can be read again without depending on the current
-// position of the caller's stream. Local crawler/transcode files are reused in
-// place; genuinely streaming inputs are staged in the configured temp dir.
+// position of the caller's stream. Local files are reused in place; genuinely
+// streaming inputs are staged in the configured temp dir.
 func (d *Driver) prepareUploadBody(ctx context.Context, source io.Reader, declaredSize int64) (guangYaPreparedUploadBody, error) {
 	if source == nil {
 		return guangYaPreparedUploadBody{}, errors.New("guangyapan upload: nil reader")

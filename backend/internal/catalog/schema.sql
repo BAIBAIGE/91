@@ -24,10 +24,6 @@ CREATE TABLE IF NOT EXISTS videos (
     preview_local    TEXT,                      -- 本地预览视频路径（兜底）
     preview_updated_at INTEGER DEFAULT 0,       -- preview-only revision; unrelated metadata must not invalidate teaser caches
     preview_status   TEXT DEFAULT 'pending',    -- pending / ready / failed / disabled
-    transcode_status TEXT DEFAULT '',           -- '' / pending / ready / skipped / failed（浏览器兼容性转码）
-    transcode_error  TEXT DEFAULT '',
-    transcoded_file_id TEXT DEFAULT '',         -- 转码产物在同一 drive 上的 fileID，播放源优先用它
-    transcoded_size  INTEGER DEFAULT 0,
     views            INTEGER DEFAULT 0,
     last_viewed_at   INTEGER DEFAULT 0,
     favorites        INTEGER DEFAULT 0,

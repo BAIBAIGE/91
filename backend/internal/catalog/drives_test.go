@@ -4,9 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"fmt"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 )
@@ -85,73 +83,6 @@ func TestUpsertDrivePreservingSkipDirIDsKeepsConcurrentSetting(t *testing.T) {
 	}
 	if len(got.SkipDirIDs) != 1 || got.SkipDirIDs[0] != "latest-skip" {
 		t.Fatalf("skip dir ids = %#v, want latest setting", got.SkipDirIDs)
-	}
-}
-
-func TestEnsureDriveSkipDirIDSerializesConcurrentAppends(t *testing.T) {
-	ctx := context.Background()
-	cat, err := Open(t.TempDir() + "/catalog.db")
-	if err != nil {
-		t.Fatalf("open catalog: %v", err)
-	}
-	t.Cleanup(func() { _ = cat.Close() })
-	if err := cat.UpsertDrive(ctx, &Drive{
-		ID: "drive", Kind: "p115", Name: "Drive", RootID: "root",
-		SkipDirIDs: []string{"stale-admin-dir"},
-	}); err != nil {
-		t.Fatalf("seed drive: %v", err)
-	}
-	// Model the admin save that lands after a worker captured an older Drive.
-	// Every later atomic ensure must merge with this latest replacement.
-	if err := cat.SetDriveSkipDirIDs(ctx, "drive", []string{"latest-admin-dir"}); err != nil {
-		t.Fatalf("save latest admin skip dirs: %v", err)
-	}
-
-	const appendCount = 24
-	start := make(chan struct{})
-	errCh := make(chan error, appendCount)
-	var wg sync.WaitGroup
-	for i := 0; i < appendCount; i++ {
-		dirID := fmt.Sprintf("system-dir-%02d", i)
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			<-start
-			errCh <- cat.EnsureDriveSkipDirID(ctx, "drive", dirID)
-		}()
-	}
-	close(start)
-	wg.Wait()
-	close(errCh)
-	for err := range errCh {
-		if err != nil {
-			t.Fatalf("ensure skip dir: %v", err)
-		}
-	}
-	// Repeating an append must remain idempotent.
-	if err := cat.EnsureDriveSkipDirID(ctx, "drive", "system-dir-00"); err != nil {
-		t.Fatalf("repeat ensure skip dir: %v", err)
-	}
-
-	got, err := cat.GetDrive(ctx, "drive")
-	if err != nil {
-		t.Fatalf("get drive: %v", err)
-	}
-	seen := make(map[string]int, len(got.SkipDirIDs))
-	for _, id := range got.SkipDirIDs {
-		seen[id]++
-	}
-	if seen["latest-admin-dir"] != 1 || seen["stale-admin-dir"] != 0 {
-		t.Fatalf("admin skip dirs after ensures = %#v, want latest value only", seen)
-	}
-	for i := 0; i < appendCount; i++ {
-		dirID := fmt.Sprintf("system-dir-%02d", i)
-		if seen[dirID] != 1 {
-			t.Fatalf("skip dir %q count = %d, want 1", dirID, seen[dirID])
-		}
-	}
-	if len(got.SkipDirIDs) != appendCount+1 {
-		t.Fatalf("skip dir count = %d, want %d", len(got.SkipDirIDs), appendCount+1)
 	}
 }
 

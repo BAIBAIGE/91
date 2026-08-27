@@ -153,25 +153,19 @@ type Video struct {
 	PreviewLocal       string    `json:"previewLocal"`
 	PreviewUpdatedAt   time.Time `json:"previewUpdatedAt"`
 	PreviewStatus      string    `json:"previewStatus"`
-	// TranscodeStatus：浏览器兼容性转码状态。
-	// ''=未检测 / pending=已入队 / ready=已转码 / skipped=无需转码 / failed=失败。
-	TranscodeStatus  string    `json:"transcodeStatus"`
-	TranscodeError   string    `json:"transcodeError"`
-	TranscodedFileID string    `json:"transcodedFileId"`
-	TranscodedSize   int64     `json:"transcodedSize"`
-	Views            int       `json:"views"`
-	LastViewedAt     time.Time `json:"lastViewedAt"`
-	Favorites        int       `json:"favorites"`
-	Comments         int       `json:"comments"`
-	Likes            int       `json:"likes"`
-	LastLikedAt      time.Time `json:"lastLikedAt"`
-	Dislikes         int       `json:"dislikes"`
-	Hidden           bool      `json:"hidden"`
-	Badges           []string  `json:"badges"`
-	Description      string    `json:"description"`
-	PublishedAt      time.Time `json:"publishedAt"`
-	CreatedAt        time.Time `json:"createdAt"`
-	UpdatedAt        time.Time `json:"updatedAt"`
+	Views              int       `json:"views"`
+	LastViewedAt       time.Time `json:"lastViewedAt"`
+	Favorites          int       `json:"favorites"`
+	Comments           int       `json:"comments"`
+	Likes              int       `json:"likes"`
+	LastLikedAt        time.Time `json:"lastLikedAt"`
+	Dislikes           int       `json:"dislikes"`
+	Hidden             bool      `json:"hidden"`
+	Badges             []string  `json:"badges"`
+	Description        string    `json:"description"`
+	PublishedAt        time.Time `json:"publishedAt"`
+	CreatedAt          time.Time `json:"createdAt"`
+	UpdatedAt          time.Time `json:"updatedAt"`
 }
 
 // VideoSummary is the public card-sized projection of a video. List feeds use
@@ -260,13 +254,11 @@ INSERT INTO videos (
   id, drive_id, file_id, file_name, content_hash, sampled_sha256, fingerprint_status, fingerprint_error, parent_id, dir_name, title, author, tags,
 	  duration_seconds, size_bytes, ext, thumbnail_url, thumbnail_updated_at, thumbnail_status,
 	  preview_file_id, preview_local, preview_updated_at, preview_status,
-	  transcode_status, transcode_error, transcoded_file_id, transcoded_size,
 	  views, last_viewed_at, favorites, comments, likes, last_liked_at, dislikes,
 	  hidden, badges, description, published_at, created_at, updated_at
 	) VALUES (
 	  ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 	  ?, ?, ?, ?, ?, CASE WHEN COALESCE(?, '') != '' THEN 'ready' ELSE 'pending' END,
-	  ?, ?, ?, ?,
 	  ?, ?, ?, ?,
 	  ?, ?, ?, ?, ?, ?, ?,
 	  ?, ?, ?, ?, ?, ?
@@ -335,7 +327,6 @@ ON CONFLICT(id) DO UPDATE SET
 		v.ID, v.DriveID, v.FileID, v.FileName, v.ContentHash, v.SampledSHA256, fingerprintStatus, v.FingerprintError, v.ParentID, v.DirName, v.Title, v.Author, string(tagsJSON),
 		v.DurationSeconds, v.Size, v.Ext, v.ThumbnailURL, thumbnailUpdatedAt, v.ThumbnailURL,
 		v.PreviewFileID, v.PreviewLocal, previewUpdatedAt, nullableStatus(v.PreviewStatus),
-		v.TranscodeStatus, v.TranscodeError, v.TranscodedFileID, v.TranscodedSize,
 		v.Views, unixMilliOrZero(v.LastViewedAt), v.Favorites, v.Comments, v.Likes, unixMilliOrZero(v.LastLikedAt), v.Dislikes,
 		boolToInt(v.Hidden), string(badgesJSON), v.Description,
 		v.PublishedAt.UnixMilli(), v.CreatedAt.UnixMilli(), v.UpdatedAt.UnixMilli(),
@@ -385,87 +376,6 @@ func (c *Catalog) UpdatePreview(ctx context.Context, id, previewLocal, status st
 		status, previewLocal, status, previewLocal,
 		now, id)
 	return err
-}
-
-// transcodeCandidateWhereSQL 圈定"可能需要浏览器兼容性转码"的视频：
-// webm 容器规范上只允许 vp8/vp9/av1 + vorbis/opus，浏览器必播，不进候选；
-// strm 是远程引用没有本体。mp4/m4v 虽然容器兼容，但里面可能装着
-// MPEG-4 Part 2 / HEVC 等浏览器解不了的视频轨（表现为黑屏有声音），
-// 所以也进候选，由转码 worker 先远程 probe 实际编码，兼容的直接标
-// skipped（不下载文件），不兼容的才转码。failed 也保留在候选里，
-// 重新点开始转码时会自动重试。
-const transcodeCandidateWhereSQL = `COALESCE(ext, '') NOT IN ('webm', 'strm')
-	AND COALESCE(transcode_status, '') IN ('', 'pending', 'failed')`
-
-// ListTranscodeCandidates 列出某盘所有转码候选视频。limit<=0 表示不限制。
-func (c *Catalog) ListTranscodeCandidates(ctx context.Context, driveID string, limit int) ([]*Video, error) {
-	query := `SELECT ` + allVideoCols + ` FROM videos
-		 WHERE drive_id = ? AND ` + transcodeCandidateWhereSQL + `
-		 ORDER BY created_at ASC, id ASC`
-	args := []any{driveID}
-	if limit > 0 {
-		query += ` LIMIT ?`
-		args = append(args, limit)
-	}
-	rows, err := c.db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []*Video
-	for rows.Next() {
-		v, err := scanVideo(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, v)
-	}
-	return out, rows.Err()
-}
-
-// UpdateVideoTranscode 写回单条视频的转码结果。
-// status=ready 时 transcodedFileID/transcodedSize 指向转码产物；
-// 其它 status 调用方应传空值，本函数会按传入值原样覆盖。
-func (c *Catalog) UpdateVideoTranscode(ctx context.Context, id, status, errMsg, transcodedFileID string, transcodedSize int64) error {
-	_, err := c.db.ExecContext(ctx,
-		`UPDATE videos SET transcode_status = ?, transcode_error = ?, transcoded_file_id = ?, transcoded_size = ?, updated_at = ? WHERE id = ?`,
-		status, errMsg, transcodedFileID, transcodedSize, time.Now().UnixMilli(), id)
-	return err
-}
-
-// DriveTranscodeCounts 是单盘的转码进度统计。
-type DriveTranscodeCounts struct {
-	// Pending 是仍在候选集合里、还没有出结果的数量（含从未检测过的）。
-	Pending int
-	Ready   int
-	Failed  int
-	Skipped int
-}
-
-func (c *Catalog) CountTranscodesByDrive(ctx context.Context) (map[string]DriveTranscodeCounts, error) {
-	rows, err := c.db.QueryContext(ctx, `
-		SELECT drive_id,
-		        COUNT(CASE WHEN COALESCE(ext, '') NOT IN ('mp4', 'webm', 'm4v', 'strm')
-		                    AND COALESCE(transcode_status, '') IN ('', 'pending') THEN 1 END) AS pending_count,
-		        COUNT(CASE WHEN COALESCE(transcode_status, '') = 'ready' THEN 1 END) AS ready_count,
-		        COUNT(CASE WHEN COALESCE(transcode_status, '') = 'failed' THEN 1 END) AS failed_count,
-		        COUNT(CASE WHEN COALESCE(transcode_status, '') = 'skipped' THEN 1 END) AS skipped_count
-		  FROM videos
-		 GROUP BY drive_id`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := make(map[string]DriveTranscodeCounts)
-	for rows.Next() {
-		var driveID string
-		var counts DriveTranscodeCounts
-		if err := rows.Scan(&driveID, &counts.Pending, &counts.Ready, &counts.Failed, &counts.Skipped); err != nil {
-			return nil, err
-		}
-		out[driveID] = counts
-	}
-	return out, rows.Err()
 }
 
 func (c *Catalog) HideVideo(ctx context.Context, id string) error {
@@ -2150,14 +2060,10 @@ UPDATE videos
        thumbnail_status = 'pending',
        thumbnail_failures = 0,
        preview_file_id = '',
-       preview_local = '',
-       preview_updated_at = 0,
-       preview_status = 'pending',
-       transcode_status = '',
-       transcode_error = '',
-       transcoded_file_id = '',
-       transcoded_size = 0,
-       updated_at = ?
+	       preview_local = '',
+	       preview_updated_at = 0,
+	       preview_status = 'pending',
+	       updated_at = ?
  WHERE id = ?`, source.Size, time.Now().UnixMilli(), id)
 	return err
 }
@@ -3924,77 +3830,6 @@ func (c *Catalog) SetDriveSkipDirIDs(ctx context.Context, id string, ids []strin
 	return nil
 }
 
-// EnsureDriveSkipDirID atomically adds one system-owned directory to the
-// latest stored skip list. Transcode workers must use this method instead of a
-// GetDrive/SetDriveSkipDirIDs read-modify-write pair: an administrator may
-// replace the user-managed list while a long-running worker is still active.
-func (c *Catalog) EnsureDriveSkipDirID(ctx context.Context, id, dirID string) error {
-	id = strings.TrimSpace(id)
-	dirID = strings.TrimSpace(dirID)
-	if id == "" {
-		return fmt.Errorf("catalog: ensure drive skip_dir_id: empty id")
-	}
-	if dirID == "" {
-		return fmt.Errorf("catalog: ensure drive skip_dir_id: empty directory id")
-	}
-
-	// BEGIN IMMEDIATE reserves SQLite's writer slot before reading. The critical
-	// section is deliberately catalog-owned so every caller, including config
-	// APIs that do not know about transcode workers, participates in the same
-	// database-level ordering.
-	conn, err := c.db.Conn(ctx)
-	if err != nil {
-		return fmt.Errorf("catalog: reserve skip_dir_ids connection: %w", err)
-	}
-	defer conn.Close()
-	if _, err := conn.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
-		return fmt.Errorf("catalog: begin ensure skip_dir_id: %w", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_, _ = conn.ExecContext(context.Background(), `ROLLBACK`)
-		}
-	}()
-
-	var stored string
-	if err := conn.QueryRowContext(ctx,
-		`SELECT COALESCE(skip_dir_ids, '[]') FROM drives WHERE id = ?`, id,
-	).Scan(&stored); err != nil {
-		return err
-	}
-	var ids []string
-	if err := json.Unmarshal([]byte(stored), &ids); err != nil {
-		return fmt.Errorf("catalog: decode drive skip_dir_ids: %w", err)
-	}
-	for _, existing := range ids {
-		if existing == dirID {
-			if _, err := conn.ExecContext(ctx, `COMMIT`); err != nil {
-				return fmt.Errorf("catalog: commit unchanged skip_dir_ids: %w", err)
-			}
-			committed = true
-			return nil
-		}
-	}
-
-	ids = append(ids, dirID)
-	payload, err := json.Marshal(ids)
-	if err != nil {
-		return fmt.Errorf("catalog: marshal ensured skip_dir_ids: %w", err)
-	}
-	if _, err := conn.ExecContext(ctx,
-		`UPDATE drives SET skip_dir_ids = ?, updated_at = ? WHERE id = ?`,
-		string(payload), time.Now().UnixMilli(), id,
-	); err != nil {
-		return fmt.Errorf("catalog: ensure drive skip_dir_id: %w", err)
-	}
-	if _, err := conn.ExecContext(ctx, `COMMIT`); err != nil {
-		return fmt.Errorf("catalog: commit ensured skip_dir_id: %w", err)
-	}
-	committed = true
-	return nil
-}
-
 // ---------- Admin session ----------
 
 type SessionInfo struct {
@@ -4138,7 +3973,6 @@ COALESCE(sampled_sha256, ''), COALESCE(fingerprint_status, 'pending'), COALESCE(
 COALESCE(parent_id, ''), COALESCE(dir_name, ''), title, COALESCE(author, ''), COALESCE(tags, '[]'),
 duration_seconds, size_bytes, COALESCE(ext, ''), COALESCE(thumbnail_url, ''), COALESCE(thumbnail_updated_at, 0),
 COALESCE(preview_file_id, ''), COALESCE(preview_local, ''), COALESCE(preview_updated_at, 0), COALESCE(preview_status, 'pending'),
-	COALESCE(transcode_status, ''), COALESCE(transcode_error, ''), COALESCE(transcoded_file_id, ''), COALESCE(transcoded_size, 0),
 	views, COALESCE(last_viewed_at, 0), favorites, comments, likes, COALESCE(last_liked_at, 0), dislikes,
 	COALESCE(hidden, 0), COALESCE(badges, '[]'), COALESCE(description, ''),
 	published_at, created_at, updated_at
@@ -4219,7 +4053,6 @@ func scanVideo(row rowScanner) (*Video, error) {
 		&v.ParentID, &v.DirName, &v.Title, &v.Author, &tagsJSON,
 		&v.DurationSeconds, &v.Size, &v.Ext, &v.ThumbnailURL, &thumbnailUpdatedAt,
 		&v.PreviewFileID, &v.PreviewLocal, &previewUpdatedAt, &v.PreviewStatus,
-		&v.TranscodeStatus, &v.TranscodeError, &v.TranscodedFileID, &v.TranscodedSize,
 		&v.Views, &lastViewedAt, &v.Favorites, &v.Comments, &v.Likes, &lastLikedAt, &v.Dislikes,
 		&hidden, &badgesJSON, &v.Description,
 		&publishedAt, &createdAt, &updatedAt,
@@ -4550,10 +4383,6 @@ func directRestoreVideo(deleted *DeletedVideo, restoreVideo *Video, source Delet
 	video.PreviewLocal = ""
 	video.PreviewUpdatedAt = time.Time{}
 	video.PreviewStatus = "pending"
-	video.TranscodeStatus = ""
-	video.TranscodeError = ""
-	video.TranscodedFileID = ""
-	video.TranscodedSize = 0
 	return video
 }
 

@@ -94,16 +94,7 @@ func TestPlaybackMediaTypeDescribesSelectedResource(t *testing.T) {
 			want:  "video/mp4",
 		},
 		{
-			name: "ready transcode",
-			video: &catalog.Video{
-				Ext:              "mkv",
-				TranscodeStatus:  "ready",
-				TranscodedFileID: "transcoded.mp4",
-			},
-			want: "video/mp4",
-		},
-		{
-			name:  "untranscoded mkv",
+			name:  "mkv",
 			video: &catalog.Video{Ext: "mkv"},
 			want:  "",
 		},
@@ -2076,17 +2067,7 @@ func TestHandleShortsNextCarriesBitrateMetadata(t *testing.T) {
 	seed("unsized", 0, 0)
 	seed("size-only", 100<<20, 0)
 	seed("duration-only", 0, 120)
-	seed("transcoded", 300<<20, 300)
-	if err := cat.UpdateVideoTranscode(
-		ctx,
-		"transcoded",
-		"ready",
-		"",
-		"file-transcoded-output",
-		30<<20,
-	); err != nil {
-		t.Fatalf("mark transcoded video ready: %v", err)
-	}
+	seed("original", 300<<20, 300)
 
 	server := &Server{Catalog: cat}
 	req := httptest.NewRequest(http.MethodGet, "/api/shorts/next?count=5", nil)
@@ -2114,18 +2095,18 @@ func TestHandleShortsNextCarriesBitrateMetadata(t *testing.T) {
 		t.Fatalf("sized item = %d bytes / %ds, want 314572800 / 388", sized.SizeBytes, sized.DurationSeconds)
 	}
 
-	transcoded, ok := byID["transcoded"]
+	original, ok := byID["original"]
 	if !ok {
-		t.Fatalf("feed did not return the transcoded video: %s", body)
+		t.Fatalf("feed did not return the original video: %s", body)
 	}
-	if transcoded.VideoSrc != "/p/stream/drive/file-transcoded-output" {
-		t.Fatalf("transcoded video source = %q, want the transcoded asset", transcoded.VideoSrc)
+	if original.VideoSrc != "/p/stream/drive/file-original" {
+		t.Fatalf("original video source = %q, want the catalog source", original.VideoSrc)
 	}
-	if transcoded.SizeBytes != 30<<20 || transcoded.DurationSeconds != 300 {
+	if original.SizeBytes != 300<<20 || original.DurationSeconds != 300 {
 		t.Fatalf(
-			"transcoded item = %d bytes / %ds, want the 31457280-byte playback asset / 300s",
-			transcoded.SizeBytes,
-			transcoded.DurationSeconds,
+			"original item = %d bytes / %ds, want the 314572800-byte source / 300s",
+			original.SizeBytes,
+			original.DurationSeconds,
 		)
 	}
 
@@ -2163,7 +2144,7 @@ func TestHandleShortsNextCarriesBitrateMetadata(t *testing.T) {
 		}
 	}
 	assertMetadataKeys("sized", true)
-	assertMetadataKeys("transcoded", true)
+	assertMetadataKeys("original", true)
 	for _, id := range []string{"unsized", "size-only", "duration-only"} {
 		assertMetadataKeys(id, false)
 	}
@@ -2175,13 +2156,7 @@ func TestPrewarmShortsStreamLinksUsesFirstTwoPlaybackTargetsAndUserAgent(t *test
 	registry.Set("drive", drive)
 	server := &Server{Proxy: proxy.New(registry)}
 	videos := []*catalog.Video{
-		{
-			ID:               "transcoded",
-			DriveID:          "drive",
-			FileID:           "original-1",
-			TranscodeStatus:  "ready",
-			TranscodedFileID: "transcoded-1",
-		},
+		{ID: "first", DriveID: "drive", FileID: "original-1"},
 		{ID: "original", DriveID: "drive", FileID: "original-2"},
 		{ID: "third", DriveID: "drive", FileID: "original-3"},
 		{ID: "upload", DriveID: localUploadDriveID, FileID: "upload.mp4"},
@@ -2205,7 +2180,7 @@ func TestPrewarmShortsStreamLinksUsesFirstTwoPlaybackTargetsAndUserAgent(t *test
 	for _, call := range got {
 		targets[call.fileID] = true
 	}
-	if !targets["transcoded-1"] || !targets["original-2"] || len(targets) != 2 {
+	if !targets["original-1"] || !targets["original-2"] || len(targets) != 2 {
 		t.Fatalf("prewarm calls = %#v, want the first two playback targets", got)
 	}
 	for _, call := range got {

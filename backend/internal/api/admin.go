@@ -82,24 +82,18 @@ type AdminServer struct {
 	// OnPrepareDriveDelete cancels all work for the drive and returns only after
 	// every tracked task has exited. The destructive lease is already blocking
 	// new admissions when this hook runs.
-	OnPrepareDriveDelete      func(ctx context.Context, driveID string) error
-	OnDriveDeleteCleanup      func(ctx context.Context, driveID string) (int, error)
-	OnDriveRemoved            func(driveID string)
-	OnScanRequested           func(driveID string) bool
-	OnCrawlerUploadRequested  func(driveID string) (bool, string)
-	OnStopDriveTasks          func(driveID string) bool
-	OnStopAllTasks            func() int
-	OnRegenPreview            func(videoID string)
-	OnRegenAllPreviews        func()
-	OnRegenFailedPreviews     func(driveID string)
-	OnRegenFailedThumbnails   func(driveID string)
-	OnRegenFailedFingerprints func(driveID string)
-	// OnStartDriveTranscode 手动开启某盘的浏览器兼容性转码任务。
-	// 返回 (是否接受, 拒绝原因)。转码从不自动运行，只能在这里手动触发；
-	// 处理完候选列表后任务自然结束。
-	OnStartDriveTranscode func(driveID string) (bool, string)
-	// OnStopDriveTranscode 手动停止某盘正在进行的转码任务。返回是否有任务被停。
-	OnStopDriveTranscode           func(driveID string) bool
+	OnPrepareDriveDelete           func(ctx context.Context, driveID string) error
+	OnDriveDeleteCleanup           func(ctx context.Context, driveID string) (int, error)
+	OnDriveRemoved                 func(driveID string)
+	OnScanRequested                func(driveID string) bool
+	OnCrawlerUploadRequested       func(driveID string) (bool, string)
+	OnStopDriveTasks               func(driveID string) bool
+	OnStopAllTasks                 func() int
+	OnRegenPreview                 func(videoID string)
+	OnRegenAllPreviews             func()
+	OnRegenFailedPreviews          func(driveID string)
+	OnRegenFailedThumbnails        func(driveID string)
+	OnRegenFailedFingerprints      func(driveID string)
 	OnDeleteVideo                  func(ctx context.Context, videoID string, deleteSource bool) (DeleteVideoResult, error)
 	OnStartBlacklistSourceDelete   func(BlacklistSourceDeleteRequest) bool
 	GetBlacklistSourceDeleteStatus func() BlacklistSourceDeleteStatus
@@ -179,7 +173,6 @@ type DriveGenerationStatuses struct {
 	Preview     GenerationStatus `json:"preview"`
 	Fingerprint GenerationStatus `json:"fingerprint"`
 	Upload      GenerationStatus `json:"upload"`
-	Transcode   GenerationStatus `json:"transcode"`
 }
 
 type NightlyJobStatus struct {
@@ -269,8 +262,6 @@ func (a *AdminServer) Register(r chi.Router) {
 			r.Post("/drives/{id}/previews/failed/regenerate", a.handleRegenFailedPreviews)
 			r.Post("/drives/{id}/thumbnails/failed/regenerate", a.handleRegenFailedThumbnails)
 			r.Post("/drives/{id}/fingerprints/failed/regenerate", a.handleRegenFailedFingerprints)
-			r.Post("/drives/{id}/transcode/start", a.handleStartDriveTranscode)
-			r.Post("/drives/{id}/transcode/stop", a.handleStopDriveTranscode)
 
 			// 爬虫
 			r.Get("/crawlers", a.handleListCrawlers)

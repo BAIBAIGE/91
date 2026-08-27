@@ -977,10 +977,6 @@ func (c *Crawler) RestoreRequestedVideos(ctx context.Context) (int, error) {
 		if c.previewDisabled(ctx) {
 			video.PreviewStatus = "disabled"
 		}
-		video.TranscodeStatus = ""
-		video.TranscodeError = ""
-		video.TranscodedFileID = ""
-		video.TranscodedSize = 0
 		if video.CreatedAt.IsZero() {
 			video.CreatedAt = file.modTime
 		}

@@ -24,7 +24,6 @@ import (
 	"github.com/video-site/backend/internal/catalog"
 	"github.com/video-site/backend/internal/drives/localupload"
 	"github.com/video-site/backend/internal/persistence"
-	"github.com/video-site/backend/internal/transcode"
 	"github.com/video-site/backend/internal/videoname"
 )
 
@@ -76,7 +75,7 @@ type Manager struct {
 	client         *http.Client
 	validateURL    func(context.Context, string) (*url.URL, error)
 	availableBytes func(string) (int64, error)
-	probeFile      func(context.Context, string, string) (transcode.MediaInfo, error)
+	probeFile      func(context.Context, string, string) (mediaInfo, error)
 
 	startMu sync.Mutex
 	started bool
@@ -135,7 +134,7 @@ func New(cfg Config) (*Manager, error) {
 		wake:            make(chan struct{}, 1),
 		done:            make(chan struct{}),
 		availableBytes:  diskAvailableBytes,
-		probeFile:       transcode.ProbeFile,
+		probeFile:       probeMediaFile,
 	}
 	m.validateURL = policy.validate
 	m.client = &http.Client{
@@ -671,7 +670,7 @@ func (m *Manager) publishFile(
 	return nil, taskError("同名视频文件过多，无法生成可用文件名")
 }
 
-func supportedExtension(info transcode.MediaInfo, metadata downloadMetadata) (string, error) {
+func supportedExtension(info mediaInfo, metadata downloadMetadata) (string, error) {
 	formatNames := make(map[string]bool)
 	for _, name := range strings.Split(strings.ToLower(info.FormatName), ",") {
 		formatNames[strings.TrimSpace(name)] = true

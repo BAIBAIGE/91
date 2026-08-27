@@ -279,15 +279,15 @@ DELETE FROM remote_upload_jobs
 	}
 
 	rows, err = tx.QueryContext(ctx, `
-SELECT id, drive_id, file_id, COALESCE(transcoded_file_id, ''), COALESCE(preview_local, '')
+SELECT id, drive_id, file_id, COALESCE(preview_local, '')
   FROM videos`)
 	if err != nil {
 		rollback()
 		return snapshotSelectionState{}, err
 	}
 	for rows.Next() {
-		var id, driveID, fileID, transcodedFileID, previewPath string
-		if err := rows.Scan(&id, &driveID, &fileID, &transcodedFileID, &previewPath); err != nil {
+		var id, driveID, fileID, previewPath string
+		if err := rows.Scan(&id, &driveID, &fileID, &previewPath); err != nil {
 			_ = rows.Close()
 			rollback()
 			return snapshotSelectionState{}, err
@@ -297,10 +297,8 @@ SELECT id, drive_id, file_id, COALESCE(transcoded_file_id, ''), COALESCE(preview
 			state.SelectedPreviewPaths[id] = previewPath
 		}
 		if driveID == "local-upload" {
-			for _, candidate := range []string{fileID, transcodedFileID} {
-				if candidate != "" {
-					state.SelectedUploadFiles[filepath.Base(candidate)] = struct{}{}
-				}
+			if fileID != "" {
+				state.SelectedUploadFiles[filepath.Base(fileID)] = struct{}{}
 			}
 		}
 		for index := range state.LocalStorageRoots {
@@ -308,16 +306,14 @@ SELECT id, drive_id, file_id, COALESCE(transcoded_file_id, ''), COALESCE(preview
 			if root.DriveID != driveID {
 				continue
 			}
-			for _, candidate := range []string{fileID, transcodedFileID} {
-				relative, err := decodeLocalStorageFileID(candidate)
-				if err != nil {
-					_ = rows.Close()
-					rollback()
-					return snapshotSelectionState{}, fmt.Errorf("backup: decode local storage file for video %s: %w", id, err)
-				}
-				if relative != "" {
-					root.Files[relative] = struct{}{}
-				}
+			relative, err := decodeLocalStorageFileID(fileID)
+			if err != nil {
+				_ = rows.Close()
+				rollback()
+				return snapshotSelectionState{}, fmt.Errorf("backup: decode local storage file for video %s: %w", id, err)
+			}
+			if relative != "" {
+				root.Files[relative] = struct{}{}
 			}
 			break
 		}

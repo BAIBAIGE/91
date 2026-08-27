@@ -186,11 +186,7 @@ func (s *Server) handleSharedVideoStream(w http.ResponseWriter, r *http.Request)
 		http.NotFound(w, r)
 		return
 	}
-	fileID := v.FileID
-	if v.TranscodeStatus == "ready" && v.TranscodedFileID != "" {
-		fileID = v.TranscodedFileID
-	}
-	s.Proxy.ServeStream(w, r, v.DriveID, fileID)
+	s.Proxy.ServeStream(w, r, v.DriveID, v.FileID)
 }
 
 func (s *Server) handleSharedVideoPreview(w http.ResponseWriter, r *http.Request) {

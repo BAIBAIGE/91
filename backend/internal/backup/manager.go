@@ -430,35 +430,33 @@ func (m *Manager) estimateLocalStorageResources(ctx context.Context, strict bool
 			if video == nil {
 				continue
 			}
-			for _, fileID := range []string{video.FileID, video.TranscodedFileID} {
-				relative, decodeErr := decodeLocalStorageFileID(fileID)
-				if decodeErr != nil {
-					if strict {
-						return 0, 0, fmt.Errorf("backup: decode local storage file for video %s: %w", video.ID, decodeErr)
-					}
-					continue
+			relative, decodeErr := decodeLocalStorageFileID(video.FileID)
+			if decodeErr != nil {
+				if strict {
+					return 0, 0, fmt.Errorf("backup: decode local storage file for video %s: %w", video.ID, decodeErr)
 				}
-				if relative == "" {
-					continue
-				}
-				candidate := filepath.Join(root, filepath.FromSlash(relative))
-				clean, _, info, ok, resolveErr := resolveContainedRegularFile(root, candidate)
-				if resolveErr != nil {
-					if strict {
-						return 0, 0, fmt.Errorf("backup: inspect local storage file for video %s: %w", video.ID, resolveErr)
-					}
-					continue
-				}
-				if !ok {
-					continue
-				}
-				if _, exists := seen[clean]; exists {
-					continue
-				}
-				seen[clean] = struct{}{}
-				count++
-				size += info.Size()
+				continue
 			}
+			if relative == "" {
+				continue
+			}
+			candidate := filepath.Join(root, filepath.FromSlash(relative))
+			clean, _, info, ok, resolveErr := resolveContainedRegularFile(root, candidate)
+			if resolveErr != nil {
+				if strict {
+					return 0, 0, fmt.Errorf("backup: inspect local storage file for video %s: %w", video.ID, resolveErr)
+				}
+				continue
+			}
+			if !ok {
+				continue
+			}
+			if _, exists := seen[clean]; exists {
+				continue
+			}
+			seen[clean] = struct{}{}
+			count++
+			size += info.Size()
 		}
 	}
 	return count, size, nil

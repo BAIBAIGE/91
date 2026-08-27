@@ -46,10 +46,6 @@ type adminVideoDTO struct {
 	PreviewFileID     string            `json:"previewFileId"`
 	PreviewLocal      string            `json:"previewLocal"`
 	PreviewStatus     string            `json:"previewStatus"`
-	TranscodeStatus   string            `json:"transcodeStatus"`
-	TranscodeError    string            `json:"transcodeError"`
-	TranscodedFileID  string            `json:"transcodedFileId"`
-	TranscodedSize    int64             `json:"transcodedSize"`
 	Views             int               `json:"views"`
 	LastViewedAt      time.Time         `json:"lastViewedAt"`
 	Favorites         int               `json:"favorites"`
@@ -88,10 +84,6 @@ func mapAdminVideo(v *catalog.Video) adminVideoDTO {
 		PreviewFileID:     v.PreviewFileID,
 		PreviewLocal:      v.PreviewLocal,
 		PreviewStatus:     v.PreviewStatus,
-		TranscodeStatus:   v.TranscodeStatus,
-		TranscodeError:    v.TranscodeError,
-		TranscodedFileID:  v.TranscodedFileID,
-		TranscodedSize:    v.TranscodedSize,
 		Views:             v.Views,
 		LastViewedAt:      v.LastViewedAt,
 		Favorites:         v.Favorites,

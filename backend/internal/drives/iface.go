@@ -49,7 +49,7 @@ type GenerationStreamProvider interface {
 
 // Uploader is the optional write capability of a drive. Callers that produce
 // remote files must assert it before starting work instead of discovering an
-// unsupported operation only after an expensive download/transcode has run.
+// unsupported operation only after preparing a potentially large upload.
 type Uploader interface {
 	Upload(ctx context.Context, parentID, name string, r io.Reader, size int64) (string, error)
 	EnsureDir(ctx context.Context, pathFromRoot string) (string, error)

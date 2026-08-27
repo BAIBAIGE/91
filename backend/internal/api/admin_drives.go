@@ -33,11 +33,6 @@ func (a *AdminServer) handleListDrives(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
-	transcodeCounts, err := a.Catalog.CountTranscodesByDrive(r.Context())
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
-		return
-	}
 	generationStatuses := map[string]DriveGenerationStatuses{}
 	if a.GetDriveGenerationStatuses != nil {
 		generationStatuses = a.GetDriveGenerationStatuses()
@@ -77,11 +72,6 @@ func (a *AdminServer) handleListDrives(w http.ResponseWriter, r *http.Request) {
 		FingerprintReadyCount         int              `json:"fingerprintReadyCount"`
 		FingerprintPendingCount       int              `json:"fingerprintPendingCount"`
 		FingerprintFailedCount        int              `json:"fingerprintFailedCount"`
-		TranscodeGenerationStatus     GenerationStatus `json:"transcodeGenerationStatus"`
-		TranscodePendingCount         int              `json:"transcodePendingCount"`
-		TranscodeReadyCount           int              `json:"transcodeReadyCount"`
-		TranscodeFailedCount          int              `json:"transcodeFailedCount"`
-		TranscodeSkippedCount         int              `json:"transcodeSkippedCount"`
 	}
 	list := make([]out, 0, len(drives))
 	for _, d := range drives {
@@ -91,7 +81,6 @@ func (a *AdminServer) handleListDrives(w http.ResponseWriter, r *http.Request) {
 		counts := teaserCounts[d.ID]
 		thumbCounts := thumbnailCounts[d.ID]
 		fingerprintCount := fingerprintCounts[d.ID]
-		transcodeCount := transcodeCounts[d.ID]
 		generation := generationStatuses[d.ID]
 		if generation.Scan.State == "" {
 			generation.Scan.State = "idle"
@@ -104,9 +93,6 @@ func (a *AdminServer) handleListDrives(w http.ResponseWriter, r *http.Request) {
 		}
 		if generation.Fingerprint.State == "" {
 			generation.Fingerprint.State = "idle"
-		}
-		if generation.Transcode.State == "" {
-			generation.Transcode.State = "idle"
 		}
 		// last_crawl_at 是后端自动写入的运行状态字段，不计入 hasCredential 判定。
 		hasCred := false
@@ -152,11 +138,6 @@ func (a *AdminServer) handleListDrives(w http.ResponseWriter, r *http.Request) {
 			FingerprintReadyCount:         fingerprintCount.Ready,
 			FingerprintPendingCount:       fingerprintCount.Pending,
 			FingerprintFailedCount:        fingerprintCount.Failed,
-			TranscodeGenerationStatus:     generation.Transcode,
-			TranscodePendingCount:         transcodeCount.Pending,
-			TranscodeReadyCount:           transcodeCount.Ready,
-			TranscodeFailedCount:          transcodeCount.Failed,
-			TranscodeSkippedCount:         transcodeCount.Skipped,
 		})
 	}
 	writeJSON(w, http.StatusOK, list)

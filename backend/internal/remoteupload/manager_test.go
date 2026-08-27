@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/video-site/backend/internal/catalog"
-	"github.com/video-site/backend/internal/transcode"
 )
 
 func TestManagerDownloadsValidatesAndFinalizesVideo(t *testing.T) {
@@ -361,11 +360,10 @@ func newTestManager(
 		context.Context,
 		string,
 		string,
-	) (transcode.MediaInfo, error) {
-		return transcode.MediaInfo{
+	) (mediaInfo, error) {
+		return mediaInfo{
 			FormatName:  "mov,mp4,m4a,3gp,3g2,mj2",
 			VideoCodecs: []string{"h264"},
-			AudioCodecs: []string{"aac"},
 		}, nil
 	}
 	t.Cleanup(func() {

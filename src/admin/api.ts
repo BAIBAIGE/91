@@ -491,7 +491,7 @@ export type AdminDrive = {
   status: string;
   lastError?: string;
   hasCredential: boolean;
-  /** 后端能力表声明该挂载可写入文件；爬虫目标与转码入口据此展示。 */
+  /** 后端能力表声明该挂载可写入文件；爬虫上传目标据此展示。 */
   canUpload: boolean;
   /** 当前是否给该盘生成预览视频（per-drive 开关，替代旧的全局 preview.enabled；封面不受影响）。 */
   teaserEnabled: boolean;
@@ -517,12 +517,6 @@ export type AdminDrive = {
   fingerprintReadyCount: number;
   fingerprintPendingCount: number;
   fingerprintFailedCount: number;
-  // 浏览器兼容性转码：候选(待处理)/已转码/失败/检测后无需转码 计数与任务状态。
-  transcodeGenerationStatus?: DriveGenerationStatus;
-  transcodePendingCount: number;
-  transcodeReadyCount: number;
-  transcodeFailedCount: number;
-  transcodeSkippedCount: number;
 };
 
 export type DriveGenerationStatus = {
@@ -972,26 +966,6 @@ export function regenFailedThumbnails(id: string) {
 export function regenFailedFingerprints(id: string) {
   return request<{ ok: boolean }>(
     `/drives/${encodeURIComponent(id)}/fingerprints/failed/regenerate`,
-    { method: "POST" }
-  );
-}
-
-/**
- * 手动开启某存储的浏览器兼容性转码（AVI/WMV 等浏览器播不动的视频转 H.264 MP4，
- * 产物上传回同一存储）。转码默认关闭、从不自动运行，这是唯一入口；
- * 任务处理完候选列表后自然结束。
- */
-export function startDriveTranscode(id: string) {
-  return request<{ ok: boolean; accepted: boolean; message?: string }>(
-    `/drives/${encodeURIComponent(id)}/transcode/start`,
-    { method: "POST" }
-  );
-}
-
-/** 手动停止某存储正在进行的转码任务。 */
-export function stopDriveTranscode(id: string) {
-  return request<{ ok: boolean; stopped: boolean }>(
-    `/drives/${encodeURIComponent(id)}/transcode/stop`,
     { method: "POST" }
   );
 }

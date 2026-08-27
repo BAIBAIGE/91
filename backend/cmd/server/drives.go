@@ -796,8 +796,6 @@ func (a *App) activeDriveConfig(ctx context.Context, driveID string) (*catalog.D
 	gate.mu.Unlock()
 
 	// Without a pending transition the catalog is the active configuration.
-	// Refreshing here also observes internal changes such as the transcode
-	// worker adding its output directory to skip_dir_ids.
 	d, err := a.cat.GetDrive(ctx, driveID)
 	if err != nil {
 		return nil, err
@@ -822,24 +820,6 @@ func (a *App) setActiveDriveConfig(d *catalog.Drive) {
 	gate.mu.Unlock()
 }
 
-// setActiveDriveConfigIfStable publishes a catalog row only when no
-// configuration transition became active after that row was read. This is the
-// compare-with-gate half of refreshActiveDriveConfigIfStable and prevents a
-// stale background refresh from replacing the immutable old-generation view.
-func (a *App) setActiveDriveConfigIfStable(d *catalog.Drive) bool {
-	if a == nil || d == nil {
-		return false
-	}
-	gate := a.driveOperationGate(d.ID)
-	gate.mu.Lock()
-	defer gate.mu.Unlock()
-	if gate.pending || gate.applying || gate.deleting || gate.retired {
-		return false
-	}
-	gate.activeConfig = cloneDriveConfig(d)
-	return true
-}
-
 // refreshActiveDriveConfigAfterApply is the forced publication path owned by
 // a configuration writer after it has drained the old task generation.
 func (a *App) refreshActiveDriveConfigAfterApply(driveID string) {
@@ -854,23 +834,6 @@ func (a *App) refreshActiveDriveConfigAfterApply(driveID string) {
 		return
 	}
 	a.setActiveDriveConfig(d)
-}
-
-// refreshActiveDriveConfigIfStable is for background/system writers such as a
-// completed transcode. The gate state is checked after the catalog read, which
-// closes the check-then-refresh race with a newly authorized configuration save.
-func (a *App) refreshActiveDriveConfigIfStable(driveID string) {
-	if a == nil || a.cat == nil {
-		return
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	d, err := a.cat.GetDrive(ctx, driveID)
-	if err != nil {
-		log.Printf("[drive %s] refresh stable configuration snapshot: %v", driveID, err)
-		return
-	}
-	a.setActiveDriveConfigIfStable(d)
 }
 
 type driveCredentialState struct {
@@ -1693,13 +1656,6 @@ func (a *App) driveHasActiveWork(driveID string) bool {
 		return true
 	}
 
-	a.transcodeMu.Lock()
-	transcoding := a.transcodeWorkers[driveID] != nil
-	a.transcodeMu.Unlock()
-	if transcoding {
-		return true
-	}
-
 	a.mu.Lock()
 	previewWorker := a.workers[driveID]
 	thumbWorker := a.thumbWorkers[driveID]
@@ -1856,14 +1812,13 @@ func (a *App) stopDriveTasks(ctx context.Context, driveID string) bool {
 	queued := a.clearQueuedDriveTask(driveID)
 	fingerprintQueued := a.clearFingerprintQueueing(driveID)
 	uploading := a.clearCrawlerUploadProgress(driveID)
-	transcoding := a.stopDriveTranscode(driveID)
 	gate := a.driveOperationGate(driveID)
 	gate.controlMu.Lock()
 	hadWorkers := a.resetDriveGenerationWorkers(ctx, driveID)
 	gate.controlMu.Unlock()
-	stopped := canceled > 0 || queued || fingerprintQueued || uploading || transcoding || hadWorkers
-	log.Printf("[tasks] stop drive=%s stopped=%v canceled_tasks=%d queued=%v fingerprint_queue=%v uploading=%v transcoding=%v workers=%v",
-		driveID, stopped, canceled, queued, fingerprintQueued, uploading, transcoding, hadWorkers)
+	stopped := canceled > 0 || queued || fingerprintQueued || uploading || hadWorkers
+	log.Printf("[tasks] stop drive=%s stopped=%v canceled_tasks=%d queued=%v fingerprint_queue=%v uploading=%v workers=%v",
+		driveID, stopped, canceled, queued, fingerprintQueued, uploading, hadWorkers)
 	return stopped
 }
 
@@ -1910,11 +1865,6 @@ func (a *App) driveTaskIDs() []string {
 		ids[id] = struct{}{}
 	}
 	a.uploadProgressMu.Unlock()
-	a.transcodeMu.Lock()
-	for id := range a.transcodeWorkers {
-		ids[id] = struct{}{}
-	}
-	a.transcodeMu.Unlock()
 	a.mu.Lock()
 	for id := range a.workers {
 		ids[id] = struct{}{}

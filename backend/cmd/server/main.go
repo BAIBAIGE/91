@@ -425,12 +425,6 @@ func main() {
 		OnRegenFailedFingerprints: func(driveID string) {
 			go app.regenFailedFingerprints(ctx, driveID)
 		},
-		OnStartDriveTranscode: func(driveID string) (bool, string) {
-			return app.startDriveTranscode(ctx, driveID)
-		},
-		OnStopDriveTranscode: func(driveID string) bool {
-			return app.stopDriveTranscode(driveID)
-		},
 		OnDeleteVideo: func(reqCtx context.Context, videoID string, deleteSource bool) (api.DeleteVideoResult, error) {
 			return app.deleteVideo(reqCtx, videoID, deleteSource)
 		},

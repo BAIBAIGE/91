@@ -809,47 +809,6 @@ func TestDeferredDriveConfigKeepsTaskSnapshotUntilApply(t *testing.T) {
 	}
 }
 
-func TestStableDriveConfigRefreshCannotOverwritePendingSnapshot(t *testing.T) {
-	ctx := context.Background()
-	cat, err := catalog.Open(t.TempDir() + "/catalog.db")
-	if err != nil {
-		t.Fatalf("open catalog: %v", err)
-	}
-	t.Cleanup(func() { _ = cat.Close() })
-	oldConfig := &catalog.Drive{
-		ID: "drive-id", Kind: "onedrive", Name: "Drive", RootID: "old-root",
-	}
-	if err := cat.UpsertDrive(ctx, oldConfig); err != nil {
-		t.Fatalf("seed drive: %v", err)
-	}
-	app := &App{cat: cat}
-	app.setActiveDriveConfig(oldConfig)
-
-	// Model a background refresh that read the desired row immediately before a
-	// config writer published pending=true. The late publication must be rejected.
-	desiredConfig := cloneDriveConfig(oldConfig)
-	desiredConfig.RootID = "new-root"
-	gate := app.driveOperationGate("drive-id")
-	gate.mu.Lock()
-	gate.beginBlockedLocked()
-	gate.pending = true
-	gate.mu.Unlock()
-	if app.setActiveDriveConfigIfStable(desiredConfig) {
-		t.Fatal("background refresh replaced a pending generation snapshot")
-	}
-	if err := cat.UpsertDrive(ctx, desiredConfig); err != nil {
-		t.Fatalf("save desired drive: %v", err)
-	}
-	app.refreshActiveDriveConfigIfStable("drive-id")
-	active, err := app.activeDriveConfig(ctx, "drive-id")
-	if err != nil {
-		t.Fatalf("read pending snapshot: %v", err)
-	}
-	if active.RootID != "old-root" {
-		t.Fatalf("pending snapshot root = %q, want old-root", active.RootID)
-	}
-}
-
 func TestDriveConfigUpdateDefersEveryTaskSensitiveScope(t *testing.T) {
 	app := &App{}
 	ctx := context.Background()
