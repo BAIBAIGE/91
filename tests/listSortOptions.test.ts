@@ -22,10 +22,6 @@ const homePageSource = readFileSync(
   new URL("../src/pages/HomePage.tsx", import.meta.url),
   "utf8"
 );
-const listingQuerySource = readFileSync(
-  new URL("../src/lib/useListingQuery.ts", import.meta.url),
-  "utf8"
-);
 const responsiveSource = readFileSync(
   new URL("../src/lib/responsive.ts", import.meta.url),
   "utf8"
@@ -126,18 +122,13 @@ test("public video lists use fourteen mobile and twenty desktop items per batch"
   assert.match(listingPageSource, /skeletonCount=\{pageSize\}/);
 });
 
-test("home search keeps the shared stale-while-revalidate query contract", () => {
-  assert.match(homePageSource, /import \{ useListingQuery \} from "@\/lib\/useListingQuery"/);
-  assert.match(homePageSource, /refreshMode=\{[\s\S]*?searchResult\.transitioning[\s\S]*?"blocking"[\s\S]*?searchResult\.revalidating[\s\S]*?"background"/);
-  assert.match(homePageSource, /disabled=\{searchResult\.transitioning\}/);
-  assert.match(homePageSource, /<ListingLoadError[\s\S]*?displayedPage=\{displayedSearchPage\}/);
-  assert.match(homePageSource, /searchSnapshot\?\.query\.page \?\? searchPage/);
-  assert.match(listingQuerySource, /const LISTING_CACHE_TTL_MS = 60_000/);
-  assert.match(listingQuerySource, /const LISTING_CACHE_MAX_ENTRIES = 20/);
-  assert.match(listingQuerySource, /function peekListingCache/);
-  assert.match(listingQuerySource, /transitioning: refreshing && !snapshotMatchesRequest/);
-  assert.match(listingQuerySource, /revalidating: refreshing && snapshotMatchesRequest/);
-  assert.match(listingQuerySource, /return \(\) => controller\.abort\(\)/);
+test("home filters use the shared snapshot-based infinite listing contract", () => {
+  assert.match(homePageSource, /listingFeedSource\(\{[\s\S]*?q: activeSearchQuery,[\s\S]*?tag: activeTag,[\s\S]*?sort: searchSort/);
+  assert.match(homePageSource, /useInfiniteListing\(activeFeedSource, \{/);
+  assert.match(homePageSource, /useListingScrollRestore\(\{[\s\S]*?queryKey: activeFeedSource\.key/);
+  assert.match(homePageSource, /<VirtualVideoGrid[\s\S]*?hasMore=\{homeFeed\.hasMore\}[\s\S]*?onLoadMore=\{homeFeed\.loadMore\}/);
+  assert.match(homePageSource, /sortDisabled=\{homeFeed\.initialLoading\}/);
+  assert.doesNotMatch(homePageSource, /useListingQuery|<Pagination|displayedSearchPage/);
 });
 
 test("sort toolbar has no outer frame around its controls", () => {

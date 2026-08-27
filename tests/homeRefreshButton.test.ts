@@ -51,11 +51,10 @@ test("home page refresh button shares back-to-top slot until back-to-top is visi
     homePageSource,
     /const refreshHome = useCallback\(\(\) => \{\s*window\.scrollTo\(\{ top: 0, behavior: "auto" \}\);\s*reloadFeed\(\);/
   );
-  assert.match(homePageSource, /const HOME_SEARCH_DESKTOP_PAGE_SIZE = 20;/);
-  assert.match(homePageSource, /const HOME_FEED_DESKTOP_BATCH_SIZE = 20;/);
+  assert.match(homePageSource, /const HOME_DESKTOP_BATCH_SIZE = 20;/);
   assert.match(
     homePageSource,
-    /const feedBatchSize = isMobile\s*\? MOBILE_VIDEO_PAGE_SIZE\s*:\s*HOME_FEED_DESKTOP_BATCH_SIZE;/
+    /const batchSize = isMobile\s*\? MOBILE_VIDEO_PAGE_SIZE\s*:\s*HOME_DESKTOP_BATCH_SIZE;/
   );
   // 推荐流的取数和缓存都收敛到共享的无限滚动 hook 里。
   assert.doesNotMatch(homePageSource, /cachedRanking|cachedLatest/);
@@ -86,12 +85,13 @@ test("home page refresh button shares back-to-top slot until back-to-top is visi
   assert.match(backToTopSource, /onVisibilityChange\?\.\(nextVisible\)/);
 });
 
-test("home page keeps its recommendation state in the shared feed session", () => {
+test("home page keeps every active result set in the shared feed session", () => {
   // 返回首页时的续播、去重、中断过期请求都由 useInfiniteListing 负责，
   // 页面自己不再维护模块级缓存和请求版本号。
-  assert.match(homePageSource, /const homeFeed = useInfiniteListing\(feedSource, \{/);
-  assert.match(homePageSource, /enabled: !hasActiveFilter,/);
+  assert.match(homePageSource, /const activeFeedSource = hasActiveFilter \? filterFeedSource : feedSource;/);
+  assert.match(homePageSource, /const homeFeed = useInfiniteListing\(activeFeedSource, \{/);
   assert.match(homePageSource, /restoreCount: restoreTarget\.count,/);
+  assert.match(homePageSource, /queryKey: activeFeedSource\.key,[\s\S]*?requestedCount: homeFeed\.requestedCount/);
   assert.doesNotMatch(homePageSource, /rankingRequestVersion|latestRequestVersion|homeRequestVersion/);
   assert.doesNotMatch(homePageSource, /loadRanking|loadLatest|refreshLatest/);
   assert.doesNotMatch(homePageSource, /HOME_CACHE_TTL_MS|cacheIsFresh|cachedRankingAt|cachedLatestAt/);
@@ -218,28 +218,25 @@ test("home page reserves tag cloud space while tags load and uses one empty libr
   assert.match(homePageSource, /const \[searchParams, setSearchParams\] = useSearchParams\(\)/);
   assert.match(homePageSource, /const activeSearchQuery = searchParams\.get\("q"\)\?\.trim\(\) \?\? ""/);
   assert.match(homePageSource, /const activeTag = searchParams\.get\("tag"\)\?\.trim\(\) \?\? ""/);
-  assert.match(homePageSource, /const searchPage = readListingPage\(searchParams\)/);
   assert.match(homePageSource, /const searchSort = readListingSort\(searchParams\)/);
   assert.match(homePageSource, /const searchView = readListingView\(searchParams\)/);
   assert.doesNotMatch(homePageSource, /const handleSearch = useCallback/);
   assert.doesNotMatch(homePageSource, /next\.delete\("tag"\)/);
   assert.match(homePageSource, /<SearchPanel[\s\S]*?navigationPath="\/"[\s\S]*?variant="uiverse"[\s\S]*?placeholder=""[\s\S]*?\/>/);
   assert.match(homePageSource, /className="search-panel--public search-panel--transparent"/);
-  assert.match(homePageSource, /const searchPageSize = isMobile\s*\? MOBILE_VIDEO_PAGE_SIZE\s*:\s*HOME_SEARCH_DESKTOP_PAGE_SIZE/);
-  assert.match(homePageSource, /const searchResult = useListingQuery\([\s\S]*?q: activeSearchQuery,[\s\S]*?tag: activeTag,[\s\S]*?sort: searchSort,[\s\S]*?page: searchPage,[\s\S]*?pageSize: searchPageSize/);
-  assert.match(homePageSource, /\{ enabled: hasActiveFilter \}/);
+  assert.match(homePageSource, /const batchSize = isMobile\s*\? MOBILE_VIDEO_PAGE_SIZE\s*:\s*HOME_DESKTOP_BATCH_SIZE/);
+  assert.match(homePageSource, /listingFeedSource\(\{[\s\S]*?q: activeSearchQuery,[\s\S]*?tag: activeTag,[\s\S]*?sort: searchSort,[\s\S]*?pageSize: batchSize/);
+  assert.doesNotMatch(homePageSource, /useListingQuery|<Pagination/);
   assert.match(homePageSource, /withListingPage\(current, 1\)/);
   assert.match(homePageSource, /const hasActiveTag = activeTag\.length > 0/);
   assert.match(homePageSource, /const hasActiveFilter = hasActiveSearch \|\| hasActiveTag/);
   assert.doesNotMatch(homePageSource, /搜索结果：/);
-  assert.match(homePageSource, /<SortToolbar[\s\S]*?sort=\{displayedSearchSort\}[\s\S]*?view=\{searchView\}/);
+  assert.match(homePageSource, /<SortToolbar[\s\S]*?sort=\{searchSort\}[\s\S]*?view=\{searchView\}/);
   assert.match(homePageSource, /withListingNavigation\(current, \{ sort: nextSort, page: 1 \}\)/);
   assert.match(homePageSource, /withListingView\(current, nextView\)/);
-  assert.match(homePageSource, /compact=\{searchView === "compact"\}/);
-  assert.match(homePageSource, /variant="no-results"[\s\S]*?text="未查询到"[\s\S]*?className="admin-empty-state admin-empty-state--plain home-empty-state"/);
-  assert.match(homePageSource, /<Pagination[\s\S]*?page=\{displayedSearchPage\}[\s\S]*?pageSize=\{searchSnapshot\.query\.pageSize\}/);
-  assert.match(homePageSource, /refreshMode=\{[\s\S]*?searchResult\.transitioning[\s\S]*?"blocking"[\s\S]*?searchResult\.revalidating[\s\S]*?"background"/);
-  assert.match(homePageSource, /<ListingLoadError[\s\S]*?displayedPage=\{displayedSearchPage\}/);
+  assert.match(homePageSource, /compact=\{hasActiveFilter && searchView === "compact"\}/);
+  assert.match(homePageSource, /variant=\{hasActiveFilter \? "no-results" : "empty"\}[\s\S]*?text=\{hasActiveFilter \? "未查询到" : "当前库中没有视频"\}/);
+  assert.match(homePageSource, /<VirtualVideoGrid[\s\S]*?onLoadMore=\{homeFeed\.loadMore\}/);
   assert.match(homePageSource, /const feedHasContent = feedItems\.length > 0/);
   assert.match(
     homePageSource,
@@ -252,7 +249,7 @@ test("home page reserves tag cloud space while tags load and uses one empty libr
   assert.doesNotMatch(homePageSource, /共 \$\{latest\.length\} 个/);
   assert.match(homePageSource, /className="container page-section home-discovery-section"/);
   assert.match(homePageSource, /className="container page-section home-primary-section"/);
-  assert.match(homePageSource, /variant="empty"[\s\S]*?text="当前库中没有视频"[\s\S]*?className="admin-empty-state admin-empty-state--plain home-empty-state"/);
+  assert.match(homePageSource, /className="admin-empty-state admin-empty-state--plain home-empty-state"/);
   assert.doesNotMatch(homePageSource, /className="home-empty"/);
   assert.doesNotMatch(homePageSource, /当前没有可播放视频/);
 

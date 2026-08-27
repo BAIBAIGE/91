@@ -74,14 +74,14 @@ test("switching tabs replaces the history entry and restarts at the top", () => 
   );
   assert.match(
     homePageSource,
-    /if \(previousFeedKeyRef\.current === feedSource\.key\) return;[\s\S]*?window\.scrollTo\(\{ top: 0, behavior: "auto" \}\)/
+    /if \(previousFeedKeyRef\.current === activeFeedSource\.key\) return;[\s\S]*?window\.scrollTo\(\{ top: 0, behavior: "auto" \}\)/
   );
 });
 
 test("each home tab scrolls infinitely through its own feed source", () => {
   assert.match(
     homePageSource,
-    /feed === "latest"\s*\? homeLatestFeedSource\(feedBatchSize\)\s*:\s*homeRecommendationFeedSource\(\)/
+    /feed === "latest"\s*\? homeLatestFeedSource\(batchSize\)\s*:\s*homeRecommendationFeedSource\(\)/
   );
   assert.match(
     homePageSource,
@@ -94,15 +94,19 @@ test("each home tab scrolls infinitely through its own feed source", () => {
   assert.match(infiniteFeedStatusSource, /没有更多了/);
 });
 
-test("search and tag results keep their pagination", () => {
+test("search, tag, and combined results use the same infinite listing", () => {
   assert.match(
     homePageSource,
-    /const searchResult = useListingQuery\([\s\S]*?page: searchPage,[\s\S]*?pageSize: searchPageSize/
+    /const filterFeedSource = useMemo\([\s\S]*?listingFeedSource\(\{[\s\S]*?q: activeSearchQuery,[\s\S]*?tag: activeTag,[\s\S]*?sort: searchSort,[\s\S]*?pageSize: batchSize/
   );
-  assert.match(homePageSource, /<Pagination[\s\S]*?page=\{displayedSearchPage\}/);
-  // 搜索结果仍然分页，推荐流才是无限滚动。
   assert.match(
     homePageSource,
-    /<VideoGrid\s+videos=\{searchItems\}/
+    /const activeFeedSource = hasActiveFilter \? filterFeedSource : feedSource;[\s\S]*?useInfiniteListing\(activeFeedSource,/
   );
+  assert.match(
+    homePageSource,
+    /<VirtualVideoGrid[\s\S]*?videos=\{feedItems\}[\s\S]*?compact=\{hasActiveFilter && searchView === "compact"\}[\s\S]*?onLoadMore=\{homeFeed\.loadMore\}/
+  );
+  assert.match(homePageSource, /if \(!searchParams\.has\("page"\)\) return;/);
+  assert.doesNotMatch(homePageSource, /useListingQuery|<Pagination/);
 });

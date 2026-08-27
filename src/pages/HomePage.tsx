@@ -6,7 +6,6 @@ import { AppShell } from "@/components/AppShell";
 import { HomeFeedTabs } from "@/components/HomeFeedTabs";
 import { InfiniteFeedStatus } from "@/components/InfiniteFeedStatus";
 import { ListingLoadError } from "@/components/ListingLoadError";
-import { Pagination } from "@/components/Pagination";
 import { PromoStrip } from "@/components/PromoStrip";
 import { SearchPanel } from "@/components/SearchPanel";
 import { SortToolbar, type ViewMode } from "@/components/SortToolbar";
@@ -16,10 +15,10 @@ import { VirtualVideoGrid } from "@/components/VirtualVideoGrid";
 import {
   homeLatestFeedSource,
   homeRecommendationFeedSource,
+  listingFeedSource,
 } from "@/lib/infiniteFeedSource";
 import {
   readHomeFeed,
-  readListingPage,
   readListingSort,
   readListingView,
   withHomeFeed,
@@ -30,15 +29,13 @@ import {
 } from "@/lib/listingSearchParams";
 import { MOBILE_VIDEO_PAGE_SIZE, useIsMobile } from "@/lib/responsive";
 import { useInfiniteListing } from "@/lib/useInfiniteListing";
-import { useListingQuery } from "@/lib/useListingQuery";
 import {
   useListingRestoreTarget,
   useListingScrollRestore,
 } from "@/lib/useListingScrollRestore";
 import type { SortKey } from "@/types";
 
-const HOME_SEARCH_DESKTOP_PAGE_SIZE = 20;
-const HOME_FEED_DESKTOP_BATCH_SIZE = 20;
+const HOME_DESKTOP_BATCH_SIZE = 20;
 
 // 距列表尾部还有两行时就续下一批，滚动到底之前数据已经在路上。
 const PREFETCH_ROWS = 2;
@@ -51,73 +48,55 @@ export default function HomePage() {
   const hasActiveSearch = activeSearchQuery.length > 0;
   const hasActiveTag = activeTag.length > 0;
   const hasActiveFilter = hasActiveSearch || hasActiveTag;
-  const searchPage = readListingPage(searchParams);
   const searchSort = readListingSort(searchParams);
   const searchView = readListingView(searchParams);
   const feed = readHomeFeed(searchParams);
   const isMobile = useIsMobile();
   const eagerCount = isMobile ? 2 : 4;
 
-  // 搜索和标签结果仍然分页：这类结果常常需要定位到具体某一页。
-  const searchPageSize = isMobile
+  // 推荐、最新以及任意搜索/标签组合都通过不可变快照无限滚动。source key
+  // 完整描述结果集身份，hook 统一负责累积、缓存、取消和返回位置恢复。
+  const batchSize = isMobile
     ? MOBILE_VIDEO_PAGE_SIZE
-    : HOME_SEARCH_DESKTOP_PAGE_SIZE;
-  const searchResult = useListingQuery(
-    {
-      q: activeSearchQuery,
-      tag: activeTag,
-      sort: searchSort,
-      page: searchPage,
-      pageSize: searchPageSize,
-    },
-    { enabled: hasActiveFilter }
-  );
-  const searchSnapshot = searchResult.snapshot;
-  const searchItems = searchSnapshot?.items ?? [];
-  const searchHasContent = searchItems.length > 0;
-  const searchShowSkeleton =
-    searchResult.initialLoading ||
-    (searchResult.transitioning && !searchHasContent);
-  const searchShowContentError =
-    searchResult.phase === "error" && searchHasContent;
-  const searchShowEmptyError =
-    searchResult.phase === "error" && !searchHasContent;
-  const previousSearchPageSizeRef = useRef(searchPageSize);
-  const searchScrollOnCommitRef = useRef(false);
-
-  // 两个推荐 tab 都通过不可变快照无限滚动：随机推荐在建快照时洗牌，最新
-  // 视频按确定顺序冻结，后续请求只按 token/cursor 读取同一份结果集。
-  const feedBatchSize = isMobile
-    ? MOBILE_VIDEO_PAGE_SIZE
-    : HOME_FEED_DESKTOP_BATCH_SIZE;
+    : HOME_DESKTOP_BATCH_SIZE;
   const feedSource = useMemo(
     () =>
       feed === "latest"
-        ? homeLatestFeedSource(feedBatchSize)
+        ? homeLatestFeedSource(batchSize)
         : homeRecommendationFeedSource(),
-    [feed, feedBatchSize]
+    [batchSize, feed]
   );
+  const filterFeedSource = useMemo(
+    () =>
+      listingFeedSource({
+        q: activeSearchQuery,
+        tag: activeTag,
+        sort: searchSort,
+        pageSize: batchSize,
+      }),
+    [activeSearchQuery, activeTag, batchSize, searchSort]
+  );
+  const activeFeedSource = hasActiveFilter ? filterFeedSource : feedSource;
   const restoreTarget = useListingRestoreTarget({
     historyKey: location.key,
-    queryKey: feedSource.key,
-    pageSize: feedSource.batchSize,
+    queryKey: activeFeedSource.key,
+    pageSize: activeFeedSource.batchSize,
   });
-  const homeFeed = useInfiniteListing(feedSource, {
-    enabled: !hasActiveFilter,
+  const homeFeed = useInfiniteListing(activeFeedSource, {
     restoreCount: restoreTarget.count,
     restoreFeedToken: restoreTarget.feedToken,
   });
   useListingScrollRestore({
     target: restoreTarget,
-    queryKey: feedSource.key,
-    requestedCount: hasActiveFilter ? 0 : homeFeed.requestedCount,
-    feedToken: hasActiveFilter ? "" : homeFeed.feedToken,
+    queryKey: activeFeedSource.key,
+    requestedCount: homeFeed.requestedCount,
+    feedToken: homeFeed.feedToken,
     itemCount: homeFeed.items.length,
   });
 
   const feedItems = homeFeed.items;
   const feedHasContent = feedItems.length > 0;
-  const previousFeedKeyRef = useRef(feedSource.key);
+  const previousFeedKeyRef = useRef(activeFeedSource.key);
 
   useEffect(() => {
     document.title = activeSearchQuery
@@ -128,30 +107,18 @@ export default function HomePage() {
   }, [activeSearchQuery, activeTag]);
 
   useEffect(() => {
-    if (previousSearchPageSizeRef.current === searchPageSize) return;
-    previousSearchPageSizeRef.current = searchPageSize;
-    if (!hasActiveFilter || searchPage === 1) return;
+    // 无限滚动没有页码；清理旧书签或外部链接遗留的 page 参数。
+    if (!searchParams.has("page")) return;
     setSearchParams((current) => withListingPage(current, 1), { replace: true });
-  }, [hasActiveFilter, searchPage, searchPageSize, setSearchParams]);
+  }, [searchParams, setSearchParams]);
 
+  // 换 tab、排序、搜索或标签都会生成一个新结果集，直接回到顶部再累积。
+  // 平滑滚动会被虚拟列表的行高补偿打断而停在半路。
   useEffect(() => {
-    if (
-      !searchScrollOnCommitRef.current ||
-      searchSnapshot?.key !== searchResult.key
-    ) {
-      return;
-    }
-    searchScrollOnCommitRef.current = false;
-    window.scrollTo({ top: 0, behavior: "smooth" });
-  }, [searchResult.key, searchSnapshot?.key]);
-
-  // 换 tab 是一次全新的列表，回到顶部再开始累积。平滑滚动会被虚拟列表的
-  // 行高补偿打断而停在半路，所以直接落到顶部。
-  useEffect(() => {
-    if (previousFeedKeyRef.current === feedSource.key) return;
-    previousFeedKeyRef.current = feedSource.key;
+    if (previousFeedKeyRef.current === activeFeedSource.key) return;
+    previousFeedKeyRef.current = activeFeedSource.key;
     window.scrollTo({ top: 0, behavior: "auto" });
-  }, [feedSource.key]);
+  }, [activeFeedSource.key]);
 
   const reloadFeed = homeFeed.reload;
   const refreshHome = useCallback(() => {
@@ -159,17 +126,11 @@ export default function HomePage() {
     reloadFeed();
   }, [reloadFeed]);
 
-  const displayedSearchSort =
-    searchResult.phase === "error" && searchSnapshot
-      ? searchSnapshot.query.sort
-      : searchSort;
-  const displayedSearchPage = searchSnapshot?.query.page ?? searchPage;
   const showRefresh = !hasActiveFilter && feed === "recommend";
   const refreshing = showRefresh && homeFeed.initialLoading;
 
   const handleSearchSortChange = useCallback(
     (nextSort: SortKey) => {
-      searchScrollOnCommitRef.current = true;
       setSearchParams(
         (current) =>
           withListingNavigation(current, { sort: nextSort, page: 1 }),
@@ -184,14 +145,6 @@ export default function HomePage() {
       setSearchParams((current) => withListingView(current, nextView), {
         replace: true,
       });
-    },
-    [setSearchParams]
-  );
-
-  const handleSearchPageChange = useCallback(
-    (nextPage: number) => {
-      searchScrollOnCommitRef.current = true;
-      setSearchParams((current) => withListingPage(current, nextPage));
     },
     [setSearchParams]
   );
@@ -222,119 +175,68 @@ export default function HomePage() {
         )}
       </div>
 
-      {hasActiveFilter ? (
-        <div className="container page-section home-primary-section">
+      <div className="container page-section home-primary-section">
+        {hasActiveFilter ? (
           <SortToolbar
-            sort={displayedSearchSort}
+            sort={searchSort}
             view={searchView}
-            sortDisabled={searchResult.initialLoading || searchResult.transitioning}
+            sortDisabled={homeFeed.initialLoading}
             onSortChange={handleSearchSortChange}
             onViewChange={handleSearchViewChange}
           />
-
-          {searchShowSkeleton ? (
-            <VideoGrid
-              videos={[]}
-              loading
-              compact={searchView === "compact"}
-              skeletonCount={searchPageSize}
-            />
-          ) : searchShowEmptyError ? (
-            <ListingLoadError
-              hasContent={false}
-              onRetry={searchResult.retry}
-              emptyClassName="admin-empty-state admin-empty-state--plain home-empty-state"
-            />
-          ) : searchSnapshot && searchItems.length === 0 ? (
-            <AdminEmptyVisual
-              variant="no-results"
-              text="未查询到"
-              className="admin-empty-state admin-empty-state--plain home-empty-state"
-            />
-          ) : (
-            <>
-              {searchShowContentError && (
-                <ListingLoadError
-                  hasContent
-                  displayedPage={displayedSearchPage}
-                  onRetry={searchResult.retry}
-                />
-              )}
-              <VideoGrid
-                videos={searchItems}
-                compact={searchView === "compact"}
-                refreshMode={
-                  searchResult.transitioning
-                    ? "blocking"
-                    : searchResult.revalidating
-                    ? "background"
-                    : undefined
-                }
-                eagerCount={eagerCount}
-                highPriorityCount={1}
-              />
-            </>
-          )}
-
-          {searchSnapshot && (
-            <Pagination
-              page={displayedSearchPage}
-              pageSize={searchSnapshot.query.pageSize}
-              total={searchSnapshot.total}
-              disabled={searchResult.transitioning}
-              pendingPage={searchResult.transitioning ? searchPage : undefined}
-              onChange={handleSearchPageChange}
-            />
-          )}
-        </div>
-      ) : (
-        <div className="container page-section home-primary-section">
+        ) : (
           <HomeFeedTabs
             feed={feed}
             onChange={handleFeedChange}
           />
+        )}
 
-          {homeFeed.initialLoading && !feedHasContent ? (
-            <VideoGrid videos={[]} loading skeletonCount={feedSource.batchSize} />
-          ) : homeFeed.failed && !feedHasContent ? (
-            <ListingLoadError
-              hasContent={false}
-              onRetry={homeFeed.retry}
-              emptyClassName="admin-empty-state admin-empty-state--plain home-empty-state"
+        {homeFeed.initialLoading && !feedHasContent ? (
+          <VideoGrid
+            videos={[]}
+            loading
+            compact={hasActiveFilter && searchView === "compact"}
+            skeletonCount={activeFeedSource.batchSize}
+          />
+        ) : homeFeed.failed && !feedHasContent ? (
+          <ListingLoadError
+            hasContent={false}
+            onRetry={homeFeed.retry}
+            emptyClassName="admin-empty-state admin-empty-state--plain home-empty-state"
+          />
+        ) : !feedHasContent ? (
+          <AdminEmptyVisual
+            variant={hasActiveFilter ? "no-results" : "empty"}
+            text={hasActiveFilter ? "未查询到" : "当前库中没有视频"}
+            className="admin-empty-state admin-empty-state--plain home-empty-state"
+          />
+        ) : (
+          <>
+            <VirtualVideoGrid
+              videos={feedItems}
+              compact={hasActiveFilter && searchView === "compact"}
+              eagerCount={eagerCount}
+              highPriorityCount={1}
+              key={`${activeFeedSource.key}:${homeFeed.feedToken}`}
+              hasMore={homeFeed.hasMore}
+              loadingMore={homeFeed.loadingMore}
+              prefetchRows={PREFETCH_ROWS}
+              tailContent={
+                homeFeed.loadingMore ? (
+                  <InfiniteFeedStatus state="loading" />
+                ) : undefined
+              }
+              onLoadMore={homeFeed.loadMore}
             />
-          ) : !feedHasContent ? (
-            <AdminEmptyVisual
-              variant="empty"
-              text="当前库中没有视频"
-              className="admin-empty-state admin-empty-state--plain home-empty-state"
-            />
-          ) : (
-            <>
-              <VirtualVideoGrid
-                videos={feedItems}
-                eagerCount={eagerCount}
-                highPriorityCount={1}
-                key={`${feedSource.key}:${homeFeed.feedToken}`}
-                hasMore={homeFeed.hasMore}
-                loadingMore={homeFeed.loadingMore}
-                prefetchRows={PREFETCH_ROWS}
-                tailContent={
-                  homeFeed.loadingMore ? (
-                    <InfiniteFeedStatus state="loading" />
-                  ) : undefined
-                }
-                onLoadMore={homeFeed.loadMore}
-              />
 
-              {homeFeed.failed ? (
-                <ListingLoadError hasContent onRetry={homeFeed.retry} />
-              ) : homeFeed.exhausted ? (
-                <InfiniteFeedStatus state="end" />
-              ) : null}
-            </>
-          )}
-        </div>
-      )}
+            {homeFeed.failed ? (
+              <ListingLoadError hasContent onRetry={homeFeed.retry} />
+            ) : homeFeed.exhausted ? (
+              <InfiniteFeedStatus state="end" />
+            ) : null}
+          </>
+        )}
+      </div>
 
       {showRefresh && (
         <button
