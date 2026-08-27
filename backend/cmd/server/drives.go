@@ -1244,6 +1244,11 @@ func (a *App) newDriveGenerationWorkers(drv drives.Drive) (*preview.Worker, *pre
 		previewWorker.Concurrency = a.cfg.Preview.ConcurrencyForDrive(drv.ID())
 	}
 	thumbWorker := preview.NewThumbWorker(gen, a.cat, drv)
+	previewWorker.OnPreviewReady = func(video *catalog.Video) {
+		if !thumbWorker.EnqueueFollowUp(video) {
+			log.Printf("[thumb] dependent enqueue full drive=%s video=%s; remains pending for the next reconciliation", drv.ID(), video.ID)
+		}
+	}
 	if cooldown := generationCooldownForDrive(drv); cooldown > 0 {
 		previewWorker.RateLimitCooldown = cooldown
 		thumbWorker.RateLimitCooldown = cooldown

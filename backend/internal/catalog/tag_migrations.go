@@ -201,6 +201,9 @@ CREATE TABLE IF NOT EXISTS deleted_videos (
 	if err := c.reconcileThumbnailStatusOnce(ctx); err != nil {
 		return err
 	}
+	if err := c.requeueFailedThumbnailsWithReadyPreviewOnce(ctx); err != nil {
+		return err
+	}
 	if err := c.requeueSkippedPreviews(ctx); err != nil {
 		return err
 	}
@@ -1255,6 +1258,41 @@ UPDATE videos
 	}
 	if affected, err := res.RowsAffected(); err == nil && affected > 0 {
 		log.Printf("[catalog] reconciled %d video(s) thumbnail_status pending→ready (url already written)", affected)
+	}
+	if err := c.SetSetting(ctx, markerKey, "1"); err != nil {
+		return fmt.Errorf("write %s marker: %w", markerKey, err)
+	}
+	return nil
+}
+
+// requeueFailedThumbnailsWithReadyPreviewOnce repairs rows created before
+// preview completion became a thumbnail retry signal. Future rows are handled
+// transactionally by UpdatePreview; the marker prevents a permanently bad
+// source video from being retried on every process restart.
+func (c *Catalog) requeueFailedThumbnailsWithReadyPreviewOnce(ctx context.Context) error {
+	const markerKey = "videos.failed_thumbnail.ready_preview_requeued_v2"
+	marker, err := c.GetSetting(ctx, markerKey, "")
+	if err != nil {
+		return fmt.Errorf("read %s marker: %w", markerKey, err)
+	}
+	if strings.TrimSpace(marker) == "1" {
+		return nil
+	}
+	result, err := c.db.ExecContext(ctx, `
+UPDATE videos
+   SET thumbnail_status = 'pending',
+       thumbnail_failures = 0,
+       updated_at = ?
+ WHERE COALESCE(thumbnail_url, '') = ''
+   AND COALESCE(thumbnail_status, 'pending') = 'failed'
+   AND COALESCE(preview_status, 'pending') = 'ready'
+   AND TRIM(COALESCE(preview_local, '')) != ''
+`, time.Now().UnixMilli())
+	if err != nil {
+		return fmt.Errorf("requeue failed thumbnails with ready preview: %w", err)
+	}
+	if affected, rowsErr := result.RowsAffected(); rowsErr == nil && affected > 0 {
+		log.Printf("[catalog] requeued %d failed thumbnail(s) with a ready local preview", affected)
 	}
 	if err := c.SetSetting(ctx, markerKey, "1"); err != nil {
 		return fmt.Errorf("write %s marker: %w", markerKey, err)

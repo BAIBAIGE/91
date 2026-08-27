@@ -365,9 +365,25 @@ func (c *Catalog) UpdatePreview(ctx context.Context, id, previewLocal, status st
 		          ELSE 0
 		        END,
 		        preview_status = ?,
+		        thumbnail_status = CASE
+		          WHEN ? = 'ready'
+		           AND COALESCE(?, '') != ''
+		           AND COALESCE(thumbnail_url, '') = ''
+		            THEN 'pending'
+		          ELSE thumbnail_status
+		        END,
+		        thumbnail_failures = CASE
+		          WHEN ? = 'ready'
+		           AND COALESCE(?, '') != ''
+		           AND COALESCE(thumbnail_url, '') = ''
+		            THEN 0
+		          ELSE thumbnail_failures
+		        END,
 		        updated_at = ?
 		  WHERE id = ?`,
-		previewLocal, status, previewLocal, now, status, now, id)
+		previewLocal, status, previewLocal, now, status,
+		status, previewLocal, status, previewLocal,
+		now, id)
 	return err
 }
 
@@ -675,12 +691,14 @@ func (c *Catalog) IncrementView(ctx context.Context, id string) (int, error) {
 	return views, nil
 }
 
-// VideoMetaPatch 轻量更新视频元数据（仅非零值字段会被写入）
+// VideoMetaPatch 轻量更新视频元数据。大多数字段仍按非零值更新；带 Set
+// 标记的字段允许调用方显式写入零值。
 type VideoMetaPatch struct {
 	ThumbnailURL           string
 	ThumbnailStatus        string
 	ResetThumbnailFailures bool
 	DurationSeconds        int
+	DurationSecondsSet     bool
 	ContentHash            string
 	FileName               string
 	ParentID               string
@@ -728,9 +746,13 @@ func (c *Catalog) UpdateVideoMeta(ctx context.Context, id string, p VideoMetaPat
 	if p.ResetThumbnailFailures {
 		parts = append(parts, "thumbnail_failures = 0")
 	}
-	if p.DurationSeconds > 0 {
+	if p.DurationSecondsSet || p.DurationSeconds > 0 {
 		parts = append(parts, "duration_seconds = ?")
-		args = append(args, p.DurationSeconds)
+		duration := p.DurationSeconds
+		if duration < 0 {
+			duration = 0
+		}
+		args = append(args, duration)
 	}
 	if p.ContentHash != "" {
 		parts = append(parts, "content_hash = ?")
