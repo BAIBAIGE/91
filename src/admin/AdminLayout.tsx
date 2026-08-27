@@ -58,7 +58,6 @@ export function AdminLayout() {
   const navigate = useNavigate();
   const { show } = useToast();
   const isLogsPage = location.pathname.startsWith("/admin/logs");
-  const isSettingsPage = location.pathname.startsWith("/admin/settings");
   const currentPageTitle = getAdminPageTitle(location.pathname);
   const showCurrentPageHeader = shouldShowAdminPageHeader(
     location.pathname,
@@ -502,9 +501,7 @@ export function AdminLayout() {
       />
       <main
         ref={mainScrollRef}
-        className={`admin-main${isLogsPage ? " admin-main--logs" : ""}${
-          isSettingsPage ? " admin-main--settings" : ""
-        }`}
+        className={`admin-main${isLogsPage ? " admin-main--logs" : ""}`}
       >
         {showCurrentPageHeader && (
           <header className="admin-current-page-header">

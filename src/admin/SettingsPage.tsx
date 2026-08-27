@@ -68,32 +68,46 @@ const PREVIEW_CONCURRENCY_OPTIONS = Array.from(
   { length: MAX_PREVIEW_CONCURRENCY - MIN_PREVIEW_CONCURRENCY + 1 },
   (_, index) => MIN_PREVIEW_CONCURRENCY + index
 );
+const CONFIG_FIELD_COUNT = Object.keys(DEFAULT_DRAFT).length;
 
 const SECTION_META: Array<{
   id: SectionID;
-  index: string;
   title: string;
   icon: LucideIcon;
 }> = [
   {
     id: "config-automation",
-    index: "01",
     title: "定时任务",
     icon: Clock3,
   },
   {
     id: "config-preview",
-    index: "02",
     title: "预览视频",
     icon: Film,
   },
   {
     id: "config-tags",
-    index: "03",
     title: "内置标签",
     icon: Tags,
   },
 ];
+
+type ConfigPageMetaProps = {
+  statusClass: string;
+  statusText: string;
+};
+
+function ConfigPageMeta({ statusClass, statusText }: ConfigPageMetaProps) {
+  return (
+    <p className="admin-config-meta">
+      <span>{CONFIG_FIELD_COUNT} 项常用配置</span>
+      <span className="admin-config-meta__separator" aria-hidden="true">
+        ·
+      </span>
+      <span className={`admin-config-meta__status ${statusClass}`}>{statusText}</span>
+    </p>
+  );
+}
 
 export function SettingsPage() {
   const floatingActionPageRef = useAdminFloatingActionSpace<HTMLFormElement>();
@@ -130,22 +144,24 @@ export function SettingsPage() {
   );
   const controlsDisabled = loading || saving || loaded === null;
   const scheduleControlsDisabled = controlsDisabled || draft.nightlyDisabled;
-  const statusClass = loading
-    ? ""
-    : sourceError
+  const hasConfigError =
+    Boolean(sourceError) || !timeValid || !timezoneValid || !previewConcurrencyValid;
+  const statusClass = loading || saving
+    ? "is-busy"
+    : hasConfigError
       ? "is-error"
       : dirty
         ? "is-dirty"
         : "is-saved";
   const statusText = loading
-    ? "加载配置中"
-    : sourceError
+    ? "正在同步"
+    : hasConfigError
       ? "配置有误"
       : saving
-        ? "处理中"
+        ? "正在保存"
         : dirty
           ? "有未保存更改"
-          : "配置已加载";
+          : "已同步";
 
   async function load(silent = false) {
     if (!silent) {
@@ -391,14 +407,19 @@ export function SettingsPage() {
 
   if (!loading && (loadError || !loaded)) {
     return (
-      <div className="admin-page admin-config-page admin-config-page--error">
-        <SlidersHorizontal size={26} aria-hidden="true" />
-        <strong>配置加载失败</strong>
-        <span>{loadError || "暂时无法读取 config.yaml"}</span>
-        <button type="button" className="admin-btn is-primary" onClick={() => void load()}>
-          重新加载
-        </button>
-      </div>
+      <>
+        <header className="admin-config-header admin-config-header--standalone">
+          <ConfigPageMeta statusClass="is-error" statusText="同步失败" />
+        </header>
+        <div className="admin-page admin-config-page admin-config-page--error">
+          <SlidersHorizontal size={26} aria-hidden="true" />
+          <strong>配置加载失败</strong>
+          <span>{loadError || "暂时无法读取 config.yaml"}</span>
+          <button type="button" className="admin-btn is-primary" onClick={() => void load()}>
+            重新加载
+          </button>
+        </div>
+      </>
     );
   }
 
@@ -411,11 +432,15 @@ export function SettingsPage() {
         onSubmit={prepareSave}
       >
         <header className="admin-config-header">
-          <div className="admin-config-tabs" role="tablist" aria-label="配置编辑模式">
+          <ConfigPageMeta statusClass={statusClass} statusText={statusText} />
+          <div
+            className="admin-config-mode-switch"
+            role="group"
+            aria-label="配置编辑模式"
+          >
             <button
               type="button"
-              role="tab"
-              aria-selected={activeTab === "visual"}
+              aria-pressed={activeTab === "visual"}
               className={activeTab === "visual" ? "is-active" : ""}
               disabled={loading || saving}
               onClick={() => handleTabChange("visual")}
@@ -424,8 +449,7 @@ export function SettingsPage() {
             </button>
             <button
               type="button"
-              role="tab"
-              aria-selected={activeTab === "source"}
+              aria-pressed={activeTab === "source"}
               className={activeTab === "source" ? "is-active" : ""}
               disabled={loading || saving}
               onClick={() => handleTabChange("source")}
@@ -436,7 +460,7 @@ export function SettingsPage() {
         </header>
 
         {activeTab === "visual" ? (
-          <div className="admin-config-visual" role="tabpanel">
+          <div className="admin-config-visual">
             <nav
               className="admin-config-section-nav"
               role="tablist"
@@ -455,11 +479,10 @@ export function SettingsPage() {
                     className={activeSection === section.id ? "is-active" : ""}
                     onClick={() => setActiveSection(section.id)}
                   >
-                    <span className="admin-config-section-nav__index">{section.index}</span>
                     <span className="admin-config-section-nav__icon" aria-hidden="true">
-                      <Icon size={16} />
+                      <Icon size={15} />
                     </span>
-                    <span>{section.title}</span>
+                    <span className="admin-config-section-nav__label">{section.title}</span>
                   </button>
                 );
               })}
@@ -472,30 +495,8 @@ export function SettingsPage() {
                   index="01"
                   icon={<Clock3 size={16} />}
                   title="定时任务"
-                  description="按指定时区控制每日扫盘和库内视频维护时间"
+                  description="控制每日扫盘和库内视频维护"
                 >
-                  <SettingsRow
-                    label="停止定时任务"
-                    labelID="nightly-disabled-label"
-                    layout="inline"
-                  >
-                    <div className="admin-config-control admin-config-control--switch">
-                      <button
-                        id="nightly-disabled-toggle"
-                        type="button"
-                        className={`toggle-switch ${draft.nightlyDisabled ? "is-on" : ""}`}
-                        role="switch"
-                        aria-checked={draft.nightlyDisabled}
-                        aria-labelledby="nightly-disabled-label"
-                        disabled={controlsDisabled}
-                        onClick={() =>
-                          updateVisualField("nightlyDisabled", !draft.nightlyDisabled)
-                        }
-                      >
-                        <span className="toggle-switch__dot" />
-                      </button>
-                    </div>
-                  </SettingsRow>
                   <SettingsRow
                     label="启动时间"
                     htmlFor="nightly-start-time"
@@ -541,7 +542,7 @@ export function SettingsPage() {
                     </div>
                   </SettingsRow>
                   <SettingsRow
-                    label="任务时区"
+                    label="时区配置"
                     htmlFor="nightly-timezone"
                     layout="inline"
                   >
@@ -583,6 +584,28 @@ export function SettingsPage() {
                       )}
                     </div>
                   </SettingsRow>
+                  <SettingsRow
+                    label="停止定时任务"
+                    labelID="nightly-disabled-label"
+                    layout="inline"
+                  >
+                    <div className="admin-config-control admin-config-control--switch">
+                      <button
+                        id="nightly-disabled-toggle"
+                        type="button"
+                        className={`toggle-switch ${draft.nightlyDisabled ? "is-on" : ""}`}
+                        role="switch"
+                        aria-checked={draft.nightlyDisabled}
+                        aria-labelledby="nightly-disabled-label"
+                        disabled={controlsDisabled}
+                        onClick={() =>
+                          updateVisualField("nightlyDisabled", !draft.nightlyDisabled)
+                        }
+                      >
+                        <span className="toggle-switch__dot" />
+                      </button>
+                    </div>
+                  </SettingsRow>
                 </SettingsSection>
               )}
               {activeSection === "config-preview" && (
@@ -591,11 +614,11 @@ export function SettingsPage() {
                   index="02"
                   icon={<Film size={16} />}
                   title="预览视频"
-                  description="统一控制每个存储生成预览视频的并发数"
+                  description="控制每个存储生成预览视频的并发数"
                 >
                   <SettingsRow
                     label="并发数"
-                    description="请根据服务器性能和网盘API并发风控适当调整，最高不要超过3"
+                    description="请根据服务器性能和网盘API并发风控适当调整，建议最高不超过3"
                     descriptionID="preview-concurrency-description"
                     htmlFor="preview-concurrency"
                     layout="inline"
@@ -677,7 +700,7 @@ export function SettingsPage() {
             </div>
           </div>
         ) : (
-          <div role="tabpanel">
+          <div>
             <ConfigSourceWorkspace
               value={workingYAML}
               error={sourceError}

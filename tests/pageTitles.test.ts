@@ -102,7 +102,7 @@ test("every admin page has a centralized title", () => {
       ["/admin/users", "用户管理"],
       ["/admin/backup", "备份恢复"],
       ["/admin/logs", "日志查看"],
-      ["/admin/settings", "配置管理"],
+      ["/admin/settings", "配置面板"],
     ]
   );
 
