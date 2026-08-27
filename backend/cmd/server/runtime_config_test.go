@@ -34,6 +34,7 @@ func TestConfigSavePersistsAndHotUpdatesRuntimeSettings(t *testing.T) {
 	}
 	app.nightlyRunner = nightly.New(nightly.Config{
 		Settings:  cat,
+		Disabled:  manager.LiveSettings().NightlyDisabled,
 		StartTime: manager.LiveSettings().NightlyStartTime,
 		Timezone:  manager.LiveSettings().NightlyTimezone,
 	})
@@ -47,7 +48,7 @@ func TestConfigSavePersistsAndHotUpdatesRuntimeSettings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	next, err := manager.ReplaceYAML([]byte("nightly:\n  start_time: \"00:45\"\n  timezone: Asia/Shanghai\ntags:\n  builtin_pack_enabled: false\n"), version)
+	next, err := manager.ReplaceYAML([]byte("nightly:\n  disabled: true\n  start_time: \"00:45\"\n  timezone: Asia/Shanghai\ntags:\n  builtin_pack_enabled: false\n"), version)
 	if err != nil {
 		t.Fatalf("replace config: %v", err)
 	}
@@ -62,6 +63,9 @@ func TestConfigSavePersistsAndHotUpdatesRuntimeSettings(t *testing.T) {
 	}
 	if got := app.nightlyRunner.Timezone(); got != "Asia/Shanghai" {
 		t.Fatalf("live scheduler timezone = %q, want Asia/Shanghai", got)
+	}
+	if !next.Settings.NightlyDisabled || !app.nightlyRunner.Disabled() {
+		t.Fatalf("live scheduler disabled state was not applied: %#v", next.Settings)
 	}
 	if next.Settings.BuiltinTagsEnabled {
 		t.Fatalf("updated settings = %#v, want built-in tags disabled", next.Settings)

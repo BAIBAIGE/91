@@ -276,6 +276,9 @@ func TestLoadDefaultNightlyCronHour(t *testing.T) {
 	if cfg.Nightly.Timezone != DefaultNightlyTimezone {
 		t.Fatalf("nightly timezone = %q, want %q", cfg.Nightly.Timezone, DefaultNightlyTimezone)
 	}
+	if cfg.Nightly.Disabled != DefaultNightlyDisabled {
+		t.Fatalf("nightly disabled = %v, want %v", cfg.Nightly.Disabled, DefaultNightlyDisabled)
+	}
 }
 
 func TestParseNightlyStartTime(t *testing.T) {
@@ -298,6 +301,28 @@ func TestParseNightlyTimezone(t *testing.T) {
 	}
 	if cfg.Nightly.Timezone != "Asia/Shanghai" {
 		t.Fatalf("timezone = %q", cfg.Nightly.Timezone)
+	}
+}
+
+func TestParseNightlyDisabled(t *testing.T) {
+	disabled, err := Parse([]byte("nightly:\n  disabled: true\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !disabled.Nightly.Disabled {
+		t.Fatal("explicitly disabled nightly schedule was enabled")
+	}
+
+	enabled, err := Parse([]byte("nightly:\n  disabled: false\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if enabled.Nightly.Disabled {
+		t.Fatal("explicitly enabled nightly schedule was disabled")
+	}
+
+	if _, err := Parse([]byte("nightly:\n  disabled: not-a-boolean\n")); err == nil {
+		t.Fatal("non-boolean nightly.disabled was accepted")
 	}
 }
 

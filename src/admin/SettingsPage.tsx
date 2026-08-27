@@ -111,6 +111,7 @@ export function SettingsPage() {
     (timezone) => timezone === draft.nightlyTimezone
   );
   const controlsDisabled = loading || saving || loaded === null;
+  const scheduleControlsDisabled = controlsDisabled || draft.nightlyDisabled;
   const statusClass = loading
     ? ""
     : sourceError
@@ -447,6 +448,28 @@ export function SettingsPage() {
                   description="按指定时区控制每日扫盘和库内视频维护时间"
                 >
                   <SettingsRow
+                    label="停止定时任务"
+                    labelID="nightly-disabled-label"
+                    layout="inline"
+                  >
+                    <div className="admin-config-control admin-config-control--switch">
+                      <button
+                        id="nightly-disabled-toggle"
+                        type="button"
+                        className={`toggle-switch ${draft.nightlyDisabled ? "is-on" : ""}`}
+                        role="switch"
+                        aria-checked={draft.nightlyDisabled}
+                        aria-labelledby="nightly-disabled-label"
+                        disabled={controlsDisabled}
+                        onClick={() =>
+                          updateVisualField("nightlyDisabled", !draft.nightlyDisabled)
+                        }
+                      >
+                        <span className="toggle-switch__dot" />
+                      </button>
+                    </div>
+                  </SettingsRow>
+                  <SettingsRow
                     label="启动时间"
                     htmlFor="nightly-start-time"
                     layout="inline"
@@ -455,7 +478,7 @@ export function SettingsPage() {
                       <div
                         className={`admin-config-picker-field admin-config-picker-field--time${
                           !timeValid ? " is-invalid" : ""
-                        }${controlsDisabled ? " is-disabled" : ""}`}
+                        }${scheduleControlsDisabled ? " is-disabled" : ""}`}
                       >
                         <span
                           className="admin-config-picker-field__value admin-config-picker-field__value--time"
@@ -468,7 +491,7 @@ export function SettingsPage() {
                           type="time"
                           step={60}
                           value={draft.nightlyStartTime}
-                          disabled={controlsDisabled}
+                          disabled={scheduleControlsDisabled}
                           aria-invalid={!timeValid}
                           aria-describedby={!timeValid ? "nightly-start-time-hint" : undefined}
                           onClick={(event) => {
@@ -499,7 +522,7 @@ export function SettingsPage() {
                       <div
                         className={`admin-config-picker-field admin-config-picker-field--timezone${
                           !timezoneValid ? " is-invalid" : ""
-                        }${controlsDisabled ? " is-disabled" : ""}`}
+                        }${scheduleControlsDisabled ? " is-disabled" : ""}`}
                       >
                         <span className="admin-config-picker-field__value" aria-hidden="true">
                           {draft.nightlyTimezone || "--"}
@@ -507,7 +530,7 @@ export function SettingsPage() {
                         <select
                           id="nightly-timezone"
                           value={draft.nightlyTimezone}
-                          disabled={controlsDisabled}
+                          disabled={scheduleControlsDisabled}
                           aria-invalid={!timezoneValid}
                           aria-describedby={!timezoneValid ? "nightly-timezone-hint" : undefined}
                           onChange={(event) =>

@@ -30,7 +30,7 @@ func TestGetSettingsReturnsDatabasePreferencesOnly(t *testing.T) {
 	if response.Theme != "sky" {
 		t.Fatalf("theme = %q, want sky", response.Theme)
 	}
-	for _, configField := range []string{"nightlyStartTime", "builtinTagsEnabled"} {
+	for _, configField := range []string{"nightlyDisabled", "nightlyStartTime", "builtinTagsEnabled"} {
 		if strings.Contains(recorder.Body.String(), configField) {
 			t.Fatalf("config.yaml field %q leaked into settings endpoint: %s", configField, recorder.Body.String())
 		}

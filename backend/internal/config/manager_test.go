@@ -146,14 +146,14 @@ func TestManagerReloadPublishesExternalValidChangeAndKeepsLastGoodOnError(t *tes
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(path, []byte("nightly:\n  start_time: \"06:30\"\n"), 0o640); err != nil {
+	if err := os.WriteFile(path, []byte("nightly:\n  disabled: true\n  start_time: \"06:30\"\n"), 0o640); err != nil {
 		t.Fatal(err)
 	}
 	changed, err := manager.Reload()
 	if err != nil || !changed {
 		t.Fatalf("reload changed=%v err=%v", changed, err)
 	}
-	want := LiveSettings{NightlyStartTime: "06:30", NightlyTimezone: "Asia/Shanghai", BuiltinTagsEnabled: true}
+	want := LiveSettings{NightlyDisabled: true, NightlyStartTime: "06:30", NightlyTimezone: "Asia/Shanghai", BuiltinTagsEnabled: true}
 	if got := manager.LiveSettings(); got != want {
 		t.Fatalf("settings = %#v, want %#v", got, want)
 	}
@@ -173,7 +173,7 @@ func TestManagerReloadPublishesExternalValidChangeAndKeepsLastGoodOnError(t *tes
 
 func TestRestartRequiredComparisonIgnoresOnlyLivePaths(t *testing.T) {
 	before := []byte("nightly:\n  start_time: \"01:00\"\nfuture:\n  value: one\n")
-	liveOnly := []byte("nightly:\n  start_time: \"03:15\"\n  timezone: Asia/Shanghai\ntags:\n  builtin_pack_enabled: false\nfuture:\n  value: one\n")
+	liveOnly := []byte("nightly:\n  disabled: true\n  start_time: \"03:15\"\n  timezone: Asia/Shanghai\ntags:\n  builtin_pack_enabled: false\nfuture:\n  value: one\n")
 	if hasRestartRequiredChange(before, liveOnly) {
 		t.Fatal("live-only values were reported as restart-required")
 	}

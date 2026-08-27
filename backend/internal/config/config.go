@@ -18,6 +18,7 @@ import (
 const (
 	DefaultAdminUsername      = "admin"
 	DefaultAdminPassword      = "admin123"
+	DefaultNightlyDisabled    = false
 	DefaultNightlyStartTime   = "01:00"
 	DefaultNightlyTimezone    = schedule.DefaultTimezone
 	DefaultBuiltinTagsEnabled = true
@@ -297,6 +298,9 @@ func (p Proxy) AllowsForcedRelay() bool {
 // 一个进程只跑一条 nightly 流水线；该 cron 时间到达且当天还没跑过时触发。
 // 管理后台「扫描所有网盘」与它共享任务协调器，但只运行扫盘和去重阶段。
 type Nightly struct {
+	// Disabled 阻止每日自然调度触发新的流水线。它不影响管理员手动触发的
+	// 扫描任务，也不会取消已经开始执行的流水线。
+	Disabled bool `yaml:"disabled,omitempty"`
 	// StartTime 是每日触发时间，采用严格的 24 小时 HH:mm 格式。该字段可在
 	// 管理后台热更新；配置面板与源码编辑器都直接读写 config.yaml。
 	StartTime string `yaml:"start_time,omitempty"`

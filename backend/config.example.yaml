@@ -42,6 +42,8 @@ scanner:
   video_extensions: [".mp4", ".mkv", ".mov", ".webm", ".avi", ".strm"]
 
 nightly:
+  # 停止每日定时任务；不影响后台手动执行“扫描所有网盘”。
+  disabled: false
   # 凌晨流水线的每日启动时间，24 小时制 HH:mm；后台保存后会热更新。
   # 运行时会统一编排扫描、媒体资产生成和后续清理任务。
   start_time: "01:00"

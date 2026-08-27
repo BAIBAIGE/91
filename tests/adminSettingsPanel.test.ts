@@ -93,6 +93,35 @@ test("configuration panel groups typed fields from the real YAML document", () =
   assert.match(apiSource, /nightlyTimezone: string/);
 });
 
+test("nightly schedule stop switch uses the shared YAML save flow", () => {
+  assert.match(pageSource, /\n\s+label="停止定时任务"/);
+  assert.doesNotMatch(pageSource, /开启后不再自动执行每日任务/);
+  assert.match(pageSource, /id="nightly-disabled-toggle"/);
+  assert.match(pageSource, /aria-checked=\{draft\.nightlyDisabled\}/);
+  assert.match(pageSource, /aria-labelledby="nightly-disabled-label"/);
+  assert.match(
+    pageSource,
+    /const scheduleControlsDisabled = controlsDisabled \|\| draft\.nightlyDisabled/
+  );
+  assert.match(
+    pageSource,
+    /id="nightly-start-time"[\s\S]*?disabled=\{scheduleControlsDisabled\}/
+  );
+  assert.match(
+    pageSource,
+    /id="nightly-timezone"[\s\S]*?disabled=\{scheduleControlsDisabled\}/
+  );
+  assert.match(
+    pageSource,
+    /updateVisualField\("nightlyDisabled", !draft\.nightlyDisabled\)/
+  );
+  assert.doesNotMatch(pageSource, /visualDirtyFields\.has\("nightlyDisabled"\)/);
+  assert.match(configYamlSource, /nightlyDisabled: boolean/);
+  assert.match(configYamlSource, /\["nightly", "disabled"\]/);
+  assert.match(configYamlSource, /nightlyDisabledEdits/);
+  assert.match(apiSource, /settings:\s*\{[\s\S]*?nightlyDisabled: boolean/);
+});
+
 test("built-in tag changes use the configuration draft and shared save review", () => {
   assert.match(pageSource, /id: "config-tags"/);
   assert.match(pageSource, /title="内置标签"/);
@@ -118,7 +147,8 @@ test("built-in tag changes use the configuration draft and shared save review", 
   assert.match(configYamlSource, /builtinTagsEnabled: boolean/);
   assert.match(configYamlSource, /\["tags", "builtin_pack_enabled"\]/);
   assert.match(configYamlSource, /builtinTagsEnabledEdits/);
-  assert.match(configYamlSource, /builtin_pack_enabled: \$\{rendered\}/);
+  assert.match(configYamlSource, /key: "builtin_pack_enabled"/);
+  assert.match(configYamlSource, /`\$\{field\.key\}: \$\{rendered\}`/);
   assert.match(diffModalSource, /const hasChanges = diff\.additions \+ diff\.deletions > 0/);
   assert.match(diffModalSource, /aria-label="config\.yaml 变更对比"/);
   assert.doesNotMatch(diffModalSource, /settingChanges|应用设置|Database|TriangleAlert/);

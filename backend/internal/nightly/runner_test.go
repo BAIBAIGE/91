@@ -175,18 +175,77 @@ func TestUpdateScheduleIsAtomicAndRejectsInvalidTimezone(t *testing.T) {
 		StartTime: "01:00",
 		Timezone:  "Etc/UTC",
 	})
-	if err := r.UpdateSchedule("02:30", "Asia/Shanghai"); err != nil {
+	if err := r.UpdateSchedule("02:30", "Asia/Shanghai", true); err != nil {
 		t.Fatalf("update schedule: %v", err)
 	}
 	if startTime, timezone := r.Schedule(); startTime != "02:30" || timezone != "Asia/Shanghai" {
 		t.Fatalf("schedule = %s %s, want 02:30 Asia/Shanghai", startTime, timezone)
 	}
+	if !r.Disabled() {
+		t.Fatal("schedule disabled state was not updated")
+	}
 
-	if err := r.UpdateSchedule("03:45", "Mars/Olympus"); err == nil {
+	if err := r.UpdateSchedule("03:45", "Mars/Olympus", false); err == nil {
 		t.Fatal("invalid timezone update unexpectedly succeeded")
 	}
 	if startTime, timezone := r.Schedule(); startTime != "02:30" || timezone != "Asia/Shanghai" {
 		t.Fatalf("rejected update partially changed schedule to %s %s", startTime, timezone)
+	}
+	if !r.Disabled() {
+		t.Fatal("rejected update partially changed disabled state")
+	}
+}
+
+func TestDisabledScheduleSkipsNaturalRunAndResumesAfterUpdate(t *testing.T) {
+	settings := newStubSettings()
+	now := time.Date(2026, 5, 27, 2, 30, 0, 0, time.UTC)
+	var runs atomic.Int32
+	r := New(Config{
+		Settings:  settings,
+		Disabled:  true,
+		StartTime: "02:30",
+		Timezone:  "Etc/UTC",
+		Now:       func() time.Time { return now },
+		ListScanTargets: func(context.Context) []string {
+			runs.Add(1)
+			return nil
+		},
+	})
+
+	r.tryNaturalRun(context.Background())
+	if got := runs.Load(); got != 0 {
+		t.Fatalf("runs while disabled = %d, want 0", got)
+	}
+	if last, _ := settings.GetSetting(context.Background(), settingLastRunDate, ""); last != "" {
+		t.Fatalf("disabled schedule consumed last-run date %q", last)
+	}
+
+	if err := r.UpdateSchedule("02:30", "Etc/UTC", false); err != nil {
+		t.Fatalf("re-enable schedule: %v", err)
+	}
+	r.tryNaturalRun(context.Background())
+	if got := runs.Load(); got != 1 {
+		t.Fatalf("runs after re-enabling = %d, want 1", got)
+	}
+}
+
+func TestDisabledScheduleStillAcceptsManualScanAll(t *testing.T) {
+	var scans atomic.Int32
+	r := New(Config{
+		Settings: newStubSettings(),
+		Disabled: true,
+		ListScanTargets: func(context.Context) []string {
+			scans.Add(1)
+			return nil
+		},
+	})
+
+	if !r.TriggerScanAll() {
+		t.Fatal("disabled schedule rejected manual scan-all")
+	}
+	r.runModeLocked(context.Background(), <-r.trigger)
+	if got := scans.Load(); got != 1 {
+		t.Fatalf("manual scans while disabled = %d, want 1", got)
 	}
 }
 

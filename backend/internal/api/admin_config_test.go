@@ -46,7 +46,7 @@ func TestConfigYAMLPutValidatesPersistsAndPublishes(t *testing.T) {
 	get := httptest.NewRecorder()
 	server.handleGetConfigYAML(get, httptest.NewRequest(http.MethodGet, "/admin/api/config.yaml", nil))
 
-	candidate := "# keep\nnightly:\n  start_time: \"00:45\"\n  timezone: Asia/Shanghai\ntags:\n  builtin_pack_enabled: false\nfuture:\n  value: keep\n"
+	candidate := "# keep\nnightly:\n  disabled: true\n  start_time: \"00:45\"\n  timezone: Asia/Shanghai\ntags:\n  builtin_pack_enabled: false\nfuture:\n  value: keep\n"
 	request := httptest.NewRequest(http.MethodPut, "/admin/api/config.yaml", strings.NewReader(candidate))
 	request.Header.Set("If-Match", get.Header().Get("ETag"))
 	recorder := httptest.NewRecorder()
@@ -67,6 +67,9 @@ func TestConfigYAMLPutValidatesPersistsAndPublishes(t *testing.T) {
 	}
 	if response.Settings.NightlyTimezone != "Asia/Shanghai" {
 		t.Fatalf("published settings = %#v", response.Settings)
+	}
+	if !response.Settings.NightlyDisabled {
+		t.Fatalf("published settings = %#v, want nightly disabled", response.Settings)
 	}
 	if response.Settings.BuiltinTagsEnabled {
 		t.Fatalf("published settings = %#v, want built-in tags disabled", response.Settings)

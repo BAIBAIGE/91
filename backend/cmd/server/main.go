@@ -507,6 +507,7 @@ func main() {
 	liveSettings := app.liveConfigSettings()
 	app.nightlyRunner = nightly.New(nightly.Config{
 		Settings:              cat,
+		Disabled:              liveSettings.NightlyDisabled,
 		StartTime:             liveSettings.NightlyStartTime,
 		Timezone:              liveSettings.NightlyTimezone,
 		ListScanTargets:       app.listScanTargetIDs,

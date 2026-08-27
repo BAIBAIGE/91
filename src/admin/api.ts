@@ -1236,6 +1236,7 @@ export type ConfigSaveResult = {
   version: string;
   restartRequired: boolean;
   settings: {
+    nightlyDisabled: boolean;
     nightlyStartTime: string;
     nightlyTimezone: string;
     builtinTagsEnabled: boolean;
