@@ -294,6 +294,10 @@ func TestRunPipelineHonoursPhaseOrder(t *testing.T) {
 			rec.push("wait-idle")
 			return nil
 		},
+		RunLocalAssetReconciliation: func(context.Context) (int, error) {
+			rec.push("asset-reconciliation")
+			return 2, nil
+		},
 		RunMigration: func(context.Context) error {
 			rec.push("migrate")
 			return nil
@@ -320,6 +324,8 @@ func TestRunPipelineHonoursPhaseOrder(t *testing.T) {
 		"scan:drive-a",
 		"scan:drive-b",
 		"wait-idle", // after phase 1
+		"asset-reconciliation",
+		"wait-idle", // after repaired local assets are admitted
 		"list-crawler",
 		"crawl:sp-1",
 		"wait-idle", // after phase 2
@@ -328,6 +334,40 @@ func TestRunPipelineHonoursPhaseOrder(t *testing.T) {
 		"dedupe-cleanup",
 		"tag-maintenance",
 	}
+	if len(got) != len(want) {
+		t.Fatalf("call sequence len = %d, want %d; got=%v", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("call[%d] = %q, want %q (full=%v)", i, got[i], want[i], got)
+		}
+	}
+}
+
+func TestRunPipelineReconcilesLocalAssetsWithoutScanTargets(t *testing.T) {
+	rec := &recorder{}
+	r := New(Config{
+		Settings:        newStubSettings(),
+		ListScanTargets: func(context.Context) []string { return nil },
+		WaitPreviewQueuesIdle: func(context.Context) error {
+			rec.push("wait-idle")
+			return nil
+		},
+		RunLocalAssetReconciliation: func(context.Context) (int, error) {
+			rec.push("asset-reconciliation")
+			return 0, nil
+		},
+		ListCrawlerDrives: func(context.Context) []string { return nil },
+		RunDedupeAssetCleanup: func(context.Context) error {
+			rec.push("dedupe-cleanup")
+			return nil
+		},
+	})
+
+	r.runPipeline(context.Background())
+
+	got := rec.snapshot()
+	want := []string{"wait-idle", "asset-reconciliation", "dedupe-cleanup"}
 	if len(got) != len(want) {
 		t.Fatalf("call sequence len = %d, want %d; got=%v", len(got), len(want), got)
 	}
@@ -356,6 +396,10 @@ func TestRunScanAllOnlyScansConfiguredDrivesAndDedupes(t *testing.T) {
 		WaitPreviewQueuesIdle: func(context.Context) error {
 			rec.push("wait-idle")
 			return nil
+		},
+		RunLocalAssetReconciliation: func(context.Context) (int, error) {
+			rec.push("asset-reconciliation")
+			return 1, nil
 		},
 		ListCrawlerDrives: func(context.Context) []string {
 			rec.push("list-crawler")
@@ -397,6 +441,8 @@ func TestRunScanAllOnlyScansConfiguredDrivesAndDedupes(t *testing.T) {
 		"scan:drive-a",
 		"scan:drive-b",
 		"wait-idle",
+		"asset-reconciliation",
+		"wait-idle",
 		"dedupe-cleanup",
 	}
 	if len(got) != len(want) {
@@ -425,6 +471,10 @@ func TestRunPipelineSkipsMigrationWhenNoCrawler(t *testing.T) {
 			rec.push("wait-idle")
 			return nil
 		},
+		RunLocalAssetReconciliation: func(context.Context) (int, error) {
+			rec.push("asset-reconciliation")
+			return 0, nil
+		},
 		RunMigration: func(context.Context) error {
 			rec.push("migrate")
 			return nil
@@ -448,6 +498,7 @@ func TestRunPipelineSkipsMigrationWhenNoCrawler(t *testing.T) {
 	}
 	foundCleanup := false
 	foundTagMaintenance := false
+	foundAssetReconciliation := false
 	for _, c := range rec.snapshot() {
 		if c == "dedupe-cleanup" {
 			foundCleanup = true
@@ -455,12 +506,18 @@ func TestRunPipelineSkipsMigrationWhenNoCrawler(t *testing.T) {
 		if c == "tag-maintenance" {
 			foundTagMaintenance = true
 		}
+		if c == "asset-reconciliation" {
+			foundAssetReconciliation = true
+		}
 	}
 	if !foundCleanup {
 		t.Fatalf("dedupe cleanup should still run when crawler is absent; calls=%v", rec.snapshot())
 	}
 	if !foundTagMaintenance {
 		t.Fatalf("tag maintenance should still run when crawler is absent; calls=%v", rec.snapshot())
+	}
+	if !foundAssetReconciliation {
+		t.Fatalf("asset reconciliation should run when crawler is absent; calls=%v", rec.snapshot())
 	}
 }
 
@@ -482,6 +539,10 @@ func TestRunPipelineExitsWhenContextCancelledMidPhase(t *testing.T) {
 		ListCrawlerDrives:     func(context.Context) []string { return []string{"x"} },
 		RunCrawlerCrawl:       func(context.Context, string) { rec.push("crawl") },
 		WaitPreviewQueuesIdle: func(context.Context) error { rec.push("wait-idle"); return nil },
+		RunLocalAssetReconciliation: func(context.Context) (int, error) {
+			rec.push("asset-reconciliation")
+			return 0, nil
+		},
 		RunMigration:          func(context.Context) error { rec.push("migrate"); return nil },
 		RunDedupeAssetCleanup: func(context.Context) error { rec.push("dedupe-cleanup"); return nil },
 		RunTagMaintenance:     func(context.Context) error { rec.push("tag-maintenance"); return nil },
@@ -496,7 +557,7 @@ func TestRunPipelineExitsWhenContextCancelledMidPhase(t *testing.T) {
 		}
 	}
 	for _, c := range got {
-		if c == "crawl" || c == "migrate" {
+		if c == "crawl" || c == "migrate" || c == "asset-reconciliation" {
 			t.Fatalf("subsequent phase should not run after cancel, got call %q", c)
 		}
 		if c == "dedupe-cleanup" {

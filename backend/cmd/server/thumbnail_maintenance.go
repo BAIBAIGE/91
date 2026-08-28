@@ -22,51 +22,40 @@ type localAssetReconciliationStats struct {
 	Reset   int
 }
 
-// runStartupLocalAssetMaintenance performs directory-wide generated-asset
-// work outside the startup critical path. If stale references are reset, it
-// immediately rescans workers that are already available, then performs one
-// final rescan after the initial drive attachment pass. The first pass avoids
-// making local repairs wait on a slow provider; the second closes the race with
-// a worker attaching while reconciliation was running.
-func (a *App) runStartupLocalAssetMaintenance(ctx context.Context, driveAttachDone <-chan struct{}) {
+// runStartupThumbnailNormalization keeps the one-time legacy file migration
+// independent from recurring catalog/filesystem reconciliation. Once its
+// persisted marker exists, startup performs no thumbnail directory scan.
+func (a *App) runStartupThumbnailNormalization(ctx context.Context) {
 	if _, err := a.normalizeLegacyThumbnailFiles(ctx); err != nil {
 		log.Printf("[thumbnail-maintenance] migration failed: %v", err)
 	}
+}
 
+// reconcileLocalGeneratedAssets repairs local thumbnail and preview
+// references, then waits for every currently registered drive to finish
+// admitting the resulting pending work. Generation itself remains asynchronous;
+// the nightly runner establishes the queue-idle boundary after this method
+// returns.
+func (a *App) reconcileLocalGeneratedAssets(ctx context.Context) (int, error) {
 	thumbnailStats, thumbnailErr := a.reconcileMissingLocalThumbnailFiles(ctx)
-	if thumbnailErr != nil {
-		log.Printf("[thumbnail-maintenance] reconciliation failed: %v", thumbnailErr)
-	}
 	previewStats, previewErr := a.reconcileMissingLocalPreviewFiles(ctx)
-	if previewErr != nil {
-		log.Printf("[preview-maintenance] reconciliation failed: %v", previewErr)
+	resets := thumbnailStats.Reset + previewStats.Reset
+	reconcileErr := errors.Join(thumbnailErr, previewErr)
+	if resets == 0 {
+		return 0, errors.Join(reconcileErr, ctx.Err())
 	}
-	if thumbnailStats.Reset+previewStats.Reset == 0 {
-		return
-	}
-
 	if err := ctx.Err(); err != nil {
-		return
+		return resets, errors.Join(reconcileErr, err)
 	}
 	log.Printf(
-		"[asset-maintenance] rescanning generation queues after thumbnail_resets=%d preview_resets=%d",
+		"[asset-reconciliation] admitting repaired assets thumbnail_resets=%d preview_resets=%d",
 		thumbnailStats.Reset,
 		previewStats.Reset,
 	)
-	a.scheduleRegisteredDriveGenerationEnqueues(ctx)
-
-	if driveAttachDone == nil {
-		return
+	if err := a.enqueueRegisteredDriveGenerationAndWait(ctx); err != nil {
+		return resets, errors.Join(reconcileErr, err)
 	}
-	select {
-	case <-ctx.Done():
-		return
-	case <-driveAttachDone:
-	}
-	if err := ctx.Err(); err != nil {
-		return
-	}
-	a.scheduleRegisteredDriveGenerationEnqueues(ctx)
+	return resets, reconcileErr
 }
 
 // normalizeLegacyThumbnailFiles upgrades the old cache contract where a .jpg
@@ -176,7 +165,7 @@ func localThumbnailFileExists(localDir, videoID string) (bool, error) {
 
 // reconcileMissingLocalPreviewFiles applies the same persisted-reference
 // invariant to generated teaser videos. Missing ready files return to the
-// normal pending queue and are picked up by the post-maintenance rescan.
+// normal pending queue and are picked up by scheduled queue admission.
 func (a *App) reconcileMissingLocalPreviewFiles(ctx context.Context) (localAssetReconciliationStats, error) {
 	stats := localAssetReconciliationStats{}
 	if a == nil || a.cfg == nil || a.cat == nil {

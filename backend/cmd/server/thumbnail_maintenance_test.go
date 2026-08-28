@@ -280,9 +280,8 @@ func TestReconcileMissingLocalPreviewFilesQueuesOnlyInvalidReadyReferences(t *te
 	}
 }
 
-func TestRunStartupLocalAssetMaintenanceRequeuesBeforeSlowDriveAttachmentFinishes(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+func TestReconcileLocalGeneratedAssetsAdmitsRepairedWorkBeforeReturning(t *testing.T) {
+	ctx := context.Background()
 	root := t.TempDir()
 	previewDir := filepath.Join(root, "previews")
 	cat, err := catalog.Open(filepath.Join(root, "catalog.db"))
@@ -320,11 +319,28 @@ func TestRunStartupLocalAssetMaintenanceRequeuesBeforeSlowDriveAttachmentFinishe
 		thumbWorkers: map[string]*preview.ThumbWorker{"drive-id": thumbnailWorker},
 	}
 
-	driveAttachDone := make(chan struct{})
-	maintenanceDone := make(chan struct{})
+	gate := app.driveOperationGate("drive-id")
+	gate.mu.Lock()
+	gate.beginBlockedLocked()
+	gate.mu.Unlock()
+	gateBlocked := true
+	defer func() {
+		if !gateBlocked {
+			return
+		}
+		gate.mu.Lock()
+		gate.endBlockedLocked()
+		gate.mu.Unlock()
+	}()
+
+	type reconciliationResult struct {
+		resets int
+		err    error
+	}
+	resultCh := make(chan reconciliationResult, 1)
 	go func() {
-		defer close(maintenanceDone)
-		app.runStartupLocalAssetMaintenance(ctx, driveAttachDone)
+		resets, err := app.reconcileLocalGeneratedAssets(ctx)
+		resultCh <- reconciliationResult{resets: resets, err: err}
 	}()
 
 	deadline := time.Now().Add(2 * time.Second)
@@ -337,37 +353,96 @@ func TestRunStartupLocalAssetMaintenanceRequeuesBeforeSlowDriveAttachmentFinishe
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("assets were not reset: thumbnail=%q preview_status=%q", stored.ThumbnailURL, stored.PreviewStatus)
+			t.Fatalf("assets were not reset before queue admission: thumbnail=%q preview_status=%q", stored.ThumbnailURL, stored.PreviewStatus)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
 	select {
-	case <-maintenanceDone:
-		t.Fatal("maintenance completed before initial drive attachment")
+	case result := <-resultCh:
+		t.Fatalf("reconciliation returned before blocked queue admission completed: %+v", result)
 	default:
 	}
-	deadline = time.Now().Add(2 * time.Second)
-	for thumbnailWorker.Status().QueueLength != 1 || previewWorker.Status().QueueLength != 1 {
-		if time.Now().After(deadline) {
-			t.Fatalf(
-				"queues waited for drive attachment: thumbnail=%d preview=%d",
-				thumbnailWorker.Status().QueueLength,
-				previewWorker.Status().QueueLength,
-			)
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
 
-	close(driveAttachDone)
+	gate.mu.Lock()
+	gate.endBlockedLocked()
+	gate.mu.Unlock()
+	gateBlocked = false
+
+	var result reconciliationResult
 	select {
-	case <-maintenanceDone:
+	case result = <-resultCh:
 	case <-time.After(2 * time.Second):
-		t.Fatal("maintenance did not finish after drive attachment")
+		t.Fatal("reconciliation did not return after queue admission unblocked")
+	}
+	if result.err != nil {
+		t.Fatalf("reconcile generated assets: %v", result.err)
+	}
+	if result.resets != 2 {
+		t.Fatalf("reset assets = %d, want thumbnail + preview", result.resets)
+	}
+	stored, err := cat.GetVideo(ctx, video.ID)
+	if err != nil {
+		t.Fatalf("get reconciled video: %v", err)
+	}
+	if stored.ThumbnailURL != "" || stored.PreviewStatus != "pending" || stored.PreviewLocal != "" {
+		t.Fatalf(
+			"reconciled assets thumbnail=%q preview_status=%q preview_local=%q",
+			stored.ThumbnailURL,
+			stored.PreviewStatus,
+			stored.PreviewLocal,
+		)
 	}
 	if got := thumbnailWorker.Status().QueueLength; got != 1 {
-		t.Fatalf("thumbnail queue length after final rescan = %d, want deduplicated 1", got)
+		t.Fatalf("thumbnail queue length on return = %d, want admitted 1", got)
 	}
 	if got := previewWorker.Status().QueueLength; got != 1 {
-		t.Fatalf("preview queue length after final rescan = %d, want deduplicated 1", got)
+		t.Fatalf("preview queue length on return = %d, want admitted 1", got)
+	}
+}
+
+func TestStartupThumbnailNormalizationDoesNotReconcileGeneratedAssets(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	previewDir := filepath.Join(root, "previews")
+	if err := os.MkdirAll(filepath.Join(previewDir, "thumbs"), 0o755); err != nil {
+		t.Fatalf("mkdir thumbnails: %v", err)
+	}
+	cat, err := catalog.Open(filepath.Join(root, "catalog.db"))
+	if err != nil {
+		t.Fatalf("open catalog: %v", err)
+	}
+	defer cat.Close()
+
+	now := time.Now()
+	video := &catalog.Video{
+		ID:            "missing-assets",
+		DriveID:       "drive-id",
+		FileID:        "missing-file",
+		Title:         "Missing Assets",
+		ThumbnailURL:  "/p/thumb/missing-assets",
+		PreviewLocal:  filepath.Join(previewDir, "missing-assets.mp4"),
+		PreviewStatus: "ready",
+		PublishedAt:   now,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}
+	if err := cat.UpsertVideo(ctx, video); err != nil {
+		t.Fatalf("seed video: %v", err)
+	}
+	app := &App{cat: cat, cfg: &config.Config{Storage: config.Storage{LocalPreviewDir: previewDir}}}
+
+	app.runStartupThumbnailNormalization(ctx)
+
+	stored, err := cat.GetVideo(ctx, video.ID)
+	if err != nil {
+		t.Fatalf("get video after startup normalization: %v", err)
+	}
+	if stored.ThumbnailURL != video.ThumbnailURL || stored.PreviewStatus != "ready" || stored.PreviewLocal != video.PreviewLocal {
+		t.Fatalf(
+			"startup normalization changed generated assets thumbnail=%q preview_status=%q preview_local=%q",
+			stored.ThumbnailURL,
+			stored.PreviewStatus,
+			stored.PreviewLocal,
+		)
 	}
 }

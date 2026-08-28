@@ -8,6 +8,8 @@
 //	Phase 1: for each non-crawler cloud drive
 //	           scan + delete-detection + enqueue thumb + enqueue preview video
 //	         wait until all thumb / preview-video queues are idle
+//	Phase 1b: reconcile generated thumbnails/previews against local storage
+//	          enqueue repaired pending rows and wait for their queues to drain
 //	Phase 2: if any script crawler configured
 //	           crawl + enqueue preview video for new videos
 //	         wait until preview-video queues are idle
@@ -98,6 +100,12 @@ type Config struct {
 	// across all drives are drained (queue empty + no in-flight task). It must
 	// honor ctx cancellation.
 	WaitPreviewQueuesIdle func(ctx context.Context) error
+
+	// RunLocalAssetReconciliation repairs catalog rows whose generated local
+	// thumbnail or preview file is missing. It must finish admitting repaired
+	// pending rows to registered worker queues before returning. The result is
+	// the number of generated asset references reset across both asset types.
+	RunLocalAssetReconciliation func(ctx context.Context) (int, error)
 
 	// RunMigration runs crawlerupload.Migrator.RunOnce for Phase 3.
 	RunMigration func(ctx context.Context) error
@@ -294,9 +302,10 @@ func (r *Runner) Schedule() (string, string) {
 }
 
 // TriggerScanAll asks the runner to scan every configured non-crawler cloud
-// drive, wait for newly discovered video assets, and then run full-library
-// duplicate maintenance. It deliberately excludes crawler, migration, and
-// retained-video restore phases, and does not consume today's scheduled run.
+// drive, wait for newly discovered video assets, reconcile generated local
+// assets, and then run full-library duplicate maintenance. It deliberately
+// excludes crawler, migration, and retained-video restore phases, and does not
+// consume today's scheduled run.
 func (r *Runner) TriggerScanAll() bool {
 	return r.queueManualRun()
 }
@@ -502,6 +511,9 @@ func (r *Runner) runPipeline(ctx context.Context) {
 	if !r.runScanPhase(ctx, "nightly", "phase 1") {
 		return
 	}
+	if !r.runLocalAssetReconciliationPhase(ctx, "nightly", "phase 1b") {
+		return
+	}
 
 	// ---------- Phase 2 ----------
 	if r.shouldStop(ctx, "nightly", "phase 2") {
@@ -567,6 +579,9 @@ func (r *Runner) runScanAllPipeline(ctx context.Context) {
 	if !r.runScanPhase(ctx, "scan-all", "scan") {
 		return
 	}
+	if !r.runLocalAssetReconciliationPhase(ctx, "scan-all", "asset reconciliation") {
+		return
+	}
 	r.runDedupeAssetCleanupPhase(ctx, "scan-all", "dedupe")
 }
 
@@ -590,12 +605,34 @@ func (r *Runner) runScanPhase(ctx context.Context, component, phase string) bool
 			log.Printf("[%s] %s: scanning drive=%s", component, phase, id)
 			r.cfg.RunScan(ctx, id)
 		}
-		log.Printf("[%s] %s: waiting for preview queues to drain", component, phase)
-		if err := r.waitIdle(ctx, component, phase); err != nil {
-			return false
-		}
+	}
+	log.Printf("[%s] %s: waiting for preview queues to drain", component, phase)
+	if err := r.waitIdle(ctx, component, phase); err != nil {
+		return false
 	}
 	return true
+}
+
+func (r *Runner) runLocalAssetReconciliationPhase(ctx context.Context, component, phase string) bool {
+	if r.shouldStop(ctx, component, phase) {
+		return false
+	}
+	if r.cfg.RunLocalAssetReconciliation == nil {
+		return true
+	}
+	log.Printf("[%s] %s: reconciling generated local assets", component, phase)
+	resets, err := r.cfg.RunLocalAssetReconciliation(ctx)
+	if err != nil {
+		log.Printf("[%s] %s local asset reconciliation: %v", component, phase, err)
+	}
+	if r.shouldStop(ctx, component, phase) {
+		return false
+	}
+	if resets <= 0 {
+		return true
+	}
+	log.Printf("[%s] %s: waiting for %d repaired local asset(s)", component, phase, resets)
+	return r.waitIdle(ctx, component, phase) == nil
 }
 
 func (r *Runner) shouldStop(ctx context.Context, component, phase string) bool {

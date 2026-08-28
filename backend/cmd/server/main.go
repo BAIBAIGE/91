@@ -498,27 +498,29 @@ func main() {
 
 	// 凌晨流水线：每天按后台可热更新的 HH:mm + IANA 时区触发一次，串行跑
 	//   Phase 1 扫所有非爬虫 / localupload 网盘 + 连续缺失确认清理 + 入队封面/预览视频
+	//   Phase 1b 对账本地封面/预览文件 + 将丢失资产重置入队并等待补生成
 	//   Phase 2 脚本爬虫 + 入队预览视频
 	//   Phase 3 爬虫本地视频 → 云盘上传
 	//   Phase 4 扫描爬虫本地目录并恢复已取消拉黑的视频
 	//   Phase 5 全库重复视频维护：精确指纹去重 + 标题/时长/封面近似去重
 	// 标签匹配不在夜间流水线中全库重算；新视频入库和管理员修改标签规则时按事件刷新。
 	// admin "扫描所有网盘" 使用同一个 Runner 的独立 scan-all 模式，只运行
-	// 云盘扫描和全库重复维护，不触发爬虫、迁移或恢复，也不占用当天的定时执行标记。
+	// 云盘扫描、本地资产对账和全库重复维护，不触发爬虫、迁移或恢复，也不占用当天的定时执行标记。
 	liveSettings := app.liveConfigSettings()
 	app.nightlyRunner = nightly.New(nightly.Config{
-		Settings:              cat,
-		Disabled:              liveSettings.NightlyDisabled,
-		StartTime:             liveSettings.NightlyStartTime,
-		Timezone:              liveSettings.NightlyTimezone,
-		ListScanTargets:       app.listScanTargetIDs,
-		RunScan:               app.runScan,
-		ListCrawlerDrives:     app.listCrawlerDriveIDs,
-		RunCrawlerCrawl:       app.runScriptCrawlerCrawl,
-		WaitPreviewQueuesIdle: app.waitAllPreviewQueuesIdle,
-		RunMigration:          app.runCrawlerUploadMigration,
-		RestoreCrawlerVideos:  app.restoreScriptCrawlerVideos,
-		RunDedupeAssetCleanup: app.cleanupDuplicateVideoAssets,
+		Settings:                    cat,
+		Disabled:                    liveSettings.NightlyDisabled,
+		StartTime:                   liveSettings.NightlyStartTime,
+		Timezone:                    liveSettings.NightlyTimezone,
+		ListScanTargets:             app.listScanTargetIDs,
+		RunScan:                     app.runScan,
+		ListCrawlerDrives:           app.listCrawlerDriveIDs,
+		RunCrawlerCrawl:             app.runScriptCrawlerCrawl,
+		WaitPreviewQueuesIdle:       app.waitAllPreviewQueuesIdle,
+		RunLocalAssetReconciliation: app.reconcileLocalGeneratedAssets,
+		RunMigration:                app.runCrawlerUploadMigration,
+		RestoreCrawlerVideos:        app.restoreScriptCrawlerVideos,
+		RunDedupeAssetCleanup:       app.cleanupDuplicateVideoAssets,
 	})
 	go configManager.Watch(ctx)
 	go app.nightlyRunner.Run(ctx)
@@ -537,12 +539,8 @@ func main() {
 			log.Fatalf("server error: %v", err)
 		}
 	}()
-	driveAttachDone := make(chan struct{})
-	go func() {
-		defer close(driveAttachDone)
-		app.attachExistingDrives(ctx)
-	}()
-	go app.runStartupLocalAssetMaintenance(ctx, driveAttachDone)
+	go app.attachExistingDrives(ctx)
+	go app.runStartupThumbnailNormalization(ctx)
 	go app.migrateHiddenVideosToTombstone(ctx)
 
 	// 等待退出信号或恢复任务要求的受控重启。

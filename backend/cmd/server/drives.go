@@ -1918,11 +1918,15 @@ func (a *App) scheduleDriveGenerationEnqueue(
 	}()
 }
 
-// scheduleRegisteredDriveGenerationEnqueues takes a stable snapshot of the
-// currently attached workers and asks each drive to rescan its catalog-backed
-// queues. It is used after background maintenance changes ready rows back to
-// pending; later lazy attachments still perform their own normal initial scan.
-func (a *App) scheduleRegisteredDriveGenerationEnqueues(ctx context.Context) {
+// enqueueRegisteredDriveGenerationAndWait takes a stable snapshot of the
+// currently attached workers and asks every drive to rescan its catalog-backed
+// queues. It returns only after all queue producers have finished admission,
+// so a following WaitIdle cannot race ahead of an untracked enqueue goroutine.
+// Drives that attach later perform their own normal initial pending scan.
+func (a *App) enqueueRegisteredDriveGenerationAndWait(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	type generationWorkers struct {
 		preview   *preview.Worker
 		thumbnail *preview.ThumbWorker
@@ -1947,10 +1951,22 @@ func (a *App) scheduleRegisteredDriveGenerationEnqueues(ctx context.Context) {
 		driveIDs = append(driveIDs, driveID)
 	}
 	sort.Strings(driveIDs)
+	var admissions sync.WaitGroup
 	for _, driveID := range driveIDs {
 		workers := workersByDrive[driveID]
-		a.scheduleDriveGenerationEnqueue(ctx, driveID, workers.preview, workers.thumbnail)
+		admissions.Add(1)
+		go func(driveID string, workers generationWorkers) {
+			defer admissions.Done()
+			taskCtx, done := a.registerDriveTaskContextWaiting(ctx, driveID, driveTaskScopePreview)
+			defer done()
+			if err := taskCtx.Err(); err != nil {
+				return
+			}
+			a.enqueueDriveGeneration(taskCtx, driveID, workers.preview, workers.thumbnail)
+		}(driveID, workers)
 	}
+	admissions.Wait()
+	return ctx.Err()
 }
 
 func (a *App) enqueuePending(ctx context.Context, driveID string, w *preview.Worker) {

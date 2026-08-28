@@ -62,7 +62,7 @@ type App struct {
 	crawlerUploader crawlerUploadRunner
 
 	// nightlyRunner 协调两种互斥任务：定时完整流水线，以及 admin 手动触发的
-	// “扫所有真实网盘 → 等新视频资产 → 去重”精简流水线。
+	// “扫所有真实网盘 → 等新视频资产 → 对账本地资产 → 去重”精简流水线。
 	nightlyRunner *nightly.Runner
 
 	// scanQueueMu 保护 scanQueued 和 scanProgress。
