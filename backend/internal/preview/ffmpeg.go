@@ -39,10 +39,7 @@ type Generator struct {
 	cfg Config
 }
 
-const (
-	teaserSegmentTimeout      = 90 * time.Second
-	maxParallelTeaserSegments = 4
-)
+const teaserSegmentTimeout = 90 * time.Second
 
 type ThumbnailGenerator interface {
 	Probe(ctx context.Context, link *drives.StreamLink) (float64, error)
@@ -56,7 +53,7 @@ type TeaserGenerator interface {
 }
 
 type refreshingTeaserGenerator interface {
-	GenerateWithLinkProvider(ctx context.Context, first *drives.StreamLink, duration float64, refresh func(context.Context) (*drives.StreamLink, error)) (string, error)
+	GenerateWithLinkRefresh(ctx context.Context, first *drives.StreamLink, duration float64, refreshAfterFailure func(context.Context) (*drives.StreamLink, error)) (string, error)
 }
 
 func New(cfg Config) *Generator {
@@ -516,135 +513,11 @@ func preferredSourceDuration(probe localMediaProbe) float64 {
 // Generate 拉取预览视频到本地临时文件，返回路径。
 // 根据 Config.Segments 和视频时长决定是单段还是多段拼接。
 func (g *Generator) Generate(ctx context.Context, link *drives.StreamLink, duration float64) (string, error) {
-	return g.generate(ctx, duration, func(int) (*drives.StreamLink, error) {
-		return link, nil
-	})
+	return g.generateSerialWithRefresh(ctx, duration, link, nil)
 }
 
-func (g *Generator) GenerateWithLinkProvider(ctx context.Context, first *drives.StreamLink, duration float64, refresh func(context.Context) (*drives.StreamLink, error)) (string, error) {
-	return g.generateSequentialWithRefresh(ctx, duration, first, refresh)
-}
-
-func (g *Generator) generate(ctx context.Context, duration float64, linkForInput func(int) (*drives.StreamLink, error)) (string, error) {
-	if err := os.MkdirAll(g.cfg.LocalDir, 0o755); err != nil {
-		return "", err
-	}
-
-	plan := buildTeaserPlan(g.cfg, duration)
-	starts := plan.starts
-	eachSec := plan.eachSec
-	if len(starts) == 0 {
-		return "", fmt.Errorf("video too short for %.0fs teaser segment", eachSec)
-	}
-
-	ctx2, cancel := context.WithTimeout(ctx, 4*time.Minute)
-	defer cancel()
-
-	// 用 ffmpeg 的 concat 滤镜一次输出：多个 -ss input 再 concat + fade
-	tmp, err := os.CreateTemp(g.cfg.LocalDir, "teaser-*.mp4")
-	if err != nil {
-		return "", err
-	}
-	tmpPath := tmp.Name()
-	tmp.Close()
-
-	args := []string{
-		"-hide_banner",
-		"-loglevel", "error",
-	}
-
-	// 每段独立 -ss + -i，精确 seek 重新解码保证拼接帧准
-	var cleanups []func()
-	defer func() {
-		for i := len(cleanups) - 1; i >= 0; i-- {
-			cleanups[i]()
-		}
-	}()
-	for i, s := range starts {
-		link, err := linkForInput(i)
-		if err != nil {
-			os.Remove(tmpPath)
-			return "", err
-		}
-		ffmpegLink, cleanup, err := prepareFFmpegLink(ctx2, link)
-		if err != nil {
-			os.Remove(tmpPath)
-			return "", err
-		}
-		cleanups = append(cleanups, cleanup)
-		args = append(args, ffmpegHTTPInputOptions(ffmpegLink)...)
-		args = append(args,
-			"-ss", fmt.Sprintf("%.2f", s),
-			"-t", fmt.Sprintf("%.2f", eachSec),
-			"-i", ffmpegLink.URL,
-		)
-	}
-
-	if len(starts) == 1 {
-		// 单段：无需 concat，直接缩放 + 无音
-		args = append(args,
-			"-an",
-			"-vf", teaserSegmentVideoFilter(g.cfg.Width, false, eachSec),
-			"-c:v", "libx264",
-			"-preset", "veryfast",
-			"-crf", "28",
-			"-movflags", "+faststart",
-			"-y", tmpPath,
-		)
-	} else {
-		// 多段：各段缩放 + 0.2s 黑场淡入淡出，concat 拼接
-		// filter_complex: [0:v]scale,setpts,fade... [v0]; ...; [v0][v1][v2]concat=n=3:v=1:a=0[v]
-		var filter strings.Builder
-		for i := range starts {
-			if i > 0 {
-				filter.WriteString(";")
-			}
-			fmt.Fprintf(&filter,
-				"[%d:v]%s[v%d]",
-				i, teaserSegmentVideoFilter(g.cfg.Width, true, eachSec), i)
-		}
-		filter.WriteString(";")
-		for i := range starts {
-			fmt.Fprintf(&filter, "[v%d]", i)
-		}
-		fmt.Fprintf(&filter, "concat=n=%d:v=1:a=0[v]", len(starts))
-
-		args = append(args,
-			"-filter_complex", filter.String(),
-			"-map", "[v]",
-			"-an",
-			"-c:v", "libx264",
-			"-preset", "veryfast",
-			"-crf", "28",
-			"-movflags", "+faststart",
-			"-y", tmpPath,
-		)
-	}
-
-	cmd := exec.CommandContext(ctx2, g.cfg.FFmpegPath, args...)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		os.Remove(tmpPath)
-		return "", ffmpegCommandError("ffmpeg", err, out)
-	}
-
-	if info, statErr := os.Stat(tmpPath); statErr != nil || info.Size() == 0 {
-		os.Remove(tmpPath)
-		return "", fmt.Errorf("ffmpeg produced empty file, stderr: %s", string(out))
-	}
-	if err := g.validateGeneratedTeaser(ctx2, tmpPath); err != nil {
-		os.Remove(tmpPath)
-		return "", err
-	}
-	return tmpPath, nil
-}
-
-func (g *Generator) generateSequential(ctx context.Context, duration float64, linkForInput func(int) (*drives.StreamLink, error)) (string, error) {
-	link, err := linkForInput(0)
-	if err != nil {
-		return "", err
-	}
-	return g.generateSequentialWithRefresh(ctx, duration, link, nil)
+func (g *Generator) GenerateWithLinkRefresh(ctx context.Context, first *drives.StreamLink, duration float64, refreshAfterFailure func(context.Context) (*drives.StreamLink, error)) (string, error) {
+	return g.generateSerialWithRefresh(ctx, duration, first, refreshAfterFailure)
 }
 
 type teaserSegmentCandidate struct {
@@ -658,12 +531,11 @@ type teaserSegmentResult struct {
 	err  error
 }
 
-// generateSequentialWithRefresh keeps one signed source link for the whole
-// teaser task and generates each batch with at most four parallel ffmpeg
-// processes. Link refresh remains serialized here: a concrete remote-read
-// failure permits one replacement for the entire task, after which only the
-// failed segments are retried with that shared replacement.
-func (g *Generator) generateSequentialWithRefresh(
+// generateSerialWithRefresh generates at most one teaser segment at a time.
+// A healthy source link is reused for the whole task. When a concrete remote
+// read failure occurs, the current segment gets one attempt with a refreshed
+// link; a successful replacement then becomes the source for later segments.
+func (g *Generator) generateSerialWithRefresh(
 	ctx context.Context,
 	duration float64,
 	initialLink *drives.StreamLink,
@@ -696,47 +568,29 @@ func (g *Generator) generateSequentialWithRefresh(
 
 	candidates := teaserCandidateStarts(duration, starts, eachSec)
 	targetSegments := len(starts)
+	fadeSegments := targetSegments > 1
 	requiredSegments := requiredTeaserSegments(duration, targetSegments, false)
 	segmentResults := make([]teaserSegmentResult, 0, targetSegments)
 	currentLink := initialLink
-	refreshAttempted := false
 	nextCandidate := 0
 	var lastErr error
 	for nextCandidate < len(candidates) && len(segmentResults) < targetSegments {
-		batchSize := targetSegments - len(segmentResults)
-		if remaining := len(candidates) - nextCandidate; batchSize > remaining {
-			batchSize = remaining
+		candidate := teaserSegmentCandidate{
+			index: nextCandidate,
+			start: candidates[nextCandidate],
 		}
-		if batchSize > maxParallelTeaserSegments {
-			batchSize = maxParallelTeaserSegments
-		}
+		nextCandidate++
 
-		batchCandidates := make([]teaserSegmentCandidate, batchSize)
-		for i := range batchCandidates {
-			candidateIndex := nextCandidate + i
-			batchCandidates[i] = teaserSegmentCandidate{
-				index: candidateIndex,
-				start: candidates[candidateIndex],
-			}
-		}
-		nextCandidate += batchSize
-
-		batchResults := g.generateSegmentBatch(ctx2, batchCandidates, eachSec, currentLink)
-		for _, result := range batchResults {
-			if result.err == nil {
-				generatedPaths = append(generatedPaths, result.path)
-			}
-		}
-		refreshPositions := make([]int, 0, len(batchResults))
-		if refreshAfterFailure != nil && !refreshAttempted {
-			for i, result := range batchResults {
-				if directMediaLinkRefreshAllowed(result.err) {
-					refreshPositions = append(refreshPositions, i)
-				}
-			}
-		}
-		if len(refreshPositions) > 0 {
-			refreshAttempted = true
+		result := teaserSegmentResult{teaserSegmentCandidate: candidate}
+		result.path, result.err = g.generateSingleSegment(
+			ctx2,
+			candidate.index,
+			candidate.start,
+			eachSec,
+			fadeSegments,
+			currentLink,
+		)
+		if refreshAfterFailure != nil && directMediaLinkRefreshAllowed(result.err) {
 			refreshed, refreshErr := refreshAfterFailure(ctx2)
 			if refreshErr == nil && (refreshed == nil || strings.TrimSpace(refreshed.URL) == "") {
 				refreshErr = fmt.Errorf("%w: empty refreshed direct link", drives.ErrGenerationStreamUnavailable)
@@ -744,34 +598,28 @@ func (g *Generator) generateSequentialWithRefresh(
 			switch {
 			case refreshErr == nil:
 				currentLink = refreshed
-				retryCandidates := make([]teaserSegmentCandidate, len(refreshPositions))
-				for i, position := range refreshPositions {
-					retryCandidates[i] = batchResults[position].teaserSegmentCandidate
-				}
-				retryResults := g.generateSegmentBatch(ctx2, retryCandidates, eachSec, currentLink)
-				for _, result := range retryResults {
-					if result.err == nil {
-						generatedPaths = append(generatedPaths, result.path)
-					}
-				}
-				for i, position := range refreshPositions {
-					batchResults[position] = retryResults[i]
-				}
+				result.path, result.err = g.generateSingleSegment(
+					ctx2,
+					candidate.index,
+					candidate.start,
+					eachSec,
+					fadeSegments,
+					currentLink,
+				)
 			case !errors.Is(refreshErr, drives.ErrGenerationStreamUnavailable):
 				return "", refreshErr
 			}
 		}
 
-		for _, result := range batchResults {
-			if result.err != nil {
-				if !teaserSegmentFallbackAllowed(result.err) {
-					return "", result.err
-				}
-				lastErr = result.err
-				continue
+		if result.err != nil {
+			if !teaserSegmentFallbackAllowed(result.err) {
+				return "", result.err
 			}
-			segmentResults = append(segmentResults, result)
+			lastErr = result.err
+			continue
 		}
+		generatedPaths = append(generatedPaths, result.path)
+		segmentResults = append(segmentResults, result)
 	}
 	if len(segmentResults) < requiredSegments {
 		degradedRequired := requiredTeaserSegments(duration, targetSegments, true)
@@ -785,9 +633,9 @@ func (g *Generator) generateSequentialWithRefresh(
 			len(segmentResults), targetSegments, duration, lastErr)
 	}
 
-	// Completion order is nondeterministic. Always restore timeline order before
-	// writing the concat list, including when fallback timestamps replaced a
-	// failed planned segment.
+	// Fallback candidates are attempted after the primary plan and are not
+	// necessarily later on the source timeline. Restore timeline order before
+	// writing the concat list.
 	sort.SliceStable(segmentResults, func(i, j int) bool {
 		if segmentResults[i].start == segmentResults[j].start {
 			return segmentResults[i].index < segmentResults[j].index
@@ -861,32 +709,6 @@ func (g *Generator) generateSequentialWithRefresh(
 	return tmpPath, nil
 }
 
-func (g *Generator) generateSegmentBatch(
-	ctx context.Context,
-	candidates []teaserSegmentCandidate,
-	eachSec float64,
-	link *drives.StreamLink,
-) []teaserSegmentResult {
-	results := make([]teaserSegmentResult, len(candidates))
-	var wg sync.WaitGroup
-	for i, candidate := range candidates {
-		results[i].teaserSegmentCandidate = candidate
-		wg.Add(1)
-		go func(i int, candidate teaserSegmentCandidate) {
-			defer wg.Done()
-			results[i].path, results[i].err = g.generateSingleSegment(
-				ctx,
-				candidate.index,
-				candidate.start,
-				eachSec,
-				link,
-			)
-		}(i, candidate)
-	}
-	wg.Wait()
-	return results
-}
-
 func requiredTeaserSegments(duration float64, targetSegments int, degraded bool) int {
 	if targetSegments <= 0 {
 		return 0
@@ -903,7 +725,7 @@ func requiredTeaserSegments(duration float64, targetSegments int, degraded bool)
 	return targetSegments
 }
 
-func (g *Generator) generateSingleSegment(ctx context.Context, index int, start, eachSec float64, link *drives.StreamLink) (string, error) {
+func (g *Generator) generateSingleSegment(ctx context.Context, index int, start, eachSec float64, fade bool, link *drives.StreamLink) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, teaserSegmentTimeout)
 	defer cancel()
 
@@ -920,7 +742,7 @@ func (g *Generator) generateSingleSegment(ctx context.Context, index int, start,
 	segPath := seg.Name()
 	seg.Close()
 
-	filter := teaserSegmentVideoFilter(g.cfg.Width, true, eachSec)
+	filter := teaserSegmentVideoFilter(g.cfg.Width, fade, eachSec)
 
 	args := []string{
 		"-hide_banner",
@@ -2245,7 +2067,7 @@ func (w *Worker) generateTeaserFromOriginal(ctx context.Context, v *catalog.Vide
 	if !ok || w.Drive == nil || w.Drive.Kind() != "p115" {
 		return w.Gen.Generate(ctx, link, duration)
 	}
-	return gen.GenerateWithLinkProvider(ctx, link, duration, func(ctx context.Context) (*drives.StreamLink, error) {
+	return gen.GenerateWithLinkRefresh(ctx, link, duration, func(ctx context.Context) (*drives.StreamLink, error) {
 		return w.Drive.StreamURL(ctx, v.FileID)
 	})
 }

@@ -1327,7 +1327,7 @@ func (g *fakeTeaserGenerator) Generate(_ context.Context, link *drives.StreamLin
 	return "/tmp/source-teaser.mp4", nil
 }
 
-func (g *fakeTeaserGenerator) GenerateWithLinkProvider(ctx context.Context, first *drives.StreamLink, duration float64, _ func(context.Context) (*drives.StreamLink, error)) (string, error) {
+func (g *fakeTeaserGenerator) GenerateWithLinkRefresh(ctx context.Context, first *drives.StreamLink, duration float64, _ func(context.Context) (*drives.StreamLink, error)) (string, error) {
 	return g.Generate(ctx, first, duration)
 }
 

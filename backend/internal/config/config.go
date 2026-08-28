@@ -272,8 +272,9 @@ type Preview struct {
 	DurationSeconds int    `yaml:"duration_seconds"`
 	Width           int    `yaml:"width"`
 	Segments        int    `yaml:"segments"`
-	// Concurrency is applied independently to every attached drive's preview
-	// worker. It is not a process-wide shared task budget.
+	// Concurrency is the number of video-level preview tasks admitted by each
+	// attached drive's worker. Segments inside one video task run serially. It is
+	// not a process-wide shared task budget.
 	Concurrency int `yaml:"concurrency"`
 }
 
