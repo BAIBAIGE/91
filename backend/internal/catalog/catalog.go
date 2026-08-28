@@ -23,6 +23,13 @@ var schemaSQL string
 
 type Catalog struct {
 	db *sql.DB
+	// statsContext bounds stale-while-revalidate work to this Catalog's
+	// lifetime. HTTP request cancellation must not abort a refresh after the
+	// stale response has already been returned, but Close still must.
+	statsContext context.Context
+	statsCancel  context.CancelFunc
+	driveStats   statsCache[DriveAssetStats]
+	crawlerStats statsCache[map[string]CrawlerAssetCounts]
 
 	// matcher 缓存：按 settings 里的规则版本号失效。标签创建/修改/删除都会
 	// bump 版本；Matcher() 每次调用只多花一条单行 SELECT。
@@ -62,15 +69,26 @@ func Open(path string) (*Catalog, error) {
 		db.Close()
 		return nil, fmt.Errorf("apply schema: %w", err)
 	}
-	c := &Catalog{db: db}
+	statsContext, statsCancel := context.WithCancel(context.Background())
+	c := &Catalog{
+		db:           db,
+		statsContext: statsContext,
+		statsCancel:  statsCancel,
+	}
 	if err := c.migrate(context.Background()); err != nil {
+		statsCancel()
 		db.Close()
 		return nil, fmt.Errorf("migrate catalog: %w", err)
 	}
 	return c, nil
 }
 
-func (c *Catalog) Close() error { return c.db.Close() }
+func (c *Catalog) Close() error {
+	if c.statsCancel != nil {
+		c.statsCancel()
+	}
+	return c.db.Close()
+}
 
 // BeginWriteBarrier waits for existing writers and prevents new write
 // transactions while still allowing read-only queries and online snapshots.
@@ -3102,74 +3120,39 @@ type DriveFingerprintCounts struct {
 	Failed  int
 }
 
-func (c *Catalog) CountTeasersByDrive(ctx context.Context) (map[string]DriveTeaserCounts, error) {
-	rows, err := c.db.QueryContext(ctx,
-		`SELECT drive_id,
-		        COUNT(CASE WHEN COALESCE(preview_status, 'pending') = 'ready' THEN 1 END) AS ready_count,
-		        COUNT(CASE WHEN COALESCE(preview_status, 'pending') = 'pending' THEN 1 END) AS pending_count,
-		        COUNT(CASE WHEN COALESCE(preview_status, 'pending') = 'failed' THEN 1 END) AS failed_count
-		   FROM videos
-		  WHERE COALESCE(hidden, 0) = 0
-		    AND `+uniqueVideoWhereSQL+`
-		  GROUP BY drive_id`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	out := make(map[string]DriveTeaserCounts)
-	for rows.Next() {
-		var driveID string
-		var counts DriveTeaserCounts
-		if err := rows.Scan(&driveID, &counts.Ready, &counts.Pending, &counts.Failed); err != nil {
-			return nil, err
-		}
-		out[driveID] = counts
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return out, nil
+// DriveAssetStats groups the three aggregate maps consumed together by the
+// admin drive list. A single query computes the snapshot so refreshing the
+// cache scans videos once rather than three times.
+type DriveAssetStats struct {
+	Teasers      map[string]DriveTeaserCounts
+	Thumbnails   map[string]DriveThumbnailCounts
+	Fingerprints map[string]DriveFingerprintCounts
 }
 
-func (c *Catalog) CountThumbnailsByDrive(ctx context.Context) (map[string]DriveThumbnailCounts, error) {
+// CountDriveAssetStats reads an exact, uncached snapshot. Thumbnail and teaser
+// counts retain the public canonical-video filter; fingerprint work deliberately
+// includes duplicate rows, matching the former independent queries.
+func (c *Catalog) CountDriveAssetStats(ctx context.Context) (DriveAssetStats, error) {
 	rows, err := c.db.QueryContext(ctx,
 		`SELECT drive_id,
-		        COUNT(CASE WHEN COALESCE(thumbnail_url, '') != '' THEN 1 END) AS ready_count,
-		        COUNT(CASE WHEN COALESCE(thumbnail_url, '') = ''
-		                     AND COALESCE(thumbnail_status, 'pending') NOT IN ('failed', 'skipped') THEN 1 END) AS pending_count,
-		        COUNT(CASE WHEN COALESCE(thumbnail_url, '') = ''
-		                     AND COALESCE(thumbnail_status, 'pending') = 'failed' THEN 1 END) AS failed_count,
-		        COUNT(CASE WHEN COALESCE(thumbnail_url, '') != ''
+		        COUNT(CASE WHEN is_canonical = 1
+		                     AND COALESCE(preview_status, 'pending') = 'ready' THEN 1 END) AS teaser_ready_count,
+		        COUNT(CASE WHEN is_canonical = 1
+		                     AND COALESCE(preview_status, 'pending') = 'pending' THEN 1 END) AS teaser_pending_count,
+		        COUNT(CASE WHEN is_canonical = 1
+		                     AND COALESCE(preview_status, 'pending') = 'failed' THEN 1 END) AS teaser_failed_count,
+		        COUNT(CASE WHEN is_canonical = 1
+		                     AND COALESCE(thumbnail_url, '') != '' THEN 1 END) AS thumbnail_ready_count,
+		        COUNT(CASE WHEN is_canonical = 1
+		                     AND COALESCE(thumbnail_url, '') = ''
+		                     AND COALESCE(thumbnail_status, 'pending') NOT IN ('failed', 'skipped') THEN 1 END) AS thumbnail_pending_count,
+		        COUNT(CASE WHEN is_canonical = 1
+		                     AND COALESCE(thumbnail_url, '') = ''
+		                     AND COALESCE(thumbnail_status, 'pending') = 'failed' THEN 1 END) AS thumbnail_failed_count,
+		        COUNT(CASE WHEN is_canonical = 1
+		                     AND COALESCE(thumbnail_url, '') != ''
 		                     AND COALESCE(duration_seconds, 0) <= 0
-		                     AND COALESCE(thumbnail_status, 'pending') NOT IN ('failed', 'skipped') THEN 1 END) AS duration_pending_count
-		   FROM videos
-		  WHERE COALESCE(hidden, 0) = 0
-		    AND `+uniqueVideoWhereSQL+`
-		  GROUP BY drive_id`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	out := make(map[string]DriveThumbnailCounts)
-	for rows.Next() {
-		var driveID string
-		var counts DriveThumbnailCounts
-		if err := rows.Scan(&driveID, &counts.Ready, &counts.Pending, &counts.Failed, &counts.DurationPending); err != nil {
-			return nil, err
-		}
-		out[driveID] = counts
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *Catalog) CountFingerprintsByDrive(ctx context.Context) (map[string]DriveFingerprintCounts, error) {
-	rows, err := c.db.QueryContext(ctx,
-		`SELECT drive_id,
+		                     AND COALESCE(thumbnail_status, 'pending') NOT IN ('failed', 'skipped') THEN 1 END) AS duration_pending_count,
 		        COUNT(CASE WHEN COALESCE(sampled_sha256, '') != ''
 		                      OR COALESCE(fingerprint_status, 'pending') = 'ready' THEN 1 END) AS ready_count,
 		        COUNT(CASE WHEN size_bytes > 0
@@ -3181,21 +3164,41 @@ func (c *Catalog) CountFingerprintsByDrive(ctx context.Context) (map[string]Driv
 		  WHERE COALESCE(hidden, 0) = 0
 		  GROUP BY drive_id`)
 	if err != nil {
-		return nil, err
+		return DriveAssetStats{}, err
 	}
 	defer rows.Close()
 
-	out := make(map[string]DriveFingerprintCounts)
+	out := DriveAssetStats{
+		Teasers:      make(map[string]DriveTeaserCounts),
+		Thumbnails:   make(map[string]DriveThumbnailCounts),
+		Fingerprints: make(map[string]DriveFingerprintCounts),
+	}
 	for rows.Next() {
 		var driveID string
-		var counts DriveFingerprintCounts
-		if err := rows.Scan(&driveID, &counts.Ready, &counts.Pending, &counts.Failed); err != nil {
-			return nil, err
+		var teaser DriveTeaserCounts
+		var thumbnail DriveThumbnailCounts
+		var fingerprint DriveFingerprintCounts
+		if err := rows.Scan(
+			&driveID,
+			&teaser.Ready,
+			&teaser.Pending,
+			&teaser.Failed,
+			&thumbnail.Ready,
+			&thumbnail.Pending,
+			&thumbnail.Failed,
+			&thumbnail.DurationPending,
+			&fingerprint.Ready,
+			&fingerprint.Pending,
+			&fingerprint.Failed,
+		); err != nil {
+			return DriveAssetStats{}, err
 		}
-		out[driveID] = counts
+		out.Teasers[driveID] = teaser
+		out.Thumbnails[driveID] = thumbnail
+		out.Fingerprints[driveID] = fingerprint
 	}
 	if err := rows.Err(); err != nil {
-		return nil, err
+		return DriveAssetStats{}, err
 	}
 	return out, nil
 }

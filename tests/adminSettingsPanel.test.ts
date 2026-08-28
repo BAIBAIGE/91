@@ -209,6 +209,14 @@ test("configuration source workspace stays visible while CodeMirror loads", () =
   assert.match(pageSource, /preloadConfigSourceEditor\(\)\.catch/);
 });
 
+test("configuration diff code loads only while preparing a save", () => {
+  assert.doesNotMatch(pageSource, /import \{ ConfigDiffModal \} from/);
+  assert.match(pageSource, /import\("\.\/settings\/ConfigDiffModal"\)/);
+  assert.match(pageSource, /const LazyConfigDiffModal = lazy\(loadConfigDiffModal\)/);
+  assert.match(pageSource, /Promise\.all\(\[\s*api\.getConfigYAML\(\),\s*loadConfigDiffModal\(\)/s);
+  assert.match(pageSource, /\{pendingSave && \([\s\S]*?<LazyConfigDiffModal/);
+});
+
 test("configuration panel follows the CLIProxy configuration workspace UI", () => {
   assert.match(pageTitleSource, /title: "配置面板"/);
   assert.match(pageSource, /const CONFIG_FIELD_COUNT = Object\.keys\(DEFAULT_DRAFT\)\.length/);

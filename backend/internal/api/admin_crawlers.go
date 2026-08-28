@@ -86,17 +86,31 @@ func (a *AdminServer) handleListCrawlers(w http.ResponseWriter, r *http.Request)
 		generationStatuses = a.GetDriveGenerationStatuses()
 	}
 
-	out := []crawlerDTO{}
+	crawlers := make([]*catalog.Drive, 0, len(all))
+	statsSpecs := make([]catalog.CrawlerAssetStatsSpec, 0, len(all))
 	for _, d := range all {
 		if d == nil || !isConfiguredCrawlerDrive(d) {
 			continue
 		}
-		assetCounts, err := a.Catalog.CountCrawlerAssets(r.Context(), d.ID, crawlerVideoIDPrefixes(d))
-		if err != nil {
-			writeErr(w, http.StatusInternalServerError, err)
-			return
-		}
-		out = append(out, a.crawlerDTOForDrive(d, assetCounts, generationStatuses[d.ID]))
+		crawlers = append(crawlers, d)
+		statsSpecs = append(statsSpecs, catalog.CrawlerAssetStatsSpec{
+			ID:       d.ID,
+			Prefixes: crawlerVideoIDPrefixes(d),
+		})
+	}
+	assetStats, err := a.Catalog.CachedCrawlerAssetStats(
+		r.Context(),
+		statsSpecs,
+		a.assetStatsFreshFor(generationStatuses),
+	)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+
+	out := make([]crawlerDTO, 0, len(crawlers))
+	for _, d := range crawlers {
+		out = append(out, a.crawlerDTOForDrive(d, assetStats[d.ID], generationStatuses[d.ID]))
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -822,7 +836,7 @@ func crawlerUploadBlockedReason(d *catalog.Drive, assets catalog.CrawlerAssetCou
 	if assets.Local <= 0 {
 		return "没有待上传的本地视频"
 	}
-	if crawlerGenerationBusy(generation) {
+	if driveGenerationBusy(generation) {
 		return "当前爬虫有正在进行的任务，请稍后重试"
 	}
 	if assets.Fingerprint.Pending > 0 {
@@ -842,7 +856,7 @@ func crawlerUploadBlockedReason(d *catalog.Drive, assets catalog.CrawlerAssetCou
 	return ""
 }
 
-func crawlerGenerationBusy(g DriveGenerationStatuses) bool {
+func driveGenerationBusy(g DriveGenerationStatuses) bool {
 	return generationBusy(g.Scan) ||
 		generationBusy(g.Thumbnail) ||
 		generationBusy(g.Preview) ||
@@ -913,6 +927,7 @@ func (a *AdminServer) handleDeleteCrawler(w http.ResponseWriter, r *http.Request
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
+	a.invalidateAssetStats()
 	resp := map[string]any{
 		"ok":            true,
 		"deletedVideos": deletedVideos,

@@ -65,6 +65,12 @@ test("admin toasts keep the newest two visible", () => {
   assert.doesNotMatch(toastSource, /setItems\(\(list\) => \[\.\.\.list,/);
 });
 
+test("toast item updates keep the context value stable", () => {
+  assert.match(toastSource, /const contextValue = useMemo\(\(\) => \(\{ show \}\), \[show\]\)/);
+  assert.match(toastSource, /<ToastCtx\.Provider value=\{contextValue\}>/);
+  assert.doesNotMatch(toastSource, /<ToastCtx\.Provider value=\{\{ show \}\}>/);
+});
+
 test("admin toasts show long messages without internal scrolling", () => {
   const baseToast = ruleBody(sharedStateCss, ".admin-toast");
   const baseText = ruleBody(sharedStateCss, ".admin-toast__text");

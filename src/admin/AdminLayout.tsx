@@ -16,11 +16,12 @@ import { VideoIcon } from "@/components/icons/VideoIcon";
 import * as api from "./api";
 import { AdminGlobalActions } from "./AdminGlobalActions";
 import { AdminPageActionsProvider } from "./AdminPageActions";
-import { AdminRouteCache } from "./AdminRouteCache";
+import { AdminRouteCache, getAdminRouteCacheKey } from "./AdminRouteCache";
 import { useAuth } from "./AuthContext";
 import { useToast } from "./ToastContext";
 import { Modal } from "./Modal";
 import { getAdminPageTitle, shouldShowAdminPageHeader } from "./adminPageTitle";
+import { preloadRemainingAdminPageModules } from "./adminPagePreload";
 import { SpiderIcon } from "./icons/SpiderIcon";
 import {
   resolveAdminScrollTarget,
@@ -52,6 +53,20 @@ function writeAdminScrollTop(
   }
 }
 
+function useAdminPageModulePreload(pathname: string) {
+  const preloadOriginRef = useRef<string | null>(null);
+  const activePath = getAdminRouteCacheKey(pathname);
+  if (preloadOriginRef.current === null && activePath) {
+    preloadOriginRef.current = activePath;
+  }
+  const preloadOrigin = preloadOriginRef.current;
+
+  useEffect(() => {
+    if (!preloadOrigin) return;
+    return preloadRemainingAdminPageModules(preloadOrigin);
+  }, [preloadOrigin]);
+}
+
 export function AdminLayout() {
   const { logout } = useAuth();
   const location = useLocation();
@@ -76,6 +91,8 @@ export function AdminLayout() {
   const [loggingOut, setLoggingOut] = useState(false);
   const [mobileNavigationOpen, setMobileNavigationOpen] = useState(false);
   const [availableUpdate, setAvailableUpdate] = useState<api.UpdateCheck | null>(null);
+
+  useAdminPageModulePreload(location.pathname);
 
   useEffect(() => {
     document.title = currentPageTitle;

@@ -380,6 +380,13 @@ func TestHandleRemoveBlacklistRestoresLocalUploadImmediately(t *testing.T) {
 	if err := cat.DeleteVideoWithTombstone(ctx, "local-upload-video"); err != nil {
 		t.Fatalf("tombstone video: %v", err)
 	}
+	beforeRestore, err := cat.CachedDriveAssetStats(ctx, time.Hour)
+	if err != nil {
+		t.Fatalf("warm asset stats cache: %v", err)
+	}
+	if got := beforeRestore.Teasers["local-upload"].Pending; got != 0 {
+		t.Fatalf("pre-restore pending teasers = %d, want 0", got)
+	}
 
 	verified := ""
 	server := &AdminServer{
@@ -412,6 +419,13 @@ func TestHandleRemoveBlacklistRestoresLocalUploadImmediately(t *testing.T) {
 	}
 	if deleted, err := cat.IsVideoDeleted(ctx, "local-upload-video"); err != nil || deleted {
 		t.Fatalf("tombstone still present: deleted=%v err=%v", deleted, err)
+	}
+	afterRestore, err := cat.CachedDriveAssetStats(ctx, time.Hour)
+	if err != nil {
+		t.Fatalf("read asset stats after restore: %v", err)
+	}
+	if got := afterRestore.Teasers["local-upload"].Pending; got != 1 {
+		t.Fatalf("post-restore pending teasers = %d, want 1", got)
 	}
 }
 

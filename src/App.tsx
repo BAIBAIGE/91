@@ -19,6 +19,16 @@ import { DrivesPageLoading } from "@/admin/DrivesPageLoading";
 import { useAuth } from "@/admin/AuthContext";
 import { RequireAuth } from "@/admin/RequireAuth";
 import { RequireAdmin } from "@/admin/RequireAdmin";
+import {
+  loadBackupPage,
+  loadCrawlersPage,
+  loadDrivesPage,
+  loadLogsPage,
+  loadSettingsPage,
+  loadTagsPage,
+  loadUsersPage,
+  loadVideosPage,
+} from "@/admin/adminPageModules";
 import { loadVideoDetailPage } from "@/lib/videoDetailRoute";
 import { rememberVideoReturnPath, routeToPath } from "@/lib/videoReturnPath";
 
@@ -38,32 +48,28 @@ const LoginPage = lazy(() =>
   import("@/admin/LoginPage").then((module) => ({ default: module.LoginPage }))
 );
 const DrivesPage = lazy(() =>
-  import("@/admin/DrivesPage").then((module) => ({ default: module.DrivesPage }))
+  loadDrivesPage().then((module) => ({ default: module.DrivesPage }))
 );
 const CrawlersPage = lazy(() =>
-  import("@/admin/CrawlersPage").then((module) => ({
-    default: module.CrawlersPage,
-  }))
+  loadCrawlersPage().then((module) => ({ default: module.CrawlersPage }))
 );
 const VideosPage = lazy(() =>
-  import("@/admin/VideosPage").then((module) => ({ default: module.VideosPage }))
+  loadVideosPage().then((module) => ({ default: module.VideosPage }))
 );
 const TagsPage = lazy(() =>
-  import("@/admin/TagsPage").then((module) => ({ default: module.TagsPage }))
+  loadTagsPage().then((module) => ({ default: module.TagsPage }))
 );
 const SettingsPage = lazy(() =>
-  import("@/admin/SettingsPage").then((module) => ({
-    default: module.SettingsPage,
-  }))
+  loadSettingsPage().then((module) => ({ default: module.SettingsPage }))
 );
 const BackupPage = lazy(() =>
-  import("@/admin/BackupPage").then((module) => ({ default: module.BackupPage }))
+  loadBackupPage().then((module) => ({ default: module.BackupPage }))
 );
 const UsersPage = lazy(() =>
-  import("@/admin/UsersPage").then((module) => ({ default: module.UsersPage }))
+  loadUsersPage().then((module) => ({ default: module.UsersPage }))
 );
 const LogsPage = lazy(() =>
-  import("@/admin/LogsPage").then((module) => ({ default: module.LogsPage }))
+  loadLogsPage().then((module) => ({ default: module.LogsPage }))
 );
 
 function PageSuspense({

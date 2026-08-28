@@ -1,4 +1,6 @@
 import {
+  Suspense,
+  lazy,
   useEffect,
   useMemo,
   useRef,
@@ -18,7 +20,6 @@ import {
 import { invalidateTagsCache } from "@/data/videos";
 import * as api from "./api";
 import { useToast } from "./ToastContext";
-import { ConfigDiffModal } from "./settings/ConfigDiffModal";
 import {
   ConfigSourceWorkspace,
   preloadConfigSourceEditor,
@@ -38,6 +39,24 @@ import {
   type SettingsDraft,
   type VisualField,
 } from "./settings/configYaml";
+
+type ConfigDiffModalModule = {
+  default: typeof import("./settings/ConfigDiffModal").ConfigDiffModal;
+};
+
+let configDiffModalRequest: Promise<ConfigDiffModalModule> | undefined;
+
+function loadConfigDiffModal(): Promise<ConfigDiffModalModule> {
+  configDiffModalRequest ??= import("./settings/ConfigDiffModal")
+    .then((module) => ({ default: module.ConfigDiffModal }))
+    .catch((error: unknown) => {
+      configDiffModalRequest = undefined;
+      throw error;
+    });
+  return configDiffModalRequest;
+}
+
+const LazyConfigDiffModal = lazy(loadConfigDiffModal);
 
 type LoadedConfig = {
   content: string;
@@ -268,7 +287,10 @@ export function SettingsPage() {
 
     setSaving(true);
     try {
-      const latest = await api.getConfigYAML();
+      const [latest] = await Promise.all([
+        api.getConfigYAML(),
+        loadConfigDiffModal(),
+      ]);
       const candidate = candidateForLatest(latest);
       parseConfig(candidate);
       if (candidate === latest.content) {
@@ -751,14 +773,18 @@ export function SettingsPage() {
         </div>
       </form>
 
-      <ConfigDiffModal
-        open={pendingSave !== null}
-        before={pendingSave?.before ?? ""}
-        after={pendingSave?.after ?? ""}
-        saving={saving}
-        onClose={() => setPendingSave(null)}
-        onConfirm={() => void confirmSave()}
-      />
+      {pendingSave && (
+        <Suspense fallback={null}>
+          <LazyConfigDiffModal
+            open
+            before={pendingSave.before}
+            after={pendingSave.after}
+            saving={saving}
+            onClose={() => setPendingSave(null)}
+            onConfirm={() => void confirmSave()}
+          />
+        </Suspense>
+      )}
     </>
   );
 }

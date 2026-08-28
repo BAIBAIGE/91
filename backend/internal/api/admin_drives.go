@@ -18,24 +18,17 @@ func (a *AdminServer) handleListDrives(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
-	teaserCounts, err := a.Catalog.CountTeasersByDrive(r.Context())
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
-		return
-	}
-	thumbnailCounts, err := a.Catalog.CountThumbnailsByDrive(r.Context())
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
-		return
-	}
-	fingerprintCounts, err := a.Catalog.CountFingerprintsByDrive(r.Context())
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
-		return
-	}
 	generationStatuses := map[string]DriveGenerationStatuses{}
 	if a.GetDriveGenerationStatuses != nil {
 		generationStatuses = a.GetDriveGenerationStatuses()
+	}
+	assetStats, err := a.Catalog.CachedDriveAssetStats(
+		r.Context(),
+		a.assetStatsFreshFor(generationStatuses),
+	)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
 	}
 	// 出参不返回凭证明文，只告诉前端是否已配置
 	type out struct {
@@ -78,9 +71,9 @@ func (a *AdminServer) handleListDrives(w http.ResponseWriter, r *http.Request) {
 		if isCrawlerDriveKind(d.Kind) {
 			continue
 		}
-		counts := teaserCounts[d.ID]
-		thumbCounts := thumbnailCounts[d.ID]
-		fingerprintCount := fingerprintCounts[d.ID]
+		counts := assetStats.Teasers[d.ID]
+		thumbCounts := assetStats.Thumbnails[d.ID]
+		fingerprintCount := assetStats.Fingerprints[d.ID]
 		generation := generationStatuses[d.ID]
 		if generation.Scan.State == "" {
 			generation.Scan.State = "idle"

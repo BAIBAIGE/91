@@ -293,6 +293,7 @@ func (a *AdminServer) handleDeleteDrive(w http.ResponseWriter, r *http.Request) 
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
+	a.invalidateAssetStats()
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "deletedVideos": deletedVideos})
 }
 

@@ -95,11 +95,11 @@ func TestListVideosNeedingThumbnailIncludesExistingThumbnailMissingDuration(t *t
 		t.Fatalf("count = %d, want 2", count)
 	}
 
-	counts, err := cat.CountThumbnailsByDrive(ctx)
+	stats, err := cat.CountDriveAssetStats(ctx)
 	if err != nil {
-		t.Fatalf("count thumbnails by drive: %v", err)
+		t.Fatalf("count drive asset stats: %v", err)
 	}
-	if got := counts["drive"]; got.Ready != 2 || got.Pending != 1 || got.Failed != 1 || got.DurationPending != 1 {
+	if got := stats.Thumbnails["drive"]; got.Ready != 2 || got.Pending != 1 || got.Failed != 1 || got.DurationPending != 1 {
 		t.Fatalf("thumbnail counts = %#v, want ready=2 pending=1 failed=1 durationPending=1", got)
 	}
 
@@ -113,11 +113,11 @@ func TestListVideosNeedingThumbnailIncludesExistingThumbnailMissingDuration(t *t
 	if count != 1 {
 		t.Fatalf("count after skip = %d, want 1", count)
 	}
-	counts, err = cat.CountThumbnailsByDrive(ctx)
+	stats, err = cat.CountDriveAssetStats(ctx)
 	if err != nil {
-		t.Fatalf("count thumbnails by drive after skip: %v", err)
+		t.Fatalf("count drive asset stats after skip: %v", err)
 	}
-	if got := counts["drive"]; got.Ready != 2 || got.Pending != 1 || got.Failed != 1 || got.DurationPending != 0 {
+	if got := stats.Thumbnails["drive"]; got.Ready != 2 || got.Pending != 1 || got.Failed != 1 || got.DurationPending != 0 {
 		t.Fatalf("thumbnail counts after skip = %#v, want ready=2 pending=1 failed=1 durationPending=0", got)
 	}
 }

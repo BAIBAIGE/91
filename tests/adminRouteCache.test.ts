@@ -7,6 +7,9 @@ function source(path: string) {
 }
 
 const routeCacheSource = source("admin/AdminRouteCache.tsx");
+const pageModulesSource = source("admin/adminPageModules.ts");
+const pagePreloadSource = source("admin/adminPagePreload.ts");
+const appSource = source("App.tsx");
 const layoutSource = source("admin/AdminLayout.tsx");
 const modalSource = source("admin/Modal.tsx");
 const drivesSource = source("admin/DrivesPage.tsx");
@@ -66,4 +69,20 @@ test("hidden pages suspend recurring and out-of-tree UI work", () => {
   assert.match(logsSource, /const fullscreenActive = fullscreen && routeActive/);
   assert.match(modalSource, /const visible = open && routeActive/);
   assert.match(modalSource, /if \(!visible\) return null/);
+});
+
+test("remaining admin page modules preload sequentially during idle time", () => {
+  assert.match(layoutSource, /useAdminPageModulePreload\(location\.pathname\)/);
+  assert.match(layoutSource, /preloadRemainingAdminPageModules\(preloadOrigin\)/);
+  assert.match(pagePreloadSource, /window\.requestIdleCallback\(task\)/);
+  assert.match(pagePreloadSource, /const nextModule = queue\.shift\(\)/);
+  assert.match(
+    pagePreloadSource,
+    /nextModule\.load\(\)\.catch\(\(\) => undefined\)\.finally\(scheduleNext\)/
+  );
+  assert.match(pagePreloadSource, /activeModule\?\.load\(\) \?\? Promise\.resolve\(\)/);
+  assert.match(pageModulesSource, /reusableModuleLoader/);
+  assert.match(appSource, /loadDrivesPage\(\)\.then/);
+  assert.match(appSource, /loadSettingsPage\(\)\.then/);
+  assert.doesNotMatch(layoutSource, /onMouseEnter|onPointerEnter|onFocus=/);
 });

@@ -4,6 +4,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -132,8 +133,10 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
+  const contextValue = useMemo(() => ({ show }), [show]);
+
   return (
-    <ToastCtx.Provider value={{ show }}>
+    <ToastCtx.Provider value={contextValue}>
       {children}
       {createPortal(
         <div className="admin-toast-stack" role="status" aria-live="polite">
