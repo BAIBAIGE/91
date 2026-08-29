@@ -44,14 +44,16 @@
   font-weight: var(--weight-extrabold);
 }
 
-.main-nav__logo:hover {
-  color: var(--text-strong);
-  transform: scale(1.02);
-}
+@media (hover: hover) and (pointer: fine) {
+  .main-nav__logo:hover {
+    color: var(--text-strong);
+    transform: scale(1.02);
+  }
 
-.main-nav__logo:hover .main-nav__logo-mark {
-  transform: rotate(3deg) scale(1.04);
-  box-shadow: 0 6px 20px var(--accent-glow);
+  .main-nav__logo:hover .main-nav__logo-mark {
+    transform: rotate(3deg) scale(1.04);
+    box-shadow: 0 6px 20px var(--accent-glow);
+  }
 }
 
 .main-nav__logo-mark {
@@ -66,6 +68,14 @@
   isolation: isolate;
   overflow: hidden;
   transition: transform var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.main-nav__logo:active {
+  transform: scale(0.98);
+}
+
+.main-nav__logo:active .main-nav__logo-mark {
+  transform: rotate(3deg) scale(0.96);
 }
 
 .main-nav__logo-img {
