@@ -1150,7 +1150,7 @@ test("drive detail actions use ordinary text buttons", () => {
   );
   assert.match(
     drivesPageSource,
-    /className="admin-btn"\s+onClick=\{\(\) => openEdit\(d\)\}/
+    /className="admin-btn admin-detail-actions__credentials"\s+onClick=\{\(\) => openEdit\(d\)\}/
   );
   assert.match(
     drivesPageSource,
@@ -1165,6 +1165,29 @@ test("drive detail actions use ordinary text buttons", () => {
     /<CircleStop[^>]*>|<Trash2[^>]*>|<RefreshCw[^>]*>[\s\S]*?开始扫盘/
   );
   assert.doesNotMatch(adminCss, /\.admin-detail-actions > \.admin-btn:not\(\.is-danger\)/);
+});
+
+test("mobile drive detail actions use an explicit two-by-two grid", () => {
+  assert.match(
+    adminCss,
+    /@media \(max-width: 640px\) \{\s*\.admin-detail-actions \{[^}]*display:\s*grid;[^}]*grid-template-columns:\s*repeat\(2, minmax\(0, 1fr\)\);[^}]*grid-template-areas:\s*"tasks tasks"\s*"credentials danger";/s
+  );
+  assert.match(
+    adminCss,
+    /\.admin-detail-actions > \.admin-task-controls \{[^}]*grid-area:\s*tasks;[^}]*display:\s*grid;[^}]*grid-template-columns:\s*repeat\(2, minmax\(0, 1fr\)\);/s
+  );
+  assert.match(
+    adminCss,
+    /\.admin-detail-actions__credentials \{[^}]*grid-area:\s*credentials;/s
+  );
+  assert.match(
+    adminCss,
+    /\.admin-detail-actions__danger \{[^}]*grid-area:\s*danger;[^}]*margin-left:\s*0;/s
+  );
+  assert.match(
+    drivesPageLoadingSource,
+    /className="admin-btn admin-detail-actions__credentials"[\s\S]*?>\s*编辑凭证\s*<\/button>/
+  );
 });
 
 test("drive delete and credential confirm buttons use ordinary styling", () => {

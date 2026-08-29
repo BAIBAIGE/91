@@ -538,15 +538,6 @@ body.admin-mobile-nav-open {
     bottom: calc(var(--space-3) + env(safe-area-inset-bottom));
     max-width: calc(100vw - (var(--space-3) * 2));
   }
-
-  .admin-detail-actions > .admin-btn {
-    flex: 1 1 130px;
-    min-height: 34px;
-  }
-
-  .admin-detail-actions__danger {
-    margin-left: 0;
-  }
 }
 
 /* =========================================================
@@ -7461,6 +7452,39 @@ body.admin-mobile-nav-open {
   margin-top: var(--space-5);
   padding-top: var(--space-4);
   border-top: 1px solid var(--border-subtle);
+}
+
+@media (max-width: 640px) {
+  .admin-detail-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-areas:
+      "tasks tasks"
+      "credentials danger";
+  }
+
+  .admin-detail-actions > .admin-task-controls {
+    grid-area: tasks;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 100%;
+  }
+
+  .admin-detail-actions .admin-btn {
+    justify-content: center;
+    width: 100%;
+    min-width: 0;
+    min-height: 34px;
+  }
+
+  .admin-detail-actions__credentials {
+    grid-area: credentials;
+  }
+
+  .admin-detail-actions__danger {
+    grid-area: danger;
+    margin-left: 0;
+  }
 }
 
 .admin-generation-actions {

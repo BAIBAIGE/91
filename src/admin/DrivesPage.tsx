@@ -650,7 +650,7 @@ export function DrivesPage() {
                 </div>
                 <button
                   type="button"
-                  className="admin-btn"
+                  className="admin-btn admin-detail-actions__credentials"
                   onClick={() => openEdit(d)}
                   disabled={!!editingCredentialsId}
                 >

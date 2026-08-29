@@ -91,7 +91,11 @@ export function DriveDetailLoading({ onBack }: { onBack: () => void }) {
                   停止任务
                 </button>
               </div>
-              <button type="button" className="admin-btn" disabled>
+              <button
+                type="button"
+                className="admin-btn admin-detail-actions__credentials"
+                disabled
+              >
                 编辑凭证
               </button>
               <button
