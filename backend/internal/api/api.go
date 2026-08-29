@@ -996,9 +996,6 @@ func (s *Server) handleHideVideo(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
-	if s.Catalog != nil {
-		s.Catalog.InvalidateAssetStats()
-	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 

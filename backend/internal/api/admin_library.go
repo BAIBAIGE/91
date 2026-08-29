@@ -310,6 +310,5 @@ func (a *AdminServer) handleRemoveBlacklist(w http.ResponseWriter, r *http.Reque
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
-	a.invalidateAssetStats()
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }

@@ -193,7 +193,6 @@ func (a *AdminServer) handleDeleteVideo(w http.ResponseWriter, r *http.Request) 
 	if !result.OK {
 		result.OK = true
 	}
-	a.invalidateAssetStats()
 	writeJSON(w, http.StatusOK, result)
 }
 

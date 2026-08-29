@@ -13,6 +13,7 @@ import (
 )
 
 func (a *AdminServer) handleListDrives(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	drives, err := a.Catalog.ListDrives(r.Context())
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
@@ -22,10 +23,7 @@ func (a *AdminServer) handleListDrives(w http.ResponseWriter, r *http.Request) {
 	if a.GetDriveGenerationStatuses != nil {
 		generationStatuses = a.GetDriveGenerationStatuses()
 	}
-	assetStats, err := a.Catalog.CachedDriveAssetStats(
-		r.Context(),
-		a.assetStatsFreshFor(generationStatuses),
-	)
+	assetStats, err := a.Catalog.CountDriveAssetStats(r.Context())
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return

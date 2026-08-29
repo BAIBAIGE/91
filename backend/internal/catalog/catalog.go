@@ -23,13 +23,6 @@ var schemaSQL string
 
 type Catalog struct {
 	db *sql.DB
-	// statsContext bounds stale-while-revalidate work to this Catalog's
-	// lifetime. HTTP request cancellation must not abort a refresh after the
-	// stale response has already been returned, but Close still must.
-	statsContext context.Context
-	statsCancel  context.CancelFunc
-	driveStats   statsCache[DriveAssetStats]
-	crawlerStats statsCache[map[string]CrawlerAssetCounts]
 
 	// matcher 缓存：按 settings 里的规则版本号失效。标签创建/修改/删除都会
 	// bump 版本；Matcher() 每次调用只多花一条单行 SELECT。
@@ -69,14 +62,8 @@ func Open(path string) (*Catalog, error) {
 		db.Close()
 		return nil, fmt.Errorf("apply schema: %w", err)
 	}
-	statsContext, statsCancel := context.WithCancel(context.Background())
-	c := &Catalog{
-		db:           db,
-		statsContext: statsContext,
-		statsCancel:  statsCancel,
-	}
+	c := &Catalog{db: db}
 	if err := c.migrate(context.Background()); err != nil {
-		statsCancel()
 		db.Close()
 		return nil, fmt.Errorf("migrate catalog: %w", err)
 	}
@@ -84,9 +71,6 @@ func Open(path string) (*Catalog, error) {
 }
 
 func (c *Catalog) Close() error {
-	if c.statsCancel != nil {
-		c.statsCancel()
-	}
 	return c.db.Close()
 }
 
@@ -3121,17 +3105,18 @@ type DriveFingerprintCounts struct {
 }
 
 // DriveAssetStats groups the three aggregate maps consumed together by the
-// admin drive list. A single query computes the snapshot so refreshing the
-// cache scans videos once rather than three times.
+// admin drive list. A single query computes an exact snapshot while scanning
+// videos once rather than three times.
 type DriveAssetStats struct {
 	Teasers      map[string]DriveTeaserCounts
 	Thumbnails   map[string]DriveThumbnailCounts
 	Fingerprints map[string]DriveFingerprintCounts
 }
 
-// CountDriveAssetStats reads an exact, uncached snapshot. Thumbnail and teaser
-// counts retain the public canonical-video filter; fingerprint work deliberately
-// includes duplicate rows, matching the former independent queries.
+// CountDriveAssetStats reads one exact snapshot for every drive. Thumbnail and
+// teaser counts retain the public canonical-video filter; fingerprint work
+// deliberately includes duplicate rows, matching the former independent
+// queries.
 func (c *Catalog) CountDriveAssetStats(ctx context.Context) (DriveAssetStats, error) {
 	rows, err := c.db.QueryContext(ctx,
 		`SELECT drive_id,
