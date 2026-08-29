@@ -33,11 +33,11 @@ test("video skeleton mirrors thumbnail, title, and metadata structure", () => {
   assert.match(thumb, /aspect-ratio\s*:\s*16 \/ 9/);
   assert.match(
     videoCardCss,
-    /\.skeleton-card__title\s*\{\s*margin-top:[^}]*width:\s*100%;[^}]*height:\s*10px;[^}]*border-radius:\s*0/s
+    /\.skeleton-card__title\s*\{\s*margin-top:[^}]*width:\s*100%;[^}]*height:\s*10px;[^}]*border-radius:\s*var\(--radius-xs\)/s
   );
   assert.match(
     videoCardCss,
-    /\.skeleton-card__meta\s*\{\s*margin-top:\s*6px;[^}]*width:\s*100%;[^}]*height:\s*10px;[^}]*border-radius:\s*0/s
+    /\.skeleton-card__meta\s*\{\s*margin-top:\s*6px;[^}]*width:\s*100%;[^}]*height:\s*10px;[^}]*border-radius:\s*var\(--radius-xs\)/s
   );
   assert.match(pink, /--skeleton-shimmer-base\s*:\s*rgba\(255,\s*91,\s*138,\s*0\.12\)/);
   assert.match(sky, /--skeleton-shimmer-base\s*:\s*rgba\(60,\s*100,\s*170,\s*0\.13\)/);
