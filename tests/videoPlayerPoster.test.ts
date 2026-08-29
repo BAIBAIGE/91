@@ -323,6 +323,15 @@ test("detail loading skeleton keeps metadata bars uniform and concise", () => {
   );
 });
 
+test("detail loading title bar spans the full summary width", () => {
+  const titleRules = [
+    ...detailCss.matchAll(/\.vd-skeleton__title\s*\{([^}]*)\}/g),
+  ];
+  assert.equal(titleRules.length, 2);
+  assert.match(titleRules[0][1], /width:\s*100%;/);
+  assert.doesNotMatch(titleRules[1][1], /\bwidth\s*:/);
+});
+
 test("detail info skeleton omits the two description lines", () => {
   assert.match(
     detailLoadingSource,
