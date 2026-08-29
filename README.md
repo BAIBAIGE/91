@@ -45,8 +45,7 @@ sudo bash install.sh
 ```bash
 mkdir video-site-91 && cd video-site-91
 ```
-**2. 创建 `docker-compose.yml`**
-拉取仓库内置docker-compose.yml：
+**2. 拉取仓库内置`docker-compose.yml`**
 ```bash
 curl -fsSL https://raw.githubusercontent.com/nianzhibai/91/main/docker-compose.yml -o docker-compose.yml
 ```
@@ -103,7 +102,7 @@ docker compose logs -f                        # 查看日志
 ## 使用须知
 
 - **本项目仅面向个人私有部署**
-- **请遵守法律**
+- **请遵守法律法规**
 
 ## 致谢
 
