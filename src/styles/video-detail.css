@@ -1887,7 +1887,7 @@
     min-height: 104px;
     display: grid;
     grid-template-columns: 142px minmax(0, 1fr);
-    align-items: center;
+    align-items: start;
     gap: 14px;
     margin: 0 -8px;
     padding: 13px 8px;
@@ -1946,10 +1946,8 @@
 
   .vd-collection-item__body {
     min-width: 0;
-    align-self: stretch;
     display: flex;
     flex-direction: column;
-    justify-content: center;
     gap: 7px;
   }
 

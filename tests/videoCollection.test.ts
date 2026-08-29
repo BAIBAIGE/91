@@ -331,6 +331,21 @@ test("mobile collection loading cards match the two-bar skeleton", () => {
   );
 });
 
+test("mobile collection titles align with the top of their thumbnails", () => {
+  assert.match(
+    stylesSource,
+    /\.vd-collection-item__link\s*\{[^}]*align-items:\s*start;/s
+  );
+  assert.doesNotMatch(
+    stylesSource,
+    /\.vd-collection-item__body\s*\{[^}]*align-self:\s*stretch;/s
+  );
+  assert.doesNotMatch(
+    stylesSource,
+    /\.vd-collection-item__body\s*\{[^}]*justify-content:\s*center;/s
+  );
+});
+
 test("desktop collection stays bounded and positions the current video", () => {
   assert.match(
     stylesSource,
