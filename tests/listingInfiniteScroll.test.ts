@@ -219,7 +219,23 @@ test("browser history navigation restores both the loaded batches and the positi
   );
   assert.match(
     scrollRestoreHookSource,
+    /resolveRestoreCount\(\{[\s\S]*?documentID: LISTING_DOCUMENT_ID/
+  );
+  assert.match(
+    scrollRestoreHookSource,
+    /resolveRestoreScrollY\([\s\S]*?LISTING_DOCUMENT_ID[\s\S]*?\)/
+  );
+  assert.match(
+    scrollRestoreHookSource,
     /writeListingScrollEntry\([\s\S]*?documentID: LISTING_DOCUMENT_ID/
+  );
+  assert.match(
+    scrollRestoreHookSource,
+    /window\.history\.scrollRestoration = "manual"/
+  );
+  assert.match(
+    scrollRestoreHookSource,
+    /if \(target\.scrollY <= 0\) \{\s*window\.scrollTo\(\{ top: 0, left: 0, behavior: "auto" \}\)/
   );
   assert.match(
     scrollRestoreHookSource,

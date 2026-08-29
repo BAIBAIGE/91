@@ -117,13 +117,15 @@ export function resolveRestoreCount(input: {
   entry: ListingScrollEntry | null;
   queryKey: string;
   pageSize: number;
+  documentID: string;
   maxItems?: number;
 }): number {
-  const { entry, queryKey } = input;
+  const { entry, queryKey, documentID } = input;
   const pageSize =
     Number.isInteger(input.pageSize) && input.pageSize > 0 ? input.pageSize : 0;
   if (!entry || pageSize === 0) return 0;
   if (entry.queryKey !== queryKey) return 0;
+  if (!documentID || entry.documentID !== documentID) return 0;
 
   const maxItems = input.maxItems ?? MAX_RESTORE_ITEMS;
   const capped = Math.min(entry.requestedCount, Math.max(maxItems, pageSize));
@@ -132,9 +134,11 @@ export function resolveRestoreCount(input: {
 
 export function resolveRestoreScrollY(
   entry: ListingScrollEntry | null,
-  queryKey: string
+  queryKey: string,
+  documentID: string
 ): number {
   if (!entry || entry.queryKey !== queryKey) return 0;
+  if (!documentID || entry.documentID !== documentID) return 0;
   return entry.scrollY;
 }
 

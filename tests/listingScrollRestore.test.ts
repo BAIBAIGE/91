@@ -136,17 +136,31 @@ test("malformed stored entries are rejected", () => {
   );
 });
 
-test("the restore request keeps the exact cursor count and caps deep histories", () => {
+test("same-document restore keeps the exact cursor count and caps deep histories", () => {
   const entry = {
     queryKey: QUERY_KEY,
     feedToken: FEED_TOKEN,
+    documentID: DOCUMENT_ID,
     requestedCount: 60,
     scrollY: 900,
   };
 
-  assert.equal(resolveRestoreCount({ entry, queryKey: QUERY_KEY, pageSize: 20 }), 60);
   assert.equal(
-    resolveRestoreCount({ entry, queryKey: QUERY_KEY, pageSize: 14 }),
+    resolveRestoreCount({
+      entry,
+      queryKey: QUERY_KEY,
+      pageSize: 20,
+      documentID: DOCUMENT_ID,
+    }),
+    60
+  );
+  assert.equal(
+    resolveRestoreCount({
+      entry,
+      queryKey: QUERY_KEY,
+      pageSize: 14,
+      documentID: DOCUMENT_ID,
+    }),
     60,
     "显式 cursor 不依赖响应式批次的页边界"
   );
@@ -155,22 +169,49 @@ test("the restore request keeps the exact cursor count and caps deep histories",
       entry: { ...entry, requestedCount: 5_000 },
       queryKey: QUERY_KEY,
       pageSize: 20,
+      documentID: DOCUMENT_ID,
     }),
     MAX_RESTORE_ITEMS,
     "深滚之后的返回不能打出一个无上限的大请求"
   );
   assert.equal(
-    resolveRestoreCount({ entry: { ...entry, requestedCount: 20 }, queryKey: QUERY_KEY, pageSize: 20 }),
+    resolveRestoreCount({
+      entry: { ...entry, requestedCount: 20 },
+      queryKey: QUERY_KEY,
+      pageSize: 20,
+      documentID: DOCUMENT_ID,
+    }),
     0,
     "只看了首屏就按普通首屏加载"
   );
   assert.equal(
-    resolveRestoreCount({ entry, queryKey: 'listing:["","","latest"]', pageSize: 20 }),
+    resolveRestoreCount({
+      entry,
+      queryKey: 'listing:["","","latest"]',
+      pageSize: 20,
+      documentID: DOCUMENT_ID,
+    }),
     0,
     "排序变了就是另一个列表，不能沿用旧进度"
   );
-  assert.equal(resolveRestoreCount({ entry: null, queryKey: QUERY_KEY, pageSize: 20 }), 0);
-  assert.equal(resolveRestoreCount({ entry, queryKey: QUERY_KEY, pageSize: 0 }), 0);
+  assert.equal(
+    resolveRestoreCount({
+      entry: null,
+      queryKey: QUERY_KEY,
+      pageSize: 20,
+      documentID: DOCUMENT_ID,
+    }),
+    0
+  );
+  assert.equal(
+    resolveRestoreCount({
+      entry,
+      queryKey: QUERY_KEY,
+      pageSize: 0,
+      documentID: DOCUMENT_ID,
+    }),
+    0
+  );
 });
 
 test("the restore position only applies to the query it was saved for", () => {
@@ -181,12 +222,55 @@ test("the restore position only applies to the query it was saved for", () => {
     requestedCount: 60,
     scrollY: 1_200,
   };
-  assert.equal(resolveRestoreScrollY(entry, QUERY_KEY), 1_200);
+  assert.equal(resolveRestoreScrollY(entry, QUERY_KEY, DOCUMENT_ID), 1_200);
   assert.equal(resolveRestoreFeedToken(entry, QUERY_KEY), FEED_TOKEN);
-  assert.equal(resolveRestoreScrollY(entry, 'listing:["","","latest"]'), 0);
+  assert.equal(
+    resolveRestoreScrollY(
+      entry,
+      'listing:["","","latest"]',
+      DOCUMENT_ID
+    ),
+    0
+  );
   assert.equal(resolveRestoreFeedToken(entry, 'listing:["","","latest"]'), "");
-  assert.equal(resolveRestoreScrollY(null, QUERY_KEY), 0);
+  assert.equal(resolveRestoreScrollY(null, QUERY_KEY, DOCUMENT_ID), 0);
   assert.equal(resolveRestoreFeedToken(null, QUERY_KEY), "");
+});
+
+test("browser reload does not restore listing progress or scroll position", () => {
+  const entry = {
+    queryKey: QUERY_KEY,
+    feedToken: FEED_TOKEN,
+    documentID: DOCUMENT_ID,
+    requestedCount: 60,
+    scrollY: 1_200,
+  };
+  const reloadedDocumentID = "document-after-reload";
+
+  assert.equal(
+    resolveRestoreCount({
+      entry,
+      queryKey: QUERY_KEY,
+      pageSize: 20,
+      documentID: reloadedDocumentID,
+    }),
+    0,
+    "刷新后只请求普通首屏"
+  );
+  assert.equal(
+    resolveRestoreScrollY(entry, QUERY_KEY, reloadedDocumentID),
+    0,
+    "刷新后从页面顶部开始"
+  );
+  assert.equal(
+    resolveRestoreScrollY(
+      { ...entry, documentID: undefined },
+      QUERY_KEY,
+      DOCUMENT_ID
+    ),
+    0,
+    "旧版本中没有 Document 标识的记录不能恢复位置"
+  );
 });
 
 test("document-scoped snapshots survive SPA returns but not browser reloads", () => {

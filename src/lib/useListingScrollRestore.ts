@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   canRestoreScrollY,
   readListingScrollEntry,
@@ -75,12 +75,17 @@ export function useListingRestoreTarget(input: {
         entry,
         queryKey: input.queryKey,
         pageSize: input.pageSize,
+        documentID: LISTING_DOCUMENT_ID,
       }),
       feedToken: resolveRestoreFeedToken(entry, input.queryKey, {
         scope: feedSnapshotScope,
         documentID: LISTING_DOCUMENT_ID,
       }),
-      scrollY: resolveRestoreScrollY(entry, input.queryKey),
+      scrollY: resolveRestoreScrollY(
+        entry,
+        input.queryKey,
+        LISTING_DOCUMENT_ID
+      ),
       feedSnapshotScope,
     };
   }
@@ -133,6 +138,28 @@ export function useListingScrollRestore({
   }
   const session = sessionRef.current;
   const [restoring, setRestoring] = useState(target.scrollY > 0);
+
+  useLayoutEffect(() => {
+    // 该 hook 已经按 history entry 恢复列表位置，挂载期间不再让浏览器进行
+    // 第二套自动恢复。新 Document 或新列表没有恢复目标时则明确从顶部开始。
+    const supportsManualRestoration =
+      "scrollRestoration" in window.history;
+    const previousRestoration = supportsManualRestoration
+      ? window.history.scrollRestoration
+      : null;
+    if (supportsManualRestoration) {
+      window.history.scrollRestoration = "manual";
+    }
+    if (target.scrollY <= 0) {
+      window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+    }
+
+    return () => {
+      if (previousRestoration) {
+        window.history.scrollRestoration = previousRestoration;
+      }
+    };
+  }, [restoreIdentity, target.scrollY]);
 
   useEffect(() => {
     const targetScrollY = session.pendingScrollY;
