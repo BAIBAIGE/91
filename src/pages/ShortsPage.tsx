@@ -14,7 +14,6 @@ import {
   Volume2,
   VolumeX,
   EyeOff,
-  Info,
   AlertCircle,
   Share2,
 } from "lucide-react";
@@ -2663,7 +2662,7 @@ function ShortsSlideImpl({
         </div>
       )}
 
-      <div className="shorts-slide__overlay" onClick={(e) => e.stopPropagation()}>
+      <div className="shorts-slide__overlay">
         <h2 className="shorts-slide__title">{item.title}</h2>
         <div className="shorts-slide__meta">
           {item.sourceLabel && (
@@ -2678,14 +2677,6 @@ function ShortsSlideImpl({
             </span>
           )}
         </div>
-        <Link
-          to={detailPath}
-          className="shorts-slide__detail"
-          onClick={(event) => onRouteClick(event, detailPath)}
-        >
-          <Info size={13} />
-          <span>查看详情</span>
-        </Link>
       </div>
 
       {/* 右下角操作栏 */}
@@ -2693,10 +2684,16 @@ function ShortsSlideImpl({
         className="shorts-slide__actions"
         onClick={(e) => e.stopPropagation()}
       >
-        {/* 云盘来源徽章 */}
-        <div className="shorts-drive-badge" title={`来源: ${item.sourceLabel || "本地"}`}>
+        {/* 云盘来源徽章同时是当前视频唯一的详情入口。 */}
+        <Link
+          to={detailPath}
+          className="shorts-drive-badge"
+          aria-label={`查看视频详情，来源：${item.sourceLabel || "本地"}`}
+          title={`查看视频详情 · 来源：${item.sourceLabel || "本地"}`}
+          onClick={(event) => onRouteClick(event, detailPath)}
+        >
           {getDriveShortName(item.sourceLabel || "本地")}
-        </div>
+        </Link>
 
         {/* 点赞 */}
         <button
