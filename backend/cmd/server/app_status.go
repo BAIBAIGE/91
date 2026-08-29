@@ -117,6 +117,13 @@ func (a *App) driveGenerationStatuses() map[string]api.DriveGenerationStatuses {
 	}
 	a.uploadProgressMu.Unlock()
 
+	a.crawlerUploadMu.Lock()
+	crawlerUploads := make(map[string]bool, len(a.crawlerUploadRunning))
+	for id, running := range a.crawlerUploadRunning {
+		crawlerUploads[id] = running
+	}
+	a.crawlerUploadMu.Unlock()
+
 	a.mu.Lock()
 	previewWorkers := make(map[string]*preview.Worker, len(a.workers))
 	for id, worker := range a.workers {
@@ -183,6 +190,16 @@ func (a *App) driveGenerationStatuses() map[string]api.DriveGenerationStatuses {
 			TotalCount:   progress.TotalCount,
 		}
 		out[id] = status
+	}
+	for id, running := range crawlerUploads {
+		if !running {
+			continue
+		}
+		status := out[id]
+		if status.Upload.State == "" || status.Upload.State == "idle" {
+			status.Upload.State = "queued"
+			out[id] = status
+		}
 	}
 	return out
 }

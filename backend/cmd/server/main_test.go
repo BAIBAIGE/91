@@ -1390,6 +1390,17 @@ func TestDriveGenerationStatusIncludesScanCooldown(t *testing.T) {
 	}
 }
 
+func TestDriveGenerationStatusIncludesQueuedCrawlerUploadBeforeProgress(t *testing.T) {
+	app := &App{
+		crawlerUploadRunning: map[string]bool{"crawler-id": true},
+	}
+
+	status := app.driveGenerationStatuses()["crawler-id"].Upload
+	if status.State != "queued" {
+		t.Fatalf("upload status = %#v, want queued", status)
+	}
+}
+
 func TestGuangYaPanGenerationCooldowns(t *testing.T) {
 	drv := &serverFakeKindDrive{id: "gy", kind: "guangyapan"}
 	if got := generationCooldownForDrive(drv); got != 10*time.Minute {
