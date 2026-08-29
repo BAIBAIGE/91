@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"errors"
+	"log"
 	"net/http"
 	"sync"
 	"time"
@@ -220,29 +221,7 @@ func (a *Authenticator) validateSession(w http.ResponseWriter, r *http.Request, 
 }
 
 func (a *Authenticator) Required(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ok, userID, err := a.ValidateRequest(w, r)
-		if err != nil || !ok {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-		if userID > 0 {
-			u, err := a.Catalog.GetUserByID(r.Context(), userID)
-			if errors.Is(err, sql.ErrNoRows) {
-				http.Error(w, "unauthorized", http.StatusUnauthorized)
-				return
-			}
-			if err != nil {
-				http.Error(w, "unauthorized", http.StatusUnauthorized)
-				return
-			}
-			if u.Banned {
-				http.Error(w, "forbidden", http.StatusForbidden)
-				return
-			}
-		}
-		next.ServeHTTP(w, withSessionIdentity(r))
-	})
+	return a.require(next, false)
 }
 
 func withSessionIdentity(r *http.Request) *http.Request {
@@ -346,9 +325,17 @@ func (a *Authenticator) UserLogin(w http.ResponseWriter, r *http.Request, user, 
 // AdminRequired is like Required but additionally checks that the session
 // belongs to a user with role="admin". Regular users get 403.
 func (a *Authenticator) AdminRequired(next http.Handler) http.Handler {
+	return a.require(next, true)
+}
+
+func (a *Authenticator) require(next http.Handler, adminOnly bool) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ok, userID, err := a.ValidateRequest(w, r)
-		if err != nil || !ok {
+		if err != nil {
+			writeAuthUnavailable(w, r, "validate session", err)
+			return
+		}
+		if !ok {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
@@ -359,16 +346,27 @@ func (a *Authenticator) AdminRequired(next http.Handler) http.Handler {
 				return
 			}
 			if err != nil {
-				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				writeAuthUnavailable(w, r, "load session user", err)
 				return
 			}
-			if u.Banned || u.Role != "admin" {
+			if u.Banned || (adminOnly && u.Role != "admin") {
 				http.Error(w, "forbidden", http.StatusForbidden)
 				return
 			}
 		}
 		next.ServeHTTP(w, withSessionIdentity(r))
 	})
+}
+
+func writeAuthUnavailable(w http.ResponseWriter, r *http.Request, operation string, err error) {
+	// A canceled client is no longer waiting for a response. More importantly,
+	// cancellation must not be translated into a misleading authentication
+	// failure that makes the browser discard otherwise valid session state.
+	if r.Context().Err() != nil {
+		return
+	}
+	log.Printf("[auth] %s method=%s path=%s: %v", operation, r.Method, r.URL.Path, err)
+	http.Error(w, "service temporarily unavailable", http.StatusServiceUnavailable)
 }
 
 func setSessionCookie(w http.ResponseWriter, token string, expiresAt time.Time) {

@@ -359,6 +359,49 @@ func TestRequiredRejectsDeletedUserSession(t *testing.T) {
 	}
 }
 
+func TestAuthMiddlewareReturnsServiceUnavailableWhenCatalogFails(t *testing.T) {
+	cat, err := catalog.Open(t.TempDir() + "/catalog.db")
+	if err != nil {
+		t.Fatalf("open catalog: %v", err)
+	}
+	if err := cat.Close(); err != nil {
+		t.Fatalf("close catalog: %v", err)
+	}
+	authr := &Authenticator{Catalog: cat}
+
+	tests := []struct {
+		name string
+		wrap func(http.Handler) http.Handler
+	}{
+		{name: "required", wrap: authr.Required},
+		{name: "admin required", wrap: authr.AdminRequired},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			called := false
+			next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				called = true
+				w.WriteHeader(http.StatusNoContent)
+			})
+			req := httptest.NewRequest(http.MethodGet, "/api/home", nil)
+			req.AddCookie(&http.Cookie{Name: sessionCookie, Value: "valid-looking-token"})
+			res := httptest.NewRecorder()
+
+			tt.wrap(next).ServeHTTP(res, req)
+
+			if called {
+				t.Fatal("protected handler was called")
+			}
+			if res.Code != http.StatusServiceUnavailable {
+				t.Fatalf("status = %d, want 503; body = %s", res.Code, res.Body.String())
+			}
+			if strings.Contains(res.Body.String(), "database") || strings.Contains(res.Body.String(), "interrupted") {
+				t.Fatalf("response exposed the catalog error: %q", res.Body.String())
+			}
+		})
+	}
+}
+
 func TestUserLoginOnlyFallsBackToConfigWhenUsersTableIsEmpty(t *testing.T) {
 	ctx := context.Background()
 	cat, err := catalog.Open(t.TempDir() + "/catalog.db")

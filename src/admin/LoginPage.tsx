@@ -3,6 +3,7 @@ import { Navigate, useLocation, useNavigate } from "react-router";
 import "@/styles/admin-controls.css";
 import "@/styles/login.css";
 import { useAuth } from "./AuthContext";
+import { AuthUnavailable } from "./AuthUnavailable";
 import { useToast } from "./ToastContext";
 import * as api from "./api";
 import { PasswordInput } from "./PasswordInput";
@@ -43,6 +44,10 @@ export function LoginPage() {
         检查登录状态...
       </div>
     );
+  }
+
+  if (status === "unavailable") {
+    return <AuthUnavailable />;
   }
 
   // 已登录：回到来源页，或默认去首页

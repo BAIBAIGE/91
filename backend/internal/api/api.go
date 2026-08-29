@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"math/rand/v2"
 	"net/http"
 	"net/url"
@@ -419,7 +420,7 @@ func (s *Server) handleVideoDetail(w http.ResponseWriter, r *http.Request) {
 	id := routeParam(r, "id")
 	v, err := s.availableVideo(r.Context(), id)
 	if err != nil {
-		writeErr(w, http.StatusNotFound, err)
+		writeCatalogLookupError(w, r, err)
 		return
 	}
 	dto := mapVideo(v)
@@ -451,10 +452,14 @@ func (s *Server) handleVideoDetail(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleVideoRecommendations(w http.ResponseWriter, r *http.Request) {
 	v, err := s.availableVideo(r.Context(), routeParam(r, "id"))
 	if err != nil {
-		writeErr(w, http.StatusNotFound, err)
+		writeCatalogLookupError(w, r, err)
 		return
 	}
-	related := s.pickRelatedVideos(r.Context(), v, 6)
+	related, err := s.pickRelatedVideos(r.Context(), v, 6)
+	if err != nil {
+		writeServiceUnavailable(w, r, "load video recommendations", err)
+		return
+	}
 	// Recommendations are randomized per uncached request. Keep their cache
 	// policy independent from the core detail resource.
 	w.Header().Set("Cache-Control", "no-store")
@@ -464,12 +469,12 @@ func (s *Server) handleVideoRecommendations(w http.ResponseWriter, r *http.Reque
 func (s *Server) handleVideoCollectionSummary(w http.ResponseWriter, r *http.Request) {
 	v, err := s.availableVideo(r.Context(), routeParam(r, "id"))
 	if err != nil {
-		writeErr(w, http.StatusNotFound, err)
+		writeCatalogLookupError(w, r, err)
 		return
 	}
 	summary, err := s.videoCollectionSummary(r.Context(), v)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
+		writeServiceUnavailable(w, r, "load video collection summary", err)
 		return
 	}
 	if summary == nil {
@@ -482,12 +487,12 @@ func (s *Server) handleVideoCollectionSummary(w http.ResponseWriter, r *http.Req
 func (s *Server) handleVideoCollection(w http.ResponseWriter, r *http.Request) {
 	v, err := s.availableVideo(r.Context(), routeParam(r, "id"))
 	if err != nil {
-		writeErr(w, http.StatusNotFound, err)
+		writeCatalogLookupError(w, r, err)
 		return
 	}
 	summary, items, err := s.videoCollection(r.Context(), v)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
+		writeServiceUnavailable(w, r, "load video collection", err)
 		return
 	}
 	if summary == nil {
@@ -724,9 +729,9 @@ const recommendationCandidateWindow = 48
 // 一半来自同标签命中，剩下用全库随机补齐；两段都优先取已有封面的视频，
 // 不够时再回退到未生成封面的候选。每一段只读取一个固定大小的卡片摘要池，
 // 结果不会重复，也不会包含当前视频。
-func (s *Server) pickRelatedVideos(ctx context.Context, current *catalog.Video, total int) []*catalog.VideoSummary {
+func (s *Server) pickRelatedVideos(ctx context.Context, current *catalog.Video, total int) ([]*catalog.VideoSummary, error) {
 	if total <= 0 || current == nil {
-		return nil
+		return nil, nil
 	}
 	tagQuota := total / 2
 	if tagQuota <= 0 && len(current.Tags) > 0 {
@@ -739,16 +744,24 @@ func (s *Server) pickRelatedVideos(ctx context.Context, current *catalog.Video, 
 
 	// 1) 所有标签合并成一次候选查询；不再按标签重复查询公共列表。
 	if tagQuota > 0 && len(current.Tags) > 0 {
+		pool, err := s.recommendationPool(ctx, current.Tags, seen, true, candidateLimit)
+		if err != nil {
+			return nil, err
+		}
 		picked = appendRandomRelated(
 			picked,
-			s.recommendationPool(ctx, current.Tags, seen, true, candidateLimit),
+			pool,
 			tagQuota,
 			seen,
 		)
 		if len(picked) < tagQuota {
+			pool, err = s.recommendationPool(ctx, current.Tags, seen, false, candidateLimit)
+			if err != nil {
+				return nil, err
+			}
 			picked = appendRandomRelated(
 				picked,
-				s.recommendationPool(ctx, current.Tags, seen, false, candidateLimit),
+				pool,
 				tagQuota,
 				seen,
 			)
@@ -757,23 +770,31 @@ func (s *Server) pickRelatedVideos(ctx context.Context, current *catalog.Video, 
 
 	// 2) 随机补齐：同样优先已有封面的全库候选，不够再回退。
 	if len(picked) < total {
+		pool, err := s.recommendationPool(ctx, nil, seen, true, candidateLimit)
+		if err != nil {
+			return nil, err
+		}
 		picked = appendRandomRelated(
 			picked,
-			s.recommendationPool(ctx, nil, seen, true, candidateLimit),
+			pool,
 			total,
 			seen,
 		)
 	}
 	if len(picked) < total {
+		pool, err := s.recommendationPool(ctx, nil, seen, false, candidateLimit)
+		if err != nil {
+			return nil, err
+		}
 		picked = appendRandomRelated(
 			picked,
-			s.recommendationPool(ctx, nil, seen, false, candidateLimit),
+			pool,
 			total,
 			seen,
 		)
 	}
 
-	return picked
+	return picked, nil
 }
 
 func (s *Server) recommendationPool(
@@ -782,7 +803,7 @@ func (s *Server) recommendationPool(
 	seen map[string]struct{},
 	readyOnly bool,
 	limit int,
-) []*catalog.VideoSummary {
+) ([]*catalog.VideoSummary, error) {
 	items, err := s.Catalog.ListRecommendationCandidates(ctx, catalog.RecommendationCandidateParams{
 		Tags:               tags,
 		ExcludeIDs:         recommendationSeenIDs(seen),
@@ -790,9 +811,9 @@ func (s *Server) recommendationPool(
 		Limit:              limit,
 	})
 	if err != nil {
-		return nil
+		return nil, err
 	}
-	return items
+	return items, nil
 }
 
 func recommendationSeenIDs(seen map[string]struct{}) []string {
@@ -1207,7 +1228,11 @@ func (s *Server) handleSubtitleFile(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) visibleVideo(w http.ResponseWriter, r *http.Request, id string) (*catalog.Video, bool) {
 	v, err := s.videoByPublicID(r.Context(), id)
-	if err != nil || v.Hidden {
+	if err != nil {
+		writeCatalogLookupError(w, r, err)
+		return nil, false
+	}
+	if v.Hidden {
 		writeErr(w, http.StatusNotFound, sql.ErrNoRows)
 		return nil, false
 	}
@@ -1217,7 +1242,11 @@ func (s *Server) visibleVideo(w http.ResponseWriter, r *http.Request, id string)
 func (s *Server) handleUploadedVideo(w http.ResponseWriter, r *http.Request) {
 	videoID := routeParam(r, "videoID")
 	v, err := s.videoByPublicID(r.Context(), videoID)
-	if err != nil || v.Hidden || v.DriveID != localUploadDriveID {
+	if err != nil {
+		writeCatalogLookupError(w, r, err)
+		return
+	}
+	if v.Hidden || v.DriveID != localUploadDriveID {
 		http.NotFound(w, r)
 		return
 	}
@@ -1228,7 +1257,7 @@ func (s *Server) handlePreview(w http.ResponseWriter, r *http.Request) {
 	videoID := routeParam(r, "videoID")
 	v, err := s.videoByPublicID(r.Context(), videoID)
 	if err != nil {
-		http.NotFound(w, r)
+		writeCatalogLookupError(w, r, err)
 		return
 	}
 	s.servePreviewVideo(w, r, v)
@@ -1897,4 +1926,22 @@ func writeJSON(w http.ResponseWriter, code int, body any) {
 
 func writeErr(w http.ResponseWriter, code int, err error) {
 	writeJSON(w, code, map[string]string{"error": err.Error()})
+}
+
+func writeCatalogLookupError(w http.ResponseWriter, r *http.Request, err error) {
+	if errors.Is(err, sql.ErrNoRows) {
+		writeErr(w, http.StatusNotFound, sql.ErrNoRows)
+		return
+	}
+	writeServiceUnavailable(w, r, "query catalog", err)
+}
+
+func writeServiceUnavailable(w http.ResponseWriter, r *http.Request, operation string, err error) {
+	if r.Context().Err() != nil {
+		return
+	}
+	log.Printf("[api] %s method=%s path=%s: %v", operation, r.Method, r.URL.Path, err)
+	writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+		"error": "service temporarily unavailable",
+	})
 }

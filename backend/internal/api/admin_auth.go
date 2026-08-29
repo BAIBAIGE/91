@@ -82,7 +82,7 @@ func (a *AdminServer) handleSetup(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "ip banned", http.StatusForbidden)
 			return
 		}
-		writeErr(w, http.StatusInternalServerError, err)
+		writeServiceUnavailable(w, r, "login after administrator setup", err)
 		return
 	}
 	if role != "admin" {
@@ -113,7 +113,7 @@ func (a *AdminServer) handleLogin(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "user banned", http.StatusForbidden)
 			return
 		}
-		writeErr(w, http.StatusInternalServerError, err)
+		writeServiceUnavailable(w, r, "login", err)
 		return
 	}
 	if role == "" {
@@ -129,12 +129,17 @@ func (a *AdminServer) handleLogout(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *AdminServer) handleMe(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	if a.Auth == nil {
 		writeJSON(w, http.StatusOK, map[string]any{"authenticated": false})
 		return
 	}
 	ok, userID, err := a.Auth.ValidateRequest(w, r)
-	if err != nil || !ok {
+	if err != nil {
+		writeServiceUnavailable(w, r, "validate current session", err)
+		return
+	}
+	if !ok {
 		writeJSON(w, http.StatusOK, map[string]any{"authenticated": false})
 		return
 	}
@@ -147,7 +152,7 @@ func (a *AdminServer) handleMe(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err != nil {
-			writeJSON(w, http.StatusOK, map[string]any{"authenticated": false})
+			writeServiceUnavailable(w, r, "load current user", err)
 			return
 		}
 		role = u.Role

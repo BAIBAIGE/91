@@ -9,7 +9,7 @@ import {
 } from "react";
 import * as api from "./api";
 
-type AuthStatus = "loading" | "authed" | "guest";
+type AuthStatus = "loading" | "authed" | "guest" | "unavailable";
 
 type AuthCtx = {
   status: AuthStatus;
@@ -42,7 +42,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setStatus("authed");
       setRole(r.role ?? "");
     } catch {
-      invalidateSession();
+      // A transport or server failure says nothing about whether the session is
+      // valid. Keep an already authenticated screen usable, and use a distinct
+      // state during initial loading so route guards do not redirect to login.
+      setStatus((current) =>
+        current === "authed" ? current : "unavailable"
+      );
     }
   }, [invalidateSession]);
 

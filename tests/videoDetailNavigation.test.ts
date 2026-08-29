@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   consumePrefetchedVideoDetail,
   consumePrefetchedVideoRecommendations,
+  fetchVideoDetail,
   prefetchVideoDetail,
   prefetchVideoRecommendations,
 } from "../src/data/videos.ts";
@@ -64,7 +65,7 @@ test("video cards start independent detail and recommendation requests for confi
   );
   assert.match(
     detailPageSource,
-    /const prefetchedDetail = consumePrefetchedVideoDetail\(id\)[\s\S]*?detailRequest\.then\(\(d\) =>[\s\S]*?setDetail\(stableDetail\);[\s\S]*?setLoading\(false\)/
+    /const prefetchedDetail =[\s\S]*?consumePrefetchedVideoDetail\(id\)[\s\S]*?const detailRequest = prefetchedDetail \?\? fetchVideoDetail\(id\);[\s\S]*?detailRequest[\s\S]*?\.then\(\(d\) =>[\s\S]*?setDetail\(stableDetail\);[\s\S]*?setLoading\(false\)/
   );
   assert.match(
     detailPageSource,
@@ -143,6 +144,19 @@ test("detail-data prefetch is shared and consumed by one navigation", async () =
     assert.equal(consumePrefetchedVideoDetail(videoID), null);
     assert.equal((await first)?.id, videoID);
     assert.equal(requestCount, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("video detail distinguishes a missing resource from a service failure", async () => {
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = async () => new Response(null, { status: 404 });
+    assert.equal(await fetchVideoDetail("missing-video"), null);
+
+    globalThis.fetch = async () => new Response(null, { status: 503 });
+    await assert.rejects(fetchVideoDetail("temporarily-unavailable"), /HTTP 503/);
   } finally {
     globalThis.fetch = originalFetch;
   }

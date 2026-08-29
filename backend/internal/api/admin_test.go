@@ -119,6 +119,54 @@ func TestHandleLoginReturnsForbiddenForBannedIP(t *testing.T) {
 	}
 }
 
+func TestAuthenticationEndpointsReturnServiceUnavailableWhenCatalogFails(t *testing.T) {
+	cat, err := catalog.Open(t.TempDir() + "/catalog.db")
+	if err != nil {
+		t.Fatalf("open catalog: %v", err)
+	}
+	if err := cat.Close(); err != nil {
+		t.Fatalf("close catalog: %v", err)
+	}
+	server := &AdminServer{
+		Catalog: cat,
+		Auth:    &auth.Authenticator{Username: "admin", Password: "secret", Catalog: cat},
+	}
+
+	tests := []struct {
+		name   string
+		handle http.HandlerFunc
+		req    *http.Request
+	}{
+		{
+			name:   "login",
+			handle: server.handleLogin,
+			req:    httptest.NewRequest(http.MethodPost, "/admin/api/login", strings.NewReader(`{"username":"admin","password":"secret"}`)),
+		},
+		{
+			name:   "me",
+			handle: server.handleMe,
+			req: func() *http.Request {
+				req := httptest.NewRequest(http.MethodGet, "/admin/api/me", nil)
+				req.AddCookie(&http.Cookie{Name: "vs_admin", Value: "valid-looking-token"})
+				return req
+			}(),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rr := httptest.NewRecorder()
+			tt.handle(rr, tt.req)
+
+			if rr.Code != http.StatusServiceUnavailable {
+				t.Fatalf("status = %d, want 503; body = %s", rr.Code, rr.Body.String())
+			}
+			if strings.Contains(rr.Body.String(), "database") || strings.Contains(rr.Body.String(), "interrupted") {
+				t.Fatalf("response exposed the catalog error: %q", rr.Body.String())
+			}
+		})
+	}
+}
+
 func TestHandleLoginRequiresSetupBeforeDefaultLogin(t *testing.T) {
 	cat, err := catalog.Open(t.TempDir() + "/catalog.db")
 	if err != nil {

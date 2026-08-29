@@ -139,15 +139,18 @@ test("detail history navigation renders cached content before background refresh
   );
   assert.match(
     detailPageSource,
-    /const detailRequest = prefetchedDetail[\s\S]*?detailRequest\.then\(\(d\) =>[\s\S]*?setLoading\(false\)/
+    /const detailRequest = prefetchedDetail \?\? fetchVideoDetail\(id\);[\s\S]*?detailRequest[\s\S]*?\.then\(\(d\) =>[\s\S]*?setLoading\(false\)/
   );
   assert.doesNotMatch(
     detailPageSource,
     /Promise\.all\(\[detailRequest, fetchTags\(\)\]\)/
   );
-  assert.match(detailPageSource, /if \(!stableDetail && initialSnapshot\)/);
+  assert.match(
+    detailPageSource,
+    /\.catch\(\(\) => \{[\s\S]*?setDetailError\("视频信息暂时无法加载，请稍后重试"\);[\s\S]*?setLoading\(false\)/
+  );
   assert.match(detailPageSource, /if \(navigationType !== "POP"\)/);
-  assert.doesNotMatch(detailPageSource, /setLoading\(true\)/);
+  assert.match(detailPageSource, /if \(!initialSnapshot\) setLoading\(true\)/);
 });
 
 test("detail page defers subtitles to the player menu", () => {

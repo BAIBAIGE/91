@@ -152,7 +152,15 @@ export async function fetchVideoFeed(
 
 export function fetchVideoDetail(id: string): Promise<VideoDetail | null> {
   return apiGet<VideoDetail>(`/api/video/${encodeURIComponent(id)}`).catch(
-    () => null
+    (error: unknown) => {
+      if (
+        error instanceof HTTPStatusError &&
+        (error.status === 404 || error.status === 410)
+      ) {
+        return null;
+      }
+      throw error;
+    }
   );
 }
 
@@ -184,14 +192,21 @@ export function prefetchVideoDetail(id: string): Promise<VideoDetail | null> {
   prefetchedVideoDetailsByID.set(id, entry);
   trimVideoDetailPrefetches();
 
-  void request.then((detail) => {
-    if (
-      detail === null &&
-      prefetchedVideoDetailsByID.get(id)?.request === request
-    ) {
-      prefetchedVideoDetailsByID.delete(id);
+  void request.then(
+    (detail) => {
+      if (
+        detail === null &&
+        prefetchedVideoDetailsByID.get(id)?.request === request
+      ) {
+        prefetchedVideoDetailsByID.delete(id);
+      }
+    },
+    () => {
+      if (prefetchedVideoDetailsByID.get(id)?.request === request) {
+        prefetchedVideoDetailsByID.delete(id);
+      }
     }
-  });
+  );
   return request;
 }
 

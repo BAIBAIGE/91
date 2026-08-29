@@ -140,6 +140,8 @@ function VideoDetailContent({ id }: { id?: string }) {
       id ? (cachedCollectionSummariesByID.get(id) ?? null) : null
     );
   const [loading, setLoading] = useState(initialSnapshot === null);
+  const [detailError, setDetailError] = useState("");
+  const [detailLoadVersion, setDetailLoadVersion] = useState(0);
   const [tagSaving, setTagSaving] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteSource, setDeleteSource] = useState(false);
@@ -154,6 +156,7 @@ function VideoDetailContent({ id }: { id?: string }) {
   useEffect(() => {
     if (!id) {
       setLoading(false);
+      setDetailError("");
       document.title = "视频不存在";
       return;
     }
@@ -167,40 +170,50 @@ function VideoDetailContent({ id }: { id?: string }) {
       document.title = initialSnapshot.detail.title;
     }
 
+    if (!initialSnapshot) setLoading(true);
+    setDetailError("");
+
     // 命中快照时保留当前画面，在后台静默校验最新详情。
     // 字幕只在用户打开播放器的字幕菜单后请求。
-    const prefetchedDetail = consumePrefetchedVideoDetail(id);
-    const detailRequest = prefetchedDetail
-      ? prefetchedDetail.then((value) => value ?? fetchVideoDetail(id))
-      : fetchVideoDetail(id);
+    const prefetchedDetail =
+      detailLoadVersion === 0 ? consumePrefetchedVideoDetail(id) : null;
+    const detailRequest = prefetchedDetail ?? fetchVideoDetail(id);
 
-    detailRequest.then((d) => {
-      if (!active) return;
-      let stableDetail = d;
-      const localReactionCounts = reactionCountsRef.current;
-      if (stableDetail && localReactionCounts?.videoId === stableDetail.id) {
-        stableDetail = {
-          ...stableDetail,
-          likes: localReactionCounts.likes,
-          dislikes: localReactionCounts.dislikes,
-        };
-      }
+    detailRequest
+      .then((d) => {
+        if (!active) return;
+        let stableDetail = d;
+        const localReactionCounts = reactionCountsRef.current;
+        if (stableDetail && localReactionCounts?.videoId === stableDetail.id) {
+          stableDetail = {
+            ...stableDetail,
+            likes: localReactionCounts.likes,
+            dislikes: localReactionCounts.dislikes,
+          };
+        }
 
-      // 请求短暂失败时 fetchVideoDetail 会返回 null；已有快照比错误空态更有用。
-      if (!stableDetail && initialSnapshot) {
+        if (stableDetail) {
+          rememberVideoDetail({ detail: stableDetail });
+        } else {
+          forgetVideoDetail(id);
+        }
+        setDetail(stableDetail);
+        setDetailError("");
         setLoading(false);
-        return;
-      }
-
-      if (stableDetail) rememberVideoDetail({ detail: stableDetail });
-      setDetail(stableDetail);
-      setLoading(false);
-      document.title = stableDetail ? stableDetail.title : "视频不存在";
-    });
+        document.title = stableDetail ? stableDetail.title : "视频不存在";
+      })
+      .catch(() => {
+        if (!active) return;
+        // Preserve a cached detail during a transient outage. Without a cache,
+        // show a retryable failure state instead of claiming the video is gone.
+        setDetailError("视频信息暂时无法加载，请稍后重试");
+        setLoading(false);
+        if (!initialSnapshot) document.title = "视频加载失败";
+      });
     return () => {
       active = false;
     };
-  }, [id, initialSnapshot, navigationType]);
+  }, [detailLoadVersion, id, initialSnapshot, navigationType]);
 
   useEffect(() => {
     if (!id) {
@@ -400,7 +413,20 @@ function VideoDetailContent({ id }: { id?: string }) {
       <AppShell mobileAutoHideNav>
         <div className="vd-page">
           <div className="container vd-page__inner">
-            <div className="vd-empty">视频不存在或已被移除</div>
+            <div className="vd-empty">
+              <div>
+                {detailError || "视频不存在或已被移除"}
+              </div>
+              {detailError && (
+                <button
+                  className="vd-empty__retry"
+                  type="button"
+                  onClick={() => setDetailLoadVersion((version) => version + 1)}
+                >
+                  重试
+                </button>
+              )}
+            </div>
           </div>
         </div>
       </AppShell>

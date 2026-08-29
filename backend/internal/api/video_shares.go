@@ -47,7 +47,7 @@ func (s *Server) handleCreateVideoShare(w http.ResponseWriter, r *http.Request) 
 	videoID := routeParam(r, "id")
 	v, err := s.availableVideo(r.Context(), videoID)
 	if err != nil {
-		writeErr(w, http.StatusNotFound, sql.ErrNoRows)
+		writeCatalogLookupError(w, r, err)
 		return
 	}
 
@@ -72,7 +72,7 @@ func (s *Server) handleCreateVideoShare(w http.ResponseWriter, r *http.Request) 
 			writeErr(w, http.StatusNotFound, sql.ErrNoRows)
 			return
 		}
-		writeErr(w, http.StatusInternalServerError, err)
+		writeServiceUnavailable(w, r, "create video share", err)
 		return
 	}
 
@@ -124,14 +124,18 @@ func (s *Server) handleConsumeVideoShare(w http.ResponseWriter, r *http.Request)
 		case errors.Is(err, catalog.ErrVideoShareUnavailable):
 			writeErr(w, http.StatusNotFound, err)
 		default:
-			writeErr(w, http.StatusInternalServerError, err)
+			writeServiceUnavailable(w, r, "claim video share", err)
 		}
 		return
 	}
 
 	v, err := s.availableVideo(r.Context(), share.VideoID)
 	if err != nil {
-		writeErr(w, http.StatusNotFound, catalog.ErrVideoShareUnavailable)
+		if errors.Is(err, sql.ErrNoRows) {
+			writeErr(w, http.StatusNotFound, catalog.ErrVideoShareUnavailable)
+		} else {
+			writeServiceUnavailable(w, r, "load shared video", err)
+		}
 		return
 	}
 	setVideoShareSessionCookie(w, r, sessionValue, share.SessionExpiresAt, now)
@@ -231,12 +235,20 @@ func (s *Server) activeSharedVideo(w http.ResponseWriter, r *http.Request) (*cat
 		s.shareCurrentTime(),
 	)
 	if err != nil {
-		http.NotFound(w, r)
+		if errors.Is(err, catalog.ErrVideoShareUnavailable) {
+			http.NotFound(w, r)
+		} else {
+			writeServiceUnavailable(w, r, "validate video share", err)
+		}
 		return nil, false
 	}
 	v, err := s.availableVideo(r.Context(), videoID)
 	if err != nil {
-		http.NotFound(w, r)
+		if errors.Is(err, sql.ErrNoRows) {
+			http.NotFound(w, r)
+		} else {
+			writeServiceUnavailable(w, r, "load shared video", err)
+		}
 		return nil, false
 	}
 	return v, true
@@ -247,7 +259,10 @@ func (s *Server) availableVideo(ctx context.Context, id string) (*catalog.Video,
 		return nil, sql.ErrNoRows
 	}
 	v, err := s.videoByPublicID(ctx, id)
-	if err != nil || v.Hidden {
+	if err != nil {
+		return nil, err
+	}
+	if v.Hidden {
 		return nil, sql.ErrNoRows
 	}
 	if v.DriveID == localUploadDriveID {
@@ -255,11 +270,16 @@ func (s *Server) availableVideo(ctx context.Context, id string) (*catalog.Video,
 	}
 	if _, err := s.Catalog.GetDrive(ctx, v.DriveID); err == nil {
 		return v, nil
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return nil, err
 	}
 	// Preserve the catalog-only development/test mode used by the existing API:
 	// when no drives have been configured at all, metadata remains readable.
 	drives, err := s.Catalog.ListDrives(ctx)
-	if err != nil || len(drives) > 0 {
+	if err != nil {
+		return nil, err
+	}
+	if len(drives) > 0 {
 		return nil, sql.ErrNoRows
 	}
 	return v, nil

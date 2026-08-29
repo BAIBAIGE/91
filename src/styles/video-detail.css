@@ -2579,6 +2579,28 @@
   border-radius: var(--radius-lg);
 }
 
+.vd-empty__retry {
+  min-height: 44px;
+  margin-top: var(--space-4);
+  padding: 0 var(--space-5);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: var(--accent);
+  color: var(--text-on-accent);
+  font: inherit;
+  cursor: pointer;
+}
+
+.vd-empty__retry:hover {
+  border-color: var(--accent-hover);
+  background: var(--accent-hover);
+}
+
+.vd-empty__retry:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 /* =========================================================
  * Responsive
  * ========================================================= */
