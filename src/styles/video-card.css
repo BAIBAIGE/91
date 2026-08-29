@@ -120,6 +120,7 @@
 .video-card__link {
   display: block;
   color: inherit;
+  -webkit-tap-highlight-color: transparent;
 }
 
 .video-card__link:hover {
@@ -165,34 +166,6 @@
 
 @keyframes thumbnail-loading-sweep {
   to { transform: translateX(110%); }
-}
-
-/* Hover Shimmer Sweep Animation */
-.thumb-frame::before {
-  content: "";
-  position: absolute;
-  top: 0;
-  left: -150%;
-  width: 50%;
-  height: 100%;
-  background: linear-gradient(
-    90deg,
-    transparent 0%,
-    rgba(255, 255, 255, 0.16) 50%,
-    transparent 100%
-  );
-  transform: skewX(-25deg);
-  z-index: 3;
-  pointer-events: none;
-}
-
-.video-card:hover .thumb-frame::before {
-  animation: shine-sweep var(--duration-slow) var(--ease-out) forwards;
-}
-
-@keyframes shine-sweep {
-  0% { left: -150%; }
-  100% { left: 150%; }
 }
 
 .thumb-image,
@@ -835,9 +808,21 @@
     box-shadow: var(--shadow-sm);
   }
 
-  .video-card:active {
-    transform: scale(0.98);
-    background: var(--bg-elevated);
+  .video-card::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: 5;
+    border-radius: inherit;
+    background: color-mix(in srgb, var(--accent) 14%, transparent);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity var(--transition-fast);
+  }
+
+  .video-card:active::after {
+    opacity: 1;
+    transition-duration: 0ms;
   }
 
   .video-card:hover .thumb-image {
