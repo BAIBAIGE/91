@@ -173,11 +173,7 @@ export default function HomePage() {
           placeholder=""
           className="search-panel--public search-panel--transparent"
         />
-        {feedHasContent || hasActiveFilter ? (
-          <TagCloud linkBasePath="/" />
-        ) : (
-          <div className="tag-cloud-container is-reserved" aria-hidden="true" />
-        )}
+        <TagCloud linkBasePath="/" />
       </div>
 
       <div className="container page-section home-primary-section">

@@ -13,6 +13,8 @@ import { withListingNavigation } from "@/lib/listingSearchParams";
 
 const TAG_PLACEHOLDER_COUNT = 16;
 
+type TagCloudStatus = "loading" | "ready" | "error";
+
 type TagCloudProps = {
   linkBasePath?: string;
   onTagSelect?: () => void;
@@ -26,7 +28,10 @@ export const TagCloud = memo(function TagCloud({
   const activeTag = params.get("tag")?.trim() ?? "";
   const initialTagsRef = useRef<TagItem[] | null>(readCachedTags());
   const [tags, setTags] = useState<TagItem[]>(initialTagsRef.current ?? []);
-  const [loaded, setLoaded] = useState(initialTagsRef.current !== null);
+  const [status, setStatus] = useState<TagCloudStatus>(
+    initialTagsRef.current === null ? "loading" : "ready"
+  );
+  const [retryVersion, setRetryVersion] = useState(0);
   const [hasMoreRight, setHasMoreRight] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const visibleTags = useMemo(
@@ -44,23 +49,23 @@ export const TagCloud = memo(function TagCloud({
   }, []);
 
   useEffect(() => {
-    if (initialTagsRef.current !== null) return;
+    if (initialTagsRef.current !== null && retryVersion === 0) return;
 
     let active = true;
+    setStatus("loading");
     fetchTags()
       .then((list) => {
-        if (active) setTags(list);
+        if (!active) return;
+        setTags(list);
+        setStatus("ready");
       })
       .catch(() => {
-        if (active) setTags([]);
-      })
-      .finally(() => {
-        if (active) setLoaded(true);
+        if (active) setStatus("error");
       });
     return () => {
       active = false;
     };
-  }, []);
+  }, [retryVersion]);
 
   useLayoutEffect(() => {
     updateScrollOverflow();
@@ -146,11 +151,12 @@ export const TagCloud = memo(function TagCloud({
       window.removeEventListener("resize", updateScrollOverflow);
       resizeObserver?.disconnect();
     };
-  }, [updateScrollOverflow]);
+  }, [status, updateScrollOverflow]);
 
-  if (loaded && visibleTags.length === 0) return null;
+  if (status === "ready" && visibleTags.length === 0) return null;
 
-  const loading = !loaded && visibleTags.length === 0;
+  const loading = status === "loading" && visibleTags.length === 0;
+  const failed = status === "error" && visibleTags.length === 0;
 
   const buildTagHref = (label: string) => {
     const nextTag = activeTag === label ? null : label;
@@ -176,19 +182,32 @@ export const TagCloud = memo(function TagCloud({
       aria-label="热门标签"
       aria-busy={loading ? "true" : undefined}
     >
-      <div className="tag-cloud__grid" ref={containerRef}>
-        <div className="tag-cloud__row">
-          {loading
-            ? Array.from({ length: TAG_PLACEHOLDER_COUNT }, (_, item) => (
-                <span
-                  key={item}
-                  className="tag-chip tag-chip--placeholder"
-                  aria-hidden="true"
-                />
-              ))
-            : visibleTags.map(renderTag)}
+      {failed ? (
+        <div className="tag-cloud__error" role="status">
+          <span>标签加载失败</span>
+          <button
+            type="button"
+            className="tag-cloud__retry"
+            onClick={() => setRetryVersion((current) => current + 1)}
+          >
+            重新加载
+          </button>
         </div>
-      </div>
+      ) : (
+        <div className="tag-cloud__grid" ref={containerRef}>
+          <div className="tag-cloud__row">
+            {loading
+              ? Array.from({ length: TAG_PLACEHOLDER_COUNT }, (_, item) => (
+                  <span
+                    key={item}
+                    className="tag-chip tag-chip--placeholder"
+                    aria-hidden="true"
+                  />
+                ))
+              : visibleTags.map(renderTag)}
+          </div>
+        </div>
+      )}
     </div>
   );
 });

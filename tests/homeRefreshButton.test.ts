@@ -103,16 +103,22 @@ test("home page keeps every active result set in the shared feed session", () =>
   assert.doesNotMatch(homePageSource, /localStorage/);
 });
 
-test("home page reserves tag cloud space while tags load and uses one empty library state", () => {
+test("home and list pages load the shared tag cloud independently from video results", () => {
   assert.match(tagCloudSource, /const visibleTags = useMemo/);
   assert.match(tagCloudSource, /typeof tag\.count !== "number" \|\| tag\.count > 0/);
   assert.match(tagCloudSource, /const initialTagsRef = useRef<TagItem\[\] \| null>\(readCachedTags\(\)\)/);
   assert.match(tagCloudSource, /const \[tags,\s*setTags\] = useState<TagItem\[\]>\(initialTagsRef\.current \?\? \[\]\)/);
-  assert.match(tagCloudSource, /const \[loaded,\s*setLoaded\] = useState\(initialTagsRef\.current !== null\)/);
-  assert.match(tagCloudSource, /if \(initialTagsRef\.current !== null\) return/);
-  assert.match(tagCloudSource, /setLoaded\(true\)/);
-  assert.match(tagCloudSource, /if \(loaded && visibleTags\.length === 0\) return null/);
-  assert.match(tagCloudSource, /const loading = !loaded && visibleTags\.length === 0/);
+  assert.match(tagCloudSource, /type TagCloudStatus = "loading" \| "ready" \| "error"/);
+  assert.match(tagCloudSource, /const \[retryVersion, setRetryVersion\] = useState\(0\)/);
+  assert.match(tagCloudSource, /if \(initialTagsRef\.current !== null && retryVersion === 0\) return/);
+  assert.match(tagCloudSource, /setStatus\("ready"\)/);
+  assert.match(tagCloudSource, /setStatus\("error"\)/);
+  assert.match(tagCloudSource, /if \(status === "ready" && visibleTags\.length === 0\) return null/);
+  assert.match(tagCloudSource, /const loading = status === "loading" && visibleTags\.length === 0/);
+  assert.match(tagCloudSource, /const failed = status === "error" && visibleTags\.length === 0/);
+  assert.match(tagCloudSource, /标签加载失败/);
+  assert.match(tagCloudSource, /重新加载/);
+  assert.match(tagCloudSource, /setRetryVersion\(\(current\) => current \+ 1\)/);
   assert.match(tagCloudSource, /const TAG_PLACEHOLDER_COUNT = 16;/);
   assert.match(tagCloudSource, /type TagCloudProps = \{/);
   assert.match(tagCloudSource, /linkBasePath\?: string;/);
@@ -138,7 +144,8 @@ test("home page reserves tag cloud space while tags load and uses one empty libr
   const tagCloudContainer = ruleBody(searchCss, ".tag-cloud-container");
   const overflowingTagCloud = ruleBody(searchCss, ".tag-cloud-container.has-more-right");
   const loadingTagCloud = ruleBody(searchCss, ".tag-cloud-container.is-loading");
-  const reservedTagCloud = ruleBody(searchCss, ".tag-cloud-container.is-reserved");
+  const tagCloudError = ruleBody(searchCss, ".tag-cloud__error");
+  const tagCloudRetry = ruleBody(searchCss, ".tag-cloud__retry");
   const tagCloudRow = ruleBody(searchCss, ".tag-cloud__row");
   const tagChip = ruleBody(searchCss, ".tag-chip");
   const tagPlaceholder = ruleBody(searchCss, ".tag-chip--placeholder");
@@ -146,7 +153,8 @@ test("home page reserves tag cloud space while tags load and uses one empty libr
   assert.match(tagCloudContainer, /mask-image\s*:\s*none/);
   assert.match(overflowingTagCloud, /mask-image\s*:\s*linear-gradient\(to right, black 0%, black 93%, transparent 100%\)/);
   assert.match(loadingTagCloud, /pointer-events\s*:\s*none/);
-  assert.match(reservedTagCloud, /mask-image\s*:\s*none/);
+  assert.match(tagCloudError, /min-height\s*:\s*34px/);
+  assert.match(tagCloudRetry, /color\s*:\s*var\(--accent\)/);
   assert.match(tagCloudRow, /flex-wrap\s*:\s*nowrap/);
   assert.match(tagChip, /flex\s*:\s*0 0 auto/);
   assert.match(tagPlaceholder, /width\s*:\s*68px/);
@@ -243,10 +251,8 @@ test("home page reserves tag cloud space while tags load and uses one empty libr
   assert.match(homePageSource, /variant=\{hasActiveFilter \? "no-results" : "empty"\}[\s\S]*?text=\{hasActiveFilter \? "未查询到" : "当前库中没有视频"\}/);
   assert.match(homePageSource, /<VirtualVideoGrid[\s\S]*?onLoadMore=\{homeFeed\.loadMore\}/);
   assert.match(homePageSource, /const feedHasContent = feedItems\.length > 0/);
-  assert.match(
-    homePageSource,
-    /\{feedHasContent \|\| hasActiveFilter \? \([\s\S]*?<TagCloud linkBasePath="\/" \/>[\s\S]*?<div className="tag-cloud-container is-reserved" aria-hidden="true" \/>/
-  );
+  assert.match(homePageSource, /<TagCloud linkBasePath="\/" \/>/);
+  assert.doesNotMatch(homePageSource, /is-reserved/);
   // 两个推荐列表改成一个 tab 栏，不再各占一个 section。
   assert.match(homePageSource, /<HomeFeedTabs\s+feed=\{feed\}/);
   assert.doesNotMatch(homePageSource, /<SectionHeader/);
