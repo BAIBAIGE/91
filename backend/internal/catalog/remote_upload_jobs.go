@@ -463,48 +463,45 @@ UPDATE remote_upload_jobs
 // cancel_requested first; the manager then aborts the request, cleans files,
 // and turns it into the terminal canceled state.
 func (c *Catalog) CancelRemoteUploadJob(ctx context.Context, id string) (*RemoteUploadJob, error) {
-	tx, err := c.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, err
-	}
-	defer tx.Rollback()
-
-	var state string
-	if err := tx.QueryRowContext(ctx,
-		`SELECT state FROM remote_upload_jobs WHERE id = ?`,
-		strings.TrimSpace(id)).Scan(&state); err != nil {
-		return nil, err
-	}
-	if isRemoteUploadTerminalState(state) {
-		return nil, ErrRemoteUploadTerminal
-	}
 	now := time.Now().UnixMilli()
-	var res sql.Result
-	if state == RemoteUploadQueued {
-		res, err = tx.ExecContext(ctx, `
+	res, err := c.db.ExecContext(ctx, `
 UPDATE remote_upload_jobs
-   SET state = ?, source_url = '', cancel_requested = 0,
-       error_message = '', temp_file = '', final_file = '',
-       completed_video_id = '', updated_at = ?, finished_at = ?
- WHERE id = ? AND state = ?`,
-			RemoteUploadCanceled, now, now, id, RemoteUploadQueued)
-	} else {
-		res, err = tx.ExecContext(ctx, `
-UPDATE remote_upload_jobs
-   SET cancel_requested = 1, updated_at = ?
+   SET state = CASE WHEN state = ? THEN ? ELSE state END,
+       source_url = CASE WHEN state = ? THEN '' ELSE source_url END,
+       cancel_requested = CASE WHEN state = ? THEN 0 ELSE 1 END,
+       error_message = CASE WHEN state = ? THEN '' ELSE error_message END,
+       temp_file = CASE WHEN state = ? THEN '' ELSE temp_file END,
+       final_file = CASE WHEN state = ? THEN '' ELSE final_file END,
+       completed_video_id = CASE WHEN state = ? THEN '' ELSE completed_video_id END,
+       updated_at = ?,
+       finished_at = CASE WHEN state = ? THEN ? ELSE finished_at END
  WHERE id = ? AND state NOT IN (?, ?, ?)`,
-			now, id, RemoteUploadCompleted, RemoteUploadFailed, RemoteUploadCanceled)
-	}
+		RemoteUploadQueued, RemoteUploadCanceled,
+		RemoteUploadQueued,
+		RemoteUploadQueued,
+		RemoteUploadQueued,
+		RemoteUploadQueued,
+		RemoteUploadQueued,
+		RemoteUploadQueued,
+		now,
+		RemoteUploadQueued, now,
+		strings.TrimSpace(id),
+		RemoteUploadCompleted, RemoteUploadFailed, RemoteUploadCanceled,
+	)
 	if err != nil {
 		return nil, err
 	}
 	if affected, err := res.RowsAffected(); err != nil {
 		return nil, err
 	} else if affected != 1 {
-		return nil, ErrRemoteUploadTerminal
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, err
+		job, getErr := c.GetRemoteUploadJob(ctx, id)
+		if getErr != nil {
+			return nil, getErr
+		}
+		if job.Terminal() {
+			return nil, ErrRemoteUploadTerminal
+		}
+		return nil, ErrRemoteUploadInvalidTransition
 	}
 	return c.GetRemoteUploadJob(ctx, id)
 }
@@ -681,15 +678,6 @@ func (c *Catalog) remoteUploadTransitionError(ctx context.Context, id string) er
 		return ErrRemoteUploadTerminal
 	}
 	return ErrRemoteUploadInvalidTransition
-}
-
-func isRemoteUploadTerminalState(state string) bool {
-	switch state {
-	case RemoteUploadCompleted, RemoteUploadFailed, RemoteUploadCanceled:
-		return true
-	default:
-		return false
-	}
 }
 
 func filepathBaseOnly(value string) string {
