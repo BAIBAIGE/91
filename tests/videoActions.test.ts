@@ -149,7 +149,10 @@ test("detail history navigation renders cached content before background refresh
     detailPageSource,
     /\.catch\(\(\) => \{[\s\S]*?setDetailError\("视频信息暂时无法加载，请稍后重试"\);[\s\S]*?setLoading\(false\)/
   );
-  assert.match(detailPageSource, /if \(navigationType !== "POP"\)/);
+  assert.match(
+    detailPageSource,
+    /const \[entryNavigationType\] = useState\(navigationType\)[\s\S]*?if \(entryNavigationType !== "POP"\)/
+  );
   assert.match(detailPageSource, /if \(!initialSnapshot\) setLoading\(true\)/);
 });
 

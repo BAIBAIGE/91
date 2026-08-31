@@ -9,7 +9,7 @@ import {
 } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
 import { createPortal } from "react-dom";
-import { Link, useLocation } from "react-router";
+import { Link, useLocation, useNavigate } from "react-router";
 import { ArrowUpDown, ChevronRight, Eye, X } from "lucide-react";
 import type {
   PreviewState,
@@ -43,8 +43,6 @@ type SheetDragState = {
   pointerId: number;
   startY: number;
   lastY: number;
-  lastAt: number;
-  velocityY: number;
   surface: HTMLDivElement | null;
 };
 
@@ -57,11 +55,30 @@ type ListPullState = {
 };
 
 const LIST_PULL_ACTIVATION_DISTANCE = 8;
+const SHEET_DISMISS_HEIGHT_RATIO = 0.25;
 const SHEET_DISMISS_MIN_DISTANCE = 96;
 const SHEET_DISMISS_MAX_DISTANCE = 160;
-const SHEET_DISMISS_FLICK_MIN_DISTANCE = 64;
-const SHEET_DISMISS_VELOCITY = 0.9;
 const SHEET_DISMISS_ANIMATION_MS = 180;
+const COLLECTION_SHEET_HISTORY_STATE_KEY = "mobileVideoCollection";
+
+function asRouterState(value: unknown): Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function collectionSheetVideoId(state: Record<string, unknown>): string | null {
+  const sheetState = state[COLLECTION_SHEET_HISTORY_STATE_KEY];
+  if (
+    sheetState === null ||
+    typeof sheetState !== "object" ||
+    Array.isArray(sheetState)
+  ) {
+    return null;
+  }
+  const videoId = (sheetState as Record<string, unknown>).videoId;
+  return typeof videoId === "string" ? videoId : null;
+}
 
 /**
  * Mobile-only directory collection entry and bottom sheet.
@@ -71,7 +88,10 @@ const SHEET_DISMISS_ANIMATION_MS = 180;
  * directories with many videos.
  */
 export function MobileVideoCollection({ videoId, collection }: Props) {
-  const [open, setOpen] = useState(false);
+  const navigate = useNavigate();
+  const location = useLocation();
+  const locationState = asRouterState(location.state);
+  const open = collectionSheetVideoId(locationState) === videoId;
   const { data, loading, error, retry } = useLazyVideoCollection(
     videoId,
     open,
@@ -85,13 +105,12 @@ export function MobileVideoCollection({ videoId, collection }: Props) {
   const listRef = useRef<HTMLUListElement | null>(null);
   const currentItemRef = useRef<HTMLLIElement | null>(null);
   const dismissTimerRef = useRef<number | null>(null);
+  const historyClosePendingRef = useRef(false);
   const dragRef = useRef<SheetDragState>({
     active: false,
     pointerId: -1,
     startY: 0,
     lastY: 0,
-    lastAt: 0,
-    velocityY: 0,
     surface: null,
   });
   const listPullRef = useRef<ListPullState>({
@@ -101,10 +120,8 @@ export function MobileVideoCollection({ videoId, collection }: Props) {
     startX: 0,
     startY: 0,
   });
-  const location = useLocation();
-  const locationState = location.state as { from?: unknown } | null;
   const returnPath =
-    typeof locationState?.from === "string"
+    typeof locationState.from === "string"
       ? resolveVideoReturnPath(locationState.from)
       : resolveVideoReturnPath(routeToPath(location));
 
@@ -117,6 +134,19 @@ export function MobileVideoCollection({ videoId, collection }: Props) {
       }
     };
   }, []);
+
+  // A browser/system back action changes the history-backed open state without
+  // calling closeSheet. Cancel any pending gesture dismissal so its old timer
+  // cannot navigate back a second time after the sheet has already closed.
+  useEffect(() => {
+    historyClosePendingRef.current = false;
+    if (open) return;
+    if (dismissTimerRef.current !== null) {
+      window.clearTimeout(dismissTimerRef.current);
+      dismissTimerRef.current = null;
+    }
+    releaseDragCapture();
+  }, [open]);
 
   const items = useMemo(() => {
     const loaded = data?.items ?? [];
@@ -144,11 +174,11 @@ export function MobileVideoCollection({ videoId, collection }: Props) {
   useEffect(() => {
     const media = window.matchMedia("(max-width: 768px)");
     const handleChange = () => {
-      if (!media.matches) closeSheet(false);
+      if (!media.matches && open) closeSheet(false);
     };
     media.addEventListener("change", handleChange);
     return () => media.removeEventListener("change", handleChange);
-  }, []);
+  }, [open]);
 
   useEffect(() => {
     if (!open || items.length === 0) return;
@@ -211,7 +241,7 @@ export function MobileVideoCollection({ videoId, collection }: Props) {
       if (!pull.tracking) return;
       if (event.touches.length !== 1) {
         if (pull.activated) {
-          finishSheetDragAt(dragRef.current.lastY, event.timeStamp, true);
+          finishSheetDragAt(dragRef.current.lastY, true);
         }
         resetPull();
         return;
@@ -219,7 +249,7 @@ export function MobileVideoCollection({ videoId, collection }: Props) {
       const touch = findTouch(event.touches, pull.touchId);
       if (!touch) {
         if (pull.activated) {
-          finishSheetDragAt(dragRef.current.lastY, event.timeStamp, true);
+          finishSheetDragAt(dragRef.current.lastY, true);
         }
         resetPull();
         return;
@@ -243,12 +273,7 @@ export function MobileVideoCollection({ videoId, collection }: Props) {
           return;
         }
         event.preventDefault();
-        beginSheetDragAt(
-          pull.touchId,
-          pull.startY,
-          event.timeStamp,
-          null
-        );
+        beginSheetDragAt(pull.touchId, pull.startY, null);
         pull.activated = dragRef.current.active;
         if (!pull.activated) {
           resetPull();
@@ -258,7 +283,7 @@ export function MobileVideoCollection({ videoId, collection }: Props) {
         event.preventDefault();
       }
 
-      moveSheetDragAt(touch.clientY, event.timeStamp);
+      moveSheetDragAt(touch.clientY);
     };
     const finishTouch = (event: TouchEvent, cancelled: boolean) => {
       const pull = listPullRef.current;
@@ -268,7 +293,6 @@ export function MobileVideoCollection({ videoId, collection }: Props) {
         if (event.cancelable) event.preventDefault();
         finishSheetDragAt(
           touch?.clientY ?? dragRef.current.lastY,
-          event.timeStamp,
           cancelled
         );
       }
@@ -287,18 +311,20 @@ export function MobileVideoCollection({ videoId, collection }: Props) {
       list.removeEventListener("touchend", handleTouchEnd);
       list.removeEventListener("touchcancel", handleTouchCancel);
       if (listPullRef.current.activated && dragRef.current.active) {
-        finishSheetDragAt(
-          dragRef.current.lastY,
-          dragRef.current.lastAt,
-          true
-        );
+        finishSheetDragAt(dragRef.current.lastY, true);
       }
       resetPull();
     };
   }, [items.length, open]);
 
   function openSheet() {
-    setOpen(true);
+    if (open) return;
+    navigate(routeToPath(location), {
+      state: {
+        ...locationState,
+        [COLLECTION_SHEET_HISTORY_STATE_KEY]: { videoId },
+      },
+    });
   }
 
   function releaseDragCapture() {
@@ -320,12 +346,14 @@ export function MobileVideoCollection({ videoId, collection }: Props) {
   }
 
   function closeSheet(restoreFocus = true) {
+    if (!open || historyClosePendingRef.current) return;
+    historyClosePendingRef.current = true;
     if (dismissTimerRef.current !== null) {
       window.clearTimeout(dismissTimerRef.current);
       dismissTimerRef.current = null;
     }
     releaseDragCapture();
-    setOpen(false);
+    navigate(-1);
     if (restoreFocus) {
       window.setTimeout(() => triggerRef.current?.focus(), 0);
     }
@@ -334,7 +362,6 @@ export function MobileVideoCollection({ videoId, collection }: Props) {
   function beginSheetDragAt(
     pointerId: number,
     startY: number,
-    timeStamp: number,
     surface: HTMLDivElement | null
   ) {
     const sheet = sheetRef.current;
@@ -344,8 +371,6 @@ export function MobileVideoCollection({ videoId, collection }: Props) {
       pointerId,
       startY,
       lastY: startY,
-      lastAt: timeStamp,
-      velocityY: 0,
       surface,
     };
     // The opening animation is one-shot. Removing it before a gesture keeps a
@@ -356,15 +381,12 @@ export function MobileVideoCollection({ videoId, collection }: Props) {
     surface?.setPointerCapture(pointerId);
   }
 
-  function moveSheetDragAt(clientY: number, timeStamp: number) {
+  function moveSheetDragAt(clientY: number) {
     const drag = dragRef.current;
     if (!drag.active) return null;
 
     const offset = Math.max(0, clientY - drag.startY);
-    const elapsed = Math.max(1, timeStamp - drag.lastAt);
-    drag.velocityY = (clientY - drag.lastY) / elapsed;
     drag.lastY = clientY;
-    drag.lastAt = timeStamp;
     const sheet = sheetRef.current;
     if (!sheet) return null;
     const clampedOffset = Math.min(offset, sheet.offsetHeight);
@@ -375,38 +397,24 @@ export function MobileVideoCollection({ videoId, collection }: Props) {
     return offset;
   }
 
-  function finishSheetDragAt(
-    clientY: number,
-    timeStamp: number,
-    cancelled = false
-  ) {
+  function finishSheetDragAt(clientY: number, cancelled = false) {
     const drag = dragRef.current;
     if (!drag.active) return;
 
     const sheet = sheetRef.current;
     const offset = Math.max(0, clientY - drag.startY);
-    const elapsed = timeStamp - drag.lastAt;
-    if (elapsed >= 80) {
-      // A pause before release is an intentional placement, not a flick. Do
-      // not reuse velocity from an older move event.
-      drag.velocityY = 0;
-    } else if (elapsed > 0) {
-      drag.velocityY = (clientY - drag.lastY) / elapsed;
-    }
-    const velocityY = drag.velocityY;
     releaseDragCapture();
     if (!sheet) return;
 
     const sheetHeight = sheet.offsetHeight;
     const distanceThreshold = Math.min(
       SHEET_DISMISS_MAX_DISTANCE,
-      Math.max(SHEET_DISMISS_MIN_DISTANCE, sheetHeight * 0.22)
+      Math.max(
+        SHEET_DISMISS_MIN_DISTANCE,
+        sheetHeight * SHEET_DISMISS_HEIGHT_RATIO
+      )
     );
-    const shouldDismiss =
-      !cancelled &&
-      (offset >= distanceThreshold ||
-        (offset >= SHEET_DISMISS_FLICK_MIN_DISTANCE &&
-          velocityY >= SHEET_DISMISS_VELOCITY));
+    const shouldDismiss = !cancelled && offset >= distanceThreshold;
 
     sheet.classList.remove("is-dragging");
     // Commit the last drag frame before re-enabling the CSS transition so both
@@ -440,7 +448,6 @@ export function MobileVideoCollection({ videoId, collection }: Props) {
     beginSheetDragAt(
       event.pointerId,
       event.clientY,
-      event.timeStamp,
       event.currentTarget
     );
   }
@@ -448,7 +455,7 @@ export function MobileVideoCollection({ videoId, collection }: Props) {
   function moveSheetDrag(event: ReactPointerEvent<HTMLDivElement>) {
     const drag = dragRef.current;
     if (!drag.active || drag.pointerId !== event.pointerId) return;
-    const offset = moveSheetDragAt(event.clientY, event.timeStamp);
+    const offset = moveSheetDragAt(event.clientY);
     if (offset !== null && offset > 0) event.preventDefault();
   }
 
@@ -458,7 +465,7 @@ export function MobileVideoCollection({ videoId, collection }: Props) {
   ) {
     const drag = dragRef.current;
     if (!drag.active || drag.pointerId !== event.pointerId) return;
-    finishSheetDragAt(event.clientY, event.timeStamp, cancelled);
+    finishSheetDragAt(event.clientY, cancelled);
   }
 
   const shownSummary = data ?? collection;
@@ -505,24 +512,23 @@ export function MobileVideoCollection({ videoId, collection }: Props) {
                   <X size={18} strokeWidth={2} />
                 </button>
               </header>
-            </div>
-
-            <div className="vd-collection-sheet__toolbar">
-              <span>
-                选集
-                {shownSummary.total > 0 && (
-                  <small>{shownSummary.total} 个视频</small>
-                )}
-              </span>
-              <button
-                type="button"
-                className="vd-collection-sheet__sort"
-                onClick={() => setAscending((value) => !value)}
-                aria-label={`切换为${ascending ? "倒序" : "正序"}`}
-              >
-                <ArrowUpDown size={17} aria-hidden="true" />
-                {ascending ? "正序" : "倒序"}
-              </button>
+              <div className="vd-collection-sheet__toolbar">
+                <span>
+                  选集
+                  {shownSummary.total > 0 && (
+                    <small>{shownSummary.total} 个视频</small>
+                  )}
+                </span>
+                <button
+                  type="button"
+                  className="vd-collection-sheet__sort"
+                  onClick={() => setAscending((value) => !value)}
+                  aria-label={`切换为${ascending ? "倒序" : "正序"}`}
+                >
+                  <ArrowUpDown size={17} aria-hidden="true" />
+                  {ascending ? "正序" : "倒序"}
+                </button>
+              </div>
             </div>
 
             {loading && !data ? (
@@ -550,8 +556,9 @@ export function MobileVideoCollection({ videoId, collection }: Props) {
                       current={current}
                       returnPath={returnPath}
                       onSelect={(event) => {
-                        if (current) event.preventDefault();
-                        closeSheet(current);
+                        if (!current) return;
+                        event.preventDefault();
+                        closeSheet();
                       }}
                     />
                   );
@@ -727,6 +734,7 @@ const CollectionItem = forwardRef<HTMLLIElement, CollectionItemProps>(
       >
         <Link
           to={video.href}
+          replace
           state={{ from: returnPath }}
           className="vd-collection-item__link"
           aria-current={current ? "page" : undefined}

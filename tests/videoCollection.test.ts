@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { createMemoryRouter } from "react-router";
 
 const componentSource = readFileSync(
   new URL("../src/components/MobileVideoCollection.tsx", import.meta.url),
@@ -409,6 +410,84 @@ test("mobile collection uses an accessible scroll-locked bottom sheet", () => {
   assert.match(componentSource, /aria-current=\{current \? "page" : undefined\}/);
 });
 
+test("mobile collection sheet is one browser-history layer", () => {
+  assert.match(componentSource, /useNavigate\(\)/);
+  assert.match(
+    componentSource,
+    /const open = collectionSheetVideoId\(locationState\) === videoId/
+  );
+  assert.match(
+    componentSource,
+    /navigate\(routeToPath\(location\), \{[\s\S]*?\[COLLECTION_SHEET_HISTORY_STATE_KEY\]: \{ videoId \}/
+  );
+  assert.match(
+    componentSource,
+    /function closeSheet\([\s\S]*?navigate\(-1\)/
+  );
+  assert.match(
+    componentSource,
+    /<Link\s+to=\{video\.href\}\s+replace\s+state=\{\{ from: returnPath \}\}/
+  );
+  assert.doesNotMatch(componentSource, /setOpen\(/);
+});
+
+test("browser back closes the collection layer before leaving the video", async () => {
+  const router = createMemoryRouter([{ path: "*", element: null }], {
+    initialEntries: [
+      "/list",
+      { pathname: "/video/current", state: { from: "/list" } },
+    ],
+    initialIndex: 1,
+  });
+
+  try {
+    await router.navigate("/video/current", {
+      state: {
+        from: "/list",
+        mobileVideoCollection: { videoId: "current" },
+      },
+    });
+    await router.navigate(-1);
+
+    assert.equal(router.state.location.pathname, "/video/current");
+    assert.deepEqual(router.state.location.state, { from: "/list" });
+
+    await router.navigate(-1);
+    assert.equal(router.state.location.pathname, "/list");
+  } finally {
+    router.dispose();
+  }
+});
+
+test("selecting another collection item replaces the open sheet layer", async () => {
+  const router = createMemoryRouter([{ path: "*", element: null }], {
+    initialEntries: [
+      "/list",
+      { pathname: "/video/current", state: { from: "/list" } },
+    ],
+    initialIndex: 1,
+  });
+
+  try {
+    await router.navigate("/video/current", {
+      state: {
+        from: "/list",
+        mobileVideoCollection: { videoId: "current" },
+      },
+    });
+    await router.navigate("/video/next", {
+      replace: true,
+      state: { from: "/list" },
+    });
+    await router.navigate(-1);
+
+    assert.equal(router.state.location.pathname, "/video/current");
+    assert.deepEqual(router.state.location.state, { from: "/list" });
+  } finally {
+    router.dispose();
+  }
+});
+
 test("collection view counts use the shared eye icon", () => {
   assert.match(
     componentSource,
@@ -459,12 +538,12 @@ test("collection sheet follows a downward drag and dismisses past a threshold", 
   assert.match(componentSource, /onPointerDown=\{beginSheetDrag\}/);
   assert.match(componentSource, /setPointerCapture\(pointerId\)/);
   assert.match(componentSource, /offset >= distanceThreshold/);
-  assert.match(componentSource, /velocityY >= SHEET_DISMISS_VELOCITY/);
+  assert.doesNotMatch(componentSource, /velocityY|SHEET_DISMISS_(?:FLICK|VELOCITY)/);
+  assert.match(componentSource, /SHEET_DISMISS_HEIGHT_RATIO\s*=\s*0\.25/);
   assert.match(
     componentSource,
-    /SHEET_DISMISS_FLICK_MIN_DISTANCE\s*=\s*64[\s\S]*?offset >= SHEET_DISMISS_FLICK_MIN_DISTANCE/
+    /sheetHeight \* SHEET_DISMISS_HEIGHT_RATIO/
   );
-  assert.match(componentSource, /sheetHeight \* 0\.22/);
   assert.match(componentSource, /finishSheetDrag\(event, true\)/);
   assert.match(
     stylesSource,
@@ -473,6 +552,17 @@ test("collection sheet follows a downward drag and dismisses past a threshold", 
   assert.match(
     stylesSource,
     /\.vd-collection-sheet\.is-dragging\s*\{[\s\S]*?transition:\s*none;/
+  );
+});
+
+test("collection toolbar is part of the drag surface without stealing controls", () => {
+  assert.match(
+    componentSource,
+    /<header className="vd-collection-sheet__head">[\s\S]*?<\/header>\s*<div className="vd-collection-sheet__toolbar">[\s\S]*?<\/div>\s*<\/div>\s*\{loading && !data/
+  );
+  assert.match(
+    componentSource,
+    /if \(target\.closest\("button, a, input, select, textarea"\)\) return/
   );
 });
 

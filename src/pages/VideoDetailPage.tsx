@@ -109,6 +109,10 @@ function VideoDetailContent({ id }: { id?: string }) {
   const navigate = useNavigate();
   const location = useLocation();
   const navigationType = useNavigationType();
+  // VideoDetailContent is keyed by video id. Freeze how this video was entered
+  // so same-video history layers (such as the mobile collection sheet) do not
+  // restart detail loading or reset the document scroll position.
+  const [entryNavigationType] = useState(navigationType);
   const { isAdmin } = useAuth();
   const locationState = location.state as { from?: unknown } | null;
   const [initialSnapshot] = useState<VideoDetailSnapshot | null>(() =>
@@ -161,7 +165,7 @@ function VideoDetailContent({ id }: { id?: string }) {
       return;
     }
     let active = true;
-    if (navigationType !== "POP") {
+    if (entryNavigationType !== "POP") {
       window.scrollTo({ top: 0, behavior: "auto" });
     }
     if (initialSnapshot) {
@@ -213,7 +217,7 @@ function VideoDetailContent({ id }: { id?: string }) {
     return () => {
       active = false;
     };
-  }, [detailLoadVersion, id, initialSnapshot, navigationType]);
+  }, [detailLoadVersion, entryNavigationType, id, initialSnapshot]);
 
   useEffect(() => {
     if (!id) {

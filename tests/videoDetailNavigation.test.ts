@@ -82,6 +82,21 @@ test("video cards start independent detail and recommendation requests for confi
   );
 });
 
+test("same-video overlay history does not restart detail navigation effects", () => {
+  assert.match(
+    detailPageSource,
+    /const \[entryNavigationType\] = useState\(navigationType\)/
+  );
+  assert.match(
+    detailPageSource,
+    /\}, \[detailLoadVersion, entryNavigationType, id, initialSnapshot\]\);/
+  );
+  assert.doesNotMatch(
+    detailPageSource,
+    /\[detailLoadVersion, id, initialSnapshot, navigationType\]/
+  );
+});
+
 test("a touch preview intent delays media creation but still arms navigation", () => {
   assert.match(
     cardSource,
