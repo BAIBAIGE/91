@@ -85,9 +85,9 @@ export default function HomePage() {
     historyKey: location.key,
     queryKey: activeFeedSource.key,
     pageSize: activeFeedSource.batchSize,
-    // 随机快照只在当前 Document 内恢复：进详情再后退仍保持现场，浏览器
-    // 刷新生成新 Document 后则从空 token 开始重新随机。
-    feedSnapshotScope: isRandomRecommendationFeed ? "document" : "session",
+    // Each source owns its freshness policy. Latest and random feeds preserve
+    // same-Document back navigation but start fresh after a browser reload.
+    feedSnapshotScope: activeFeedSource.snapshotRestoreScope,
   });
   const homeFeed = useInfiniteListing(activeFeedSource, {
     pausePagination: !routeActive,

@@ -17,7 +17,7 @@ import {
   AlertCircle,
   Share2,
 } from "lucide-react";
-import { hideVideo, type ShortsItem } from "@/data/videos";
+import { hideVideo, setVideoLike, type ShortsItem } from "@/data/videos";
 import {
   averageBytesPerSecond,
   clamp,
@@ -331,16 +331,7 @@ export default function ShortsPage() {
         likedIdsRef.current.delete(videoId);
       }
       try {
-        const res = await fetch(
-          `/api/video/${encodeURIComponent(videoId)}/like`,
-          {
-            method: liked ? "POST" : "DELETE",
-            credentials: "include",
-          }
-        );
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data = (await res.json()) as { likes?: number };
-        return typeof data.likes === "number" ? data.likes : null;
+        return await setVideoLike(videoId, liked);
       } catch {
         // 请求失败：回滚集合，让 Slide 自己回滚 UI
         if (liked) {

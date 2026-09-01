@@ -48,7 +48,7 @@ test("home page refresh button shares back-to-top slot until back-to-top is visi
   assert.match(homePageSource, /const showRefresh = isRandomRecommendationFeed;/);
   assert.match(
     homePageSource,
-    /feedSnapshotScope: isRandomRecommendationFeed \? "document" : "session"/
+    /feedSnapshotScope: activeFeedSource\.snapshotRestoreScope/
   );
   assert.match(homePageSource, /const refreshing = showRefresh && homeFeed\.initialLoading;/);
   assert.match(homePageSource, /\{showRefresh && \(/);

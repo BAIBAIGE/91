@@ -5,6 +5,7 @@ import {
   type VideoFeedKind,
 } from "@/data/videos";
 import { infiniteListingKey } from "@/lib/infiniteListing";
+import type { FeedSnapshotRestoreScope } from "@/lib/listingScrollRestore";
 import type { SortKey, VideoItem } from "@/types";
 
 /**
@@ -28,6 +29,8 @@ export type InfiniteFeedSource = {
   /** 同一个 key 代表同一个逻辑结果集；批次大小不是结果集身份的一部分。 */
   key: string;
   batchSize: number;
+  /** Whether a feed token may survive a new browser Document. */
+  snapshotRestoreScope: FeedSnapshotRestoreScope;
   fetchBatch: (
     request: InfiniteFeedRequest,
     options: { signal: AbortSignal }
@@ -46,6 +49,7 @@ function snapshotFeedSource(input: {
   key: string;
   kind: VideoFeedKind;
   batchSize: number;
+  snapshotRestoreScope: FeedSnapshotRestoreScope;
   q?: string;
   tag?: string;
   sort?: SortKey;
@@ -53,6 +57,7 @@ function snapshotFeedSource(input: {
   return {
     key: input.key,
     batchSize: input.batchSize,
+    snapshotRestoreScope: input.snapshotRestoreScope,
     isExpiredError: (error) => error instanceof VideoFeedExpiredError,
     fetchBatch: async (request, options) => {
       const response = await fetchVideoFeed(
@@ -84,6 +89,9 @@ export function listingFeedSource(query: ListingFeedQuery): InfiniteFeedSource {
     key: `listing:${infiniteListingKey(query)}`,
     kind: "listing",
     batchSize: query.pageSize,
+    // Detail navigation retains the current React tree and exact snapshot.
+    // A browser reload creates a new Document and refreshes every sort order.
+    snapshotRestoreScope: "document",
     q: query.q.trim(),
     tag: query.tag.trim(),
     sort: query.sort,
@@ -97,6 +105,7 @@ export function homeRecommendationFeedSource(): InfiniteFeedSource {
     key: "home:recommend",
     kind: "recommend",
     batchSize: HOME_RECOMMENDATION_BATCH_SIZE,
+    snapshotRestoreScope: "document",
   });
 }
 
@@ -105,6 +114,7 @@ export function homeLatestFeedSource(pageSize: number): InfiniteFeedSource {
     key: "home:latest",
     kind: "latest",
     batchSize: pageSize,
+    snapshotRestoreScope: "document",
     sort: "latest",
   });
 }

@@ -6,6 +6,7 @@ import {
   homeRecommendationFeedSource,
   listingFeedSource,
 } from "../src/lib/infiniteFeedSource.ts";
+import { setVideoLike } from "../src/data/videos.ts";
 
 type RecordedRequest = { path: string; init?: RequestInit };
 
@@ -52,6 +53,7 @@ test("the listing feed creates a filtered snapshot instead of translating offset
   });
 
   assert.equal(source.batchSize, 20);
+  assert.equal(source.snapshotRestoreScope, "document");
   assert.equal(
     source.key,
     listingFeedSource({ q: "猫", tag: "剧情", sort: "latest", pageSize: 14 }).key,
@@ -86,6 +88,7 @@ test("later batches explicitly address the same token and cursor", async (t) => 
     feedResponse({ items: [{ id: "v3" }], nextCursor: 60 })
   );
   const source = listingFeedSource({ q: "", tag: "", sort: "hot", pageSize: 20 });
+  assert.equal(source.snapshotRestoreScope, "document");
 
   await source.fetchBatch(
     { cursor: { feedToken: "snapshot-token", position: 40 }, size: 20 },
@@ -96,6 +99,27 @@ test("later batches explicitly address the same token and cursor", async (t) => 
   assert.equal(query.get("feedToken"), "snapshot-token");
   assert.equal(query.get("cursor"), "40");
   assert.equal(query.get("count"), "20");
+  assert.equal(
+    listingFeedSource({ q: "", tag: "", sort: "recent", pageSize: 20 })
+      .snapshotRestoreScope,
+    "document"
+  );
+});
+
+test("shorts like and unlike use the shared counter endpoint", async (t) => {
+  const requested = stubFetch(t, (_path, init) => ({
+    likes: init?.method === "POST" ? 9 : 8,
+  }));
+
+  assert.equal(await setVideoLike("video-short", true), 9);
+  assert.equal(await setVideoLike("video-short", false), 8);
+  assert.deepEqual(
+    requested.map(({ path, init }) => [path, init?.method]),
+    [
+      ["/api/video/video-short/like", "POST"],
+      ["/api/video/video-short/like", "DELETE"],
+    ]
+  );
 });
 
 test("a feed completed by its first batch does not need a snapshot token", async (t) => {
@@ -150,6 +174,7 @@ test("the random recommendation feed is a restorable shuffled snapshot", async (
 
   assert.equal(source.key, "home:recommend");
   assert.equal(source.batchSize, HOME_RECOMMENDATION_BATCH_SIZE);
+  assert.equal(source.snapshotRestoreScope, "document");
   await source.fetchBatch(
     { cursor: { feedToken: "snapshot-token", position: 36 }, size: 12 },
     { signal: new AbortController().signal }
@@ -170,6 +195,7 @@ test("the home latest feed keeps its identity when its responsive batch changes"
   const source = homeLatestFeedSource(20);
 
   assert.equal(source.key, "home:latest");
+  assert.equal(source.snapshotRestoreScope, "document");
   assert.equal(source.key, homeLatestFeedSource(14).key);
   assert.notEqual(
     source.key,

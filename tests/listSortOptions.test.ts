@@ -119,12 +119,20 @@ test("public video lists use fourteen mobile and twenty desktop items per batch"
     listingPageSource,
     /listingFeedSource\(\{ q: keyword, tag, sort, pageSize \}\)/
   );
+  assert.match(
+    listingPageSource,
+    /feedSnapshotScope: source\.snapshotRestoreScope/
+  );
   assert.match(listingPageSource, /skeletonCount=\{pageSize\}/);
 });
 
 test("home filters use the shared snapshot-based infinite listing contract", () => {
   assert.match(homePageSource, /listingFeedSource\(\{[\s\S]*?q: activeSearchQuery,[\s\S]*?tag: activeTag,[\s\S]*?sort: searchSort/);
   assert.match(homePageSource, /useInfiniteListing\(activeFeedSource, \{/);
+  assert.match(
+    homePageSource,
+    /feedSnapshotScope: activeFeedSource\.snapshotRestoreScope/
+  );
   assert.match(homePageSource, /useListingScrollRestore\(\{[\s\S]*?queryKey: activeFeedSource\.key/);
   assert.match(homePageSource, /<VirtualVideoGrid[\s\S]*?hasMore=\{homeFeed\.hasMore\}[\s\S]*?onLoadMore=\{homeFeed\.loadMore\}/);
   assert.match(homePageSource, /sortDisabled=\{homeFeed\.initialLoading\}/);

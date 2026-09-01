@@ -52,6 +52,7 @@ export default function ListingPage() {
     historyKey: location.key,
     queryKey,
     pageSize,
+    feedSnapshotScope: source.snapshotRestoreScope,
   });
   const listing = useInfiniteListing(source, {
     pausePagination: !routeActive,

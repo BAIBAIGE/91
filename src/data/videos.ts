@@ -499,6 +499,18 @@ export function recordView(id: string): Promise<{ views: number }> {
   );
 }
 
+/** Legacy counter-style like endpoint used by the immersive shorts UI. */
+export async function setVideoLike(id: string, liked: boolean): Promise<number> {
+  const result = await apiJSON<{ likes: number }>(
+    `/api/video/${encodeURIComponent(id)}/like`,
+    { method: liked ? "POST" : "DELETE" }
+  );
+  if (!result || !Number.isInteger(result.likes) || result.likes < 0) {
+    throw new Error("Invalid video like response");
+  }
+  return result.likes;
+}
+
 export type VideoReactionResult = VideoReactionCounts & {
   reaction: VideoReaction;
 };
