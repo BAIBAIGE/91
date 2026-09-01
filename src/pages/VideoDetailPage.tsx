@@ -29,6 +29,7 @@ import {
 import { useAuth } from "@/admin/AuthContext";
 import { useDocumentScrollLock } from "@/lib/useDocumentScrollLock";
 import { resolveVideoReturnPath } from "@/lib/videoReturnPath";
+import { scrollPageTo, usePageScrollRoot } from "@/lib/pageScroll";
 import type {
   TagItem,
   VideoCollectionSummary,
@@ -106,6 +107,7 @@ export default function VideoDetailPage() {
 }
 
 function VideoDetailContent({ id }: { id?: string }) {
+  const scrollRootRef = usePageScrollRoot();
   const navigate = useNavigate();
   const location = useLocation();
   const navigationType = useNavigationType();
@@ -166,7 +168,7 @@ function VideoDetailContent({ id }: { id?: string }) {
     }
     let active = true;
     if (entryNavigationType !== "POP") {
-      window.scrollTo({ top: 0, behavior: "auto" });
+      scrollPageTo(scrollRootRef, { top: 0, behavior: "auto" });
     }
     if (initialSnapshot) {
       // effect 中更新最近使用顺序，保持 React 的 state initializer 无副作用。
@@ -217,7 +219,13 @@ function VideoDetailContent({ id }: { id?: string }) {
     return () => {
       active = false;
     };
-  }, [detailLoadVersion, entryNavigationType, id, initialSnapshot]);
+  }, [
+    detailLoadVersion,
+    entryNavigationType,
+    id,
+    initialSnapshot,
+    scrollRootRef,
+  ]);
 
   useEffect(() => {
     if (!id) {

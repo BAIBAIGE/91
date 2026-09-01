@@ -118,6 +118,8 @@ function initialState(
 
 export type UseInfiniteListingOptions = {
   enabled?: boolean;
+  /** Keep the current snapshot but do not extend it with more batches. */
+  pausePagination?: boolean;
   restoreCount?: number;
   restoreFeedToken?: string;
 };
@@ -127,6 +129,7 @@ export function useInfiniteListing(
   options: UseInfiniteListingOptions = {}
 ) {
   const enabled = options.enabled ?? true;
+  const pausePagination = options.pausePagination ?? false;
   const key = source.key;
   const batchSize = source.batchSize;
   const [state, dispatch] = useReducer(infiniteListingReducer, undefined, () =>
@@ -142,12 +145,14 @@ export function useInfiniteListing(
   const stateRef = useRef(state);
   const sourceRef = useRef(source);
   const enabledRef = useRef(enabled);
+  const paginationPausedRef = useRef(pausePagination);
   const restoreCountRef = useRef(options.restoreCount ?? 0);
   const restoreFeedTokenRef = useRef(options.restoreFeedToken ?? "");
   const forceFreshRef = useRef(false);
   stateRef.current = state;
   sourceRef.current = source;
   enabledRef.current = enabled;
+  paginationPausedRef.current = pausePagination;
   restoreCountRef.current = options.restoreCount ?? 0;
   restoreFeedTokenRef.current = options.restoreFeedToken ?? "";
 
@@ -284,7 +289,7 @@ export function useInfiniteListing(
 
   const requestBatch = useCallback(
     (batchOptions: { force?: boolean } = {}) => {
-      if (!enabledRef.current) return;
+      if (!enabledRef.current || paginationPausedRef.current) return;
       if (controllerRef.current && !controllerRef.current.signal.aborted) return;
       const current = stateRef.current;
       if (current.status === "initial-loading" || current.status === "loading-more") {
@@ -298,7 +303,10 @@ export function useInfiniteListing(
     [sendRequest]
   );
 
-  const loadMore = useCallback(() => requestBatch(), [requestBatch]);
+  const loadMore = useCallback(() => {
+    if (pausePagination) return;
+    requestBatch();
+  }, [pausePagination, requestBatch]);
 
   const reload = useCallback(() => {
     controllerRef.current?.abort();

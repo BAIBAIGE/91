@@ -176,10 +176,10 @@ test("detail player limits ArtPlayer automatic reconnect attempts", () => {
   );
 });
 
-test("detail page stays at the document top after video data loads", () => {
+test("detail page stays at the top of its active scroll surface after data loads", () => {
   assert.match(
     detailPageSource,
-    /window\.scrollTo\(\{ top: 0, behavior: "auto" \}\)/
+    /scrollPageTo\(scrollRootRef, \{ top: 0, behavior: "auto" \}\)/
   );
   assert.doesNotMatch(detailPageSource, /scrollIntoView/);
   assert.doesNotMatch(detailPageSource, /detailTopRef/);

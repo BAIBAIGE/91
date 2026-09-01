@@ -19,6 +19,7 @@ import {
   withListingView,
 } from "@/lib/listingSearchParams";
 import { MOBILE_VIDEO_PAGE_SIZE, useIsMobile } from "@/lib/responsive";
+import { useRouteActivity } from "@/lib/routeActivity";
 import { useInfiniteListing } from "@/lib/useInfiniteListing";
 import {
   useListingRestoreTarget,
@@ -34,6 +35,7 @@ const PREFETCH_ROWS = 2;
 export default function ListingPage() {
   const [params, setParams] = useSearchParams();
   const location = useLocation();
+  const routeActive = useRouteActivity();
   const keyword = params.get("q") ?? "";
   const tag = params.get("tag") ?? "";
   const sort = readListingSort(params);
@@ -52,6 +54,7 @@ export default function ListingPage() {
     pageSize,
   });
   const listing = useInfiniteListing(source, {
+    pausePagination: !routeActive,
     restoreCount: restoreTarget.count,
     restoreFeedToken: restoreTarget.feedToken,
   });
@@ -61,6 +64,7 @@ export default function ListingPage() {
     requestedCount: listing.requestedCount,
     feedToken: listing.feedToken,
     itemCount: listing.items.length,
+    active: routeActive,
   });
 
   const items = listing.items;

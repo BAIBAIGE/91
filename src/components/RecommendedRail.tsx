@@ -27,6 +27,10 @@ import { useInViewport } from "@/lib/useInViewport";
 import { useIsActivePreview } from "@/lib/useIsActivePreview";
 import { useLazyVideoCollection } from "@/lib/useLazyVideoCollection";
 import { resolveVideoReturnPath, routeToPath } from "@/lib/videoReturnPath";
+import {
+  continueVideoDetailNavigationState,
+  type VideoDetailNavigationState,
+} from "@/lib/videoListingBackground";
 import { PreviewVideo } from "./PreviewVideo";
 import { VideoRailMobileHeading } from "./VideoRailMobileHeading";
 import { VideoRailRowsSkeleton } from "./VideoRailSkeleton";
@@ -142,6 +146,10 @@ export function RecommendedRail({
     typeof locationState?.from === "string"
       ? resolveVideoReturnPath(locationState.from)
       : resolveVideoReturnPath(routeToPath(location));
+  const detailNavigationState = useMemo(
+    () => continueVideoDetailNavigationState(returnPath, location.state),
+    [location.state, returnPath]
+  );
   const recommendedTabId = `${tabGroupId}-recommended-tab`;
   const collectionTabId = `${tabGroupId}-collection-tab`;
   const recommendedPanelId = `${tabGroupId}-recommended-panel`;
@@ -240,10 +248,10 @@ export function RecommendedRail({
         <RecommendedItem
           key={video.id}
           video={video}
-          returnPath={returnPath}
+          navigationState={detailNavigationState}
         />
       )),
-    [returnPath, videos]
+    [detailNavigationState, videos]
   );
   const collectionItems = useMemo(
     () =>
@@ -255,12 +263,12 @@ export function RecommendedRail({
             ref={current ? currentCollectionItemRef : undefined}
             video={video}
             current={current}
-            returnPath={returnPath}
+            navigationState={detailNavigationState}
             variant="collection"
           />
         );
       }),
-    [data, returnPath, videoId]
+    [data, detailNavigationState, videoId]
   );
 
   if (!recommendationPanelAvailable && !hasCollection) return null;
@@ -372,7 +380,7 @@ export function RecommendedRail({
 
 type RailItemProps = {
   video: VideoItem | VideoCollectionItem;
-  returnPath: string;
+  navigationState: VideoDetailNavigationState;
   current?: boolean;
   variant?: "recommended" | "collection";
 };
@@ -385,7 +393,7 @@ RecommendedItem.displayName = "RecommendedItem";
 function RecommendedItemContent(
   {
     video,
-    returnPath,
+    navigationState,
     current = false,
     variant = "recommended",
   }: RailItemProps,
@@ -572,7 +580,7 @@ function RecommendedItemContent(
     >
       <Link
         to={video.href}
-        state={{ from: returnPath }}
+        state={navigationState}
         className="vd-rail__link"
         aria-current={current ? "page" : undefined}
         onClickCapture={handleClickCapture}

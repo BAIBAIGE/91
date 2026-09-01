@@ -16,6 +16,7 @@ import { useIsActivePreview } from "@/lib/useIsActivePreview";
 import { preloadVideoDetailPage } from "@/lib/videoDetailRoute";
 import { formatCount } from "@/lib/format";
 import { isVideoReturnPath, routeToPath } from "@/lib/videoReturnPath";
+import { createVideoDetailNavigationState } from "@/lib/videoListingBackground";
 import { PreviewVideo } from "./PreviewVideo";
 import { VideoThumbnail } from "./VideoThumbnail";
 
@@ -39,7 +40,7 @@ export const VideoCard = memo(function VideoCard({
   const location = useLocation();
   const currentPath = routeToPath(location);
   const linkState = isVideoReturnPath(currentPath)
-    ? { from: currentPath }
+    ? createVideoDetailNavigationState(currentPath, location)
     : undefined;
 
   const rootRef = useRef<HTMLElement | null>(null);

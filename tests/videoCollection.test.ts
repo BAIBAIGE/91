@@ -426,7 +426,11 @@ test("mobile collection sheet is one browser-history layer", () => {
   );
   assert.match(
     componentSource,
-    /<Link\s+to=\{video\.href\}\s+replace\s+state=\{\{ from: returnPath \}\}/
+    /const detailNavigationState = useMemo\([\s\S]*?continueVideoDetailNavigationState\(returnPath, location\.state\)/
+  );
+  assert.match(
+    componentSource,
+    /<Link\s+to=\{video\.href\}\s+replace\s+state=\{navigationState\}/
   );
   assert.doesNotMatch(componentSource, /setOpen\(/);
 });

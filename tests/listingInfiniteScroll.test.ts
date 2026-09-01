@@ -114,6 +114,29 @@ test("the virtual grid renders whole rows through the window virtualizer", () =>
   assert.match(virtualGridSource, /highPriority=\{index < highPriorityCount\}/);
 });
 
+test("a retained listing disconnects its window virtualizer while inactive", () => {
+  assert.match(
+    virtualGridSource,
+    /const routeActive = useRouteActivity\(\)/
+  );
+  assert.match(
+    virtualGridSource,
+    /const getScrollElement = useCallback\([\s\S]*?routeActive[\s\S]*?\? window : null,[\s\S]*?\[routeActive\]/
+  );
+  assert.match(
+    virtualGridSource,
+    /useWindowVirtualizer\(\{[\s\S]*?getScrollElement,[\s\S]*?directDomUpdates: true/
+  );
+  assert.match(
+    virtualGridSource,
+    /function useResponsiveGridColumns\(active: boolean\)[\s\S]*?if \(!active\) return/
+  );
+  assert.match(
+    virtualGridSource,
+    /useLayoutEffect\(\(\) => \{\s*if \(!routeActive\) return;[\s\S]*?new ResizeObserver/
+  );
+});
+
 test("the scrollbar grows with loaded content and keeps only a fixed tail row", () => {
   assert.match(
     virtualGridSource,
@@ -172,6 +195,10 @@ test("the infinite listing hook keeps one in-flight batch per query", () => {
   assert.match(
     infiniteListingHookSource,
     /if \(controllerRef\.current && !controllerRef\.current\.signal\.aborted\) return;/
+  );
+  assert.match(
+    infiniteListingHookSource,
+    /if \(!enabledRef\.current \|\| paginationPausedRef\.current\) return;/
   );
   assert.match(
     infiniteListingHookSource,
@@ -235,13 +262,13 @@ test("browser history navigation restores both the loaded batches and the positi
   );
   assert.match(
     scrollRestoreHookSource,
-    /if \(target\.scrollY <= 0\) \{\s*window\.scrollTo\(\{ top: 0, left: 0, behavior: "auto" \}\)/
+    /if \(!session\.initialScrollPrepared && target\.scrollY <= 0\) \{\s*window\.scrollTo\(\{ top: 0, left: 0, behavior: "auto" \}\)/
   );
   assert.match(
     scrollRestoreHookSource,
     /window\.addEventListener\("pagehide", handlePageHide\)/
   );
-  // 卸载时列表 DOM 已被详情页顶掉，window.scrollY 会被压缩，只能用滚动时记下的值。
+  // 列表停用后 document 会被锁住，只能使用滚动时同步记下的位置。
   const scrollHandler = scrollRestoreHookSource.match(
     /const handleScroll = \(\) => \{[\s\S]*?\n    \};/
   )?.[0] ?? "";

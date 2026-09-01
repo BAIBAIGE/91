@@ -4,6 +4,12 @@ import { MainNav } from "./MainNav";
 import { SubNav } from "./SubNav";
 import { Footer } from "./Footer";
 import { BackToTop } from "./BackToTop";
+import {
+  pageScrollEventTarget,
+  readPageScrollTop,
+  usePageScrollRoot,
+} from "@/lib/pageScroll";
+import { useRouteActivity } from "@/lib/routeActivity";
 
 type Props = {
   children: ReactNode;
@@ -15,24 +21,29 @@ const SCROLL_DELTA_THRESHOLD = 6;
 const HIDE_AFTER_SCROLL_Y = 56;
 
 export function AppShell({ children, mobileAutoHideNav = false }: Props) {
+  const scrollRootRef = usePageScrollRoot();
+  const routeActive = useRouteActivity();
   const [mobileNavHidden, setMobileNavHidden] = useState(false);
   const [backToTopVisible, setBackToTopVisible] = useState(false);
 
   useEffect(() => {
+    if (!routeActive) return;
     if (!mobileAutoHideNav) {
       setMobileNavHidden(false);
       return;
     }
 
     const mediaQuery = window.matchMedia(MOBILE_NAV_QUERY);
-    let lastScrollY = Math.max(window.scrollY, 0);
+    const scrollTarget = pageScrollEventTarget(scrollRootRef);
+    if (!scrollTarget) return;
+    let lastScrollY = Math.max(readPageScrollTop(scrollRootRef), 0);
     let ticking = false;
 
     const showNav = () => setMobileNavHidden(false);
 
     const updateNavVisibility = () => {
       ticking = false;
-      const currentScrollY = Math.max(window.scrollY, 0);
+      const currentScrollY = Math.max(readPageScrollTop(scrollRootRef), 0);
 
       if (!mediaQuery.matches || currentScrollY <= 0) {
         showNav();
@@ -59,19 +70,19 @@ export function AppShell({ children, mobileAutoHideNav = false }: Props) {
     };
 
     const handleMediaChange = () => {
-      lastScrollY = Math.max(window.scrollY, 0);
+      lastScrollY = Math.max(readPageScrollTop(scrollRootRef), 0);
       showNav();
     };
 
     handleMediaChange();
-    window.addEventListener("scroll", handleScroll, { passive: true });
+    scrollTarget.addEventListener("scroll", handleScroll, { passive: true });
     mediaQuery.addEventListener("change", handleMediaChange);
 
     return () => {
-      window.removeEventListener("scroll", handleScroll);
+      scrollTarget.removeEventListener("scroll", handleScroll);
       mediaQuery.removeEventListener("change", handleMediaChange);
     };
-  }, [mobileAutoHideNav]);
+  }, [mobileAutoHideNav, routeActive, scrollRootRef]);
 
   const className = [
     "app-shell",

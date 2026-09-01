@@ -10,6 +10,54 @@
   font-size: var(--font-base);
 }
 
+.app-primary-route {
+  min-height: 100%;
+}
+
+/*
+ * A detail opened from a listing is a foreground history layer. The listing
+ * remains mounted in the document underneath it, including the virtualizer's
+ * measurements and exact window scroll position. This element owns detail
+ * scrolling until that history layer is removed.
+ */
+.video-detail-foreground {
+  position: fixed;
+  inset: 0;
+  z-index: calc(var(--z-modal) - 1);
+  width: 100%;
+  height: 100vh;
+  height: 100dvh;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  color: var(--text-default);
+  background-color: var(--bg-page);
+  background-image:
+    linear-gradient(to right, rgba(255, 138, 60, 0.09) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(255, 138, 60, 0.09) 1px, transparent 1px);
+  background-position: 0 0;
+  background-size: 88px 88px;
+  isolation: isolate;
+}
+
+:root[data-theme="pink"] .video-detail-foreground {
+  background-image:
+    linear-gradient(to right, rgba(255, 91, 138, 0.13) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(255, 91, 138, 0.13) 1px, transparent 1px);
+  background-position: 0 0;
+  background-size: 82px 82px;
+}
+
+:root[data-theme="sky"] .video-detail-foreground {
+  background-image:
+    linear-gradient(to right, rgba(255, 255, 255, 0.55) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(255, 255, 255, 0.55) 1px, transparent 1px);
+  background-position: 0 0;
+  background-size: 80px 80px;
+}
+
 .app-shell__nav-stack {
   flex: 0 0 auto;
 }

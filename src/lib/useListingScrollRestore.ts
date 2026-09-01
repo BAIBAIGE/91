@@ -1,4 +1,10 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import {
   canRestoreScrollY,
   readListingScrollEntry,
@@ -99,6 +105,8 @@ export type UseListingScrollRestoreInput = {
   requestedCount: number;
   feedToken: string;
   itemCount: number;
+  /** Retained listing routes stay mounted but must not own global scroll work. */
+  active?: boolean;
 };
 
 type ListingScrollSession = {
@@ -109,6 +117,8 @@ type ListingScrollSession = {
   requestedCount: number;
   pendingScrollY: number;
   lastScrollY: number;
+  initialScrollPrepared: boolean;
+  lastPersistedSignature: string;
 };
 
 export function useListingScrollRestore({
@@ -117,6 +127,7 @@ export function useListingScrollRestore({
   requestedCount,
   feedToken,
   itemCount,
+  active = true,
 }: UseListingScrollRestoreInput) {
   const historyKey = target.historyKey;
   const restoreIdentity = `${historyKey}\u0000${queryKey}`;
@@ -130,6 +141,8 @@ export function useListingScrollRestore({
       requestedCount,
       pendingScrollY: target.scrollY,
       lastScrollY: target.scrollY,
+      initialScrollPrepared: false,
+      lastPersistedSignature: "",
     };
   } else {
     // 请求进度可以变化很多次；滚动监听器始终读取同一个会话对象的最新值。
@@ -139,29 +152,52 @@ export function useListingScrollRestore({
   const session = sessionRef.current;
   const [restoring, setRestoring] = useState(target.scrollY > 0);
 
+  const persist = useCallback(() => {
+    // Persisting before restoration completes would overwrite the saved target
+    // with the temporary position used while content is still being rebuilt.
+    if (session.pendingScrollY > 0 || session.requestedCount <= 0) return;
+    const scrollY = Math.max(0, Math.round(session.lastScrollY));
+    const signature = `${session.feedToken}\u0000${session.requestedCount}\u0000${scrollY}`;
+    if (signature === session.lastPersistedSignature) return;
+    writeListingScrollEntry(sessionStorageOrNull(), session.historyKey, {
+      queryKey: session.queryKey,
+      feedToken: session.feedToken,
+      documentID: LISTING_DOCUMENT_ID,
+      requestedCount: session.requestedCount,
+      scrollY,
+    });
+    session.lastPersistedSignature = signature;
+  }, [session]);
+
   useLayoutEffect(() => {
+    if (!active) return;
     // 该 hook 已经按 history entry 恢复列表位置，挂载期间不再让浏览器进行
     // 第二套自动恢复。新 Document 或新列表没有恢复目标时则明确从顶部开始。
     const supportsManualRestoration =
       "scrollRestoration" in window.history;
-    const previousRestoration = supportsManualRestoration
-      ? window.history.scrollRestoration
-      : null;
     if (supportsManualRestoration) {
       window.history.scrollRestoration = "manual";
     }
-    if (target.scrollY <= 0) {
+    if (!session.initialScrollPrepared && target.scrollY <= 0) {
       window.scrollTo({ top: 0, left: 0, behavior: "auto" });
     }
+    session.initialScrollPrepared = true;
 
     return () => {
-      if (previousRestoration) {
-        window.history.scrollRestoration = previousRestoration;
+      // Deactivation happens before the foreground route locks the document,
+      // so this is the last reliable moment to persist the real list offset.
+      persist();
+      if (supportsManualRestoration) {
+        // Same-document detail entries inherit the current entry's mode.
+        // They own an independent scroll surface, so browser restoration must
+        // be enabled again before the listing becomes inactive.
+        window.history.scrollRestoration = "auto";
       }
     };
-  }, [restoreIdentity, target.scrollY]);
+  }, [active, persist, restoreIdentity, session, target.scrollY]);
 
   useEffect(() => {
+    if (!active) return;
     const targetScrollY = session.pendingScrollY;
     if (targetScrollY <= 0) {
       setRestoring(false);
@@ -206,30 +242,13 @@ export function useListingScrollRestore({
     handle = window.requestAnimationFrame(attempt);
 
     return () => window.cancelAnimationFrame(handle);
-  }, [itemCount, restoreIdentity, session]);
+  }, [active, itemCount, restoreIdentity, session]);
 
-  useEffect(() => {
-    let lastPersistedSignature = "";
-
-    const persist = () => {
-      // 还没恢复完就落盘，会把保存的位置覆盖成恢复前的 0。
-      if (session.pendingScrollY > 0 || session.requestedCount <= 0) return;
-      const scrollY = Math.max(0, Math.round(session.lastScrollY));
-      const signature = `${session.feedToken}\u0000${session.requestedCount}\u0000${scrollY}`;
-      if (signature === lastPersistedSignature) return;
-      writeListingScrollEntry(sessionStorageOrNull(), session.historyKey, {
-        queryKey: session.queryKey,
-        feedToken: session.feedToken,
-        documentID: LISTING_DOCUMENT_ID,
-        requestedCount: session.requestedCount,
-        scrollY,
-      });
-      lastPersistedSignature = signature;
-    };
-
+  useLayoutEffect(() => {
+    if (!active) return;
     const handleScroll = () => {
-      // 位置要在滚动事件里同步记下：卸载时列表 DOM 已经被详情页顶掉，
-      // 那时再读 window.scrollY 拿到的是被浏览器压缩过的值。
+      // 位置要在滚动事件里同步记下：详情 Surface 随后会锁住 document，
+      // 停用阶段再读取 window.scrollY 已经不一定是列表的真实位置。
       session.lastScrollY = Math.max(0, Math.round(window.scrollY));
     };
     const handlePageHide = () => {
@@ -242,10 +261,10 @@ export function useListingScrollRestore({
     return () => {
       window.removeEventListener("scroll", handleScroll);
       window.removeEventListener("pagehide", handlePageHide);
-      // 离开列表页（例如进详情页）时把最后的位置落盘，后退才能回到原处。
+      // 停用或离开列表页时把最后的位置落盘，供冷恢复路径使用。
       persist();
     };
-  }, [restoreIdentity, session]);
+  }, [active, persist, restoreIdentity, session]);
 
   return { restoring };
 }

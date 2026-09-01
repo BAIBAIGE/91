@@ -30,6 +30,10 @@ import {
   resolveVideoReturnPath,
   routeToPath,
 } from "@/lib/videoReturnPath";
+import {
+  continueVideoDetailNavigationState,
+  type VideoDetailNavigationState,
+} from "@/lib/videoListingBackground";
 import { PreviewVideo } from "./PreviewVideo";
 import { VideoThumbnail } from "./VideoThumbnail";
 
@@ -124,6 +128,10 @@ export function MobileVideoCollection({ videoId, collection }: Props) {
     typeof locationState.from === "string"
       ? resolveVideoReturnPath(locationState.from)
       : resolveVideoReturnPath(routeToPath(location));
+  const detailNavigationState = useMemo(
+    () => continueVideoDetailNavigationState(returnPath, location.state),
+    [location.state, returnPath]
+  );
 
   useDocumentScrollLock(open);
 
@@ -554,7 +562,7 @@ export function MobileVideoCollection({ videoId, collection }: Props) {
                       ref={current ? currentItemRef : undefined}
                       video={video}
                       current={current}
-                      returnPath={returnPath}
+                      navigationState={detailNavigationState}
                       onSelect={(event) => {
                         if (!current) return;
                         event.preventDefault();
@@ -601,13 +609,13 @@ export function MobileVideoCollection({ videoId, collection }: Props) {
 type CollectionItemProps = {
   video: VideoCollectionItem;
   current: boolean;
-  returnPath: string;
+  navigationState: VideoDetailNavigationState;
   onSelect: (event: React.MouseEvent<HTMLAnchorElement>) => void;
 };
 
 const CollectionItem = forwardRef<HTMLLIElement, CollectionItemProps>(
   function CollectionItem(
-    { video, current, returnPath, onSelect },
+    { video, current, navigationState, onSelect },
     forwardedRef
   ) {
     const [previewState, setPreviewState] = useState<PreviewState>("idle");
@@ -735,7 +743,7 @@ const CollectionItem = forwardRef<HTMLLIElement, CollectionItemProps>(
         <Link
           to={video.href}
           replace
-          state={{ from: returnPath }}
+          state={navigationState}
           className="vd-collection-item__link"
           aria-current={current ? "page" : undefined}
           onClickCapture={handleClickCapture}

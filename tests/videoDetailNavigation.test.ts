@@ -37,7 +37,11 @@ test("video detail route preloads once and always has a visible route fallback",
   assert.match(appSource, /const VideoDetailPage = lazy\(loadVideoDetailPage\)/);
   assert.match(
     appSource,
-    /path="\/video\/:id"[\s\S]*?<PageSuspense fallback=\{<VideoDetailRouteFallback \/>\}>[\s\S]*?<VideoDetailPage \/>/
+    /function VideoDetailRouteElement\(\)[\s\S]*?<PageSuspense fallback=\{<VideoDetailRouteFallback \/>\}>[\s\S]*?<VideoDetailPage \/>/
+  );
+  assert.match(
+    appSource,
+    /path="\/video\/:id"[\s\S]*?element=\{<VideoDetailRouteElement \/>\}/
   );
   assert.match(
     appSource,
@@ -89,7 +93,7 @@ test("same-video overlay history does not restart detail navigation effects", ()
   );
   assert.match(
     detailPageSource,
-    /\}, \[detailLoadVersion, entryNavigationType, id, initialSnapshot\]\);/
+    /\}, \[\s*detailLoadVersion,\s*entryNavigationType,\s*id,\s*initialSnapshot,\s*scrollRootRef,\s*\]\);/
   );
   assert.doesNotMatch(
     detailPageSource,

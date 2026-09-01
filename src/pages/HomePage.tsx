@@ -28,6 +28,7 @@ import {
   type HomeFeedKey,
 } from "@/lib/listingSearchParams";
 import { MOBILE_VIDEO_PAGE_SIZE, useIsMobile } from "@/lib/responsive";
+import { useRouteActivity } from "@/lib/routeActivity";
 import { useInfiniteListing } from "@/lib/useInfiniteListing";
 import {
   useListingRestoreTarget,
@@ -43,6 +44,7 @@ const PREFETCH_ROWS = 2;
 export default function HomePage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const location = useLocation();
+  const routeActive = useRouteActivity();
   const activeSearchQuery = searchParams.get("q")?.trim() ?? "";
   const activeTag = searchParams.get("tag")?.trim() ?? "";
   const hasActiveSearch = activeSearchQuery.length > 0;
@@ -88,6 +90,7 @@ export default function HomePage() {
     feedSnapshotScope: isRandomRecommendationFeed ? "document" : "session",
   });
   const homeFeed = useInfiniteListing(activeFeedSource, {
+    pausePagination: !routeActive,
     restoreCount: restoreTarget.count,
     restoreFeedToken: restoreTarget.feedToken,
   });
@@ -97,6 +100,7 @@ export default function HomePage() {
     requestedCount: homeFeed.requestedCount,
     feedToken: homeFeed.feedToken,
     itemCount: homeFeed.items.length,
+    active: routeActive,
   });
 
   const feedItems = homeFeed.items;

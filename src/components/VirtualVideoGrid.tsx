@@ -13,6 +13,7 @@ import {
   virtualRowCount,
   virtualRowRange,
 } from "@/lib/virtualGrid";
+import { useRouteActivity } from "@/lib/routeActivity";
 import type { VideoItem } from "@/types";
 import { VideoCard } from "./VideoCard";
 
@@ -56,10 +57,11 @@ function readResponsiveGridColumns(): number {
   });
 }
 
-function useResponsiveGridColumns(): number {
+function useResponsiveGridColumns(active: boolean): number {
   const [columns, setColumns] = useState(readResponsiveGridColumns);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
+    if (!active) return;
     const mobile = window.matchMedia(MOBILE_GRID_QUERY);
     const tablet = window.matchMedia(TABLET_GRID_QUERY);
     const update = () => setColumns(readResponsiveGridColumns());
@@ -69,7 +71,7 @@ function useResponsiveGridColumns(): number {
       mobile.removeEventListener("change", update);
       tablet.removeEventListener("change", update);
     };
-  }, []);
+  }, [active]);
 
   return columns;
 }
@@ -87,9 +89,10 @@ export function VirtualVideoGrid({
   tailContent,
   onLoadMore,
 }: Props) {
+  const routeActive = useRouteActivity();
   const containerRef = useRef<HTMLDivElement | null>(null);
   const containerWidthRef = useRef(0);
-  const responsiveColumns = useResponsiveGridColumns();
+  const responsiveColumns = useResponsiveGridColumns(routeActive);
   const columns = compact ? 1 : responsiveColumns;
   // 列表容器距文档顶部的距离：window virtualizer 用它把窗口滚动换算成列表内偏移。
   const [scrollMargin, setScrollMargin] = useState(0);
@@ -113,6 +116,11 @@ export function VirtualVideoGrid({
         : ESTIMATED_ROW_HEIGHT,
     [compact, hasTailRow, loadedRowCount]
   );
+  const getScrollElement = useCallback(
+    () =>
+      routeActive && typeof document !== "undefined" ? window : null,
+    [routeActive]
+  );
 
   const virtualizer = useWindowVirtualizer({
     count: virtualRowCountWithTail,
@@ -120,11 +128,13 @@ export function VirtualVideoGrid({
     overscan: overscanRows,
     scrollMargin,
     getItemKey,
+    getScrollElement,
     directDomUpdates: true,
     directDomUpdatesMode: "transform",
   });
 
   const updateScrollMargin = useCallback(() => {
+    if (!routeActive) return;
     const container = containerRef.current;
     if (!container) return;
 
@@ -134,14 +144,15 @@ export function VirtualVideoGrid({
     setScrollMargin((current) =>
       Math.abs(current - nextMargin) < 1 ? current : nextMargin
     );
-  }, []);
+  }, [routeActive]);
 
   // 容器位置只在挂载和真实布局变化时读取，不跟着虚拟列表的每次渲染读取。
   useLayoutEffect(() => {
     updateScrollMargin();
   }, [updateScrollMargin]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
+    if (!routeActive) return;
     const container = containerRef.current;
     if (!container) return;
     const observer =
@@ -163,7 +174,7 @@ export function VirtualVideoGrid({
       observer?.disconnect();
       window.removeEventListener("resize", updateScrollMargin);
     };
-  }, [updateScrollMargin]);
+  }, [routeActive, updateScrollMargin]);
 
   // 只有断点或视图模式改变时，旧行的测量才真正失效。追加批次会保留旧缓存。
   const layoutIdentity = `${columns}:${compact ? "compact" : "grid"}`;
@@ -178,7 +189,7 @@ export function VirtualVideoGrid({
   const lastRow = virtualRows[virtualRows.length - 1]?.index ?? -1;
 
   useEffect(() => {
-    if (!onLoadMore || lastRow < 0) return;
+    if (!routeActive || !onLoadMore || lastRow < 0) return;
     if (
       shouldLoadMore({
         endIndex: Math.min((lastRow + 1) * columns, videos.length),
@@ -198,6 +209,7 @@ export function VirtualVideoGrid({
     loadingMore,
     onLoadMore,
     prefetchRows,
+    routeActive,
     videos.length,
   ]);
 

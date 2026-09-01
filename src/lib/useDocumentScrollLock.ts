@@ -1,4 +1,5 @@
-import { useEffect } from "react";
+import { useLayoutEffect } from "react";
+import { usePageScrollRoot } from "@/lib/pageScroll";
 
 type ScrollLockSnapshot = {
   scrollX: number;
@@ -18,17 +19,64 @@ type ScrollLockSnapshot = {
 let activeScrollLocks = 0;
 let scrollLockSnapshot: ScrollLockSnapshot | null = null;
 
+type ElementScrollLockSnapshot = {
+  count: number;
+  scrollLeft: number;
+  scrollTop: number;
+  overflow: string;
+  overscrollBehavior: string;
+};
+
+const elementScrollLocks = new WeakMap<HTMLElement, ElementScrollLockSnapshot>();
+
 /**
- * Prevents wheel and touch scrolling from reaching the page behind a modal.
- * Locks are reference-counted so stacked dialogs restore the document only
- * after the last one closes.
+ * Prevents wheel and touch scrolling from reaching the page behind a modal or
+ * foreground route. A scoped page scroller is locked when present; otherwise
+ * document locks are reference-counted for stacked surfaces.
  */
 export function useDocumentScrollLock(locked: boolean) {
-  useEffect(() => {
+  const scrollRootRef = usePageScrollRoot();
+
+  useLayoutEffect(() => {
     if (!locked) return;
+    const scrollRoot = scrollRootRef?.current;
+    if (scrollRoot) {
+      return lockElementScroll(scrollRoot);
+    }
     lockDocumentScroll();
     return unlockDocumentScroll;
-  }, [locked]);
+  }, [locked, scrollRootRef]);
+}
+
+function lockElementScroll(element: HTMLElement) {
+  const existing = elementScrollLocks.get(element);
+  if (existing) {
+    existing.count += 1;
+    return () => unlockElementScroll(element);
+  }
+
+  elementScrollLocks.set(element, {
+    count: 1,
+    scrollLeft: element.scrollLeft,
+    scrollTop: element.scrollTop,
+    overflow: element.style.overflow,
+    overscrollBehavior: element.style.overscrollBehavior,
+  });
+  element.style.overflow = "hidden";
+  element.style.overscrollBehavior = "none";
+  return () => unlockElementScroll(element);
+}
+
+function unlockElementScroll(element: HTMLElement) {
+  const snapshot = elementScrollLocks.get(element);
+  if (!snapshot) return;
+  snapshot.count -= 1;
+  if (snapshot.count > 0) return;
+
+  elementScrollLocks.delete(element);
+  element.style.overflow = snapshot.overflow;
+  element.style.overscrollBehavior = snapshot.overscrollBehavior;
+  element.scrollTo(snapshot.scrollLeft, snapshot.scrollTop);
 }
 
 function lockDocumentScroll() {
