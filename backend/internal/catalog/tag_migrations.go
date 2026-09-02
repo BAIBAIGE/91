@@ -83,6 +83,9 @@ UPDATE videos
 	if err := c.addColumnIfMissing(ctx, "videos", "parent_id", "TEXT DEFAULT ''"); err != nil {
 		return err
 	}
+	if err := c.addColumnIfMissing(ctx, "videos", "ancestor_dir_ids", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
 	// videos.dir_name：视频所在目录名，扫盘时落库；标签全库重算需要用它做匹配材料。
 	if err := c.addColumnIfMissing(ctx, "videos", "dir_name", "TEXT DEFAULT ''"); err != nil {
 		return err
@@ -133,6 +136,9 @@ UPDATE videos
 	// 其中任意一个的目录及其全部子目录都不会被递归扫描。替代旧版硬编码"影视"
 	// 目录例外分支；旧 drive 升级后默认空数组 → 行为等同于以前未启用跳过。
 	if err := c.addColumnIfMissing(ctx, "drives", "skip_dir_ids", "TEXT NOT NULL DEFAULT '[]'"); err != nil {
+		return err
+	}
+	if err := c.addColumnIfMissing(ctx, "drives", "skip_cleanup_dir_ids", "TEXT"); err != nil {
 		return err
 	}
 	if _, err := c.db.ExecContext(ctx, `
@@ -1062,6 +1068,7 @@ var currentVideoColumnNames = []string{
 	"fingerprint_status",
 	"fingerprint_error",
 	"parent_id",
+	"ancestor_dir_ids",
 	"dir_name",
 	"title",
 	"author",
@@ -1105,6 +1112,7 @@ CREATE TABLE videos_schema_rebuild_new (
     fingerprint_status TEXT DEFAULT 'pending',
     fingerprint_error  TEXT DEFAULT '',
     parent_id          TEXT,
+    ancestor_dir_ids   TEXT NOT NULL DEFAULT '',
     dir_name           TEXT DEFAULT '',
     title              TEXT NOT NULL,
     author             TEXT,

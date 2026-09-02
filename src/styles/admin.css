@@ -7520,6 +7520,13 @@ body.admin-mobile-nav-open {
 }
 
 /* ----- 扫描跳过目录树 ----- */
+.admin-skipdirs-note {
+  margin: 0 0 var(--space-3);
+  color: var(--text-muted);
+  font-size: var(--font-xs);
+  line-height: 1.55;
+}
+
 .admin-skipdirs-autosave {
   min-width: 7.5em;
   color: var(--text-faint);

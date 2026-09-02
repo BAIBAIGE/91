@@ -458,6 +458,9 @@ func TestDeleteDriveRemovesOwnedStateAndKeepsMigratedVideos(t *testing.T) {
 	if _, err := cat.db.ExecContext(ctx, `INSERT INTO drive_scan_misses (drive_id, file_id, consecutive_misses, last_missing_at) VALUES (?, ?, ?, ?)`, "crawler-source", "missing-file", 1, now.UnixMilli()); err != nil {
 		t.Fatalf("seed scan miss: %v", err)
 	}
+	if err := cat.MarkDriveSkipCleanupLegacyDirDone(ctx, "crawler-source", "skip-dir"); err != nil {
+		t.Fatalf("seed skip cleanup state: %v", err)
+	}
 
 	if err := cat.DeleteDrive(ctx, "crawler-source"); err != nil {
 		t.Fatalf("delete drive: %v", err)
@@ -475,6 +478,7 @@ func TestDeleteDriveRemovesOwnedStateAndKeepsMigratedVideos(t *testing.T) {
 		"crawler source": `SELECT COUNT(*) FROM crawler_seen_sources WHERE drive_id = ?`,
 		"scan":           `SELECT COUNT(*) FROM scans WHERE drive_id = ?`,
 		"scan miss":      `SELECT COUNT(*) FROM drive_scan_misses WHERE drive_id = ?`,
+		"skip cleanup":   `SELECT COUNT(*) FROM drive_skip_cleanup_legacy_dirs WHERE drive_id = ?`,
 	} {
 		var count int
 		if err := cat.db.QueryRowContext(ctx, query, "crawler-source").Scan(&count); err != nil {

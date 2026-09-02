@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS videos (
     fingerprint_status TEXT DEFAULT 'pending',  -- pending / ready / failed
     fingerprint_error  TEXT DEFAULT '',
     parent_id        TEXT,
+    ancestor_dir_ids TEXT NOT NULL DEFAULT '',  -- JSON array；扫描起点到直接父目录（含两端）
     dir_name         TEXT DEFAULT '',           -- 所在目录名（扫盘时落库，供标签重算使用）
     title            TEXT NOT NULL,
     author           TEXT,
@@ -212,11 +213,22 @@ CREATE TABLE IF NOT EXISTS drives (
     -- 替代了早期的全局 preview.enabled 设置（保留旧 setting 行不再读）。
     teaser_enabled INTEGER NOT NULL DEFAULT 1,
     -- 扫描时要跳过的目录 ID 集合（JSON array of string）。命中其中任意一个的目录及其
-    -- 全部子目录都不会被递归扫描，也不会进入 SeenFileIDs / VisitedDirIDs 统计。
+    -- 全部子目录都不会被递归扫描，并进入发现快照的策略排除集合 X。
     -- 替代了早期硬编码"影视"目录的特例分支。
     skip_dir_ids  TEXT NOT NULL DEFAULT '[]',
+    -- 上一次完成精确策略清理时使用的跳过目录集合；NULL 表示从未执行。
+    skip_cleanup_dir_ids TEXT,
     created_at    INTEGER NOT NULL,
     updated_at    INTEGER NOT NULL
+);
+
+-- 升级前无祖先链记录的补课进度按跳过目录保存。一个永久不可达的目录
+-- 不会迫使已经完成的其它跳过目录在每次扫盘时重复遍历。
+CREATE TABLE IF NOT EXISTS drive_skip_cleanup_legacy_dirs (
+    drive_id     TEXT NOT NULL,
+    dir_id       TEXT NOT NULL,
+    completed_at INTEGER NOT NULL,
+    PRIMARY KEY (drive_id, dir_id)
 );
 
 -- 扫描任务状态
@@ -231,8 +243,8 @@ CREATE TABLE IF NOT EXISTS scans (
 );
 
 -- A provider listing is not authoritative enough to delete catalog data after
--- one empty response. Missing files are confirmed across complete successful
--- scans; seeing the file again clears the counter immediately.
+-- one empty response. Missing files are confirmed across two snapshots whose
+-- directory classifications prove absence; seeing the file clears the counter.
 CREATE TABLE IF NOT EXISTS drive_scan_misses (
     drive_id            TEXT NOT NULL,
     file_id             TEXT NOT NULL,

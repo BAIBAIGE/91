@@ -688,7 +688,8 @@ type skipDirsReq struct {
 // 行为：
 //   - 立即保存 catalog.drives.skip_dir_ids（整体覆盖）
 //   - 当前网盘有任务时，旧任务继续使用原快照，结束后再切换
-//   - 不重新触发扫描；下一次扫描使用新列表
+//   - 不排清理任务、不重新触发扫描；下一次扫描开始时使用新列表执行策略清理
+//   - 下一次扫描前再次保存可取消刚设置的跳过目录，期间不会删除媒体库记录
 //   - 返回保存后的列表，方便前端乐观更新但又能以服务端为准
 func (a *AdminServer) handleSetDriveSkipDirs(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
@@ -705,7 +706,7 @@ func (a *AdminServer) handleSetDriveSkipDirs(w http.ResponseWriter, r *http.Requ
 	seen := map[string]struct{}{}
 	cleaned := make([]string, 0, len(body.DirIDs))
 	for _, raw := range body.DirIDs {
-		s := raw
+		s := strings.TrimSpace(raw)
 		if s == "" {
 			continue
 		}

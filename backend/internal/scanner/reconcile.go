@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"path"
+	"slices"
 	"strings"
 	"time"
 
@@ -124,6 +125,10 @@ func (s *Scanner) reconcileExisting(
 		patch.DirName = file.DirName
 		patch.DirNameSet = true
 	}
+	if !slices.Equal(existing.AncestorDirIDs, file.AncestorDirIDs) {
+		patch.AncestorDirIDs = append([]string(nil), file.AncestorDirIDs...)
+		patch.AncestorDirIDsSet = true
+	}
 	if entry.Name != "" && existing.FileName != entry.Name {
 		patch.FileName = entry.Name
 		patch.Author = parsedAuthor
@@ -193,21 +198,22 @@ func (s *Scanner) insertNew(
 
 	now := time.Now()
 	video := &catalog.Video{
-		ID:            id,
-		DriveID:       s.Drive.ID(),
-		FileID:        entry.ID,
-		FileName:      entry.Name,
-		ContentHash:   entry.Hash,
-		ParentID:      file.ParentID,
-		DirName:       file.DirName,
-		Title:         displayTitle,
-		Author:        parsedAuthor,
-		Ext:           strings.TrimPrefix(strings.ToLower(path.Ext(entry.Name)), "."),
-		Size:          entry.Size,
-		PreviewStatus: "pending",
-		PublishedAt:   now,
-		CreatedAt:     now,
-		UpdatedAt:     now,
+		ID:             id,
+		DriveID:        s.Drive.ID(),
+		FileID:         entry.ID,
+		FileName:       entry.Name,
+		ContentHash:    entry.Hash,
+		ParentID:       file.ParentID,
+		DirName:        file.DirName,
+		AncestorDirIDs: append([]string(nil), file.AncestorDirIDs...),
+		Title:          displayTitle,
+		Author:         parsedAuthor,
+		Ext:            strings.TrimPrefix(strings.ToLower(path.Ext(entry.Name)), "."),
+		Size:           entry.Size,
+		PreviewStatus:  "pending",
+		PublishedAt:    now,
+		CreatedAt:      now,
+		UpdatedAt:      now,
 	}
 	if err := s.Catalog.UpsertVideo(ctx, video); err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
@@ -249,7 +255,7 @@ func (r *Result) addIssue(file File, stage IssueStage, err error) {
 
 func metadataPatchSet(patch catalog.VideoMetaPatch) bool {
 	return patch.ContentHash != "" || patch.FileName != "" || patch.ParentIDSet ||
-		patch.DirNameSet || patch.TitleSet || patch.AuthorSet
+		patch.DirNameSet || patch.AncestorDirIDsSet || patch.TitleSet || patch.AuthorSet
 }
 
 func assignmentLabels(assignments []catalog.TagAssignment) []string {

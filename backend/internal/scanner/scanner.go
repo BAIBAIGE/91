@@ -26,10 +26,9 @@ type Scanner struct {
 	Drive   Source
 	Exts    map[string]bool
 
-	// SkipDirIDs contains directory IDs excluded from discovery. During a scan
-	// rooted at Drive.RootID, existing catalog rows below these directories are
-	// intentionally absent from the snapshot and therefore age out through the
-	// normal consecutive-miss cleanup policy.
+	// SkipDirIDs contains directory IDs excluded from discovery. The application
+	// owns their separate policy-cleanup lifecycle; presence cleanup treats the
+	// corresponding ExcludedDirIDs as protected rather than missing.
 	SkipDirIDs map[string]struct{}
 
 	// OnNewVideo is retained for callers using Run directly. Application-level
@@ -37,9 +36,20 @@ type Scanner struct {
 	OnNewVideo func(v *catalog.Video)
 	// OnProgress receives an immutable-by-convention copy of the current counts.
 	OnProgress func(stats Stats)
+	// OnCooldown exposes a provider rate-limit wait to application status. A zero
+	// time means the wait ended and discovery is retrying the same directory.
+	OnCooldown func(until time.Time)
+	// RateLimitBudget is shared across every Scanner used by one drive task.
+	RateLimitBudget *RateLimitBudget
+	// RetryWait is an optional test/integration seam for interruptible waits.
+	// Nil uses a context-aware timer.
+	RetryWait func(ctx context.Context, duration time.Duration) error
 	// ProgressInterval controls heartbeat logging. Zero uses the default; a
 	// negative duration disables heartbeat logs.
 	ProgressInterval time.Duration
+	// LogPrefix identifies an application-owned reuse of discovery. Empty uses
+	// "scanner"; skip-policy legacy discovery uses "skip-cleanup".
+	LogPrefix string
 }
 
 const defaultScanProgressInterval = 30 * time.Second
@@ -57,11 +67,12 @@ func New(cat *catalog.Catalog, drv Source, exts []string, skipDirIDs []string, o
 		}
 	}
 	return &Scanner{
-		Catalog:    cat,
-		Drive:      drv,
-		Exts:       extensions,
-		SkipDirIDs: skipped,
-		OnNewVideo: onNew,
+		Catalog:         cat,
+		Drive:           drv,
+		Exts:            extensions,
+		SkipDirIDs:      skipped,
+		OnNewVideo:      onNew,
+		RateLimitBudget: NewRateLimitBudget(),
 	}
 }
 
@@ -119,17 +130,17 @@ func (s *Scanner) Reconcile(ctx context.Context, snapshot Snapshot) (Result, err
 
 func newStats() Stats {
 	return Stats{
-		SeenFileIDs:   make(map[string]struct{}),
-		VisitedDirIDs: make(map[string]struct{}),
+		SeenFileIDs:      make(map[string]struct{}),
+		EnumeratedDirIDs: make(map[string]struct{}),
 	}
 }
 
 func statsForSnapshot(snapshot Snapshot) Stats {
 	return Stats{
-		Scanned:       len(snapshot.Files),
-		Errors:        len(snapshot.Issues),
-		SeenFileIDs:   snapshot.SeenFileIDs,
-		VisitedDirIDs: snapshot.VisitedDirIDs,
+		Scanned:          len(snapshot.Files),
+		Errors:           len(snapshot.Issues),
+		SeenFileIDs:      snapshot.SeenFileIDs,
+		EnumeratedDirIDs: snapshot.EnumeratedDirIDs,
 	}
 }
 
@@ -161,10 +172,20 @@ func (s *Scanner) progressReporter(stats *Stats) progressFunc {
 		if currentDir == "" {
 			currentDir = "(root)"
 		}
-		log.Printf("[scanner] drive=%s progress: phase=%s scanned=%d added=%d errors=%d dirs=%d elapsed=%s at=%s",
+		log.Printf("[%s] drive=%s progress: phase=%s scanned=%d added=%d errors=%d dirs=%d elapsed=%s at=%s",
+			s.logPrefix(),
 			driveID, phase, stats.Scanned, stats.Added, stats.Errors,
-			len(stats.VisitedDirIDs), now.Sub(started).Round(time.Second), currentDir)
+			len(stats.EnumeratedDirIDs), now.Sub(started).Round(time.Second), currentDir)
 	}
+}
+
+func (s *Scanner) logPrefix() string {
+	if s != nil {
+		if prefix := strings.TrimSpace(s.LogPrefix); prefix != "" {
+			return prefix
+		}
+	}
+	return "scanner"
 }
 
 func validateScanner(s *Scanner) error {

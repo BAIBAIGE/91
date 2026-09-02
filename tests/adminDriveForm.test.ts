@@ -1410,6 +1410,13 @@ test("drive skip directory tree uses a solid selection box without status pills"
   assert.doesNotMatch(adminCss, /\.admin-skipdirs-flag\s*\{/);
 });
 
+test("drive skip directory panel explains deferred policy cleanup", () => {
+  assert.match(skipDirsPanelSource, /下次扫盘时从媒体库移除/);
+  assert.match(skipDirsPanelSource, /在此之前取消即可保留/);
+  assert.match(skipDirsPanelSource, /手动标签和播放记录不会恢复/);
+  assert.match(adminCss, /\.admin-skipdirs-note\s*\{/);
+});
+
 test("drive skip directory selections auto-save without polling away local edits", () => {
   assert.doesNotMatch(skipDirsPanelSource, /保存更改|handleSave/);
   assert.match(skipDirsPanelSource, /const AUTO_SAVE_DELAY_MS = 300/);

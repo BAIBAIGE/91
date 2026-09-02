@@ -3,30 +3,38 @@ package catalog
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 	"time"
 )
 
-type scanPresenceVideo struct {
-	fileID   string
-	parentID string
+// ScanPresenceScope is the discovery proof used to evaluate missing catalog
+// rows. The E/F/X maps are mutually exclusive directory classifications.
+type ScanPresenceScope struct {
+	EnumeratedDirIDs map[string]struct{}
+	FailedDirIDs     map[string]struct{}
+	ExcludedDirIDs   map[string]struct{}
+	FullDriveScan    bool
 }
 
-// ConfirmMissingDriveFiles advances the durable missing counter for files that
-// were eligible for this successful scan but were not observed. A live file
-// clears its counter immediately. Only file IDs reaching threshold in this
-// snapshot are returned to the caller for destructive cleanup. For a full-drive
-// scan every catalog row is eligible, including rows below directories that the
-// current scan policy excludes; excluding a directory therefore removes its old
-// rows from management after the normal confirmation threshold.
+type scanPresenceVideo struct {
+	fileID         string
+	parentID       string
+	ancestorDirIDs []string
+}
+
+// ConfirmMissingDriveFiles advances the durable missing counter only when the
+// snapshot proves that a file or one of its ancestor directories disappeared.
+// Failed and policy-excluded subtrees remain protected. A live file clears its
+// counter immediately, and destructive cleanup still requires threshold
+// consecutive eligible snapshots.
 func (c *Catalog) ConfirmMissingDriveFiles(
 	ctx context.Context,
 	driveID string,
 	liveFileIDs map[string]struct{},
-	visitedDirIDs map[string]struct{},
-	fullDriveScan bool,
+	scope ScanPresenceScope,
 	threshold int,
 ) (map[string]struct{}, error) {
 	if c == nil || c.db == nil {
@@ -45,16 +53,29 @@ func (c *Catalog) ConfirmMissingDriveFiles(
 		return nil, err
 	}
 	defer tx.Rollback()
-	rows, err := tx.QueryContext(ctx, `SELECT file_id, COALESCE(parent_id, '') FROM videos WHERE drive_id = ?`, driveID)
+	rows, err := tx.QueryContext(ctx, `
+SELECT file_id, COALESCE(parent_id, ''), COALESCE(ancestor_dir_ids, '')
+  FROM videos
+ WHERE drive_id = ?`, driveID)
 	if err != nil {
 		return nil, err
 	}
 	var videos []scanPresenceVideo
 	for rows.Next() {
 		var video scanPresenceVideo
-		if err := rows.Scan(&video.fileID, &video.parentID); err != nil {
+		var ancestorDirIDsJSON string
+		if err := rows.Scan(&video.fileID, &video.parentID, &ancestorDirIDsJSON); err != nil {
 			rows.Close()
 			return nil, err
+		}
+		if ancestorDirIDsJSON != "" {
+			if err := json.Unmarshal([]byte(ancestorDirIDsJSON), &video.ancestorDirIDs); err != nil {
+				rows.Close()
+				return nil, fmt.Errorf("catalog: decode video %s ancestor directory IDs: %w", video.fileID, err)
+			}
+			if video.ancestorDirIDs == nil {
+				video.ancestorDirIDs = []string{}
+			}
 		}
 		videos = append(videos, video)
 	}
@@ -78,10 +99,8 @@ func (c *Catalog) ConfirmMissingDriveFiles(
 			}
 			continue
 		}
-		if !fullDriveScan {
-			if _, eligible := visitedDirIDs[video.parentID]; !eligible {
-				continue
-			}
+		if !missingFileEligible(video, scope) {
+			continue
 		}
 		if _, err := tx.ExecContext(ctx, `
 INSERT INTO drive_scan_misses (drive_id, file_id, consecutive_misses, last_missing_at)
@@ -102,8 +121,8 @@ ON CONFLICT(drive_id, file_id) DO UPDATE SET
 		}
 	}
 
-	// Keep the auxiliary table bounded when videos are removed through another
-	// lifecycle (admin delete, dedupe, crawler migration, and so on).
+	// DeleteVideo removes the matching counter transactionally. Keep this repair
+	// path for orphan rows left by versions that predate that behavior.
 	if _, err := tx.ExecContext(ctx, `
 DELETE FROM drive_scan_misses
 WHERE drive_id = ?
@@ -118,4 +137,33 @@ WHERE drive_id = ?
 		return nil, err
 	}
 	return confirmed, nil
+}
+
+func missingFileEligible(video scanPresenceVideo, scope ScanPresenceScope) bool {
+	ancestorDirIDs := effectiveAncestorDirIDs(video.ancestorDirIDs, video.parentID)
+	if len(ancestorDirIDs) == 0 {
+		return scope.FullDriveScan && len(scope.FailedDirIDs) == 0
+	}
+
+	for index, dirID := range ancestorDirIDs {
+		if _, enumerated := scope.EnumeratedDirIDs[dirID]; enumerated {
+			continue
+		}
+		if _, failed := scope.FailedDirIDs[dirID]; failed {
+			return false
+		}
+		if _, excluded := scope.ExcludedDirIDs[dirID]; excluded {
+			return false
+		}
+		if index == 0 {
+			return scope.FullDriveScan && len(scope.FailedDirIDs) == 0
+		}
+		// The preceding ancestor was enumerated successfully but did not list
+		// this directory, proving that the subtree no longer exists.
+		return true
+	}
+
+	// Every ancestor was enumerated, so the direct parent exists and the file
+	// itself is the first missing element.
+	return true
 }

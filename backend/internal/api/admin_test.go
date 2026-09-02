@@ -1254,7 +1254,7 @@ func TestDriveTaskSensitiveSettingHandlersSaveAndDeferApply(t *testing.T) {
 				return lease, ""
 			},
 		}
-		req := withDriveID(httptest.NewRequest(http.MethodPost, "/admin/api/drives/drive-main/skip-dirs", strings.NewReader(`{"dirIds":["new-dir"]}`)))
+		req := withDriveID(httptest.NewRequest(http.MethodPost, "/admin/api/drives/drive-main/skip-dirs", strings.NewReader(`{"dirIds":[" new-dir ","new-dir"]}`)))
 		rr := httptest.NewRecorder()
 		server.handleSetDriveSkipDirs(rr, req)
 		if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), `"deferred":true`) {

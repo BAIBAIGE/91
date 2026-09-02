@@ -498,6 +498,7 @@ export type AdminDrive = {
   /**
    * 用户在 admin 配置的"扫描跳过目录"集合（drive 侧目录 fileID 列表）。
    * 命中其中任一目录时 scanner 直接跳过、不递归；空数组 = 不跳过任何目录。
+   * 名单变化后的下一次扫盘会先从媒体库清理对应目录，不删除网盘源文件。
    * 替代旧版硬编码 p115 "影视" 目录例外分支。
    */
   skipDirIds: string[];
@@ -930,7 +931,7 @@ export function listDriveDirChildren(id: string, parentId?: string) {
 
 /**
  * 整体覆盖某盘的"扫描跳过目录"集合（drive 侧目录 fileID）。
- * 传空数组 = 清空跳过列表。下次扫描时生效，不会立刻重扫。
+ * 传空数组 = 清空跳过列表。不会立刻重扫或删除；下次扫描时执行策略清理。
  */
 export function setDriveSkipDirIds(id: string, dirIds: string[]) {
   return request<DriveConfigSaveResult & { skipDirIds: string[] }>(

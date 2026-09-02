@@ -8,19 +8,21 @@ import (
 )
 
 type Stats struct {
-	Scanned       int
-	Added         int
-	Errors        int
-	SeenFileIDs   map[string]struct{}
-	VisitedDirIDs map[string]struct{}
+	Scanned          int
+	Added            int
+	Errors           int
+	SeenFileIDs      map[string]struct{}
+	EnumeratedDirIDs map[string]struct{}
 }
 
 // File is a video candidate with directory identity supplied by the traversal,
-// rather than the provider's optional Entry.ParentID field.
+// rather than the provider's optional Entry.ParentID field. AncestorDirIDs runs
+// from the scan start through the direct parent, including both endpoints.
 type File struct {
-	Entry    drives.Entry
-	ParentID string
-	DirName  string
+	Entry          drives.Entry
+	ParentID       string
+	DirName        string
+	AncestorDirIDs []string
 }
 
 type IssueStage string
@@ -56,20 +58,21 @@ func (i Issue) Error() string {
 	return fmt.Sprintf("%s %s: %v", i.Stage, target, i.Err)
 }
 
-// Snapshot is the discovery phase output. FullDriveScan is deliberately true
-// only when the resolved scan root equals the provider root. In that case,
-// files under ExcludedDirIDs are missing from the snapshot by policy and may be
-// removed after the configured consecutive-miss confirmation.
+// Snapshot is the discovery phase output. EnumeratedDirIDs, FailedDirIDs, and
+// ExcludedDirIDs are the mutually exclusive E/F/X directory classifications
+// used by presence cleanup. FullDriveScan is true only when the resolved scan
+// start equals the provider root.
 type Snapshot struct {
-	DriveID        string
-	DriveKind      string
-	StartDirID     string
-	FullDriveScan  bool
-	Files          []File
-	SeenFileIDs    map[string]struct{}
-	VisitedDirIDs  map[string]struct{}
-	ExcludedDirIDs map[string]struct{}
-	Issues         []Issue
+	DriveID          string
+	DriveKind        string
+	StartDirID       string
+	FullDriveScan    bool
+	Files            []File
+	SeenFileIDs      map[string]struct{}
+	EnumeratedDirIDs map[string]struct{}
+	FailedDirIDs     map[string]struct{}
+	ExcludedDirIDs   map[string]struct{}
+	Issues           []Issue
 }
 
 func (s Snapshot) Complete() bool {
