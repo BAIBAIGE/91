@@ -2078,27 +2078,48 @@ func (a *App) startFingerprintBackfill(
 	w *fingerprint.Worker,
 	done func(),
 ) {
-	a.fingerprintQueueMu.Lock()
-	if a.fingerprintQueueing == nil {
-		a.fingerprintQueueing = make(map[string]bool)
-	}
-	if a.fingerprintQueueing[driveID] {
-		a.fingerprintQueueMu.Unlock()
+	if !a.beginFingerprintBackfill(driveID) {
 		done()
 		return
 	}
-	a.fingerprintQueueing[driveID] = true
-	a.fingerprintQueueMu.Unlock()
 
 	go func() {
 		defer func() {
-			a.fingerprintQueueMu.Lock()
-			delete(a.fingerprintQueueing, driveID)
-			a.fingerprintQueueMu.Unlock()
+			a.endFingerprintBackfill(driveID)
 			done()
 		}()
 		a.enqueueFingerprints(taskCtx, driveID, w)
 	}()
+}
+
+// enqueueFingerprintBackfill completes the catalog-to-worker handoff before
+// its caller's task context ends. The fingerprint worker performs the actual
+// remote sampling asynchronously under its own lifetime context.
+func (a *App) enqueueFingerprintBackfill(ctx context.Context, driveID string, w *fingerprint.Worker) {
+	if w == nil || !a.beginFingerprintBackfill(driveID) {
+		return
+	}
+	defer a.endFingerprintBackfill(driveID)
+	a.enqueueFingerprints(ctx, driveID, w)
+}
+
+func (a *App) beginFingerprintBackfill(driveID string) bool {
+	a.fingerprintQueueMu.Lock()
+	defer a.fingerprintQueueMu.Unlock()
+	if a.fingerprintQueueing == nil {
+		a.fingerprintQueueing = make(map[string]bool)
+	}
+	if a.fingerprintQueueing[driveID] {
+		return false
+	}
+	a.fingerprintQueueing[driveID] = true
+	return true
+}
+
+func (a *App) endFingerprintBackfill(driveID string) {
+	a.fingerprintQueueMu.Lock()
+	delete(a.fingerprintQueueing, driveID)
+	a.fingerprintQueueMu.Unlock()
 }
 
 func (a *App) enqueueFingerprints(ctx context.Context, driveID string, w *fingerprint.Worker) {

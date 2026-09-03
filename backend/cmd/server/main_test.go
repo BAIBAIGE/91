@@ -1836,6 +1836,66 @@ func TestRunScanStartsFingerprintBeforeThumbnailAndPreviewDrain(t *testing.T) {
 	t.Fatalf("fingerprint status=%q sampled=%q, want ready before thumbnail/preview drain", got.FingerprintStatus, got.SampledSHA256)
 }
 
+func TestRunScanBackfillsExistingFingerprintBeforeTaskReturns(t *testing.T) {
+	ctx := context.Background()
+	cat, err := catalog.Open(t.TempDir() + "/catalog.db")
+	if err != nil {
+		t.Fatalf("open catalog: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := cat.Close(); err != nil {
+			t.Fatalf("close catalog: %v", err)
+		}
+	})
+	seedDriveWithTeaser(t, cat, "drive-id", false)
+
+	now := time.Now()
+	if err := cat.UpsertVideo(ctx, &catalog.Video{
+		ID:                "existing-video",
+		DriveID:           "drive-id",
+		FileID:            "file-id",
+		FileName:          "existing.mp4",
+		ParentID:          "0",
+		AncestorDirIDs:    []string{"0"},
+		Title:             "existing",
+		Size:              123,
+		FingerprintStatus: "pending",
+		PublishedAt:       now,
+		CreatedAt:         now,
+		UpdatedAt:         now,
+	}); err != nil {
+		t.Fatalf("seed pending fingerprint video: %v", err)
+	}
+
+	drv := &serverScanFingerprintFakeDrive{
+		entries: []drives.Entry{{
+			ID:   "file-id",
+			Name: "existing.mp4",
+			Size: 123,
+		}},
+	}
+	registry := proxy.NewRegistry()
+	registry.Set("drive-id", drv)
+	fingerprintWorker := fingerprint.NewWorker(cat, drv, fingerprint.Config{})
+	app := &App{
+		cfg: &config.Config{
+			Scanner: config.Scanner{VideoExtensions: []string{".mp4"}},
+		},
+		cat:                cat,
+		registry:           registry,
+		fingerprintWorkers: map[string]*fingerprint.Worker{"drive-id": fingerprintWorker},
+	}
+
+	app.runScan(ctx, "drive-id")
+
+	if got := fingerprintWorker.Status().QueueLength; got != 1 {
+		t.Fatalf("fingerprint queue length after scan = %d, want 1", got)
+	}
+	if app.fingerprintQueueingBusy("drive-id") {
+		t.Fatal("fingerprint backfill still marked active after scan returned")
+	}
+}
+
 func TestNightlyTargetsComeFromCatalogBeforeDriveAttach(t *testing.T) {
 	ctx := context.Background()
 	cat, err := catalog.Open(t.TempDir() + "/catalog.db")

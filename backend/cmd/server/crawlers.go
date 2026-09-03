@@ -110,7 +110,7 @@ func (a *App) runScriptCrawlerCrawlWithTaskContext(ctx context.Context, driveID 
 	thumbWorker := a.thumbWorkers[driveID]
 	fingerprintWorker := a.fingerprintWorkers[driveID]
 	a.mu.Unlock()
-	a.scheduleFingerprintBackfill(ctx, driveID, fingerprintWorker)
+	a.enqueueFingerprintBackfill(ctx, driveID, fingerprintWorker)
 	a.enqueueDriveGeneration(ctx, driveID, worker, thumbWorker)
 	return runErr == nil
 }
@@ -431,7 +431,7 @@ func (a *App) restoreScriptCrawlerVideos(ctx context.Context, driveID string) er
 		thumbWorker := a.thumbWorkers[driveID]
 		fingerprintWorker := a.fingerprintWorkers[driveID]
 		a.mu.Unlock()
-		a.scheduleFingerprintBackfill(ctx, driveID, fingerprintWorker)
+		a.enqueueFingerprintBackfill(ctx, driveID, fingerprintWorker)
 		a.enqueueDriveGeneration(ctx, driveID, worker, thumbWorker)
 	}
 	return err

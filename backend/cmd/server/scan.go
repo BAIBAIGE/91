@@ -147,7 +147,7 @@ func (a *App) runScanWithTaskContext(ctx context.Context, driveID string) {
 	fingerprintWorker := a.fingerprintWorkers[driveID]
 	a.mu.Unlock()
 	enqueueNewScanVideos(result.NewVideos, thumbnailWorker, fingerprintWorker)
-	a.scheduleFingerprintBackfill(ctx, driveID, fingerprintWorker)
+	a.enqueueFingerprintBackfill(ctx, driveID, fingerprintWorker)
 	a.enqueueDriveGeneration(ctx, driveID, previewWorker, thumbnailWorker)
 }
 

@@ -83,6 +83,9 @@ func (s *Scanner) discoverDir(
 				if ctxErr := ctx.Err(); ctxErr != nil {
 					return ctxErr
 				}
+				if errors.Is(err, ErrRateLimitBudgetExhausted) {
+					return err
+				}
 				if _, excluded := snapshot.ExcludedDirIDs[entry.ID]; !excluded {
 					if _, enumerated := snapshot.EnumeratedDirIDs[entry.ID]; !enumerated {
 						snapshot.FailedDirIDs[entry.ID] = struct{}{}

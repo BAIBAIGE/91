@@ -1047,6 +1047,49 @@ func TestScanStopsAfterThreeRateLimitCooldownRetries(t *testing.T) {
 	}
 }
 
+func TestScanStopsWhenChildExhaustsSharedRateLimitBudget(t *testing.T) {
+	ctx := context.Background()
+	cat, err := catalog.Open(t.TempDir() + "/catalog.db")
+	if err != nil {
+		t.Fatalf("open catalog: %v", err)
+	}
+	t.Cleanup(func() { _ = cat.Close() })
+
+	drv := &discoveryTestSource{
+		entries: map[string][]drives.Entry{
+			"root": {
+				{ID: "file-before-limit", Name: "before.mp4", Size: 123},
+				{ID: "limited-dir", Name: "Limited", IsDir: true},
+				{ID: "later-dir", Name: "Later", IsDir: true},
+			},
+			"later-dir": {{ID: "later-file", Name: "later.mp4", Size: 456}},
+		},
+		errors: map[string]error{
+			"limited-dir": &drives.RateLimitError{Provider: "fake", RetryAfter: time.Second},
+		},
+		listCalls: map[string]int{},
+	}
+	scan := New(cat, drv, []string{".mp4"}, nil, nil)
+	scan.RetryWait = func(context.Context, time.Duration) error { return nil }
+
+	result, err := scan.Scan(ctx, "")
+	if !errors.Is(err, ErrRateLimitBudgetExhausted) {
+		t.Fatalf("scan error = %v, want ErrRateLimitBudgetExhausted", err)
+	}
+	if drv.listCalls["limited-dir"] != RateLimitRetryLimit+1 {
+		t.Fatalf("limited directory list calls = %d, want %d", drv.listCalls["limited-dir"], RateLimitRetryLimit+1)
+	}
+	if drv.listCalls["later-dir"] != 0 {
+		t.Fatalf("later directory list calls = %d, want 0", drv.listCalls["later-dir"])
+	}
+	if result.Stats.Scanned != 1 || result.Stats.Added != 0 {
+		t.Fatalf("partial result = scanned:%d added:%d, want 1/0", result.Stats.Scanned, result.Stats.Added)
+	}
+	if _, err := cat.GetVideo(ctx, "fake-drive-file-before-limit"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("partially discovered video lookup error = %v, want sql.ErrNoRows", err)
+	}
+}
+
 func TestRateLimitBudgetIsSharedAcrossScanners(t *testing.T) {
 	ctx := context.Background()
 	budget := NewRateLimitBudget()
