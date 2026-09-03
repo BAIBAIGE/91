@@ -60,3 +60,26 @@ Before modifying code:
 4. Evaluate whether the issue indicates a broader design problem.
 5. Consider alternative solutions and choose the one with the best long-term maintainability.
 6. Only then implement the change.
+
+# Git Commit Conventions
+
+When creating Git commits in this repository:
+
+- Write commit messages in English.
+- Use an imperative, sentence-case subject.
+- Describe the outcome of the change, not the development activity.
+- Do not use Conventional Commit prefixes such as `feat:`, `fix:`, or `chore:`.
+- Keep the subject at 75 characters or fewer and do not end it with a period.
+- Keep each commit focused on one conceptual change.
+- Use backticks around code identifiers when helpful.
+- For non-trivial commits, structure the body with:
+  - `## Why` to explain the problem or motivation.
+  - `## What changed` to summarize the implementation.
+  - `## Testing` to list actual tests and validation performed.
+- Omit `## Why` when the motivation is obvious.
+- If tests were not run, state that explicitly and explain why.
+- Only create a Git commit when the user explicitly asks for one.
+
+Example subject:
+
+`Expose thread originators through the app-server API`
