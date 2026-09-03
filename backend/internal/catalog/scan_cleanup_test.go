@@ -186,10 +186,10 @@ func TestDeleteVideoRemovesDriveScanMiss(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("upsert video: %v", err)
 	}
-	if _, err := cat.ConfirmMissingDriveFiles(ctx, "drive", nil, ScanPresenceScope{
-		EnumeratedDirIDs: stringSet("root", "parent"),
-		FullDriveScan:    true,
-	}, 2); err != nil {
+	if _, err := cat.EvaluateMissingDriveFiles(ctx, "drive", nil, ScanPresenceScope{
+		EnumeratedDirIDs:      stringSet("root", "parent"),
+		PresenceAuthoritative: true,
+	}, MissingFileCleanupConfirmTwice); err != nil {
 		t.Fatalf("record missing file: %v", err)
 	}
 	if err := cat.DeleteVideo(ctx, "video"); err != nil {

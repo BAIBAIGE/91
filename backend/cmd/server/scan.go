@@ -83,22 +83,7 @@ func (a *App) runScanWithTaskContext(ctx context.Context, driveID string) {
 		log.Printf("[scan] get active drive config %s: %v", driveID, err)
 		return
 	}
-	// Skip-directory policy is one deliberate first stage: exact ancestry cleanup
-	// and legacy subtree discovery both finish (or record retryable failures)
-	// before normal discovery starts.
 	rateLimitBudget := scanner.NewRateLimitBudget()
-	if err := a.cleanupSkippedDriveVideos(ctx, drv, driveConfig, rateLimitBudget); err != nil {
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			log.Printf("[skip-cleanup] drive=%s canceled: %v", driveID, ctxErr)
-			return
-		}
-		if errors.Is(err, scanner.ErrRateLimitBudgetExhausted) {
-			log.Printf("[skip-cleanup] drive=%s rate-limit retry budget exhausted: %v", driveID, err)
-			return
-		}
-		log.Printf("[skip-cleanup] drive=%s error; continuing scan: %v", driveID, err)
-	}
-
 	result, err := a.scanDrive(ctx, drv, driveConfig, rateLimitBudget)
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
@@ -116,13 +101,35 @@ func (a *App) runScanWithTaskContext(ctx context.Context, driveID string) {
 	}
 
 	stats := result.Stats
+	reconciliationIssues := len(result.Issues) - len(result.Snapshot.Issues)
+	if reconciliationIssues < 0 {
+		reconciliationIssues = 0
+	}
 	log.Printf(
-		"[scan] drive=%s done scanned=%d added=%d updated=%d duplicates=%d tombstoned=%d enumerated_dirs=%d failed_dirs=%d excluded_dirs=%d errors=%d",
+		"[scan] drive=%s done scanned=%d added=%d updated=%d duplicates=%d tombstoned=%d enumerated_dirs=%d failed_dirs=%d excluded_dirs=%d discovery_issues=%d reconciliation_issues=%d errors=%d",
 		driveID, stats.Scanned, stats.Added, result.Updated, result.Duplicates,
 		result.Tombstoned, len(result.Snapshot.EnumeratedDirIDs), len(result.Snapshot.FailedDirIDs),
-		len(result.Snapshot.ExcludedDirIDs), stats.Errors,
+		len(result.Snapshot.ExcludedDirIDs), len(result.Snapshot.Issues), reconciliationIssues, stats.Errors,
 	)
-	if err := a.cleanupScanSnapshot(ctx, drv, result.Snapshot); err != nil {
+
+	// Reconciliation refreshes ancestry for every discovered catalog row before
+	// skip-policy cleanup evaluates persisted chains. SeenFileIDs is an
+	// additional guard for rows whose metadata update failed.
+	skipCleanupResult, skipCleanupErr := a.cleanupSkippedDriveVideos(
+		ctx, drv, driveConfig, result.Snapshot.SeenFileIDs, rateLimitBudget,
+	)
+	if skipCleanupErr != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			log.Printf("[skip-cleanup] drive=%s canceled: %v", driveID, ctxErr)
+			return
+		}
+		if errors.Is(skipCleanupErr, scanner.ErrRateLimitBudgetExhausted) {
+			log.Printf("[skip-cleanup] drive=%s rate-limit retry budget exhausted; continuing cleanup: %v", driveID, skipCleanupErr)
+		} else {
+			log.Printf("[skip-cleanup] drive=%s error; continuing cleanup: %v", driveID, skipCleanupErr)
+		}
+	}
+	if err := a.cleanupScanResult(ctx, drv, result, skipCleanupResult.ProtectUnlocated); err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			log.Printf("[cleanup] canceled stale cleanup drive=%s kind=%s: %v", drv.ID(), drv.Kind(), ctxErr)
 			return
@@ -171,38 +178,67 @@ func (a *App) scanDrive(
 	return scan.Scan(ctx, driveConfig.RootID)
 }
 
-// cleanupScanSnapshot derives a safe cleanup decision for each catalog row from
-// the discovery directory sets. A failed subtree is protected without blocking
-// healthy sibling directories. Reconciliation issues do not affect presence,
-// which comes from the read-only snapshot.
-func (a *App) cleanupScanSnapshot(ctx context.Context, drv drives.Drive, snapshot scanner.Snapshot) error {
+// cleanupScanResult derives a safe cleanup decision for each catalog row from
+// the discovery directory sets. Complete discovery of the configured scope is
+// authoritative enough for immediate cleanup. Reconciliation and skip-policy
+// errors do not weaken the already-built presence snapshot. Incomplete
+// discovery retains two-scan confirmation, while E/F/X classification protects
+// failed and excluded subtrees.
+func (a *App) cleanupScanResult(
+	ctx context.Context,
+	drv drives.Drive,
+	result scanner.Result,
+	protectUnlocated bool,
+) error {
 	if drv.Kind() == scriptcrawler.Kind || drv.ID() == localupload.DriveID {
 		return nil
 	}
-	if !snapshot.Complete() {
+	mode := missingFileCleanupMode(result.Snapshot)
+	if mode == catalog.MissingFileCleanupConfirmTwice {
 		log.Printf(
-			"[cleanup] partial stale cleanup drive=%s kind=%s enumerated_dirs=%d failed_dirs=%d",
-			drv.ID(), drv.Kind(), len(snapshot.EnumeratedDirIDs), len(snapshot.FailedDirIDs),
+			"[cleanup] guarded stale cleanup drive=%s kind=%s enumerated_dirs=%d failed_dirs=%d discovery_issues=%d",
+			drv.ID(), drv.Kind(), len(result.Snapshot.EnumeratedDirIDs),
+			len(result.Snapshot.FailedDirIDs), len(result.Snapshot.Issues),
 		)
 	}
+	if protectUnlocated {
+		log.Printf(
+			"[cleanup] protecting unlocated videos drive=%s kind=%s reason=incomplete_skip_policy_backfill",
+			drv.ID(), drv.Kind(),
+		)
+	}
+	presenceAuthoritative := result.Snapshot.PresenceAuthoritative()
 	removed, err := a.cleanupMissingDriveVideos(
 		ctx,
 		drv.ID(),
-		snapshot.SeenFileIDs,
+		result.Snapshot.SeenFileIDs,
 		catalog.ScanPresenceScope{
-			EnumeratedDirIDs: snapshot.EnumeratedDirIDs,
-			FailedDirIDs:     snapshot.FailedDirIDs,
-			ExcludedDirIDs:   snapshot.ExcludedDirIDs,
-			FullDriveScan:    snapshot.FullDriveScan,
+			EnumeratedDirIDs:      result.Snapshot.EnumeratedDirIDs,
+			FailedDirIDs:          result.Snapshot.FailedDirIDs,
+			ExcludedDirIDs:        result.Snapshot.ExcludedDirIDs,
+			PresenceAuthoritative: presenceAuthoritative,
+			ProtectUnlocated:      protectUnlocated,
 		},
+		mode,
 	)
 	if err != nil {
 		return err
 	}
 	if removed > 0 {
-		log.Printf("[cleanup] removed %d stale videos for drive=%s kind=%s", removed, drv.ID(), drv.Kind())
+		modeName := "confirmed-twice"
+		if mode == catalog.MissingFileCleanupImmediate {
+			modeName = "immediate"
+		}
+		log.Printf("[cleanup] removed %d stale videos for drive=%s kind=%s mode=%s", removed, drv.ID(), drv.Kind(), modeName)
 	}
 	return nil
+}
+
+func missingFileCleanupMode(snapshot scanner.Snapshot) catalog.MissingFileCleanupMode {
+	if snapshot.PresenceAuthoritative() {
+		return catalog.MissingFileCleanupImmediate
+	}
+	return catalog.MissingFileCleanupConfirmTwice
 }
 
 func enqueueNewScanVideos(
@@ -228,21 +264,21 @@ func (a *App) cleanupMissingDriveVideos(
 	driveID string,
 	liveFileIDs map[string]struct{},
 	scope catalog.ScanPresenceScope,
+	mode catalog.MissingFileCleanupMode,
 ) (int, error) {
-	const confirmationThreshold = 2
-	confirmedMissing, err := func() (map[string]struct{}, error) {
+	fileIDsToRemove, err := func() (map[string]struct{}, error) {
 		if err := persistence.RLockContext(ctx); err != nil {
 			return nil, err
 		}
 		defer persistence.RUnlock()
-		return a.cat.ConfirmMissingDriveFiles(
-			ctx, driveID, liveFileIDs, scope, confirmationThreshold,
+		return a.cat.EvaluateMissingDriveFiles(
+			ctx, driveID, liveFileIDs, scope, mode,
 		)
 	}()
 	if err != nil {
-		return 0, fmt.Errorf("confirm missing drive files: %w", err)
+		return 0, fmt.Errorf("evaluate missing drive files: %w", err)
 	}
-	if len(confirmedMissing) == 0 {
+	if len(fileIDsToRemove) == 0 {
 		return 0, nil
 	}
 	items, err := a.cat.ListVideosByDrive(ctx, driveID)
@@ -250,41 +286,49 @@ func (a *App) cleanupMissingDriveVideos(
 		return 0, err
 	}
 
-	missing := make([]*catalog.Video, 0, len(confirmedMissing))
+	missing := make([]*catalog.Video, 0, len(fileIDsToRemove))
 	for _, video := range items {
-		if _, ok := confirmedMissing[video.FileID]; ok {
+		if _, ok := fileIDsToRemove[video.FileID]; ok {
 			missing = append(missing, video)
 		}
 	}
 	return a.deleteScanCleanupVideos(ctx, missing)
 }
 
+type skipCleanupResult struct {
+	ProtectUnlocated bool
+}
+
 func (a *App) cleanupSkippedDriveVideos(
 	ctx context.Context,
 	drv drives.Drive,
 	driveConfig *catalog.Drive,
+	seenFileIDs map[string]struct{},
 	rateLimitBudget *scanner.RateLimitBudget,
-) error {
+) (skipCleanupResult, error) {
 	if drv == nil || driveConfig == nil || drv.Kind() == scriptcrawler.Kind || drv.ID() == localupload.DriveID {
-		return nil
-	}
-	state, err := a.cat.GetDriveSkipCleanupState(ctx, drv.ID())
-	if err != nil {
-		return fmt.Errorf("read cleanup progress: %w", err)
+		return skipCleanupResult{}, nil
 	}
 	currentDirIDs := normalizedDirIDSet(driveConfig.SkipDirIDs)
+	result := skipCleanupResult{ProtectUnlocated: len(currentDirIDs) > 0}
+	state, err := a.cat.GetDriveSkipCleanupState(ctx, drv.ID())
+	if err != nil {
+		return result, fmt.Errorf("read cleanup progress: %w", err)
+	}
 	pendingLegacyDirIDs := pendingDirIDs(currentDirIDs, state.LegacyDoneDirIDs)
+	result.ProtectUnlocated = len(pendingLegacyDirIDs) > 0
 	if state.Initialized && len(pendingLegacyDirIDs) == 0 && equalDirIDSets(state.DirIDs, currentDirIDs) {
-		return nil
+		return result, nil
 	}
 
 	exactItems, err := a.cat.ListVideosInAncestorDirs(ctx, drv.ID(), currentDirIDs)
 	if err != nil {
-		return fmt.Errorf("list videos selected by skip policy: %w", err)
+		return result, fmt.Errorf("list videos selected by skip policy: %w", err)
 	}
+	exactItems = videosNotSeenInCurrentScan(exactItems, seenFileIDs)
 	exactRemoved, err := a.deleteScanCleanupVideos(ctx, exactItems)
 	if err != nil {
-		return fmt.Errorf("exact cleanup: %w", err)
+		return result, fmt.Errorf("exact cleanup: %w", err)
 	}
 	if exactRemoved > 0 {
 		log.Printf("[skip-cleanup] drive=%s removed=%d mode=exact", drv.ID(), exactRemoved)
@@ -298,9 +342,10 @@ func (a *App) cleanupSkippedDriveVideos(
 			cleanupErrors = append(cleanupErrors,
 				fmt.Errorf("check videos without ancestor directories: %w", legacyQueryErr))
 		case !hasLegacyVideos:
+			result.ProtectUnlocated = false
 			for _, skippedDirID := range pendingLegacyDirIDs {
 				if err := ctx.Err(); err != nil {
-					return err
+					return result, err
 				}
 				if err := a.cat.MarkDriveSkipCleanupLegacyDirDone(ctx, drv.ID(), skippedDirID); err != nil {
 					cleanupErrors = append(cleanupErrors,
@@ -308,21 +353,24 @@ func (a *App) cleanupSkippedDriveVideos(
 				}
 			}
 		default:
+			legacyCleanupComplete := true
 			for _, skippedDirID := range pendingLegacyDirIDs {
 				complete, cleanupErr := a.cleanupLegacySkippedDirectory(
-					ctx, drv, currentDirIDs, skippedDirID, rateLimitBudget,
+					ctx, drv, currentDirIDs, skippedDirID, seenFileIDs, rateLimitBudget,
 				)
 				if ctxErr := ctx.Err(); ctxErr != nil {
-					return ctxErr
+					return result, ctxErr
 				}
 				if cleanupErr != nil {
+					legacyCleanupComplete = false
 					if errors.Is(cleanupErr, scanner.ErrRateLimitBudgetExhausted) {
-						return cleanupErr
+						return result, cleanupErr
 					}
 					cleanupErrors = append(cleanupErrors, cleanupErr)
 					continue
 				}
 				if !complete {
+					legacyCleanupComplete = false
 					continue
 				}
 				if err := a.cat.MarkDriveSkipCleanupLegacyDirDone(ctx, drv.ID(), skippedDirID); err != nil {
@@ -330,6 +378,7 @@ func (a *App) cleanupSkippedDriveVideos(
 						fmt.Errorf("mark legacy cleanup complete for directory %s: %w", skippedDirID, err))
 				}
 			}
+			result.ProtectUnlocated = !legacyCleanupComplete
 		}
 	}
 
@@ -337,12 +386,12 @@ func (a *App) cleanupSkippedDriveVideos(
 	// Failed legacy directories stay pending without forcing completed siblings
 	// to be traversed again.
 	if err := ctx.Err(); err != nil {
-		return err
+		return result, err
 	}
 	if err := a.cat.SetDriveSkipCleanupDirIDs(ctx, drv.ID(), currentDirIDs); err != nil {
 		cleanupErrors = append(cleanupErrors, fmt.Errorf("record skip cleanup directory IDs: %w", err))
 	}
-	return errors.Join(cleanupErrors...)
+	return result, errors.Join(cleanupErrors...)
 }
 
 func (a *App) cleanupLegacySkippedDirectory(
@@ -350,6 +399,7 @@ func (a *App) cleanupLegacySkippedDirectory(
 	drv drives.Drive,
 	currentDirIDs []string,
 	skippedDirID string,
+	seenFileIDs map[string]struct{},
 	rateLimitBudget *scanner.RateLimitBudget,
 ) (bool, error) {
 	videoExtensions := []string(nil)
@@ -373,6 +423,7 @@ func (a *App) cleanupLegacySkippedDirectory(
 	if err != nil {
 		return false, fmt.Errorf("list legacy videos under skipped directory %s: %w", skippedDirID, err)
 	}
+	legacyItems = videosNotSeenInCurrentScan(legacyItems, seenFileIDs)
 	legacyRemoved, err := a.deleteScanCleanupVideos(ctx, legacyItems)
 	if err != nil {
 		return false, fmt.Errorf("legacy cleanup under skipped directory %s: %w", skippedDirID, err)
@@ -395,6 +446,22 @@ func (a *App) cleanupLegacySkippedDirectory(
 		return false, nil
 	}
 	return true, nil
+}
+
+func videosNotSeenInCurrentScan(videos []*catalog.Video, seenFileIDs map[string]struct{}) []*catalog.Video {
+	if len(videos) == 0 || len(seenFileIDs) == 0 {
+		return videos
+	}
+	filtered := make([]*catalog.Video, 0, len(videos))
+	for _, video := range videos {
+		if video != nil {
+			if _, seen := seenFileIDs[video.FileID]; seen {
+				continue
+			}
+		}
+		filtered = append(filtered, video)
+	}
+	return filtered
 }
 
 func (a *App) deleteScanCleanupVideos(ctx context.Context, videos []*catalog.Video) (int, error) {

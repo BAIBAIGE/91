@@ -867,8 +867,8 @@ func TestDiscoverDoesNotWriteCatalogBeforeReconcile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("discover: %v", err)
 	}
-	if !snapshot.FullDriveScan || !snapshot.Complete() {
-		t.Fatalf("snapshot = full:%v complete:%v, want both true", snapshot.FullDriveScan, snapshot.Complete())
+	if !snapshot.Complete() || !snapshot.PresenceAuthoritative() {
+		t.Fatalf("snapshot = complete:%v authoritative:%v, want both true", snapshot.Complete(), snapshot.PresenceAuthoritative())
 	}
 	if stats.Scanned != 1 || len(snapshot.Files) != 1 {
 		t.Fatalf("discovery candidates = stats:%d files:%d, want 1", stats.Scanned, len(snapshot.Files))

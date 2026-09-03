@@ -242,9 +242,9 @@ CREATE TABLE IF NOT EXISTS scans (
     error       TEXT
 );
 
--- A provider listing is not authoritative enough to delete catalog data after
--- one empty response. Missing files are confirmed across two snapshots whose
--- directory classifications prove absence; seeing the file clears the counter.
+-- Presence-authoritative discovery removes eligible missing files immediately.
+-- Incomplete discovery uses this table to require two eligible missing
+-- observations; seeing the file clears its counter in either mode.
 CREATE TABLE IF NOT EXISTS drive_scan_misses (
     drive_id            TEXT NOT NULL,
     file_id             TEXT NOT NULL,

@@ -60,13 +60,11 @@ func (i Issue) Error() string {
 
 // Snapshot is the discovery phase output. EnumeratedDirIDs, FailedDirIDs, and
 // ExcludedDirIDs are the mutually exclusive E/F/X directory classifications
-// used by presence cleanup. FullDriveScan is true only when the resolved scan
-// start equals the provider root.
+// used by presence cleanup.
 type Snapshot struct {
 	DriveID          string
 	DriveKind        string
 	StartDirID       string
-	FullDriveScan    bool
 	Files            []File
 	SeenFileIDs      map[string]struct{}
 	EnumeratedDirIDs map[string]struct{}
@@ -77,6 +75,17 @@ type Snapshot struct {
 
 func (s Snapshot) Complete() bool {
 	return len(s.Issues) == 0
+}
+
+// PresenceAuthoritative reports whether discovery completely covered the
+// configured scan scope. It deliberately ignores reconciliation issues: E/F/X
+// and SeenFileIDs are finalized before reconciliation starts.
+func (s Snapshot) PresenceAuthoritative() bool {
+	if len(s.FailedDirIDs) > 0 || len(s.Issues) > 0 {
+		return false
+	}
+	_, startEnumerated := s.EnumeratedDirIDs[s.StartDirID]
+	return startEnumerated
 }
 
 // Result combines the discovery snapshot with reconciliation output.
