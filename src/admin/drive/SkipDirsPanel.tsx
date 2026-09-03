@@ -219,10 +219,6 @@ export function SkipDirsPanel({ drive, onSaved }: SkipDirsPanelProps) {
         )}
       </header>
 
-      <p className="admin-skipdirs-note">
-        跳过目录下的视频会在下次扫盘时从媒体库移除，在此之前取消即可保留。取消跳过后视频会重新入库，但手动标签和播放记录不会恢复。
-      </p>
-
       <div className="admin-detail-tree-container">
         <DirTreeNode
           driveId={drive.id}
