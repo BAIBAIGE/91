@@ -26,9 +26,65 @@ export const ACTIVE_PRELOAD_KEEP_RATIO = 1 / 3;
 export const ACTIVE_PRELOAD_MIN_KEEP_SECONDS = 1.5;
 
 // 维护一个固定大小的视频窗口：窗口内才 mount 真实 <video> 壳。
-// 当前屏先绑定 src；后续预加载要等当前屏缓冲健康后才开始。
+// 下一屏可以轻量准备；全速预加载要等当前屏缓冲健康后才开始。
 // 窗口内只要已经产生过可复用缓冲，就保留 src 复用浏览器缓存。
 export const VIDEO_WINDOW_SIZE = 4;
+
+/** 当前屏缓冲健康时，向后预载几条。 */
+export const PRELOAD_AHEAD_COUNT = 2;
+
+/**
+ * 当前屏缓冲状态允许几条后续视频使用 preload="auto"。
+ *
+ * 这里只负责全速预载的深度。下一屏是否挂载、绑定 src 并用 metadata 做轻量
+ * 准备，由页面单独决定。分开后，当前视频卡顿时可以收回后台带宽，又不用删除
+ * 下一屏的 src 或丢弃已经下载的数据。
+ */
+export function getPreloadAheadCount(activeReadyForPreload: boolean): number {
+  return activeReadyForPreload ? PRELOAD_AHEAD_COUNT : 0;
+}
+
+/** shouldWarmFirstFrame 的输入切面；HTMLVideoElement 天然满足前两项。 */
+export type FirstFrameWarmProbe = {
+  isActive: boolean;
+  /** 该 slide 是否已经绑定了 src */
+  shouldLoad: boolean;
+  /**
+   * 该元素是不是"播放位"——即将被 play() 的那一个。播放位由 play() 自己
+   * 清掉 show-poster 标志，不该被 seek 打断；只有候补位才需要预热。
+   */
+  isPlaybackElement: boolean;
+  readyState: number;
+  currentTime: number;
+};
+
+/**
+ * 非活跃的预载视频要不要"逼出首帧"。
+ *
+ * 按 HTML 渲染模型，video 元素的 show-poster 标志在播放真正开始之前一直为真：
+ * 哪怕已经 preload="auto" 缓冲到满、首帧完全可解码，元素画的仍然是那张静态
+ * poster。也就是说光把字节下下来并不能让"滑到就有画面"成立——浏览器没有
+ * 任何理由去解码一帧。
+ *
+ * 清掉这个标志只有 play() 和 seek 两条路。预载条不能 play()（会出声、会抢
+ * 解码器），所以走 seek：写一次 currentTime 就会强制解码该位置的一帧并送进
+ * 合成器。douyin 的 BaseVideo.vue 在 onMounted 里对每个挂载的 video 写
+ * `videoEl.currentTime = 0`，就是这一步。
+ *
+ * 只在还停在起点（currentTime 为 0）且已经拿到元数据时做一次，避免把用户
+ * 的播放进度或正在进行的 seek 冲掉。
+ */
+export function shouldWarmFirstFrame(probe: FirstFrameWarmProbe): boolean {
+  if (probe.isActive) return false;
+  if (!probe.shouldLoad) return false;
+  if (probe.isPlaybackElement) return false;
+  // HAVE_METADATA 之前 seek 无处可去；currentTime 非 0 说明已经被推进过。
+  if (probe.readyState < 1) return false;
+  return probe.currentTime === 0;
+}
+
+/** 预热用的落点：足够小以视觉上仍是首帧，又足以让 seek 真的发生。 */
+export const FIRST_FRAME_WARM_TIME = 0.001;
 
 /** 判定所需的最小视频元素切面；HTMLVideoElement 天然满足。 */
 export type BufferedMediaProbe = {

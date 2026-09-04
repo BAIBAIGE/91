@@ -40,6 +40,30 @@ export function isLegacyShortsVideoTransitionEnabled() {
   );
 }
 
+/**
+ * 短视频页是否由自己接管全部滚动输入——拖拽、滚轮、原生吸附一并接管。
+ *
+ * 对**所有**设备、**所有**输入方式一视同仁，这是刻意的：这个页面存在的整个
+ * 理由就是"浏览器控制的吸附滚动手感不可控"，凡是还留给浏览器的输入通道，
+ * 那份不可控就原样保留在那里。曾经分过两次特例，两次都被证伪：
+ *
+ * - "iPhone 走文档滚动，接管触摸会让 Safari 工具栏收不起来" —— 真机截图
+ *   显示有 `scroll-snap-type: y mandatory` 在时工具栏本来就从没收起过。
+ * - "桌面滚轮走原生吸附本来就好用" —— 实测手感和移动端原来一样糟，而且
+ *   保留吸附还让鼠标拖拽彻底失效（吸附点跟着轨道 transform 走，mandatory
+ *   会反向拉 scrollTop 把位移抵消掉）。
+ *
+ * 控制器用 pointer 事件 + wheel，同一套判定同时服务手指、鼠标拖拽和滚轮，
+ * 三者共用同一条落点动画。参考实现 zyronon/douyin 也只绑 pointer 事件
+ * （它是纯移动端 demo，没有滚轮，那一半是我们自己补的）。
+ *
+ * `?shortsPager=0` 整个关掉，回到纯原生滚动（真机回退开关）。
+ */
+export function shouldUseShortsSwipePager() {
+  if (typeof window === "undefined") return false;
+  return new URLSearchParams(window.location.search).get("shortsPager") !== "0";
+}
+
 export function isWindowsPlatform() {
   if (typeof navigator === "undefined") return false;
   const platform = navigator.platform || "";
