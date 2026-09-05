@@ -1343,7 +1343,7 @@ test("Windows viewport resize keeps the current short aligned", () => {
   );
   assert.match(
     shortsPageSource,
-    /const observer = new IntersectionObserver\(\s*\(entries\) => \{\s*if \(\s*viewportResizeAnchorIndexRef\.current !== null \|\|\s*queueTrimInProgressRef\.current \|\|\s*pagerGestureActiveRef\.current\s*\) \{\s*return;\s*\}/
+    /const handleSlideIntersections = useCallback\([\s\S]*?if \(\s*viewportResizeAnchorIndexRef\.current !== null \|\|\s*queueTrimInProgressRef\.current\s*\) \{\s*slideVisibilityRef\.current\.clear\(\);\s*return;\s*\}/
   );
 });
 
@@ -1412,7 +1412,7 @@ test("shorts keeps per-swipe work off the queue length", () => {
   );
   assert.match(
     shortsPageSource,
-    /slideObserverRef\.current = observer;\s*return \(\) => \{\s*slideObserverRef\.current = null;\s*observedSlidesRef\.current = new WeakSet\(\);\s*observer\.disconnect\(\);\s*\};\s*\}, \[\]\);/
+    /slideObserverRef\.current = observer;\s*return \(\) => \{\s*slideObserverRef\.current = null;\s*observedSlidesRef\.current = new WeakSet\(\);\s*observer\.disconnect\(\);\s*slideVisibilityRef\.current\.clear\(\);\s*\};\s*\}, \[handleSlideIntersections\]\);/
   );
   assert.match(
     shortsPageSource,

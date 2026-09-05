@@ -54,6 +54,7 @@ import {
   type ShortsKeyboardSeekPreview,
 } from "@/shorts/useShortsKeyboard";
 import { useShortsSlideGestures } from "@/shorts/useShortsSlideGestures";
+import { ShortsSlideVisibility } from "@/shorts/slideVisibility";
 import {
   measureOffsetWithinSlide,
   readShortsSlideTopWithinTrack,
@@ -182,6 +183,7 @@ export default function ShortsPage() {
   // 整页只建一个 slide 观察器，新批次到达时增量补充观察目标。
   const slideObserverRef = useRef<IntersectionObserver | null>(null);
   const observedSlidesRef = useRef<WeakSet<Element>>(new WeakSet());
+  const slideVisibilityRef = useRef(new ShortsSlideVisibility());
   // index → video element，用来精确控制播放/暂停
   const videoRefs = useRef<Map<number, HTMLVideoElement>>(new Map());
   const videoRefCallbacks = useRef<
@@ -587,6 +589,30 @@ export default function ShortsPage() {
     };
   }, [isWindowsShortsPlatform]);
 
+  const handleSlideIntersections = useCallback(
+    (entries: IntersectionObserverEntry[]) => {
+      if (
+        viewportResizeAnchorIndexRef.current !== null ||
+        queueTrimInProgressRef.current
+      ) {
+        slideVisibilityRef.current.clear();
+        return;
+      }
+      const bestIndex = slideVisibilityRef.current.update(
+        entries,
+        pagerGestureActiveRef.current
+      );
+      if (bestIndex >= 0 && bestIndex !== activeIndexRef.current) {
+        activeIndexRef.current = bestIndex;
+        const sharedVideo = iosSharedVideoRef.current;
+        if (sharedVideo && !sharedVideo.paused) sharedVideo.pause();
+        setActiveReadyForPreload(false);
+        setActiveIndex(bestIndex);
+      }
+    },
+    []
+  );
+
   // 用 IntersectionObserver 找出当前进入视口的 item。
   // root 直接用 viewport：普通模式和 iPhone 页面滚动模式都能正确观测。
   //
@@ -600,33 +626,7 @@ export default function ShortsPage() {
     if (!root) return;
 
     const observer = new IntersectionObserver(
-      (entries) => {
-        if (
-          viewportResizeAnchorIndexRef.current !== null ||
-          queueTrimInProgressRef.current ||
-          pagerGestureActiveRef.current
-        ) {
-          return;
-        }
-        let bestIndex = -1;
-        let bestRatio = 0.6;
-        for (const entry of entries) {
-          if (entry.intersectionRatio > bestRatio) {
-            bestRatio = entry.intersectionRatio;
-            const idx = Number(
-              (entry.target as HTMLElement).dataset.index ?? -1
-            );
-            if (!Number.isNaN(idx)) bestIndex = idx;
-          }
-        }
-        if (bestIndex >= 0 && bestIndex !== activeIndexRef.current) {
-          activeIndexRef.current = bestIndex;
-          const sharedVideo = iosSharedVideoRef.current;
-          if (sharedVideo && !sharedVideo.paused) sharedVideo.pause();
-          setActiveReadyForPreload(false);
-          setActiveIndex(bestIndex);
-        }
-      },
+      handleSlideIntersections,
       {
         root: null,
         threshold: [0.6, 0.85],
@@ -638,8 +638,9 @@ export default function ShortsPage() {
       slideObserverRef.current = null;
       observedSlidesRef.current = new WeakSet();
       observer.disconnect();
+      slideVisibilityRef.current.clear();
     };
-  }, []);
+  }, [handleSlideIntersections]);
 
   // 新一批 slide 进入 DOM 后补充观察。WeakSet 记账避免对同一节点重复调用，
   // 节点被 React 丢弃时条目自动消失。
@@ -668,9 +669,19 @@ export default function ShortsPage() {
   // 移动端的上下滑动手势。activeIndex 仍然只由上面的 IntersectionObserver
   // 决定：这个 hook 只负责把手指位移写进同一个 scrollTop，播放 / 预载 /
   // iOS 共享元素那条链路完全不受影响。
-  const handlePagerGestureActiveChange = useCallback((active: boolean) => {
-    pagerGestureActiveRef.current = active;
-  }, []);
+  const handlePagerGestureActiveChange = useCallback(
+    (active: boolean) => {
+      pagerGestureActiveRef.current = active;
+      if (!active) {
+        const observer = slideObserverRef.current;
+        if (!observer) return;
+        // 松手前可能已经越过最后一个 IO 阈值，之后不会再收到通知。
+        // 合并尚未分发的通知，再处理拖动期间每屏最后一次观测结果。
+        handleSlideIntersections(observer.takeRecords());
+      }
+    },
+    [handleSlideIntersections]
+  );
 
   useShortsSwipePager({
     enabled: usePagerGestures,
