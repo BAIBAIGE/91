@@ -237,9 +237,8 @@ type videoRowExecer interface {
 }
 
 // upsertVideoRow owns the videos-table statement without opening a transaction.
-// Ordinary scans call it through UpsertVideo; tombstone restoration calls it
-// with an existing transaction so the row, tag assignments, and tombstone can
-// move to their new state atomically.
+// Scan admission and tombstone restoration call it with their existing write
+// transaction. General callers use UpsertVideo, which also initializes tags.
 func upsertVideoRow(ctx context.Context, exec videoRowExecer, v *Video) ([]string, error) {
 	v.ContentHash = normalizeContentHash(v.ContentHash)
 	v.SampledSHA256 = normalizeContentHash(v.SampledSHA256)

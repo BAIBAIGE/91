@@ -149,7 +149,10 @@ func (s *Scanner) reconcileExisting(
 		}
 	}
 
-	duplicate, err := s.findDuplicate(ctx, entry.Hash, entry.Name, entry.Size, existing.ID, result.Snapshot)
+	duplicate, err := s.Catalog.FindScannedVideoDuplicate(ctx, &catalog.Video{
+		ID: existing.ID, DriveID: s.Drive.ID(), ContentHash: entry.Hash,
+		FileName: entry.Name, Size: entry.Size,
+	}, result.Snapshot.SeenFileIDs)
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctxErr
@@ -180,18 +183,6 @@ func (s *Scanner) insertNew(
 	result *Result,
 ) error {
 	entry := file.Entry
-	duplicate, err := s.findDuplicate(ctx, entry.Hash, entry.Name, entry.Size, id, result.Snapshot)
-	if err != nil {
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return ctxErr
-		}
-		result.addIssue(file, IssueDuplicate, err)
-		return nil
-	}
-	if duplicate != nil {
-		result.Duplicates++
-		return nil
-	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -215,11 +206,16 @@ func (s *Scanner) insertNew(
 		CreatedAt:      now,
 		UpdatedAt:      now,
 	}
-	if err := s.Catalog.UpsertVideo(ctx, video); err != nil {
+	inserted, err := s.Catalog.InsertScannedVideo(ctx, video, result.Snapshot.SeenFileIDs)
+	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctxErr
 		}
 		result.addIssue(file, IssueUpsert, err)
+		return nil
+	}
+	if !inserted {
+		result.Duplicates++
 		return nil
 	}
 	if len(assignments) > 0 {
@@ -264,27 +260,6 @@ func assignmentLabels(assignments []catalog.TagAssignment) []string {
 		labels = append(labels, assignment.Label)
 	}
 	return labels
-}
-
-func (s *Scanner) findDuplicate(ctx context.Context, hash, fileName string, size int64, currentID string, snapshot Snapshot) (*catalog.Video, error) {
-	candidates, err := s.Catalog.ListVideoDuplicateCandidates(ctx, hash, fileName, size)
-	if err != nil {
-		return nil, err
-	}
-	for _, candidate := range candidates {
-		if candidate.ID == currentID {
-			continue
-		}
-		if candidate.DriveID == snapshot.DriveID {
-			// Only a source observed in this scan can represent another live file.
-			// A stale row may be removed by presence or skip-policy cleanup later.
-			if _, seen := snapshot.SeenFileIDs[candidate.FileID]; !seen {
-				continue
-			}
-		}
-		return candidate, nil
-	}
-	return nil, nil
 }
 
 func videoIDFilePart(fileID string) string {
