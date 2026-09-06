@@ -202,6 +202,20 @@ func (a *App) runScanWithTaskContext(ctx context.Context, driveID string) (repor
 	thumbnailWorker := a.thumbWorkers[driveID]
 	fingerprintWorker := a.fingerprintWorkers[driveID]
 	a.mu.Unlock()
+	// Reset failures once, after stale-source cleanup and before admitting new
+	// generation. Recurring queue admission only picks up pending work, so a
+	// retry that fails again remains failed until the next scan or manual retry.
+	if _, err := a.resetFailedGeneration(ctx, driveID, catalog.GenerationKinds{
+		Thumbnails:   thumbnailWorker != nil,
+		Previews:     previewWorker != nil && driveConfig.TeaserEnabled,
+		Fingerprints: fingerprintWorker != nil,
+	}); err != nil {
+		report.AddIssue("generation_retry", err)
+		log.Printf("[scan] reset failed generation drive=%s: %v", driveID, err)
+		if ctx.Err() != nil {
+			return report
+		}
+	}
 	enqueueNewScanVideos(result.NewVideos, thumbnailWorker, fingerprintWorker)
 	a.enqueueFingerprintBackfill(ctx, driveID, fingerprintWorker)
 	a.enqueueDriveGeneration(ctx, driveID, previewWorker, thumbnailWorker)
