@@ -5,9 +5,9 @@
 // "扫描所有网盘" action uses TriggerScanAll and intentionally runs only the
 // cloud-scan and duplicate-maintenance stages.
 //
-//	Phase 1: for each non-crawler cloud drive
+//	Phase 1: concurrently for each non-crawler cloud drive
 //	           scan + delete-detection + enqueue thumb + enqueue preview video
-//	         wait until all thumb / preview-video queues are idle
+//	         wait for all scans, then all thumb / preview-video queues to be idle
 //	Phase 1b: reconcile generated thumbnails/previews against local storage
 //	          enqueue repaired pending rows and wait for their queues to drain
 //	Phase 2: if any script crawler configured
@@ -81,12 +81,13 @@ type Config struct {
 	// the persisted last-run calendar date. It never changes the host timezone.
 	Timezone string
 
-	// ListScanTargets returns the drive IDs to run Phase 1 on, in deterministic
-	// order. Should exclude crawler and localupload drives.
+	// ListScanTargets returns unique drive IDs to run Phase 1 on concurrently.
+	// Should exclude crawler and localupload drives.
 	ListScanTargets func(ctx context.Context) ([]string, error)
 
 	// RunScan synchronously runs scan + cleanup + enqueueDriveGeneration for
 	// one drive, returning its final outcome even when it failed or was skipped.
+	// It must support concurrent calls for different drives and honor cancellation.
 	RunScan func(ctx context.Context, driveID string) scanjob.Result
 
 	// ListCrawlerDrives returns script crawler drive IDs to crawl in Phase 2.
@@ -136,7 +137,7 @@ type Status struct {
 	StartedAt      time.Time
 	LastFinishedAt time.Time
 	Outcome        scanjob.State
-	ScanResults    []scanjob.Result
+	ScanResults    []scanjob.Result // completed scans, in completion order
 	Issues         []scanjob.Issue
 }
 
@@ -663,18 +664,31 @@ func (r *Runner) runScanPhase(ctx context.Context, component, phase string) bool
 	if len(scanIDs) == 0 {
 		log.Printf("[%s] %s skipped: no cloud drives to scan", component, phase)
 	} else {
-		log.Printf("[%s] %s: scanning %d drive(s)", component, phase, len(scanIDs))
+		log.Printf("[%s] %s: scanning %d drive(s) concurrently", component, phase, len(scanIDs))
+		var scans sync.WaitGroup
 		for _, id := range scanIDs {
 			if ctx.Err() != nil {
-				log.Printf("[%s] %s aborted by ctx: %v", component, phase, ctx.Err())
-				return false
+				break
 			}
-			log.Printf("[%s] %s: scanning drive=%s", component, phase, id)
-			result := r.cfg.RunScan(ctx, id)
-			r.stateMu.Lock()
-			r.scanResults = append(r.scanResults, result)
-			r.stateMu.Unlock()
+			scans.Add(1)
+			go func() {
+				defer scans.Done()
+				if ctx.Err() != nil {
+					return
+				}
+				log.Printf("[%s] %s: scanning drive=%s", component, phase, id)
+				result := r.cfg.RunScan(ctx, id)
+				r.stateMu.Lock()
+				r.scanResults = append(r.scanResults, result)
+				r.stateMu.Unlock()
+			}()
 		}
+		// Keep ownership of the pipeline until every admitted scan has returned,
+		// including saving its final result and releasing its drive task on stop.
+		scans.Wait()
+	}
+	if r.shouldStop(ctx, component, phase) {
+		return false
 	}
 	log.Printf("[%s] %s: waiting for preview queues to drain", component, phase)
 	if err := r.waitIdle(ctx, component, phase); err != nil {

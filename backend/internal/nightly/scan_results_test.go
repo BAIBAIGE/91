@@ -24,17 +24,17 @@ func TestScanAllRetainsEachOutcomeAndContinuesAfterFailure(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ids := []string{}
+			states := make(map[string]scanjob.State)
 			for i := range tc.states {
-				ids = append(ids, string(rune('a'+i)))
+				id := string(rune('a' + i))
+				ids = append(ids, id)
+				states[id] = tc.states[i]
 			}
-			called := 0
 			r := New(Config{
 				Settings:        newStubSettings(),
 				ListScanTargets: func(context.Context) ([]string, error) { return ids, nil },
 				RunScan: func(_ context.Context, id string) scanjob.Result {
-					result := scanjob.Result{DriveID: id, State: tc.states[called], ScannedCount: 7}
-					called++
-					return result
+					return scanjob.Result{DriveID: id, State: states[id], ScannedCount: 7}
 				},
 			})
 			if !r.TriggerScanAll() {
@@ -46,10 +46,11 @@ func TestScanAllRetainsEachOutcomeAndContinuesAfterFailure(t *testing.T) {
 			if status.Running || status.Queued || status.Outcome != tc.want || len(status.ScanResults) != len(tc.states) {
 				t.Fatalf("status = %+v, want outcome %s", status, tc.want)
 			}
-			for i, result := range status.ScanResults {
-				if result.State != tc.states[i] || result.ScannedCount != 7 {
+			for _, result := range status.ScanResults {
+				if state, ok := states[result.DriveID]; !ok || result.State != state || result.ScannedCount != 7 {
 					t.Fatalf("lost result: %+v", result)
 				}
+				delete(states, result.DriveID)
 			}
 		})
 	}

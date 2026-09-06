@@ -2,6 +2,7 @@ package nightly
 
 import (
 	"context"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -340,6 +341,8 @@ func TestRunPipelineHonoursPhaseOrder(t *testing.T) {
 	if len(got) != len(want) {
 		t.Fatalf("call sequence len = %d, want %d; got=%v", len(got), len(want), got)
 	}
+	// Drive scans may finish in either order, but both must precede queue waits.
+	slices.Sort(got[1:3])
 	for i := range want {
 		if got[i] != want[i] {
 			t.Fatalf("call[%d] = %q, want %q (full=%v)", i, got[i], want[i], got)
@@ -453,6 +456,7 @@ func TestRunScanAllOnlyScansConfiguredDrivesAndDedupes(t *testing.T) {
 	if len(got) != len(want) {
 		t.Fatalf("call sequence len = %d, want %d; got=%v", len(got), len(want), got)
 	}
+	slices.Sort(got[1:3])
 	for i := range want {
 		if got[i] != want[i] {
 			t.Fatalf("call[%d] = %q, want %q (full=%v)", i, got[i], want[i], got)
@@ -532,6 +536,7 @@ func TestRunPipelineSkipsMigrationWhenNoCrawler(t *testing.T) {
 func TestRunPipelineExitsWhenContextCancelledMidPhase(t *testing.T) {
 	rec := &recorder{}
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	r := New(Config{
 		Settings: newStubSettings(),
@@ -562,12 +567,7 @@ func TestRunPipelineExitsWhenContextCancelledMidPhase(t *testing.T) {
 
 	got := rec.snapshot()
 	for _, c := range got {
-		if c == "scan:drive-c" || c == "scan:drive-b" {
-			t.Fatalf("scan should bail out after cancel, got call %q (full=%v)", c, got)
-		}
-	}
-	for _, c := range got {
-		if c == "crawl" || c == "migrate" || c == "asset-reconciliation" {
+		if c == "crawl" || c == "migrate" || c == "asset-reconciliation" || c == "wait-idle" {
 			t.Fatalf("subsequent phase should not run after cancel, got call %q", c)
 		}
 		if c == "dedupe-cleanup" {

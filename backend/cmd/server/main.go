@@ -496,8 +496,8 @@ func main() {
 	adminServer.Register(r)
 	mountFrontend(r)
 
-	// 凌晨流水线：每天按后台可热更新的 HH:mm + IANA 时区触发一次，串行跑
-	//   Phase 1 扫所有非爬虫 / localupload 网盘 + 跳过策略/缺失确认清理 + 入队封面/预览视频
+	// 凌晨流水线：每天按后台可热更新的 HH:mm + IANA 时区触发一次，依次运行以下阶段：
+	//   Phase 1 并行扫所有非爬虫 / localupload 网盘 + 跳过策略/缺失确认清理 + 入队封面/预览视频
 	//   Phase 1b 对账本地封面/预览文件 + 将丢失资产重置入队并等待补生成
 	//   Phase 2 脚本爬虫 + 入队预览视频
 	//   Phase 3 爬虫本地视频 → 云盘上传
