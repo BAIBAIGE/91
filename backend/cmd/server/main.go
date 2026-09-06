@@ -192,7 +192,6 @@ func main() {
 		workers:            make(map[string]*preview.Worker),
 		thumbWorkers:       make(map[string]*preview.ThumbWorker),
 		fingerprintWorkers: make(map[string]*fingerprint.Worker),
-		previewConcurrency: cfg.Preview.Concurrency,
 		scriptCrawlers:     make(map[string]*scriptcrawler.Crawler),
 	}
 	app.proxy = proxy.New(app.registry)

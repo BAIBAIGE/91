@@ -24,11 +24,13 @@ import (
 	"github.com/video-site/backend/internal/mediaasset"
 	"github.com/video-site/backend/internal/persistence"
 	"github.com/video-site/backend/internal/streamhttp"
+	"github.com/video-site/backend/internal/tasklimit"
 )
 
 type Config struct {
 	FFmpegPath      string
 	FFprobePath     string
+	FFmpegThreads   int
 	DurationSeconds int // 兼容旧配置；当前预览视频每段固定 3 秒
 	Width           int
 	Segments        int    // 兼容旧配置；当前 30 秒及以上视频固定使用 4 段
@@ -57,6 +59,9 @@ type refreshingTeaserGenerator interface {
 }
 
 func New(cfg Config) *Generator {
+	if cfg.FFmpegThreads < 1 {
+		cfg.FFmpegThreads = 1
+	}
 	if cfg.FFmpegPath == "" {
 		cfg.FFmpegPath = "ffmpeg"
 	}
@@ -321,11 +326,15 @@ func (g *Generator) generateThumbnailAtOffset(ctx context.Context, link *drives.
 	args := []string{
 		"-hide_banner",
 		"-loglevel", "error",
+		"-filter_threads", strconv.Itoa(g.cfg.FFmpegThreads),
+		"-filter_complex_threads", strconv.Itoa(g.cfg.FFmpegThreads),
+		"-threads", strconv.Itoa(g.cfg.FFmpegThreads),
 		"-ss", fmt.Sprintf("%.2f", offset),
 	}
 	args = append(args, ffmpegHTTPInputOptions(ffmpegLink)...)
 	args = append(args,
 		"-i", ffmpegLink.URL,
+		"-threads", strconv.Itoa(g.cfg.FFmpegThreads),
 		"-frames:v", "1",
 		"-vf", thumbnailVideoFilter(g.cfg.Width),
 		"-q:v", "3",
@@ -747,12 +756,16 @@ func (g *Generator) generateSingleSegment(ctx context.Context, index int, start,
 	args := []string{
 		"-hide_banner",
 		"-loglevel", "error",
+		"-filter_threads", strconv.Itoa(g.cfg.FFmpegThreads),
+		"-filter_complex_threads", strconv.Itoa(g.cfg.FFmpegThreads),
+		"-threads", strconv.Itoa(g.cfg.FFmpegThreads),
 	}
 	args = append(args, ffmpegHTTPInputOptions(ffmpegLink)...)
 	args = append(args,
 		"-ss", fmt.Sprintf("%.2f", start),
 		"-t", fmt.Sprintf("%.2f", eachSec),
 		"-i", ffmpegLink.URL,
+		"-threads", strconv.Itoa(g.cfg.FFmpegThreads),
 		"-an",
 		"-vf", filter,
 		"-c:v", "libx264",
@@ -1094,41 +1107,26 @@ type Worker struct {
 	// operation. A nil release means this worker belongs to a retired runtime
 	// generation and the queued item must remain pending for its replacement.
 	TaskGuard func() func()
-	ch        chan *catalog.Video
-	queue     videoQueue
+	// Limiter is shared by all preview workers in the application.
+	Limiter *tasklimit.Limiter
+	ch      chan *catalog.Video
+	queue   videoQueue
 
 	RateLimitCooldown time.Duration
 	rateLimit         rateLimitState
 	activities        taskActivities
-	concurrency       workerConcurrency
 }
 
 func NewWorker(gen TeaserGenerator, cat *catalog.Catalog, drv drives.Drive) *Worker {
-	w := &Worker{
+	return &Worker{
 		Gen:     gen,
 		Catalog: cat,
 		Drive:   drv,
+		// Standalone workers default to one slot. The application injects its
+		// shared preview budget before Run starts.
+		Limiter: tasklimit.New(1),
 		ch:      make(chan *catalog.Video, defaultWorkerQueueSize),
 	}
-	w.SetConcurrency(1)
-	return w
-}
-
-// SetConcurrency changes this drive's preview generation concurrency. It is
-// safe to call while Run is active. Work already in flight is allowed to
-// finish; newly admitted work observes the updated limit.
-func (w *Worker) SetConcurrency(concurrency int) {
-	if w == nil {
-		return
-	}
-	w.concurrency.setLimit(concurrency)
-}
-
-func (w *Worker) CurrentConcurrency() int {
-	if w == nil {
-		return 1
-	}
-	return w.concurrency.currentLimit()
 }
 
 func (w *Worker) Enqueue(v *catalog.Video) bool {
@@ -1168,8 +1166,10 @@ type ThumbWorker struct {
 	Catalog   *catalog.Catalog
 	Drive     drives.Drive
 	TaskGuard func() func()
-	ch        chan *catalog.Video
-	queue     videoQueue
+	// Limiter is shared by all thumbnail workers in the application.
+	Limiter *tasklimit.Limiter
+	ch      chan *catalog.Video
+	queue   videoQueue
 
 	// followUps preserves a state-change notification that arrives while the
 	// same video is already being processed. A plain deduplicating enqueue
@@ -1546,20 +1546,25 @@ func (w *Worker) Run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case v := <-w.ch:
-			if !w.concurrency.acquire(ctx) {
-				w.queue.release(v)
-				return
+			// Each drive has at most one task waiting for a global slot. FIFO
+			// admission lets other drives advance without a per-drive limit or
+			// a goroutine for every queued video.
+			run := w.prepareQueued(ctx, v)
+			if run == nil {
+				continue
 			}
 			tasks.Add(1)
-			go func(video *catalog.Video) {
+			go func() {
 				defer tasks.Done()
-				defer w.concurrency.release()
-				w.processQueued(ctx, video)
-				select {
-				case <-ctx.Done():
-				case <-time.After(500 * time.Millisecond):
-				}
-			}(v)
+				run()
+			}()
+			// Pace this drive's dispatch without occupying a global slot after
+			// processing or accumulating goroutines that only wait on a timer.
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(500 * time.Millisecond):
+			}
 		}
 	}
 }
@@ -1582,43 +1587,63 @@ func (w *ThumbWorker) Run(ctx context.Context) {
 }
 
 func (w *Worker) processQueued(ctx context.Context, v *catalog.Video) {
-	if v == nil {
-		return
+	if run := w.prepareQueued(ctx, v); run != nil {
+		run()
 	}
-	if w.Catalog == nil || v.ID == "" {
-		w.queue.release(v)
-		return
+}
+
+// prepareQueued waits in the dispatcher and transfers admission/resource
+// ownership to the returned task. No processing goroutine exists before this
+// succeeds, even when a drive has thousands of queued videos.
+func (w *Worker) prepareQueued(ctx context.Context, v *catalog.Video) func() {
+	if v == nil {
+		return nil
+	}
+	prepared := false
+	taskRelease := func() {}
+	defer func() {
+		if !prepared {
+			w.queue.release(v)
+			taskRelease()
+		}
+	}()
+	if w.Catalog == nil || v.ID == "" || ctx.Err() != nil {
+		return nil
 	}
 	if w.TaskGuard != nil {
 		release := w.TaskGuard()
 		if release == nil {
-			w.queue.release(v)
-			return
+			return nil
 		}
-		defer release()
-	}
-	if err := ctx.Err(); err != nil {
-		w.queue.release(v)
-		return
+		taskRelease = release
 	}
 	current, err := w.Catalog.GetVideo(ctx, v.ID)
 	if err != nil || current.Hidden {
+		return nil
+	}
+	release, ok := acquireGenerationSlot(ctx, w.Limiter, &w.rateLimit, "preview", w.Drive)
+	if !ok {
+		return nil
+	}
+	prepared = true
+	return func() {
+		defer taskRelease()
+		defer release()
+		if ctx.Err() != nil {
+			w.queue.release(v)
+			return
+		}
+		w.activities.start(current)
+		defer w.activities.done(current.ID)
+		retry := w.process(ctx, current)
+		release()
+		// Release before requeueing because videoQueue deduplicates reserved
+		// IDs. Keep activity visible throughout the transition for admission.
 		w.queue.release(v)
-		return
+		if retry && ctx.Err() == nil {
+			w.EnqueueBlocking(ctx, current)
+		}
 	}
-	w.activities.start(current)
-	retry := false
-	if waitForRateLimitCooldown(ctx, &w.rateLimit, "preview", w.Drive) {
-		retry = w.process(ctx, current)
-	}
-	// Release before requeueing because videoQueue deduplicates reserved IDs.
-	// Keep the activity visible across that transition, matching ThumbWorker's
-	// admission/status contract.
-	w.queue.release(v)
-	if retry && ctx.Err() == nil {
-		w.EnqueueBlocking(ctx, current)
-	}
-	w.activities.done(current.ID)
 }
 
 func (w *ThumbWorker) processQueued(ctx context.Context, v *catalog.Video) {
@@ -1651,10 +1676,11 @@ func (w *ThumbWorker) processQueued(ctx context.Context, v *catalog.Video) {
 	if err := ctx.Err(); err != nil {
 		return
 	}
-	w.activity.start(v)
-	activityStarted = true
-	if waitForRateLimitCooldown(ctx, &w.rateLimit, "thumb", w.Drive) {
+	if release, ok := acquireGenerationSlot(ctx, w.Limiter, &w.rateLimit, "thumb", w.Drive); ok {
+		w.activity.start(v)
+		activityStarted = true
 		retry = w.process(ctx, v)
+		release()
 	}
 }
 
@@ -1676,6 +1702,22 @@ func (w *ThumbWorker) finishQueued(ctx context.Context, v *catalog.Video, retry 
 		w.EnqueueBlocking(ctx, followUp)
 	}
 	w.followUpMu.Unlock()
+}
+
+// Cooldown can begin while another task waits for the global budget. Recheck
+// after acquisition and release immediately if this drive must still wait.
+func acquireGenerationSlot(ctx context.Context, limiter *tasklimit.Limiter, state *rateLimitState, label string, drive drives.Drive) (func(), bool) {
+	for waitForRateLimitCooldown(ctx, state, label, drive) {
+		release, err := limiter.Acquire(ctx)
+		if err != nil {
+			return nil, false
+		}
+		if _, cooling := state.coolingUntil(time.Now()); !cooling {
+			return release, true
+		}
+		release()
+	}
+	return nil, false
 }
 
 func waitForRateLimitCooldown(ctx context.Context, state *rateLimitState, label string, drive drives.Drive) bool {

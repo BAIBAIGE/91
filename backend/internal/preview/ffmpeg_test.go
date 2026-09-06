@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -879,5 +880,39 @@ func TestDeterministicMediaInputErrorStopsTimestampFallback(t *testing.T) {
 	}
 	if thumbnailOffsetFallbackAllowed(err) {
 		t.Fatal("invalid container should not be retried at every thumbnail offset")
+	}
+}
+
+// Exercise real decoding, filtering and encoding: misplaced FFmpeg options can
+// be accepted by argument stubs while failing when processing actual media.
+func TestGenerateMediaWithLimitedFFmpegThreads(t *testing.T) {
+	ffmpeg, err := exec.LookPath("ffmpeg")
+	if err != nil {
+		t.Skip("ffmpeg unavailable")
+	}
+	ffprobe, err := exec.LookPath("ffprobe")
+	if err != nil {
+		t.Skip("ffprobe unavailable")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	dir := t.TempDir()
+	source := filepath.Join(dir, "source.mp4")
+	out, err := exec.CommandContext(ctx, ffmpeg, "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "color=c=blue:s=160x90:r=24:d=2", "-c:v", "libx264", "-threads", "1", "-y", source).CombinedOutput()
+	if err != nil {
+		t.Fatalf("create source: %v: %s", err, out)
+	}
+	for _, threads := range []int{0, 2} {
+		gen := New(Config{FFmpegPath: ffmpeg, FFprobePath: ffprobe, FFmpegThreads: threads, Width: 160, LocalDir: dir})
+		if threads == 0 && gen.cfg.FFmpegThreads != 1 {
+			t.Fatal("default thread limit is not one")
+		}
+		link := &drives.StreamLink{URL: source}
+		if err := gen.generateThumbnailAtOffset(ctx, link, filepath.Join(dir, "cover.jpg"), 0); err != nil {
+			t.Fatalf("thumbnail threads=%d: %v", threads, err)
+		}
+		if _, err := gen.generateSingleSegment(ctx, 0, 0, 1, false, link); err != nil {
+			t.Fatalf("preview threads=%d: %v", threads, err)
+		}
 	}
 }

@@ -19,6 +19,7 @@ import (
 	"github.com/video-site/backend/internal/catalog"
 	"github.com/video-site/backend/internal/drives"
 	"github.com/video-site/backend/internal/streamhttp"
+	"github.com/video-site/backend/internal/tasklimit"
 )
 
 const (
@@ -29,6 +30,7 @@ const (
 )
 
 type Config struct {
+	Limiter           *tasklimit.Limiter
 	SampleSizeBytes   int64
 	FullHashMaxSize   int64
 	RateLimitCooldown time.Duration
@@ -200,9 +202,17 @@ func (w *Worker) processQueued(ctx context.Context, v *catalog.Video) {
 	if current.SampledSHA256 != "" || current.FingerprintStatus == "ready" || current.Hidden {
 		return
 	}
+	release, err := w.Config.Limiter.Acquire(ctx)
+	if err != nil {
+		return
+	}
 	w.activity.start(current)
 	defer w.activity.done()
-	sum, err := Compute(ctx, w.Drive, current, w.Config, w.http)
+	sum, err := compute(ctx, w.Drive, current, w.Config, w.http)
+	release() // Provider cooldown must not occupy a global slot.
+	if ctx.Err() != nil {
+		return
+	}
 	if err != nil {
 		var rl *drives.RateLimitError
 		if errors.As(err, &rl) {
@@ -229,6 +239,16 @@ func (w *Worker) processQueued(ctx context.Context, v *catalog.Video) {
 }
 
 func Compute(ctx context.Context, drv drives.Drive, v *catalog.Video, cfg Config, hc *http.Client) (string, error) {
+	release, err := cfg.Limiter.Acquire(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer release()
+	return compute(ctx, drv, v, cfg, hc)
+}
+
+// compute runs after the caller has acquired the shared fingerprint budget.
+func compute(ctx context.Context, drv drives.Drive, v *catalog.Video, cfg Config, hc *http.Client) (string, error) {
 	if drv == nil {
 		return "", errors.New("fingerprint: nil drive")
 	}

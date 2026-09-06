@@ -14,6 +14,7 @@ import (
 
 	"github.com/video-site/backend/internal/catalog"
 	"github.com/video-site/backend/internal/drives"
+	"github.com/video-site/backend/internal/tasklimit"
 )
 
 func TestComputeLocalFilesWithSameContentMatch(t *testing.T) {
@@ -359,3 +360,50 @@ func (d *fakeDrive) EnsureDir(context.Context, string) (string, error) {
 	return "", drives.ErrNotSupported
 }
 func (d *fakeDrive) RootID() string { return "root" }
+
+func TestFingerprintCooldownReleasesGlobalBudget(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusTooManyRequests) }))
+	defer srv.Close()
+	cat, err := catalog.Open(filepath.Join(t.TempDir(), "catalog.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cat.Close()
+	v := &catalog.Video{ID: "cooling", DriveID: "fake", FileID: "file", Title: "clip", Size: 10, FingerprintStatus: "pending"}
+	if err := cat.UpsertVideo(context.Background(), v); err != nil {
+		t.Fatal(err)
+	}
+	limiter := tasklimit.New(1)
+	w := NewWorker(cat, &fakeDrive{paths: map[string]string{"file": srv.URL}}, Config{Limiter: limiter, RateLimitCooldown: time.Minute})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	defer func() { cancel(); <-done }()
+	go func() { defer close(done); w.processQueued(ctx, v) }()
+	deadline := time.Now().Add(time.Second)
+	for w.Status().State != "cooling" && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if w.Status().State != "cooling" {
+		t.Fatal("fingerprint task did not enter cooldown")
+	}
+	other, stop := context.WithTimeout(ctx, time.Second)
+	defer stop()
+	release, err := limiter.Acquire(other)
+	if err != nil {
+		t.Fatalf("cooldown held global budget: %v", err)
+	}
+	release()
+}
+
+func TestDirectComputeWaitsForSharedFingerprintBudget(t *testing.T) {
+	limiter := tasklimit.New(1)
+	release, _ := limiter.Acquire(context.Background())
+	defer release()
+	drv := &fakeDrive{}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	_, err := Compute(ctx, drv, &catalog.Video{Size: 10}, Config{Limiter: limiter}, nil)
+	if !errors.Is(err, context.DeadlineExceeded) || drv.streamCalls != 0 {
+		t.Fatalf("direct compute bypassed budget: calls=%d err=%v", drv.streamCalls, err)
+	}
+}

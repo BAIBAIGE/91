@@ -285,50 +285,50 @@ test("visual config inserts the built-in tag field into block, flow, and empty m
   );
 });
 
-test("visual config reads and validates per-storage preview concurrency", () => {
+test("visual config reads and validates global preview concurrency", () => {
   assert.equal(parseConfig("{}\n").draft.previewConcurrency, 1);
   assert.equal(
-    parseConfig("preview:\n  concurrency: 3\n").draft.previewConcurrency,
+    parseConfig("generation:\n  preview_concurrency: 3\n").draft.previewConcurrency,
     3
   );
   assert.equal(
-    parseConfig("preview:\n  concurrency: 5\n").draft.previewConcurrency,
+    parseConfig("generation:\n  preview_concurrency: 5\n").draft.previewConcurrency,
     5
   );
   for (const invalid of [0, 6, 1.5]) {
     assert.throws(
-      () => parseConfig(`preview:\n  concurrency: ${invalid}\n`),
-      /preview\.concurrency 必须是 1-5 之间的整数/
+      () => parseConfig(`generation:\n  preview_concurrency: ${invalid}\n`),
+      /generation\.preview_concurrency 必须是 1-5 之间的整数/
     );
   }
   assert.throws(
-    () => parseConfig('preview:\n  concurrency: "3"\n'),
-    /preview\.concurrency 必须是 1-5 之间的整数/
+    () => parseConfig('generation:\n  preview_concurrency: "3"\n'),
+    /generation\.preview_concurrency 必须是 1-5 之间的整数/
   );
-  assert.throws(() => parseConfig("preview: true\n"), /preview 必须是映射对象/);
+  assert.throws(() => parseConfig("generation: true\n"), /generation 必须是映射对象/);
 });
 
 test("visual config updates only preview concurrency and preserves YAML layout", () => {
   const source = [
-    "preview:",
-    "  # keep preview settings",
-    "  concurrency: 1 # hot reload",
-    '  ffmpeg_path: "ffmpeg"',
+    "generation:",
+    "  # keep generation settings",
+    "  preview_concurrency: 1 # hot reload",
+    '  fingerprint_concurrency: 1',
     "future:",
     "  keep: yes",
     "",
   ].join("\n");
   assert.equal(
     updatePreviewConcurrency(source),
-    source.replace("concurrency: 1", "concurrency: 3")
+    source.replace("preview_concurrency: 1", "preview_concurrency: 3")
   );
   assert.equal(
-    updatePreviewConcurrency("preview: { enabled: true }\ntail: ok\n"),
-    "preview: { enabled: true, concurrency: 3 }\ntail: ok\n"
+    updatePreviewConcurrency("generation: { fingerprint_concurrency: 1 }\ntail: ok\n"),
+    "generation: { fingerprint_concurrency: 1, preview_concurrency: 3 }\ntail: ok\n"
   );
   assert.equal(
     updatePreviewConcurrency("head: ok\n"),
-    "head: ok\npreview:\n  concurrency: 3\n"
+    "head: ok\ngeneration:\n  preview_concurrency: 3\n"
   );
 });
 
@@ -351,7 +351,7 @@ test("visual config applies multiple missing YAML fields without overlapping edi
       }),
       fields
     ),
-    "head: ok\nnightly:\n  disabled: true\n  start_time: 03:30\n  timezone: Asia/Shanghai\npreview:\n  concurrency: 3\ntags:\n  builtin_pack_enabled: false\n"
+    "head: ok\nnightly:\n  disabled: true\n  start_time: 03:30\n  timezone: Asia/Shanghai\ngeneration:\n  preview_concurrency: 3\ntags:\n  builtin_pack_enabled: false\n"
   );
 });
 
@@ -393,4 +393,53 @@ test("changed visual fields includes preview concurrency", () => {
     ),
     new Set<VisualField>(["previewConcurrency"])
   );
+});
+
+
+test("global generation budgets default to one and validate all three limits", () => {
+  const draft = parseConfig("{}\n").draft;
+  assert.equal(draft.thumbnailConcurrency, 1);
+  assert.equal(draft.previewConcurrency, 1);
+  assert.equal(draft.fingerprintConcurrency, 1);
+  for (const key of ["thumbnail_concurrency", "preview_concurrency", "fingerprint_concurrency"]) {
+    for (const value of ["0", "-1", "6", "1.5", "true", '"2"']) {
+      assert.throws(() => parseConfig(`generation: { ${key}: ${value} }\n`));
+    }
+  }
+  assert.throws(() => parseConfig("generation: []\n"));
+});
+
+test("global budget edits preserve YAML styles and unrelated settings", () => {
+  const fields = new Set<VisualField>(["thumbnailConcurrency", "previewConcurrency", "fingerprintConcurrency"]);
+  const draft = settingsDraft({ thumbnailConcurrency: 2, previewConcurrency: 4, fingerprintConcurrency: 3 });
+  const cases = [
+    ["head: ok\n", "head: ok\ngeneration:\n  thumbnail_concurrency: 2\n  preview_concurrency: 4\n  fingerprint_concurrency: 3\n"],
+    ["generation: { thumbnail_concurrency: 1, preview_concurrency: 1, fingerprint_concurrency: 1, future: yes } # keep\n", "generation: { thumbnail_concurrency: 2, preview_concurrency: 4, fingerprint_concurrency: 3, future: yes } # keep\n"],
+    ["generation:\r\n  thumbnail_concurrency: 1 # cover\r\n  preview_concurrency: 1 # preview\r\n  fingerprint_concurrency: 1 # IO\r\n", "generation:\r\n  thumbnail_concurrency: 2 # cover\r\n  preview_concurrency: 4 # preview\r\n  fingerprint_concurrency: 3 # IO\r\n"],
+  ];
+  for (const [source, expected] of cases) {
+    const result = applyVisualFields(source, draft, fields);
+    assert.equal(result, expected);
+    const parsed = parseConfig(result).draft;
+    assert.equal(parsed.thumbnailConcurrency, 2);
+    assert.equal(parsed.previewConcurrency, 4);
+    assert.equal(parsed.fingerprintConcurrency, 3);
+  }
+  for (const source of ["generation: null\n", "generation: # keep\n", "{ generation: {} }\n"]) {
+    const result = parseConfig(applyVisualFields(source, draft, fields)).draft;
+    assert.equal(result.thumbnailConcurrency, 2);
+    assert.equal(result.previewConcurrency, 4);
+    assert.equal(result.fingerprintConcurrency, 3);
+  }
+  assert.deepEqual(changedVisualFields(settingsDraft(), draft), fields);
+});
+
+test("removed per-drive and combined settings do not control the independent budgets", () => {
+  const source = "preview: { concurrency: 5 }\ngeneration: { media_concurrency: 4 }\n";
+  const draft = parseConfig(source).draft;
+  assert.equal(draft.thumbnailConcurrency, 1);
+  assert.equal(draft.previewConcurrency, 1);
+  const updated = updatePreviewConcurrency(source, 3);
+  assert.equal(parseConfig(updated).draft.previewConcurrency, 3);
+  assert.match(updated, /preview_concurrency: 3/);
 });

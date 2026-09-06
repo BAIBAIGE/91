@@ -333,7 +333,7 @@ func TestPreviewWorkerDeduplicatesQueuedVideos(t *testing.T) {
 	}
 }
 
-func TestPreviewWorkerRunsConfiguredConsumersConcurrently(t *testing.T) {
+func TestSingleDriveUsesGlobalPreviewConcurrency(t *testing.T) {
 	ctx := context.Background()
 	cat, first := seedPreviewTestVideo(t, "preview-concurrent-1")
 	videos := []*catalog.Video{first}
@@ -357,7 +357,7 @@ func TestPreviewWorkerRunsConfiguredConsumersConcurrently(t *testing.T) {
 		release: release,
 	}
 	worker := NewWorker(gen, cat, &concurrentPreviewDrive{})
-	worker.SetConcurrency(3)
+	worker.Limiter.SetLimit(3)
 	runCtx, cancel := context.WithCancel(ctx)
 	runDone := make(chan struct{})
 	go func() {
@@ -418,7 +418,7 @@ func TestPreviewWorkerRunsConfiguredConsumersConcurrently(t *testing.T) {
 	}
 }
 
-func TestPreviewWorkerAppliesConcurrencyUpdatesWhileRunning(t *testing.T) {
+func TestPreviewWorkerAppliesGlobalConcurrencyUpdatesWhileRunning(t *testing.T) {
 	ctx := context.Background()
 	cat, first := seedPreviewTestVideo(t, "preview-resize-1")
 	second := *first
@@ -434,7 +434,7 @@ func TestPreviewWorkerAppliesConcurrencyUpdatesWhileRunning(t *testing.T) {
 		release: release,
 	}
 	worker := NewWorker(gen, cat, &concurrentPreviewDrive{})
-	worker.SetConcurrency(1)
+	worker.Limiter.SetLimit(1)
 	runCtx, cancel := context.WithCancel(ctx)
 	runDone := make(chan struct{})
 	go func() {
@@ -464,10 +464,7 @@ func TestPreviewWorkerAppliesConcurrencyUpdatesWhileRunning(t *testing.T) {
 	case <-time.After(100 * time.Millisecond):
 	}
 
-	worker.SetConcurrency(2)
-	if got := worker.CurrentConcurrency(); got != 2 {
-		t.Fatalf("current concurrency = %d, want 2", got)
-	}
+	worker.Limiter.SetLimit(2)
 	select {
 	case <-gen.started:
 	case <-time.After(2 * time.Second):

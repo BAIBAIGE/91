@@ -29,8 +29,8 @@ import { useAdminRouteRevalidation } from "./AdminRouteCache";
 import { SettingsRow, SettingsSection } from "./settings/SettingsSection";
 import {
   DEFAULT_DRAFT,
-  MAX_PREVIEW_CONCURRENCY,
-  MIN_PREVIEW_CONCURRENCY,
+  MAX_GENERATION_CONCURRENCY,
+  MIN_GENERATION_CONCURRENCY,
   applyVisualFields,
   changedVisualFields,
   isValidStartTime,
@@ -83,10 +83,24 @@ const NIGHTLY_TIMEZONE_OPTIONS = [
   "America/Los_Angeles",
 ] as const;
 
-const PREVIEW_CONCURRENCY_OPTIONS = Array.from(
-  { length: MAX_PREVIEW_CONCURRENCY - MIN_PREVIEW_CONCURRENCY + 1 },
-  (_, index) => MIN_PREVIEW_CONCURRENCY + index
+const GENERATION_CONCURRENCY_OPTIONS = Array.from(
+  { length: MAX_GENERATION_CONCURRENCY - MIN_GENERATION_CONCURRENCY + 1 },
+  (_, index) => MIN_GENERATION_CONCURRENCY + index
 );
+const GENERATION_FIELDS = [
+  {
+    field: "thumbnailConcurrency",
+    label: "封面并发",
+  },
+  {
+    field: "previewConcurrency",
+    label: "预览并发",
+  },
+  {
+    field: "fingerprintConcurrency",
+    label: "视频指纹并发",
+  },
+] as const;
 const CONFIG_FIELD_COUNT = Object.keys(DEFAULT_DRAFT).length;
 
 const SECTION_META: Array<{
@@ -101,7 +115,7 @@ const SECTION_META: Array<{
   },
   {
     id: "config-preview",
-    title: "预览视频",
+    title: "媒体生成",
     icon: Film,
   },
   {
@@ -154,17 +168,22 @@ export function SettingsPage() {
   dirtyRef.current = dirty;
   const timeValid = isValidStartTime(draft.nightlyStartTime);
   const timezoneValid = isValidTimezone(draft.nightlyTimezone);
-  const previewConcurrencyValid =
-    Number.isInteger(draft.previewConcurrency) &&
-    draft.previewConcurrency >= MIN_PREVIEW_CONCURRENCY &&
-    draft.previewConcurrency <= MAX_PREVIEW_CONCURRENCY;
+  const generationConcurrencyValid = GENERATION_FIELDS.every(
+    ({ field }) =>
+      Number.isInteger(draft[field]) &&
+      draft[field] >= MIN_GENERATION_CONCURRENCY &&
+      draft[field] <= MAX_GENERATION_CONCURRENCY
+  );
   const timezoneIsBuiltIn = NIGHTLY_TIMEZONE_OPTIONS.some(
     (timezone) => timezone === draft.nightlyTimezone
   );
   const controlsDisabled = loading || saving || loaded === null;
   const scheduleControlsDisabled = controlsDisabled || draft.nightlyDisabled;
   const hasConfigError =
-    Boolean(sourceError) || !timeValid || !timezoneValid || !previewConcurrencyValid;
+    Boolean(sourceError) ||
+    !timeValid ||
+    !timezoneValid ||
+    !generationConcurrencyValid;
   const statusClass = loading || saving
     ? "is-busy"
     : hasConfigError
@@ -271,7 +290,7 @@ export function SettingsPage() {
       !dirty ||
       !timeValid ||
       !timezoneValid ||
-      !previewConcurrencyValid ||
+      !generationConcurrencyValid ||
       sourceError ||
       saving
     )
@@ -635,47 +654,44 @@ export function SettingsPage() {
                   id="config-preview"
                   index="02"
                   icon={<Film size={16} />}
-                  title="预览视频"
-                  description="控制每个存储生成预览视频的并发数"
+                  title="媒体生成"
+                  description="控制视频资源生成的并发数，请根据服务器性能和网盘API风控调整，如果性能允许推荐 1-3-1"
                 >
-                  <SettingsRow
-                    label="并发数"
-                    description="请根据服务器性能和网盘API并发风控适当调整，建议最高不超过3"
-                    descriptionID="preview-concurrency-description"
-                    htmlFor="preview-concurrency"
-                    layout="inline"
-                  >
-                    <div className="admin-config-control admin-config-control--picker">
-                      <div
-                        className={`admin-config-picker-field admin-config-picker-field--concurrency${
-                          !previewConcurrencyValid ? " is-invalid" : ""
-                        }${controlsDisabled ? " is-disabled" : ""}`}
-                      >
-                        <span className="admin-config-picker-field__value" aria-hidden="true">
-                          {draft.previewConcurrency}
-                        </span>
-                        <select
-                          id="preview-concurrency"
-                          value={draft.previewConcurrency}
-                          disabled={controlsDisabled}
-                          aria-invalid={!previewConcurrencyValid}
-                          aria-describedby="preview-concurrency-description"
-                          onChange={(event) =>
-                            updateVisualField(
-                              "previewConcurrency",
-                              Number(event.target.value)
-                            )
-                          }
+                  {GENERATION_FIELDS.map(({ field, label }) => (
+                    <SettingsRow
+                      key={field}
+                      label={label}
+                      htmlFor={field}
+                      layout="inline"
+                    >
+                      <div className="admin-config-control admin-config-control--picker">
+                        <div
+                          className={`admin-config-picker-field admin-config-picker-field--concurrency${
+                            controlsDisabled ? " is-disabled" : ""
+                          }`}
                         >
-                          {PREVIEW_CONCURRENCY_OPTIONS.map((concurrency) => (
-                            <option key={concurrency} value={concurrency}>
-                              {concurrency}
-                            </option>
-                          ))}
-                        </select>
+                          <span className="admin-config-picker-field__value" aria-hidden="true">
+                            {draft[field]}
+                          </span>
+                          <select
+                            id={field}
+                            value={draft[field]}
+                            disabled={controlsDisabled}
+                            aria-invalid={!generationConcurrencyValid}
+                            onChange={(event) =>
+                              updateVisualField(field, Number(event.target.value))
+                            }
+                          >
+                            {GENERATION_CONCURRENCY_OPTIONS.map((concurrency) => (
+                              <option key={concurrency} value={concurrency}>
+                                {concurrency}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
                       </div>
-                    </div>
-                  </SettingsRow>
+                    </SettingsRow>
+                  ))}
                 </SettingsSection>
               )}
               {activeSection === "config-tags" && (
@@ -757,7 +773,7 @@ export function SettingsPage() {
               !dirty ||
               !timeValid ||
               !timezoneValid ||
-              !previewConcurrencyValid ||
+              !generationConcurrencyValid ||
               Boolean(sourceError)
             }
             title="预览并保存配置"

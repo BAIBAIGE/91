@@ -1195,6 +1195,7 @@ func (a *App) newDriveGenerationWorkers(drv drives.Drive) (*preview.Worker, *pre
 		previewCfg = preview.Config{
 			FFmpegPath:      a.cfg.Preview.FFmpegPath,
 			FFprobePath:     a.cfg.Preview.FFprobePath,
+			FFmpegThreads:   a.cfg.Preview.FFmpegThreads,
 			DurationSeconds: a.cfg.Preview.DurationSeconds,
 			Width:           a.cfg.Preview.Width,
 			Segments:        a.cfg.Preview.Segments,
@@ -1204,6 +1205,9 @@ func (a *App) newDriveGenerationWorkers(drv drives.Drive) (*preview.Worker, *pre
 	gen := preview.New(previewCfg)
 	previewWorker := preview.NewWorker(gen, a.cat, drv)
 	thumbWorker := preview.NewThumbWorker(gen, a.cat, drv)
+	thumbnailLimiter, previewLimiter, fingerprintLimiter := a.generationLimits()
+	previewWorker.Limiter = previewLimiter
+	thumbWorker.Limiter = thumbnailLimiter
 	previewWorker.OnPreviewReady = func(video *catalog.Video) {
 		if !thumbWorker.EnqueueFollowUp(video) {
 			log.Printf("[thumb] dependent enqueue full drive=%s video=%s; remains pending for the next reconciliation", drv.ID(), video.ID)
@@ -1213,7 +1217,9 @@ func (a *App) newDriveGenerationWorkers(drv drives.Drive) (*preview.Worker, *pre
 		previewWorker.RateLimitCooldown = cooldown
 		thumbWorker.RateLimitCooldown = cooldown
 	}
-	fingerprintWorker := fingerprint.NewWorker(a.cat, drv, fingerprintConfigForDrive(drv))
+	fingerprintCfg := fingerprintConfigForDrive(drv)
+	fingerprintCfg.Limiter = fingerprintLimiter
+	fingerprintWorker := fingerprint.NewWorker(a.cat, drv, fingerprintCfg)
 	driveID := drv.ID()
 	gate := a.driveOperationGate(driveID)
 	generation := gate.currentGeneration()
@@ -1337,22 +1343,24 @@ func (a *App) attachScriptCrawler(d *catalog.Drive, drv *scriptcrawler.Driver) {
 	}
 
 	driveID := d.ID
+	_, _, fingerprintLimiter := a.generationLimits()
 	c := scriptcrawler.NewCrawler(scriptcrawler.CrawlerConfig{
-		Driver:          drv,
-		Catalog:         a.cat,
-		GetDriveConfig:  a.activeDriveConfig,
-		CrawlerName:     d.Name,
-		Protocol:        protocol,
-		PythonPath:      pythonPath,
-		FFmpegPath:      a.cfg.Preview.FFmpegPath,
-		FFprobePath:     a.cfg.Preview.FFprobePath,
-		ScriptPath:      scriptPath,
-		WorkDir:         workDir,
-		CommonThumbDir:  a.commonThumbsDir(),
-		LocalPreviewDir: a.cfg.Storage.LocalPreviewDir,
-		ProxyURL:        proxyURL,
-		ConfigJSON:      configJSON,
-		DisablePreview:  !d.TeaserEnabled,
+		FingerprintLimiter: fingerprintLimiter,
+		Driver:             drv,
+		Catalog:            a.cat,
+		GetDriveConfig:     a.activeDriveConfig,
+		CrawlerName:        d.Name,
+		Protocol:           protocol,
+		PythonPath:         pythonPath,
+		FFmpegPath:         a.cfg.Preview.FFmpegPath,
+		FFprobePath:        a.cfg.Preview.FFprobePath,
+		ScriptPath:         scriptPath,
+		WorkDir:            workDir,
+		CommonThumbDir:     a.commonThumbsDir(),
+		LocalPreviewDir:    a.cfg.Storage.LocalPreviewDir,
+		ProxyURL:           proxyURL,
+		ConfigJSON:         configJSON,
+		DisablePreview:     !d.TeaserEnabled,
 		OnProgress: func(progress scriptcrawler.CrawlProgress) {
 			scanned := progress.Checked
 			if scanned < progress.TotalEntries {
@@ -1413,7 +1421,6 @@ func (a *App) registerPreviewWorkersWithOptions(ctx context.Context, driveID str
 		old()
 	}
 	if worker != nil {
-		worker.SetConcurrency(a.previewConcurrencyLocked())
 		a.workers[driveID] = worker
 	} else {
 		delete(a.workers, driveID)

@@ -229,38 +229,38 @@ scanner:
 	}
 }
 
-func TestPreviewConcurrency(t *testing.T) {
+func TestGlobalPreviewConcurrency(t *testing.T) {
 	cfg, err := Parse([]byte(`
-preview:
-  concurrency: 3
+generation:
+  preview_concurrency: 3
 `))
 	if err != nil {
 		t.Fatalf("parse config: %v", err)
 	}
-	if got := cfg.Preview.Concurrency; got != 3 {
+	if got := cfg.Generation.PreviewConcurrency; got != 3 {
 		t.Fatalf("preview concurrency = %d, want 3", got)
 	}
-	maximum, err := Parse([]byte("preview:\n  concurrency: 5\n"))
+	maximum, err := Parse([]byte("generation:\n  preview_concurrency: 5\n"))
 	if err != nil {
 		t.Fatalf("parse maximum preview concurrency: %v", err)
 	}
-	if got := maximum.Preview.Concurrency; got != MaxPreviewConcurrency {
-		t.Fatalf("maximum preview concurrency = %d, want %d", got, MaxPreviewConcurrency)
+	if got := maximum.Generation.PreviewConcurrency; got != MaxGenerationConcurrency {
+		t.Fatalf("maximum preview concurrency = %d, want %d", got, MaxGenerationConcurrency)
 	}
 
 	defaults, err := Parse([]byte(`{}`))
 	if err != nil {
 		t.Fatalf("parse default config: %v", err)
 	}
-	if got := defaults.Preview.Concurrency; got != DefaultPreviewConcurrency {
-		t.Fatalf("default preview concurrency = %d, want %d", got, DefaultPreviewConcurrency)
+	if got := defaults.Generation.PreviewConcurrency; got != DefaultGenerationConcurrency {
+		t.Fatalf("default preview concurrency = %d, want %d", got, DefaultGenerationConcurrency)
 	}
 }
 
-func TestPreviewConcurrencyRejectsInvalidValue(t *testing.T) {
+func TestGlobalPreviewConcurrencyRejectsInvalidValue(t *testing.T) {
 	_, err := Parse([]byte(`
-preview:
-  concurrency: 6
+generation:
+  preview_concurrency: 6
 `))
 	if err == nil || !strings.Contains(err.Error(), "must be between 1 and 5") {
 		t.Fatalf("parse error = %v, want concurrency validation error", err)
@@ -470,4 +470,29 @@ func hasVideoExtension(exts []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func TestGenerationConcurrencyDefaultsAndValidation(t *testing.T) {
+	cfg, err := Parse([]byte("{}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Generation.ThumbnailConcurrency != 1 || cfg.Generation.PreviewConcurrency != 1 || cfg.Generation.FingerprintConcurrency != 1 || cfg.Preview.FFmpegThreads != 1 {
+		t.Fatalf("unsafe generation defaults: generation=%+v threads=%d", cfg.Generation, cfg.Preview.FFmpegThreads)
+	}
+	for _, key := range []string{"thumbnail_concurrency", "preview_concurrency", "fingerprint_concurrency"} {
+		for _, value := range []string{"-1", "6", "abc"} {
+			if _, err := Parse([]byte("generation:\n  " + key + ": " + value + "\n")); err == nil {
+				t.Fatalf("accepted %s=%s", key, value)
+			}
+		}
+		if _, err := Parse([]byte("generation:\n  " + key + ": 5\n")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, value := range []string{"-1", "17"} {
+		if _, err := Parse([]byte("preview:\n  ffmpeg_threads: " + value + "\n")); err == nil {
+			t.Fatalf("accepted threads=%s", value)
+		}
+	}
 }

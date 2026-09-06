@@ -27,6 +27,7 @@ import (
 	"github.com/video-site/backend/internal/fingerprint"
 	"github.com/video-site/backend/internal/mediaasset"
 	"github.com/video-site/backend/internal/persistence"
+	"github.com/video-site/backend/internal/tasklimit"
 	"golang.org/x/net/proxy"
 )
 
@@ -51,8 +52,9 @@ const (
 )
 
 type CrawlerConfig struct {
-	Driver  *Driver
-	Catalog *catalog.Catalog
+	FingerprintLimiter *tasklimit.Limiter
+	Driver             *Driver
+	Catalog            *catalog.Catalog
 	// GetDriveConfig can supply the task-generation snapshot while a newer
 	// desired configuration is waiting for the current crawl to finish.
 	GetDriveConfig func(context.Context, string) (*catalog.Drive, error)
@@ -745,7 +747,7 @@ func (c *Crawler) processItem(ctx context.Context, item Item) (bool, error) {
 		CreatedAt:       now,
 		UpdatedAt:       now,
 	}
-	sampled, err := fingerprint.Compute(ctx, c.cfg.Driver, v, fingerprint.Config{}, c.cfg.HTTPClient)
+	sampled, err := fingerprint.Compute(ctx, c.cfg.Driver, v, fingerprint.Config{Limiter: c.cfg.FingerprintLimiter}, c.cfg.HTTPClient)
 	if err != nil {
 		_ = os.Remove(videoPath)
 		return false, fmt.Errorf("fingerprint: %w", err)

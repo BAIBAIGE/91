@@ -1243,6 +1243,8 @@ export type ConfigSaveResult = {
     nightlyTimezone: string;
     builtinTagsEnabled: boolean;
     previewConcurrency: number;
+    thumbnailConcurrency: number;
+    fingerprintConcurrency: number;
   };
 };
 

@@ -93,22 +93,20 @@ test("configuration panel groups typed fields from the real YAML document", () =
   assert.match(apiSource, /nightlyTimezone: string/);
 });
 
-test("preview concurrency is a per-storage hot-reloadable visual setting", () => {
+test("media generation exposes three independent global concurrency controls", () => {
   assert.match(pageSource, /id: "config-preview"/);
-  assert.match(pageSource, /title="预览视频"/);
-  assert.match(pageSource, /控制每个存储生成预览视频的并发数/);
-  assert.match(pageSource, /label="并发数"/);
-  assert.match(pageSource, /请根据服务器性能和网盘API并发风控适当调整，建议最高不超过3/);
-  assert.match(pageSource, /id="preview-concurrency"/);
-  assert.match(pageSource, /PREVIEW_CONCURRENCY_OPTIONS\.map/);
-  assert.match(
-    pageSource,
-    /updateVisualField\(\s*"previewConcurrency",\s*Number\(event\.target\.value\)/
-  );
-  assert.match(configYamlSource, /previewConcurrency: number/);
-  assert.match(configYamlSource, /\["preview", "concurrency"\]/);
-  assert.match(configYamlSource, /previewConcurrencyEdits/);
-  assert.match(apiSource, /previewConcurrency: number/);
+  assert.match(pageSource, /title="媒体生成"/);
+  assert.match(pageSource, /控制视频资源生成的并发数，请根据服务器性能和网盘API风控调整，如果性能允许推荐 1-3-1/);
+  for (const label of ["封面并发", "预览并发", "视频指纹并发"]) {
+    assert.ok(pageSource.includes(`label: "${label}"`));
+  }
+  for (const field of ["thumbnailConcurrency", "previewConcurrency", "fingerprintConcurrency"]) {
+    assert.ok(configYamlSource.includes(`${field}: number`));
+    assert.ok(apiSource.includes(`${field}: number`));
+  }
+  assert.doesNotMatch(pageSource, /单盘预览并发|封面与预览总并发|PREVIEW_CONCURRENCY_OPTIONS/);
+  assert.match(pageSource, /GENERATION_CONCURRENCY_OPTIONS\.map/);
+  assert.match(configYamlSource, /integerSettingEdits/);
   assert.match(adminCss, /\.admin-config-picker-field--concurrency\s*\{/);
 });
 
@@ -443,7 +441,7 @@ test("compact configuration rows stay inline on mobile", () => {
 
   assert.match(markup, /class="admin-config-row admin-config-row--inline"/);
   assert.match(pageSource, /label="启动时间"[\s\S]*?layout="inline"/);
-  assert.match(pageSource, /label="并发数"[\s\S]*?layout="inline"/);
+  assert.match(pageSource, /label=\{label\}[\s\S]*?layout="inline"/);
   assert.match(pageSource, /label="内置标签"[\s\S]*?layout="inline"/);
   assert.match(
     adminCss,

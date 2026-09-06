@@ -54,20 +54,27 @@ tags:
   # 是否启用系统内置标签包；后台保存后会热更新。
   builtin_pack_enabled: true
 
+# 全局媒体生成额度，所有网盘（含本地上传与爬虫）共享，范围 1-5，支持热更新。
+# 默认最多同时生成 1 个封面、1 个预览、1 个指纹，三类任务独立；扫盘仍按网盘并行。
+generation:
+  thumbnail_concurrency: 1
+  preview_concurrency: 1
+  fingerprint_concurrency: 1
+
 preview:
   # 是否启用 ffmpeg 抽帧生成预览视频
   enabled: true
   # ffmpeg / ffprobe 可执行文件名或绝对路径
   ffmpeg_path: "ffmpeg"
   ffprobe_path: "ffprobe"
+  # 每个封面/预览 ffmpeg 的解码、编码和滤镜线程数，范围 1-16，修改后重启生效。
+  ffmpeg_threads: 1
   # 预览视频每段时长（秒），实际生成时每段最多 3 秒
   duration_seconds: 3
   # 兼容旧配置；当前 30 秒以下最多 3 段，30 秒及以上固定 4 段
   segments: 3
   # 预览视频宽度
   width: 480
-  # 每个存储同时处理的预览视频任务数，范围 1-5；单条视频内的片段串行生成。
-  concurrency: 1
 
 proxy:
   # 是否允许播放器为“三屏画面”请求服务端全量中转视频流。

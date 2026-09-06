@@ -16,14 +16,14 @@ import (
 )
 
 const (
-	DefaultAdminUsername      = "admin"
-	DefaultAdminPassword      = "admin123"
-	DefaultNightlyDisabled    = false
-	DefaultNightlyStartTime   = "01:00"
-	DefaultNightlyTimezone    = schedule.DefaultTimezone
-	DefaultBuiltinTagsEnabled = true
-	DefaultPreviewConcurrency = 1
-	MaxPreviewConcurrency     = 5
+	DefaultAdminUsername         = "admin"
+	DefaultAdminPassword         = "admin123"
+	DefaultNightlyDisabled       = false
+	DefaultNightlyStartTime      = "01:00"
+	DefaultNightlyTimezone       = schedule.DefaultTimezone
+	DefaultBuiltinTagsEnabled    = true
+	DefaultGenerationConcurrency = 1
+	MaxGenerationConcurrency     = 5
 )
 
 var ErrInvalidNightlyStartTime = errors.New("nightly start time must use HH:mm")
@@ -40,6 +40,7 @@ type Config struct {
 	Logging      Logging      `yaml:"logging"`
 	Scanner      Scanner      `yaml:"scanner"`
 	Preview      Preview      `yaml:"preview"`
+	Generation   Generation   `yaml:"generation"`
 	Proxy        Proxy        `yaml:"proxy"`
 	Nightly      Nightly      `yaml:"nightly"`
 	Tags         Tags         `yaml:"tags"`
@@ -265,17 +266,21 @@ type Scanner struct {
 	VideoExtensions []string `yaml:"video_extensions"`
 }
 
+// Generation bounds work across every drive, independently of scan concurrency.
+type Generation struct {
+	ThumbnailConcurrency   int `yaml:"thumbnail_concurrency"`
+	PreviewConcurrency     int `yaml:"preview_concurrency"`
+	FingerprintConcurrency int `yaml:"fingerprint_concurrency"`
+}
+
 type Preview struct {
 	Enabled         bool   `yaml:"enabled"`
 	FFmpegPath      string `yaml:"ffmpeg_path"`
 	FFprobePath     string `yaml:"ffprobe_path"`
+	FFmpegThreads   int    `yaml:"ffmpeg_threads"`
 	DurationSeconds int    `yaml:"duration_seconds"`
 	Width           int    `yaml:"width"`
 	Segments        int    `yaml:"segments"`
-	// Concurrency is the number of video-level preview tasks admitted by each
-	// attached drive's worker. Segments inside one video task run serially. It is
-	// not a process-wide shared task budget.
-	Concurrency int `yaml:"concurrency"`
 }
 
 type Proxy struct {
@@ -412,6 +417,27 @@ func (c *Config) applyDefaults() error {
 	} else if isLegacyDefaultVideoExtensions(c.Scanner.VideoExtensions) {
 		c.Scanner.VideoExtensions = append(c.Scanner.VideoExtensions, ".strm")
 	}
+	for _, field := range []struct {
+		name  string
+		value *int
+	}{
+		{"thumbnail_concurrency", &c.Generation.ThumbnailConcurrency},
+		{"preview_concurrency", &c.Generation.PreviewConcurrency},
+		{"fingerprint_concurrency", &c.Generation.FingerprintConcurrency},
+	} {
+		if *field.value == 0 {
+			*field.value = DefaultGenerationConcurrency
+		}
+		if *field.value < 1 || *field.value > MaxGenerationConcurrency {
+			return fmt.Errorf("generation.%s must be between 1 and %d", field.name, MaxGenerationConcurrency)
+		}
+	}
+	if c.Preview.FFmpegThreads == 0 {
+		c.Preview.FFmpegThreads = 1
+	}
+	if c.Preview.FFmpegThreads < 1 || c.Preview.FFmpegThreads > 16 {
+		return fmt.Errorf("preview.ffmpeg_threads must be between 1 and 16")
+	}
 	if c.Preview.FFmpegPath == "" {
 		c.Preview.FFmpegPath = "ffmpeg"
 	}
@@ -426,15 +452,6 @@ func (c *Config) applyDefaults() error {
 	}
 	if c.Preview.Segments == 0 {
 		c.Preview.Segments = 3
-	}
-	if c.Preview.Concurrency == 0 {
-		c.Preview.Concurrency = DefaultPreviewConcurrency
-	}
-	if c.Preview.Concurrency < 1 || c.Preview.Concurrency > MaxPreviewConcurrency {
-		return fmt.Errorf(
-			"preview.concurrency must be between 1 and %d",
-			MaxPreviewConcurrency,
-		)
 	}
 	if c.Nightly.CronHour <= 0 || c.Nightly.CronHour > 23 {
 		c.Nightly.CronHour = 1

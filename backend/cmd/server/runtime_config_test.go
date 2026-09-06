@@ -9,7 +9,6 @@ import (
 	"github.com/video-site/backend/internal/catalog"
 	"github.com/video-site/backend/internal/config"
 	"github.com/video-site/backend/internal/nightly"
-	"github.com/video-site/backend/internal/preview"
 )
 
 func TestConfigSavePersistsAndHotUpdatesRuntimeSettings(t *testing.T) {
@@ -28,12 +27,10 @@ func TestConfigSavePersistsAndHotUpdatesRuntimeSettings(t *testing.T) {
 		t.Fatal(err)
 	}
 	tagCacheInvalidations := 0
-	previewWorker := preview.NewWorker(nil, nil, nil)
 	app := &App{
 		cat:           cat,
 		configManager: manager,
 		onTagsChanged: func() { tagCacheInvalidations++ },
-		workers:       map[string]*preview.Worker{"drive-a": previewWorker},
 	}
 	app.nightlyRunner = nightly.New(nightly.Config{
 		Settings:  cat,
@@ -51,7 +48,7 @@ func TestConfigSavePersistsAndHotUpdatesRuntimeSettings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	next, err := manager.ReplaceYAML([]byte("nightly:\n  disabled: true\n  start_time: \"00:45\"\n  timezone: Asia/Shanghai\ntags:\n  builtin_pack_enabled: false\npreview:\n  concurrency: 4\n"), version)
+	next, err := manager.ReplaceYAML([]byte("nightly:\n  disabled: true\n  start_time: \"00:45\"\n  timezone: Asia/Shanghai\ntags:\n  builtin_pack_enabled: false\ngeneration:\n  preview_concurrency: 4\n  thumbnail_concurrency: 2\n  fingerprint_concurrency: 3\n"), version)
 	if err != nil {
 		t.Fatalf("replace config: %v", err)
 	}
@@ -76,13 +73,16 @@ func TestConfigSavePersistsAndHotUpdatesRuntimeSettings(t *testing.T) {
 	if next.RestartRequired {
 		t.Fatal("preview concurrency should hot update without a restart")
 	}
-	if next.Settings.PreviewConcurrency != 4 || previewWorker.CurrentConcurrency() != 4 {
-		t.Fatalf("preview concurrency settings/worker = %d/%d, want 4/4", next.Settings.PreviewConcurrency, previewWorker.CurrentConcurrency())
+	if next.Settings.PreviewConcurrency != 4 || next.Settings.ThumbnailConcurrency != 2 || next.Settings.FingerprintConcurrency != 3 {
+		t.Fatalf("global settings not applied: %+v", next.Settings)
 	}
-	lateWorker := preview.NewWorker(nil, nil, nil)
-	app.registerPreviewWorkersWithOptions(context.Background(), "drive-b", lateWorker, nil, nil, nil, false)
-	if got := lateWorker.CurrentConcurrency(); got != 4 {
-		t.Fatalf("late attached drive preview concurrency = %d, want 4", got)
+	thumbnails, previews, fingerprints := app.generationLimits()
+	assertBudgetAvailable(t, thumbnails, 2)
+	assertBudgetAvailable(t, previews, 4)
+	assertBudgetAvailable(t, fingerprints, 3)
+	latePreview, lateThumb, lateFingerprint := app.newDriveGenerationWorkers(&serverFakeDrive{})
+	if latePreview.Limiter != previews || lateThumb.Limiter != thumbnails || lateFingerprint.Config.Limiter != fingerprints {
+		t.Fatal("late attached drive did not receive live global limits")
 	}
 	enabled, err := cat.BuiltinTagsEnabled(context.Background())
 	if err != nil || enabled {
