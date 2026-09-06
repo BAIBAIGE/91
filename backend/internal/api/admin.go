@@ -14,6 +14,7 @@ import (
 	"github.com/video-site/backend/internal/catalog"
 	"github.com/video-site/backend/internal/config"
 	"github.com/video-site/backend/internal/drives/quark"
+	"github.com/video-site/backend/internal/scanjob"
 )
 
 type DriveConfigUpdateScope uint8
@@ -157,14 +158,15 @@ type DriveDirEntry struct {
 }
 
 type GenerationStatus struct {
-	State         string `json:"state"`
-	CurrentTitle  string `json:"currentTitle,omitempty"`
-	QueueLength   int    `json:"queueLength"`
-	CooldownUntil string `json:"cooldownUntil,omitempty"`
-	ScannedCount  int    `json:"scannedCount"`
-	AddedCount    int    `json:"addedCount"`
-	DoneCount     int    `json:"doneCount"`
-	TotalCount    int    `json:"totalCount"`
+	Result        *scanjob.Result `json:"result,omitempty"`
+	State         string          `json:"state"`
+	CurrentTitle  string          `json:"currentTitle,omitempty"`
+	QueueLength   int             `json:"queueLength"`
+	CooldownUntil string          `json:"cooldownUntil,omitempty"`
+	ScannedCount  int             `json:"scannedCount"`
+	AddedCount    int             `json:"addedCount"`
+	DoneCount     int             `json:"doneCount"`
+	TotalCount    int             `json:"totalCount"`
 }
 
 type DriveGenerationStatuses struct {
@@ -176,11 +178,14 @@ type DriveGenerationStatuses struct {
 }
 
 type NightlyJobStatus struct {
-	State          string `json:"state"`
-	Running        bool   `json:"running"`
-	Queued         bool   `json:"queued"`
-	StartedAt      string `json:"startedAt,omitempty"`
-	LastFinishedAt string `json:"lastFinishedAt,omitempty"`
+	Outcome        scanjob.State    `json:"outcome,omitempty"`
+	ScanResults    []scanjob.Result `json:"scanResults,omitempty"`
+	Issues         []scanjob.Issue  `json:"issues,omitempty"`
+	State          string           `json:"state"`
+	Running        bool             `json:"running"`
+	Queued         bool             `json:"queued"`
+	StartedAt      string           `json:"startedAt,omitempty"`
+	LastFinishedAt string           `json:"lastFinishedAt,omitempty"`
 }
 
 type TagJobStatus struct {

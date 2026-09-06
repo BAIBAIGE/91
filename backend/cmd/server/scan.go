@@ -16,6 +16,7 @@ import (
 	"github.com/video-site/backend/internal/fingerprint"
 	"github.com/video-site/backend/internal/persistence"
 	"github.com/video-site/backend/internal/preview"
+	"github.com/video-site/backend/internal/scanjob"
 	"github.com/video-site/backend/internal/scanner"
 )
 
@@ -49,43 +50,96 @@ func (a *App) scheduleScan(ctx context.Context, driveID string) bool {
 }
 
 // runScan is the synchronous entry point used by the nightly pipeline.
-func (a *App) runScan(ctx context.Context, driveID string) {
+func (a *App) runScan(ctx context.Context, driveID string) scanjob.Result {
 	taskCtx, done, admitted := a.registerDriveTaskContext(ctx, driveID, driveTaskScopeScan)
 	if !admitted {
 		log.Printf("[scan] drive=%s configuration update in progress, reject direct scan", driveID)
-		return
+		return skippedScanResult(driveID, "配置正在更新，本次扫描已跳过")
 	}
 	defer done()
 	if !a.beginDriveScanOrCrawl(driveID) {
 		log.Printf("[scan] drive=%s already queued or running, skip direct scan", driveID)
-		return
+		return skippedScanResult(driveID, "该网盘已有扫描任务，本次扫描已跳过")
 	}
 	defer a.endDriveScanOrCrawl(driveID)
-	a.runScanWithTaskContext(taskCtx, driveID)
+	return a.runScanWithTaskContext(taskCtx, driveID)
 }
 
-func (a *App) runScanWithTaskContext(ctx context.Context, driveID string) {
+func skippedScanResult(driveID, message string) scanjob.Result {
+	now := time.Now()
+	return scanjob.Result{DriveID: driveID, State: scanjob.Skipped, Message: message, StartedAt: now, FinishedAt: now}
+}
+
+func (a *App) runScanWithTaskContext(ctx context.Context, driveID string) (report scanjob.Result) {
+	report = scanjob.Result{DriveID: driveID, State: scanjob.Succeeded, StartedAt: time.Now()}
+	defer func() {
+		report.FinishedAt = time.Now()
+		if report.State == scanjob.Succeeded && report.ErrorCount > 0 {
+			report.State = scanjob.Partial
+		}
+		if err := ctx.Err(); err != nil {
+			report.State = scanjob.Canceled
+			report.Message = err.Error()
+		}
+		// Cancellation must not erase the outcome. This bounded write finishes
+		// before the drive task admission is released, including during stop.
+		saveCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		if err := persistence.RLockContext(saveCtx); err != nil {
+			report.AddIssue("save_result", err)
+		} else {
+			err := a.cat.SaveScanResult(saveCtx, report)
+			persistence.RUnlock()
+			if err != nil {
+				report.AddIssue("save_result", err)
+				log.Printf("[scan] save result drive=%s: %v", driveID, err)
+			}
+		}
+		if report.State == scanjob.Succeeded && report.ErrorCount > 0 {
+			report.State = scanjob.Partial
+		}
+		log.Printf("[scan] drive=%s finished state=%s scanned=%d added=%d errors=%d", driveID, report.State, report.ScannedCount, report.AddedCount, report.ErrorCount)
+	}()
+	fail := func(stage string, err error) {
+		report.State = scanjob.Failed
+		report.Message = err.Error()
+		if ctx.Err() == nil {
+			report.AddIssue(stage, err)
+		}
+	}
 	if err := ctx.Err(); err != nil {
 		log.Printf("[scan] drive=%s canceled before start: %v", driveID, err)
-		return
+		return report
 	}
 	if err := a.ensureDriveAttached(ctx, driveID); err != nil {
 		log.Printf("[scan] drive=%s attach failed: %v", driveID, err)
-		return
+		fail("attach", err)
+		return report
 	}
 	drv, ok := a.registry.Get(driveID)
 	if !ok {
 		log.Printf("[scan] drive=%s not attached", driveID)
-		return
+		fail("attach", errors.New("网盘未挂载"))
+		return report
 	}
 	driveConfig, err := a.activeDriveConfig(ctx, driveID)
 	if err != nil {
 		log.Printf("[scan] get active drive config %s: %v", driveID, err)
-		return
+		fail("config", err)
+		return report
 	}
 	rateLimitBudget := scanner.NewRateLimitBudget()
 	result, err := a.scanDrive(ctx, drv, driveConfig, rateLimitBudget)
+	report.ScannedCount = result.Stats.Scanned
+	report.AddedCount = result.Stats.Added
+	report.UpdatedCount = result.Updated
+	report.DuplicateCount = result.Duplicates
+	report.TombstonedCount = result.Tombstoned
+	for _, issue := range result.Issues {
+		report.AddIssue(string(issue.Stage), issue)
+	}
 	if err != nil {
+		fail("scan", err)
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			log.Printf("[scan] drive=%s canceled: %v", driveID, ctxErr)
 		} else if errors.Is(err, scanner.ErrRateLimitBudgetExhausted) {
@@ -93,11 +147,11 @@ func (a *App) runScanWithTaskContext(ctx context.Context, driveID string) {
 		} else {
 			log.Printf("[scan] drive=%s error: %v", driveID, err)
 		}
-		return
+		return report
 	}
 	if err := ctx.Err(); err != nil {
 		log.Printf("[scan] drive=%s canceled after reconciliation: %v", driveID, err)
-		return
+		return report
 	}
 
 	stats := result.Stats
@@ -119,9 +173,10 @@ func (a *App) runScanWithTaskContext(ctx context.Context, driveID string) {
 		ctx, drv, driveConfig, result.Snapshot.SeenFileIDs, rateLimitBudget,
 	)
 	if skipCleanupErr != nil {
+		report.AddIssue("skip_cleanup", skipCleanupErr)
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			log.Printf("[skip-cleanup] drive=%s canceled: %v", driveID, ctxErr)
-			return
+			return report
 		}
 		if errors.Is(skipCleanupErr, scanner.ErrRateLimitBudgetExhausted) {
 			log.Printf("[skip-cleanup] drive=%s rate-limit retry budget exhausted; continuing cleanup: %v", driveID, skipCleanupErr)
@@ -130,15 +185,16 @@ func (a *App) runScanWithTaskContext(ctx context.Context, driveID string) {
 		}
 	}
 	if err := a.cleanupScanResult(ctx, drv, result, skipCleanupResult.ProtectUnlocated); err != nil {
+		report.AddIssue("presence_cleanup", err)
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			log.Printf("[cleanup] canceled stale cleanup drive=%s kind=%s: %v", drv.ID(), drv.Kind(), ctxErr)
-			return
+			return report
 		}
 		log.Printf("[cleanup] stale cleanup drive=%s kind=%s error: %v", drv.ID(), drv.Kind(), err)
 	}
 	if err := ctx.Err(); err != nil {
 		log.Printf("[scan] drive=%s canceled before derived-task dispatch: %v", driveID, err)
-		return
+		return report
 	}
 
 	a.mu.Lock()
@@ -149,6 +205,7 @@ func (a *App) runScanWithTaskContext(ctx context.Context, driveID string) {
 	enqueueNewScanVideos(result.NewVideos, thumbnailWorker, fingerprintWorker)
 	a.enqueueFingerprintBackfill(ctx, driveID, fingerprintWorker)
 	a.enqueueDriveGeneration(ctx, driveID, previewWorker, thumbnailWorker)
+	return report
 }
 
 func (a *App) scanDrive(

@@ -1921,7 +1921,10 @@ func TestNightlyTargetsComeFromCatalogBeforeDriveAttach(t *testing.T) {
 	}
 
 	app := &App{cat: cat}
-	scanIDs := app.listScanTargetIDs(ctx)
+	scanIDs, err := app.listScanTargetIDs(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(scanIDs) != 2 || scanIDs[0] != "115" || scanIDs[1] != "pikpak" {
 		t.Fatalf("scan target ids = %#v, want 115 and pikpak from catalog", scanIDs)
 	}
@@ -3470,7 +3473,10 @@ func TestRunScanContinuesAfterNonfatalSkipCleanupError(t *testing.T) {
 		cfg: &config.Config{Scanner: config.Scanner{VideoExtensions: []string{".mp4"}}},
 		cat: cat, registry: registry,
 	}
-	app.runScan(ctx, driveID)
+	result := app.runScan(ctx, driveID)
+	if result.State != "partial" || result.ErrorCount == 0 {
+		t.Fatalf("cleanup failure was not reported: %+v", result)
+	}
 	if _, err := cat.GetVideo(ctx, "fake-"+driveID+"-new-video"); err != nil {
 		t.Fatalf("normal scan did not continue after policy error: %v", err)
 	}

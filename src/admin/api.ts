@@ -521,6 +521,7 @@ export type AdminDrive = {
 };
 
 export type DriveGenerationStatus = {
+  result?: ScanResult;
   state: string;
   currentTitle?: string;
   queueLength: number;
@@ -1307,6 +1308,25 @@ export async function updateConfigYAML(
 
 // ---------- Jobs ----------
 
+export type ScanOutcome = "succeeded" | "partial" | "failed" | "canceled" | "skipped";
+
+export type ScanIssue = { stage: string; message: string };
+
+export type ScanResult = {
+  driveId: string;
+  state: ScanOutcome;
+  startedAt: string;
+  finishedAt: string;
+  scannedCount: number;
+  addedCount: number;
+  updatedCount: number;
+  duplicateCount: number;
+  tombstonedCount: number;
+  errorCount: number;
+  message?: string;
+  issues?: ScanIssue[];
+};
+
 /**
  * 扫描所有已配置的真实网盘，等待新视频资产处理完成后执行全库视频去重。
  * 不触发脚本爬虫、爬虫上传或恢复，也不占用当天的定时 nightly 执行标记。
@@ -1318,6 +1338,9 @@ export type MaintenanceJobStatus = {
   queued: boolean;
   startedAt?: string;
   lastFinishedAt?: string;
+  outcome?: ScanOutcome;
+  scanResults?: ScanResult[];
+  issues?: ScanIssue[];
 };
 
 export function getScanAllJobStatus() {

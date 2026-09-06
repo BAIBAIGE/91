@@ -1961,6 +1961,16 @@ body.admin-mobile-nav-open {
 .admin-generation-state.is-queued { background: rgba(255, 255, 255, 0.06); color: var(--text-muted); }
 .admin-generation-state.is-idle { background: var(--success-soft); color: var(--success); }
 
+.admin-scan-result {
+  margin-top: var(--space-3);
+  color: var(--text-muted);
+  font-size: var(--font-sm);
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.admin-scan-result p { margin: 6px 0; }
+.admin-scan-result__summary { white-space: pre-wrap; }
+
 /* =========================================================
  * Modal
  * ========================================================= */

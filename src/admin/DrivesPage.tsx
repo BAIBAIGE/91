@@ -46,6 +46,7 @@ import {
 } from "./drive/credentials";
 import { DeleteDriveModal } from "./drive/DeleteDriveModal";
 import { SkipDirsPanel } from "./drive/SkipDirsPanel";
+import { isGenerationBusy } from "./drive/scanResults";
 import { AdminEmptyVisual } from "./AdminEmptyVisual";
 import { useAdminFloatingActionSpace } from "./useAdminFloatingActionSpace";
 import {
@@ -64,7 +65,7 @@ function isDriveBusy(d: api.AdminDrive) {
     d.fingerprintGenerationStatus,
   ].some((status) => {
     const state = status?.state || "idle";
-    return state !== "idle";
+    return isGenerationBusy(state);
   });
 }
 

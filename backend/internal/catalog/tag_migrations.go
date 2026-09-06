@@ -15,6 +15,12 @@ import (
 )
 
 func (c *Catalog) migrate(ctx context.Context) error {
+	if err := c.addColumnIfMissing(ctx, "scans", "result", "TEXT"); err != nil {
+		return err
+	}
+	if _, err := c.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_scans_drive_id ON scans(drive_id, id)`); err != nil {
+		return err
+	}
 	if err := c.addColumnIfMissing(ctx, "videos", "tags_manual", "INTEGER DEFAULT 0"); err != nil {
 		return err
 	}

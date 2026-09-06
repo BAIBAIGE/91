@@ -239,7 +239,8 @@ CREATE TABLE IF NOT EXISTS scans (
     finished_at INTEGER,
     scanned     INTEGER DEFAULT 0,
     added       INTEGER DEFAULT 0,
-    error       TEXT
+    error       TEXT,
+    result      TEXT
 );
 
 -- Presence-authoritative discovery removes eligible missing files immediately.

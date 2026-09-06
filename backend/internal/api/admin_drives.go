@@ -28,6 +28,11 @@ func (a *AdminServer) handleListDrives(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
+	scanResults, err := a.Catalog.LatestScanResults(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
 	// 出参不返回凭证明文，只告诉前端是否已配置
 	type out struct {
 		ID            string `json:"id"`
@@ -73,6 +78,12 @@ func (a *AdminServer) handleListDrives(w http.ResponseWriter, r *http.Request) {
 		thumbCounts := assetStats.Thumbnails[d.ID]
 		fingerprintCount := assetStats.Fingerprints[d.ID]
 		generation := generationStatuses[d.ID]
+		if result, ok := scanResults[d.ID]; ok && (generation.Scan.State == "" || generation.Scan.State == "idle") {
+			generation.Scan.State = string(result.State)
+			generation.Scan.ScannedCount = result.ScannedCount
+			generation.Scan.AddedCount = result.AddedCount
+			generation.Scan.Result = &result
+		}
 		if generation.Scan.State == "" {
 			generation.Scan.State = "idle"
 		}

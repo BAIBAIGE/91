@@ -149,7 +149,7 @@ func (s *Scanner) reconcileExisting(
 		}
 	}
 
-	duplicate, err := s.findDuplicate(ctx, entry.Hash, entry.Name, entry.Size, existing.ID)
+	duplicate, err := s.findDuplicate(ctx, entry.Hash, entry.Name, entry.Size, existing.ID, result.Snapshot)
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctxErr
@@ -180,7 +180,7 @@ func (s *Scanner) insertNew(
 	result *Result,
 ) error {
 	entry := file.Entry
-	duplicate, err := s.findDuplicate(ctx, entry.Hash, entry.Name, entry.Size, id)
+	duplicate, err := s.findDuplicate(ctx, entry.Hash, entry.Name, entry.Size, id, result.Snapshot)
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctxErr
@@ -266,27 +266,25 @@ func assignmentLabels(assignments []catalog.TagAssignment) []string {
 	return labels
 }
 
-func (s *Scanner) findDuplicate(ctx context.Context, hash, fileName string, size int64, currentID string) (*catalog.Video, error) {
-	if hash != "" {
-		duplicate, err := s.Catalog.FindVideoByContentHash(ctx, hash)
-		if err != nil && !errors.Is(err, sql.ErrNoRows) {
-			return nil, err
-		}
-		if duplicate != nil && duplicate.ID != currentID {
-			return duplicate, nil
-		}
-	}
-	if fileName == "" || size <= 0 {
-		return nil, nil
-	}
-	duplicate, err := s.Catalog.FindVideoByFileSignature(ctx, fileName, size)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+func (s *Scanner) findDuplicate(ctx context.Context, hash, fileName string, size int64, currentID string, snapshot Snapshot) (*catalog.Video, error) {
+	candidates, err := s.Catalog.ListVideoDuplicateCandidates(ctx, hash, fileName, size)
+	if err != nil {
 		return nil, err
 	}
-	if duplicate == nil || duplicate.ID == currentID {
-		return nil, nil
+	for _, candidate := range candidates {
+		if candidate.ID == currentID {
+			continue
+		}
+		if candidate.DriveID == snapshot.DriveID {
+			// Only a source observed in this scan can represent another live file.
+			// A stale row may be removed by presence or skip-policy cleanup later.
+			if _, seen := snapshot.SeenFileIDs[candidate.FileID]; !seen {
+				continue
+			}
+		}
+		return candidate, nil
 	}
-	return duplicate, nil
+	return nil, nil
 }
 
 func videoIDFilePart(fileID string) string {

@@ -282,11 +282,11 @@ func (a *App) regenFailedFingerprints(ctx context.Context, driveID string) {
 // listScanTargetIDs 返回 nightly Phase 1 应扫描的所有 drive ID
 // （非爬虫、非 localupload）。它直接读 catalog，而不是 registry，这样
 // 进程刚启动、云盘还在后台挂载时，nightly 也不会漏掉配置过的 drive。
-func (a *App) listScanTargetIDs(ctx context.Context) []string {
+func (a *App) listScanTargetIDs(ctx context.Context) ([]string, error) {
 	all, err := a.cat.ListDrives(ctx)
 	if err != nil {
 		log.Printf("[nightly] list scan target drives: %v", err)
-		return nil
+		return nil, err
 	}
 	out := make([]string, 0, len(all))
 	for _, d := range all {
@@ -295,7 +295,7 @@ func (a *App) listScanTargetIDs(ctx context.Context) []string {
 		}
 		out = append(out, d.ID)
 	}
-	return out
+	return out, nil
 }
 
 // listCrawlerDriveIDs 返回 nightly Phase 2 应触发爬取的爬虫 drive ID 列表。

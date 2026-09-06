@@ -1,5 +1,6 @@
 import { Activity } from "lucide-react";
 import * as api from "../api";
+import { ScanResultDetails } from "./ScanResultDetails";
 import {
   generationStateLabel,
   generationStateClass,
@@ -213,6 +214,10 @@ export function DriveGenerationPanel({
         />
       </div>
 
+      {d.scanGenerationStatus?.result && (
+        <ScanResultDetails result={d.scanGenerationStatus.result} />
+      )}
+
       <div className="admin-detail-actions admin-generation-actions">
         <button
           className="admin-btn"
@@ -261,7 +266,7 @@ function DriveGenCol({
   const detail = generationDetail(status);
   const title = generationTitle(status, detail);
   const stateLabel = label === "抓取" && state === "scanning" ? "抓取中" : generationStateLabel(state);
-  const showScanProgress = !showCounts && (state === "scanning" || (status?.scannedCount ?? 0) > 0 || (status?.addedCount ?? 0) > 0);
+  const showScanProgress = !showCounts && (Boolean(status?.result) || state === "scanning" || (status?.scannedCount ?? 0) > 0 || (status?.addedCount ?? 0) > 0);
   const scannedLabel = label === "抓取" ? "已抓取" : "已扫描";
   return (
     <div className="admin-gen-col">
@@ -278,7 +283,7 @@ function DriveGenCol({
       {showScanProgress && (
         <div className="admin-gen-col__counts admin-gen-col__counts--scan">
           <div className="admin-gen-col__count"><span>{scannedLabel}</span><strong>{status?.scannedCount ?? 0}</strong></div>
-          <div className="admin-gen-col__count"><span>预计新增</span><strong>{status?.addedCount ?? 0}</strong></div>
+          <div className="admin-gen-col__count"><span>{status?.result ? "已新增" : "预计新增"}</span><strong>{status?.addedCount ?? 0}</strong></div>
         </div>
       )}
       {showCounts && (

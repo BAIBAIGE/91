@@ -12,6 +12,7 @@ import {
   ONEDRIVE_AUTH_MODE_CUSTOM_APP,
   ONEDRIVE_AUTH_MODE_OPENLIST_API,
 } from "./onedriveAuth";
+import { scanOutcomeClasses, scanOutcomeLabels } from "./scanResults";
 
 export type Kind = "quark" | "p115" | "p123" | "pikpak" | "wopan" | "guangyapan" | "onedrive" | "googledrive" | "webdav" | "localstorage";
 
@@ -103,6 +104,7 @@ export function maintenanceBusyText(status: { running: boolean; queued: boolean 
 }
 
 export function generationStateLabel(state: string): string {
+  if (Object.prototype.hasOwnProperty.call(scanOutcomeLabels, state)) return scanOutcomeLabels[state as keyof typeof scanOutcomeLabels];
   if (state === "scanning") return "扫盘中";
   if (state === "uploading") return "上传中";
   if (state === "generating") return "生成中";
@@ -112,6 +114,7 @@ export function generationStateLabel(state: string): string {
 }
 
 export function generationStateClass(state: string): string {
+  if (Object.prototype.hasOwnProperty.call(scanOutcomeClasses, state)) return scanOutcomeClasses[state as keyof typeof scanOutcomeClasses];
   if (state === "scanning" || state === "uploading" || state === "generating" || state === "cooling" || state === "queued") {
     if (state === "scanning" || state === "uploading") return "generating";
     return state;

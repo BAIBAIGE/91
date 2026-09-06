@@ -88,6 +88,9 @@ func (a *App) nightlyJobStatus() api.NightlyJobStatus {
 		Queued:         status.Queued,
 		StartedAt:      formatOptionalRFC3339(status.StartedAt),
 		LastFinishedAt: formatOptionalRFC3339(status.LastFinishedAt),
+		Outcome:        status.Outcome,
+		ScanResults:    status.ScanResults,
+		Issues:         status.Issues,
 	}
 }
 
