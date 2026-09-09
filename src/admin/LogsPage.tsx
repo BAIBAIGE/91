@@ -35,6 +35,7 @@ import { copyTextToClipboard } from "../lib/clipboard";
 
 const AUTO_REFRESH_STORAGE_KEY = "admin.logs.autoRefresh";
 const EMPTY_LOG_ENTRIES: api.AdminLogEntry[] = [];
+const contextKeys = ["component", "requestId", "taskId", "driveId", "videoId", "fileId", "stage"] as const;
 
 function initialAutoRefreshPreference() {
   if (typeof window === "undefined") return true;
@@ -114,7 +115,10 @@ function formatTimestamp(value: string) {
 }
 
 function formatRawLine(entry: api.AdminLogEntry) {
-  return `${formatTimestamp(entry.timestamp)} [${levelLabels[entry.level]}] [${entry.source}] ${entry.message}`;
+  const context = contextKeys.filter((key) => entry[key]).map((key) => `${key}=${JSON.stringify(entry[key])}`).join(" ");
+  const error = entry.error ? ` error=${entry.error}` : "";
+  const stack = entry.stack ? `\n${entry.stack}` : "";
+  return `${formatTimestamp(entry.timestamp)} [${levelLabels[entry.level]}] [${entry.source}] ${context ? `${context} ` : ""}${entry.message}${error}${stack}`;
 }
 
 function formatByteCount(value: number) {
@@ -201,6 +205,7 @@ export function filterRuntimeLogEntries(
       entry.bytes,
       entry.elapsed,
       entry.requestId,
+      entry.taskId, entry.component, entry.driveId, entry.videoId, entry.fileId, entry.stage, entry.error, entry.stack,
       entry.message,
     ]
       .filter((value) => value !== undefined)
@@ -245,7 +250,14 @@ export function LogsPage() {
   const [level, setLevel] = useState<api.AdminLogLevel | "">("");
   const [method, setMethod] = useState<api.AdminLogMethod | "">("");
   const [search, setSearch] = useState("");
+  const [downloading, setDownloading] = useState(false);
+  const downloadControllerRef = useRef<AbortController | null>(null);
   const deferredSearch = useDeferredValue(search.trim());
+  const [serverSearch, setServerSearch] = useState(deferredSearch);
+  useEffect(() => {
+    const timer = window.setTimeout(() => setServerSearch(deferredSearch), 250);
+    return () => window.clearTimeout(timer);
+  }, [deferredSearch]);
   const [filtersExpanded, setFiltersExpanded] = useState(false);
   const [showRawLogs, setShowRawLogs] = useState(false);
   const [autoRefresh, setAutoRefresh] = useState(initialAutoRefreshPreference);
@@ -261,6 +273,12 @@ export function LogsPage() {
     host.className = "admin-log-viewer-host";
     return host;
   });
+  const filters = useMemo<api.AdminLogFilters>(() => ({
+    source: source || undefined,
+    level: level || undefined,
+    method: method || undefined,
+    query: serverSearch,
+  }), [source, level, method, serverSearch]);
   const {
     snapshot,
     loading,
@@ -268,7 +286,13 @@ export function LogsPage() {
     error,
     reload,
     resetAfterClear,
-  } = useRuntimeLogs({ autoRefresh: autoRefresh && routeActive });
+    loadingOlder,
+    viewingHistory,
+    loadOlder,
+  } = useRuntimeLogs({ autoRefresh: autoRefresh && routeActive, filters });
+  const searchPending = search.trim() !== deferredSearch || deferredSearch !== serverSearch;
+  const logsBusy = loading || refreshing || loadingOlder || searchPending;
+  useEffect(() => () => downloadControllerRef.current?.abort(), []);
   useAdminRouteRevalidation(() => {
     void reload();
   });
@@ -283,7 +307,7 @@ export function LogsPage() {
       }),
     [bufferedEntries, deferredSearch, level, method, source]
   );
-  const filterViewKey = `${source}\u0000${level}\u0000${method}\u0000${deferredSearch}`;
+  const filterViewKey = `${source}\u0000${level}\u0000${method}\u0000${deferredSearch}\u0000${viewingHistory ? snapshot?.entries[0]?.id : "latest"}`;
 
   useLayoutEffect(() => {
     if (!fullscreenActive) return;
@@ -376,20 +400,28 @@ export function LogsPage() {
     show("复制失败，请检查浏览器剪贴板权限", "error");
   }
 
-  function downloadVisibleLogs() {
-    if (entries.length === 0) return;
-    const content = `${entries.map(formatRawLine).join("\n")}\n`;
-    const blobURL = URL.createObjectURL(
-      new Blob([content], { type: "text/plain;charset=utf-8" })
-    );
-    const link = document.createElement("a");
-    link.href = blobURL;
-    link.download = `runtime-logs-${new Date().toISOString().replace(/[:.]/g, "-")}.log`;
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    window.setTimeout(() => URL.revokeObjectURL(blobURL), 0);
-    show(`已下载 ${entries.length} 条日志`, "success");
+  async function downloadMatchingLogs() {
+    if (downloading) return;
+    const controller = new AbortController();
+    downloadControllerRef.current = controller;
+    setDownloading(true);
+    try {
+      const blob = await api.downloadLogs(filters, controller.signal);
+      const blobURL = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = blobURL;
+      link.download = `runtime-logs-${new Date().toISOString().replace(/[:.]/g, "-")}.log`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(blobURL), 1000);
+      show("日志已导出", "success");
+    } catch (downloadError) {
+      if (!controller.signal.aborted) show(downloadError instanceof Error ? downloadError.message : "日志导出失败", "error");
+    } finally {
+      downloadControllerRef.current = null;
+      if (!controller.signal.aborted) setDownloading(false);
+    }
   }
 
   async function clearRuntimeLogs() {
@@ -429,6 +461,12 @@ export function LogsPage() {
           <div className="admin-log-error" role="alert">
             <strong>日志刷新失败</strong>
             <span>{error}</span>
+          </div>
+        )}
+        {snapshot?.writeHealth?.lastError && (
+          <div className="admin-log-error" role="alert">
+            <strong>日志文件写入失败</strong>
+            <span>{snapshot.writeHealth.lastError}</span>
           </div>
         )}
 
@@ -564,10 +602,13 @@ export function LogsPage() {
                 onChange={setShowRawLogs}
               />
               <LogToggle
-                checked={autoRefresh}
+                checked={autoRefresh && !viewingHistory}
                 icon={<Timer size={16} />}
                 label="自动刷新"
-                onChange={setAutoRefresh}
+                onChange={(value) => {
+                  setAutoRefresh(value);
+                  if (value && viewingHistory) void reload();
+                }}
               />
             </div>
 
@@ -584,11 +625,11 @@ export function LogsPage() {
               <button
                 type="button"
                 className="admin-btn"
-                disabled={entries.length === 0}
-                onClick={downloadVisibleLogs}
+                disabled={loading || downloading || clearing || searchPending}
+                onClick={() => void downloadMatchingLogs()}
               >
                 <Download size={16} />
-                下载日志
+                {downloading ? "导出中" : "下载日志"}
               </button>
               <button
                 type="button"
@@ -619,19 +660,26 @@ export function LogsPage() {
             className="admin-log-panel__viewport"
             role="log"
             aria-label="日志条目"
-            aria-busy={loading || refreshing}
+            aria-busy={logsBusy}
             onScroll={handleViewportScroll}
           >
-            {loading && !snapshot ? (
+            {snapshot?.hasMore && !canLoadMore && (
+              <button type="button" className="admin-btn admin-log-history" disabled={loadingOlder || refreshing} onClick={() => void loadOlder()}>
+                <ChevronUp size={14} />{loadingOlder ? "加载中" : "更早记录"}
+              </button>
+            )}
+            {logsBusy && entries.length === 0 ? (
               <div className="admin-log-loading" role="status">
                 正在加载日志
               </div>
             ) : entries.length === 0 ? (
-              <div className="admin-log-empty">
-                {hasFilters
-                  ? "没有符合当前筛选条件的日志"
-                  : "当前还没有产生可显示的日志"}
-              </div>
+              !error && (
+                <div className="admin-log-empty">
+                  {viewingHistory ? "没有更早的日志" : hasFilters
+                    ? "没有符合当前筛选条件的日志"
+                    : "当前还没有产生可显示的日志"}
+                </div>
+              )
             ) : (
               <>
                 {canLoadMore && (
@@ -674,9 +722,9 @@ export function LogsPage() {
                                 {parsedHTTP.requestId && (
                                   <span
                                     className="admin-log-pill is-request"
-                                    title="请求 ID"
+                                    title={`请求 ID：${parsedHTTP.requestId}`}
                                   >
-                                    {parsedHTTP.requestId}
+                                    <span className="admin-log-pill__value">{parsedHTTP.requestId}</span>
                                   </span>
                                 )}
                                 <span
@@ -704,9 +752,13 @@ export function LogsPage() {
                                 </span>
                               </>
                             ) : (
-                              <span className="admin-log-message">
-                                {entry.message}
-                              </span>
+                              <>
+                                {contextKeys.some((key) => entry[key]) && (
+                                  <span className="admin-log-context">{contextKeys.filter((key) => entry[key]).map((key) => `${key}=${entry[key]}`).join(" ")}</span>
+                                )}
+                                <span className="admin-log-message">{entry.message}{entry.error && `: ${entry.error}`}</span>
+                                {entry.stack && <details className="admin-log-stack"><summary>错误堆栈</summary><pre>{entry.stack}</pre></details>}
+                              </>
                             )}
                           </div>
                         </div>
@@ -718,11 +770,11 @@ export function LogsPage() {
             )}
           </div>
 
-          {!followTail && entries.length > 0 && (
+          {(viewingHistory || (!followTail && entries.length > 0)) && (
             <button
               type="button"
               className="admin-log-jump-latest"
-              onClick={enableFollowTail}
+              onClick={() => { if (viewingHistory) void reload(); else enableFollowTail(); }}
             >
               <ChevronDown size={15} />
               回到最新日志

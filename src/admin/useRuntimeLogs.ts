@@ -8,6 +8,7 @@ export const LOG_BUFFER_LIMIT = 10000;
 const LOG_MAX_RETRY_DELAY_MS = 30000;
 const LOG_CATCH_UP_DELAY_MS = 100;
 const LOG_MAX_CATCH_UP_BATCHES = 5;
+const EMPTY_FILTERS: api.AdminLogFilters = {};
 
 type ActiveLogRequest = {
   controller: AbortController;
@@ -79,11 +80,14 @@ export function mergeRuntimeLogSnapshot(
   if (!current || latest.reset) return snapshotWithBoundedEntries(latest);
 
   const entries = mergeRuntimeLogEntries(current.entries, incoming);
+  const hasMore = Boolean(current.hasMore || (entries.length === LOG_BUFFER_LIMIT && entries[0]?.id !== current.entries[0]?.id));
   if (
     entries === current.entries &&
     current.matched === latest.matched &&
     current.storageBytes === latest.storageBytes &&
-    current.maxStorageBytes === latest.maxStorageBytes
+    current.maxStorageBytes === latest.maxStorageBytes &&
+    current.hasMore === hasMore &&
+    JSON.stringify(current.writeHealth) === JSON.stringify(latest.writeHealth)
   ) {
     return current;
   }
@@ -91,20 +95,26 @@ export function mergeRuntimeLogSnapshot(
   return {
     ...latest,
     entries,
+    hasMore,
   };
 }
 
-export function useRuntimeLogs({ autoRefresh }: { autoRefresh: boolean }) {
+export function useRuntimeLogs({ autoRefresh, filters = EMPTY_FILTERS }: { autoRefresh: boolean; filters?: api.AdminLogFilters }) {
+  const [requestedFilters, setRequestedFilters] = useState(filters);
   const [snapshot, setSnapshot] = useState<api.AdminLogSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  const [viewingHistory, setViewingHistory] = useState(false);
+  const viewingHistoryRef = useRef(false);
+  const snapshotRef = useRef(snapshot);
+  snapshotRef.current = snapshot;
 
   const activeRequestRef = useRef<ActiveLogRequest | null>(null);
   const requestVersionRef = useRef(0);
   const cursorRef = useRef<string>();
   const readyRef = useRef(false);
-  const hasLoadedRef = useRef(false);
 
   const invalidateActiveRequest = useCallback(() => {
     requestVersionRef.current += 1;
@@ -141,16 +151,17 @@ export function useRuntimeLogs({ autoRefresh }: { autoRefresh: boolean }) {
       const request = beginRequest(interrupt);
       if (!request) return { status: "busy" };
 
-      if (showProgress) {
-        setError("");
-        if (hasLoadedRef.current) setRefreshing(true);
-        else setLoading(true);
-      }
+      const hasSnapshot = snapshotRef.current !== null;
+      setLoading(!hasSnapshot);
+      setRefreshing(showProgress && hasSnapshot);
+      setLoadingOlder(false);
+      if (showProgress) setError("");
 
       try {
         const next = await api.listLogs(
           {
-            limit: LOG_BUFFER_LIMIT,
+            ...filters,
+            limit: LOG_FETCH_BATCH_LIMIT,
           },
           request.controller.signal
         );
@@ -158,7 +169,8 @@ export function useRuntimeLogs({ autoRefresh }: { autoRefresh: boolean }) {
 
         cursorRef.current = next.nextCursor;
         readyRef.current = Boolean(next.nextCursor);
-        hasLoadedRef.current = true;
+        viewingHistoryRef.current = false;
+        setViewingHistory(false);
         setSnapshot(snapshotWithBoundedEntries(next));
         setError("");
         return { status: "success", catchUp: false };
@@ -172,14 +184,16 @@ export function useRuntimeLogs({ autoRefresh }: { autoRefresh: boolean }) {
         if (requestIsCurrent(request)) {
           setLoading(false);
           setRefreshing(false);
+          setLoadingOlder(false);
         }
         finishRequest(request);
       }
     },
-    [beginRequest, finishRequest, requestIsCurrent]
+    [beginRequest, finishRequest, requestIsCurrent, filters]
   );
 
   const pollLogs = useCallback(async (): Promise<RefreshOutcome> => {
+    if (viewingHistoryRef.current) return { status: "cancelled" };
     const initialCursor = cursorRef.current;
     if (!readyRef.current || !initialCursor) {
       readyRef.current = false;
@@ -199,6 +213,7 @@ export function useRuntimeLogs({ autoRefresh }: { autoRefresh: boolean }) {
         if (!cursor) break;
         const next = await api.listLogs(
           {
+            ...filters,
             limit: LOG_FETCH_BATCH_LIMIT,
             cursor,
           },
@@ -242,15 +257,42 @@ export function useRuntimeLogs({ autoRefresh }: { autoRefresh: boolean }) {
     } finally {
       finishRequest(request);
     }
-  }, [beginRequest, finishRequest, requestIsCurrent]);
+  }, [beginRequest, finishRequest, requestIsCurrent, filters]);
+
+  const loadOlder = useCallback(async () => {
+    const current = snapshotRef.current;
+    const before = current?.entries[0]?.id;
+    if (!current?.hasMore || !before) return;
+    const request = beginRequest(true);
+    if (!request) return;
+    viewingHistoryRef.current = true;
+    setViewingHistory(true);
+    setLoadingOlder(true);
+    setError("");
+    try {
+      const older = await api.listLogs({ ...filters, before, limit: LOG_FETCH_BATCH_LIMIT }, request.controller.signal);
+      if (!requestIsCurrent(request)) return;
+      setSnapshot(snapshotWithBoundedEntries(older));
+    } catch (loadError) {
+      if (requestIsCurrent(request) && !isAbortError(loadError)) setError(loadError instanceof Error ? loadError.message : "历史日志加载失败");
+    } finally {
+      if (requestIsCurrent(request)) setLoadingOlder(false);
+      finishRequest(request);
+    }
+  }, [beginRequest, finishRequest, requestIsCurrent, filters]);
 
   useEffect(() => {
     invalidateActiveRequest();
     cursorRef.current = undefined;
     readyRef.current = false;
+    viewingHistoryRef.current = false;
+    setViewingHistory(false);
+    snapshotRef.current = null;
+    setSnapshot(null);
+    setRequestedFilters(filters);
     void loadTail({ interrupt: true, showProgress: true });
     return invalidateActiveRequest;
-  }, [invalidateActiveRequest, loadTail]);
+  }, [filters, invalidateActiveRequest, loadTail]);
 
   useEffect(() => {
     if (!autoRefresh) return;
@@ -331,12 +373,17 @@ export function useRuntimeLogs({ autoRefresh }: { autoRefresh: boolean }) {
     void loadTail({ interrupt: true, showProgress: false });
   }, [invalidateActiveRequest, loadTail]);
 
+  // New filters are pending even before the request effect clears the old data.
+  const filtersChanged = requestedFilters !== filters;
   return {
-    snapshot,
-    loading,
-    refreshing,
-    error,
+    snapshot: filtersChanged ? null : snapshot,
+    loading: filtersChanged || loading,
+    refreshing: !filtersChanged && refreshing,
+    error: filtersChanged ? "" : error,
     reload,
     resetAfterClear,
+    loadingOlder: !filtersChanged && loadingOlder,
+    viewingHistory: !filtersChanged && viewingHistory,
+    loadOlder,
   };
 }

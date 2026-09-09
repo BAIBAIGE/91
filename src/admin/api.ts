@@ -120,6 +120,14 @@ export type AdminLogEntry = {
   bytes?: number;
   elapsed?: string;
   requestId?: string;
+  taskId?: string;
+  component?: string;
+  driveId?: string;
+  videoId?: string;
+  fileId?: string;
+  stage?: string;
+  error?: string;
+  stack?: string;
   message: string;
 };
 
@@ -130,19 +138,28 @@ export type AdminLogSnapshot = {
   maxStorageBytes: number;
   nextCursor?: string;
   reset?: boolean;
+  hasMore?: boolean;
+  writeHealth?: {
+    lastError?: string;
+    failedWrites: number;
+    lastFailureAt?: string;
+    lastSuccessAt?: string;
+  };
 };
 
-export function listLogs(
-  filters: {
+export type AdminLogFilters = {
     source?: AdminLogSource;
     level?: AdminLogLevel;
     method?: AdminLogMethod;
     query?: string;
     limit?: number;
     cursor?: string;
-  } = {},
-  signal?: AbortSignal
-) {
+    before?: number;
+    from?: string;
+    to?: string;
+};
+
+export function logQueryParams(filters: AdminLogFilters = {}) {
   const params = new URLSearchParams();
   params.set("limit", String(filters.limit ?? 500));
   if (filters.cursor) params.set("cursor", filters.cursor);
@@ -150,6 +167,14 @@ export function listLogs(
   if (filters.level) params.set("level", filters.level);
   if (filters.method) params.set("method", filters.method);
   if (filters.query?.trim()) params.set("q", filters.query.trim());
+  if (filters.before) params.set("before", String(filters.before));
+  if (filters.from) params.set("from", filters.from);
+  if (filters.to) params.set("to", filters.to);
+  return params;
+}
+
+export function listLogs(filters: AdminLogFilters = {}, signal?: AbortSignal) {
+  const params = logQueryParams(filters);
   const timeoutController = new AbortController();
   let timedOut = false;
   const abortFromCaller = () => timeoutController.abort();
@@ -171,6 +196,17 @@ export function listLogs(
       globalThis.clearTimeout(timeout);
       signal?.removeEventListener("abort", abortFromCaller);
     });
+}
+
+export async function downloadLogs(filters: AdminLogFilters = {}, signal?: AbortSignal) {
+  const params = logQueryParams(filters);
+  params.set("download", "1");
+  params.delete("cursor");
+  params.delete("before");
+  const response = await fetch(`${BASE}/logs?${params}`, { credentials: "include", signal });
+  if (response.status === 401) throw new UnauthorizedError();
+  if (!response.ok) throw new APIResponseError(response.status, "日志导出失败");
+  return response.blob();
 }
 
 export function clearLogs() {

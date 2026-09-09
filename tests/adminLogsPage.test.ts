@@ -5,6 +5,8 @@ import {
   ADMIN_LOG_REQUEST_TIMEOUT_MS,
   type AdminLogEntry,
   clearLogs,
+  downloadLogs,
+  logQueryParams,
   listLogs,
 } from "../src/admin/api.ts";
 import {
@@ -55,7 +57,7 @@ test("admin log viewer is reachable from the authenticated admin layout", () => 
   assert.match(layoutSource, /to="\/admin\/logs"[\s\S]*?<ScrollText size=\{15\} \/>[\s\S]*?日志查看/);
   assert.match(
     logsPageSource,
-    /useRuntimeLogs\(\{ autoRefresh: autoRefresh && routeActive \}\)/
+    /useRuntimeLogs\(\{ autoRefresh: autoRefresh && routeActive, filters \}\)/
   );
   assert.match(runtimeLogsSource, /LOG_REFRESH_INTERVAL_MS = 3000/);
   assert.doesNotMatch(runtimeLogsSource, /source: source \|\| undefined/);
@@ -70,7 +72,8 @@ test("admin log viewer is reachable from the authenticated admin layout", () => 
   assert.match(runtimeLogsSource, /LOG_FETCH_BATCH_LIMIT = 1000/);
   assert.match(runtimeLogsSource, /LOG_BUFFER_LIMIT = 10000/);
   assert.doesNotMatch(runtimeLogsSource, /LOG_DISPLAY_LIMIT/);
-  assert.match(runtimeLogsSource, /limit: LOG_BUFFER_LIMIT/);
+  assert.doesNotMatch(runtimeLogsSource, /limit: LOG_BUFFER_LIMIT/);
+  assert.match(runtimeLogsSource, /\.\.\.filters,\s*limit: LOG_FETCH_BATCH_LIMIT/);
   assert.match(
     runtimeLogsSource,
     /if \(next\.reset\) \{[\s\S]*?cursor = next\.nextCursor;[\s\S]*?break;/
@@ -230,6 +233,85 @@ test("admin log viewer is reachable from the authenticated admin layout", () => 
     /@media \(max-width: 768px\)[\s\S]*?\.admin-log-card\.is-fullscreen \.admin-log-panel\s*\{[^}]*flex:\s*1 1 auto[^}]*min-height:\s*0[^}]*height:\s*auto/s
   );
   assert.match(adminCss, /@media \(max-width: 768px\)[\s\S]*?\.admin-log-row\s*\{/);
+});
+
+test("log initial queries fetch one batch while retaining a larger polling buffer", () => {
+  assert.ok(LOG_FETCH_BATCH_LIMIT < LOG_BUFFER_LIMIT);
+  assert.match(
+    runtimeLogsSource,
+    /const loadTail = useCallback\([\s\S]*?api\.listLogs\(\s*\{\s*\.\.\.filters,\s*limit: LOG_FETCH_BATCH_LIMIT/
+  );
+  assert.doesNotMatch(runtimeLogsSource, /limit: LOG_BUFFER_LIMIT/);
+  assert.match(runtimeLogsSource, /before, limit: LOG_FETCH_BATCH_LIMIT/);
+});
+
+test("log queries distinguish missing current results from refreshing a snapshot", () => {
+  assert.doesNotMatch(runtimeLogsSource, /hasLoadedRef/);
+  assert.match(
+    runtimeLogsSource,
+    /const hasSnapshot = snapshotRef\.current !== null;\s*setLoading\(!hasSnapshot\);\s*setRefreshing\(showProgress && hasSnapshot\)/
+  );
+  assert.match(
+    runtimeLogsSource,
+    /snapshotRef\.current = null;\s*setSnapshot\(null\);\s*setRequestedFilters\(filters\);\s*void loadTail/
+  );
+  assert.match(runtimeLogsSource, /const filtersChanged = requestedFilters !== filters/);
+  assert.match(runtimeLogsSource, /snapshot: filtersChanged \? null : snapshot/);
+  assert.match(runtimeLogsSource, /loading: filtersChanged \|\| loading/);
+  assert.match(runtimeLogsSource, /error: filtersChanged \? "" : error/);
+});
+
+test("log empty states wait for debounced searches and foreground requests", () => {
+  assert.match(
+    logsPageSource,
+    /const searchPending = search\.trim\(\) !== deferredSearch \|\| deferredSearch !== serverSearch/
+  );
+  assert.match(
+    logsPageSource,
+    /const logsBusy = loading \|\| refreshing \|\| loadingOlder \|\| searchPending/
+  );
+  assert.match(logsPageSource, /aria-busy=\{logsBusy\}/);
+  assert.match(
+    logsPageSource,
+    /logsBusy && entries\.length === 0 \? \([\s\S]*?正在加载日志[\s\S]*?\) : entries\.length === 0 \? \(\s*!error && \([\s\S]*?className="admin-log-empty"/
+  );
+  assert.doesNotMatch(logsPageSource, /loading && !snapshot \?/);
+});
+
+test("log page omits time-range controls while retaining server-backed filters", () => {
+  assert.doesNotMatch(logsPageSource, /datetime-local|logDateTime|setFrom|setTo|\bfrom:|\bto:/);
+  assert.doesNotMatch(adminCss, /admin-log-date-range/);
+  assert.match(logsPageSource, /source: source \|\| undefined/);
+  assert.match(logsPageSource, /level: level \|\| undefined/);
+  assert.match(logsPageSource, /method: method \|\| undefined/);
+  assert.match(logsPageSource, /query: serverSearch/);
+});
+
+test("historical queries and exports use the server filters and complete retained history", async () => {
+  const params = logQueryParams({ source: "application", level: "error", query: "drive-1", before: 500, from: "2026-09-09T00:00:00Z", to: "2026-09-09T01:00:00Z" });
+  assert.equal(params.get("before"), "500");
+  assert.equal(params.get("from"), "2026-09-09T00:00:00Z");
+  assert.equal(params.get("q"), "drive-1");
+  const originalFetch = globalThis.fetch;
+  let requestedURL = "";
+  globalThis.fetch = async (input) => {
+    requestedURL = String(input);
+    return new Response("all retained matching log entries", { headers: { "Content-Type": "text/plain" } });
+  };
+  try {
+    const blob = await downloadLogs({ level: "error", query: "drive-1", cursor: "old-cursor", before: 500 });
+    const url = new URL(requestedURL, "http://localhost");
+    assert.equal(url.searchParams.get("download"), "1");
+    assert.equal(url.searchParams.get("level"), "error");
+    assert.equal(url.searchParams.get("q"), "drive-1");
+    assert.equal(url.searchParams.has("cursor"), false);
+    assert.equal(url.searchParams.has("before"), false);
+    assert.equal(await blob.text(), "all retained matching log entries");
+  } finally { globalThis.fetch = originalFetch; }
+  assert.match(runtimeLogsSource, /before, limit: LOG_FETCH_BATCH_LIMIT/);
+  assert.match(logsPageSource, /api\.downloadLogs\(filters, controller\.signal\)/);
+  assert.match(logsPageSource, /writeHealth\?\.lastError/);
+  assert.match(logsPageSource, /entry\.stack/);
 });
 
 test("mobile fullscreen logs keep only the exit fullscreen action", () => {
@@ -442,6 +524,17 @@ test("admin log API client clears only the file-backed viewer history", async ()
   assert.equal(requestedURL, "/admin/api/logs");
   assert.equal(requestedInit?.method, "DELETE");
   assert.equal(requestedInit?.credentials, "include");
+});
+
+test("request ID pills truncate their text inside the padded capsule", () => {
+  assert.match(logsPageSource, /title=\{`请求 ID：\$\{parsedHTTP\.requestId\}`\}/);
+  assert.match(logsPageSource, /<span className="admin-log-pill__value">\{parsedHTTP\.requestId\}<\/span>/);
+  const pill = /\.admin-log-pill\.is-request\s*\{([^}]+)\}/.exec(adminCss)?.[1];
+  assert.ok(pill);
+  assert.match(pill, /min-width:\s*0/);
+  assert.match(pill, /max-width:\s*min\(180px, 100%\)/);
+  assert.doesNotMatch(pill, /overflow:\s*hidden/);
+  assert.match(adminCss, /\.admin-log-pill\.is-request \.admin-log-pill__value\s*\{[^}]*min-width:\s*0;[^}]*overflow:\s*hidden;[^}]*text-overflow:\s*ellipsis;[^}]*white-space:\s*nowrap;/);
 });
 
 test("HTTP access records are presented as structured log fields", () => {

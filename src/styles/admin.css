@@ -10056,12 +10056,20 @@ body.admin-logs-fullscreen-active {
 }
 
 .admin-log-pill.is-request {
-  max-width: 180px;
-  overflow: hidden;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: min(180px, 100%);
   border-color: color-mix(in srgb, var(--info) 25%, transparent);
   background: var(--info-soft);
   color: var(--info);
+}
+
+.admin-log-pill.is-request .admin-log-pill__value {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .admin-log-path {
@@ -10072,6 +10080,27 @@ body.admin-logs-fullscreen-active {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+.admin-log-context {
+  flex-basis: 100%;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--text-muted);
+  font-size: var(--font-xs);
+}
+.admin-log-stack {
+  flex-basis: 100%;
+  min-width: 0;
+  color: var(--text-default);
+}
+.admin-log-stack summary { cursor: pointer; }
+.admin-log-stack pre {
+  margin: 6px 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: var(--font-sm);
+}
+.admin-btn.admin-log-history { margin-bottom: 8px; }
 
 .admin-log-message {
   flex: 1 1 260px;
