@@ -111,16 +111,16 @@ func (a *AdminServer) handleUpdateVideo(w http.ResponseWriter, r *http.Request) 
 	id := chi.URLParam(r, "id")
 	var body updateVideoReq
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeErr(w, http.StatusBadRequest, err)
+		writeErr(w, r, http.StatusBadRequest, err)
 		return
 	}
 	if len(body.Title) > 0 || len(body.Author) > 0 {
-		writeErr(w, http.StatusBadRequest, errors.New("video title and author are read-only"))
+		writeErr(w, r, http.StatusBadRequest, errors.New("video title and author are read-only"))
 		return
 	}
 	v, err := a.Catalog.GetVideo(r.Context(), id)
 	if err != nil {
-		writeErr(w, http.StatusNotFound, err)
+		writeErr(w, r, http.StatusNotFound, err)
 		return
 	}
 	if body.Badges != nil {
@@ -136,21 +136,21 @@ func (a *AdminServer) handleUpdateVideo(w http.ResponseWriter, r *http.Request) 
 		v.DurationSeconds = body.DurationSec
 	}
 	if err := a.Catalog.UpsertVideo(r.Context(), v); err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
+		writeErr(w, r, http.StatusInternalServerError, err)
 		return
 	}
 	if body.Tags != nil {
 		if err := a.Catalog.SetManualVideoTags(r.Context(), id, body.Tags); err != nil {
 			if errors.Is(err, catalog.ErrUnknownTag) {
-				writeErr(w, http.StatusBadRequest, err)
+				writeErr(w, r, http.StatusBadRequest, err)
 				return
 			}
-			writeErr(w, http.StatusInternalServerError, err)
+			writeErr(w, r, http.StatusInternalServerError, err)
 			return
 		}
 		v, err = a.Catalog.GetVideo(r.Context(), id)
 		if err != nil {
-			writeErr(w, http.StatusInternalServerError, err)
+			writeErr(w, r, http.StatusInternalServerError, err)
 			return
 		}
 	}
@@ -160,7 +160,7 @@ func (a *AdminServer) handleUpdateVideo(w http.ResponseWriter, r *http.Request) 
 func (a *AdminServer) handleDeleteVideo(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimSpace(chi.URLParam(r, "id"))
 	if id == "" {
-		writeErr(w, http.StatusBadRequest, errors.New("invalid video id"))
+		writeErr(w, r, http.StatusBadRequest, errors.New("invalid video id"))
 		return
 	}
 	var body deleteVideoReq
@@ -168,7 +168,7 @@ func (a *AdminServer) handleDeleteVideo(w http.ResponseWriter, r *http.Request) 
 		defer r.Body.Close()
 		decoder := json.NewDecoder(r.Body)
 		if err := decoder.Decode(&body); err != nil && !errors.Is(err, io.EOF) {
-			writeErr(w, http.StatusBadRequest, err)
+			writeErr(w, r, http.StatusBadRequest, err)
 			return
 		}
 	}
@@ -184,10 +184,10 @@ func (a *AdminServer) handleDeleteVideo(w http.ResponseWriter, r *http.Request) 
 	}
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			writeErr(w, http.StatusNotFound, err)
+			writeErr(w, r, http.StatusNotFound, err)
 			return
 		}
-		writeErr(w, http.StatusInternalServerError, err)
+		writeErr(w, r, http.StatusInternalServerError, err)
 		return
 	}
 	if !result.OK {

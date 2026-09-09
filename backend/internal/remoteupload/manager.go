@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"mime"
 	"net/http"
 	"net/url"
@@ -21,6 +20,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/video-site/backend/internal/applog"
 	"github.com/video-site/backend/internal/catalog"
 	"github.com/video-site/backend/internal/drives/localupload"
 	"github.com/video-site/backend/internal/persistence"
@@ -286,7 +286,7 @@ func (m *Manager) run() {
 		}
 		retryDelay := 30 * time.Second
 		if !errors.Is(err, sql.ErrNoRows) && !errors.Is(err, context.Canceled) {
-			log.Printf("[remote-upload] queue lookup failed")
+			applog.Error(m.runCtx, "Remote upload queue lookup failed", err, applog.Fields{Component: "remote-upload", Stage: "queue"})
 			retryDelay = time.Second
 		}
 		retryTimer := time.NewTimer(retryDelay)
@@ -308,7 +308,7 @@ func (m *Manager) run() {
 }
 
 func (m *Manager) process(job *catalog.RemoteUploadJob) {
-	jobCtx, cancel := context.WithCancel(m.runCtx)
+	jobCtx, cancel := context.WithCancel(applog.WithFields(m.runCtx, applog.Fields{Component: "remote-upload", TaskID: job.ID}))
 	m.currentMu.Lock()
 	m.currentID = job.ID
 	m.currentCancel = cancel
@@ -339,7 +339,7 @@ func (m *Manager) process(job *catalog.RemoteUploadJob) {
 
 	if m.runCtx.Err() != nil {
 		if requeueErr := m.catalog.RequeueRemoteUploadOnShutdown(cleanupCtx, job.ID); requeueErr != nil {
-			log.Printf("[remote-upload] job=%s shutdown requeue failed", job.ID)
+			applog.Error(jobCtx, "Shutdown requeue failed", requeueErr, applog.Fields{Stage: "requeue"})
 		}
 		return
 	}
@@ -348,7 +348,7 @@ func (m *Manager) process(job *catalog.RemoteUploadJob) {
 		(current != nil && current.CancelRequested) {
 		if cancelErr := m.catalog.MarkRemoteUploadCanceled(cleanupCtx, job.ID); cancelErr != nil &&
 			!errors.Is(cancelErr, catalog.ErrRemoteUploadTerminal) {
-			log.Printf("[remote-upload] job=%s cancellation cleanup failed", job.ID)
+			applog.Error(jobCtx, "Cancellation cleanup failed", cancelErr, applog.Fields{Stage: "cancel"})
 		}
 		return
 	}
@@ -356,9 +356,9 @@ func (m *Manager) process(job *catalog.RemoteUploadJob) {
 	message := publicJobError(err)
 	if failErr := m.catalog.FailRemoteUploadJob(cleanupCtx, job.ID, message); failErr != nil &&
 		!errors.Is(failErr, catalog.ErrRemoteUploadTerminal) {
-		log.Printf("[remote-upload] job=%s failure state update failed", job.ID)
+		applog.Error(jobCtx, "Failure state update failed", failErr, applog.Fields{Stage: "save"})
 	}
-	log.Printf("[remote-upload] job=%s source=%s failed: %s", job.ID, job.SourceLabel, message)
+	applog.Error(jobCtx, message, err, applog.Fields{Stage: "complete"})
 }
 
 func (m *Manager) processJob(ctx context.Context, job *catalog.RemoteUploadJob) error {
@@ -367,6 +367,7 @@ func (m *Manager) processJob(ctx context.Context, job *catalog.RemoteUploadJob) 
 	}
 	part, err := os.CreateTemp(m.uploadDir, ".remote-"+job.ID+"-*.part")
 	if err != nil {
+		applog.Error(ctx, "Create download temporary file failed", err, applog.Fields{Stage: "create_file"})
 		return taskError("无法创建下载临时文件")
 	}
 	partPath := part.Name()
@@ -383,12 +384,14 @@ func (m *Manager) processJob(ctx context.Context, job *catalog.RemoteUploadJob) 
 		return err
 	}
 	if closeErr != nil {
+		applog.Error(ctx, "Close download file failed", closeErr, applog.Fields{Stage: "close_file"})
 		return taskError("无法保存下载文件")
 	}
 	if metadata.Size <= 0 {
 		return taskError("远程视频为空文件")
 	}
 	if err := os.Chmod(partPath, 0o644); err != nil {
+		applog.Error(ctx, "Set download permissions failed", err, applog.Fields{Stage: "permissions"})
 		return taskError("无法设置下载文件权限")
 	}
 	if err := m.catalog.UpdateRemoteUploadProgress(ctx, job.ID, metadata.Size, metadata.Total); err != nil {
@@ -405,6 +408,7 @@ func (m *Manager) processJob(ctx context.Context, job *catalog.RemoteUploadJob) 
 
 	info, err := m.probeFile(ctx, m.ffprobePath, partPath)
 	if err != nil || len(info.VideoCodecs) == 0 {
+		applog.Error(ctx, "Validate downloaded video failed", err, applog.Fields{Stage: "probe"})
 		return taskError("下载内容不是有效的视频文件")
 	}
 	ext, err := supportedExtension(info, metadata)
@@ -492,6 +496,7 @@ func (m *Manager) download(
 		if ctx.Err() != nil {
 			return downloadMetadata{}, ctx.Err()
 		}
+		applog.Error(ctx, "Remote video connection failed", err, applog.Fields{Stage: "connect"})
 		return downloadMetadata{}, taskError("远程视频连接失败")
 	}
 	defer response.Body.Close()
@@ -541,6 +546,10 @@ func (m *Manager) download(
 			}
 			written, writeErr := dst.Write(buffer[:n])
 			if writeErr != nil || written != n {
+				if writeErr == nil {
+					writeErr = io.ErrShortWrite
+				}
+				applog.Error(ctx, "Write download file failed", writeErr, applog.Fields{Stage: "write_file"})
 				return downloadMetadata{}, taskError("无法写入下载文件")
 			}
 			downloaded += int64(n)
@@ -563,10 +572,12 @@ func (m *Manager) download(
 			if ctx.Err() != nil {
 				return downloadMetadata{}, ctx.Err()
 			}
+			applog.Error(ctx, "Read remote video failed", readErr, applog.Fields{Stage: "read"})
 			return downloadMetadata{}, taskError("远程视频下载中断")
 		}
 	}
 	if err := dst.Sync(); err != nil {
+		applog.Error(ctx, "Sync download file failed", err, applog.Fields{Stage: "sync"})
 		return downloadMetadata{}, taskError("无法同步下载文件")
 	}
 

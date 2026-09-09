@@ -59,7 +59,7 @@ func (a *AdminServer) handleSetup(w http.ResponseWriter, r *http.Request) {
 	}
 	var body setupReq
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeErr(w, http.StatusBadRequest, err)
+		writeErr(w, r, http.StatusBadRequest, err)
 		return
 	}
 	username := strings.TrimSpace(body.Username)
@@ -73,7 +73,7 @@ func (a *AdminServer) handleSetup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := a.OnSetup(username, password); err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
+		writeErr(w, r, http.StatusInternalServerError, err)
 		return
 	}
 	role, err := a.Auth.UserLogin(w, r, username, password)
@@ -99,7 +99,7 @@ func (a *AdminServer) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	var body loginReq
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeErr(w, http.StatusBadRequest, err)
+		writeErr(w, r, http.StatusBadRequest, err)
 		return
 	}
 
@@ -165,7 +165,7 @@ func (a *AdminServer) handleMe(w http.ResponseWriter, r *http.Request) {
 func (a *AdminServer) handleCheckUpdate(w http.ResponseWriter, r *http.Request) {
 	info, err := a.checkUpdate(r.Context())
 	if err != nil {
-		writeErr(w, http.StatusBadGateway, err)
+		writeErr(w, r, http.StatusBadGateway, err)
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")

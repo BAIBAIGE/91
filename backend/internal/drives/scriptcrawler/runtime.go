@@ -11,6 +11,8 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/video-site/backend/internal/applog"
 )
 
 type scriptOutput struct {
@@ -133,7 +135,7 @@ func (c *Crawler) executeScript(
 					c.stopScript(cmd, stdout)
 					return fmt.Errorf("scriptcrawler: crawler.v2 stdout must contain JSON objects only: %w", err)
 				}
-				log.Printf("[scriptcrawler] drive=%s stdout parse: %v line=%q", c.cfg.Driver.ID(), err, truncateLogValue(line))
+				applog.Error(runCtx, "Script output parse failed", err, applog.Fields{Stage: "parse_output"})
 				continue
 			}
 
@@ -171,7 +173,7 @@ func (c *Crawler) executeScript(
 					return fmt.Errorf("scriptcrawler: maximum runtime exceeded (%s)", runTimeout)
 				}
 				if itemErr != nil {
-					log.Printf("[scriptcrawler] drive=%s item failed source_id=%q title=%q: %v", c.cfg.Driver.ID(), item.SourceID, item.Title, itemErr)
+					applog.Error(runCtx, "Crawler item failed: "+item.Title, itemErr, applog.Fields{FileID: item.SourceID, Stage: "import_item"})
 					result.Failed++
 				} else if added {
 					result.NewVideos++

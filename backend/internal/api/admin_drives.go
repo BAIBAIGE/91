@@ -16,7 +16,7 @@ func (a *AdminServer) handleListDrives(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	drives, err := a.Catalog.ListDrives(r.Context())
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
+		writeErr(w, r, http.StatusInternalServerError, err)
 		return
 	}
 	generationStatuses := map[string]DriveGenerationStatuses{}
@@ -25,12 +25,12 @@ func (a *AdminServer) handleListDrives(w http.ResponseWriter, r *http.Request) {
 	}
 	assetStats, err := a.Catalog.CountDriveAssetStats(r.Context())
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
+		writeErr(w, r, http.StatusInternalServerError, err)
 		return
 	}
 	scanResults, err := a.Catalog.LatestScanResults(r.Context())
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
+		writeErr(w, r, http.StatusInternalServerError, err)
 		return
 	}
 	// 出参不返回凭证明文，只告诉前端是否已配置
@@ -158,7 +158,7 @@ type upsertDriveReq struct {
 func (a *AdminServer) handleUpsertDrive(w http.ResponseWriter, r *http.Request) {
 	var body upsertDriveReq
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeErr(w, http.StatusBadRequest, err)
+		writeErr(w, r, http.StatusBadRequest, err)
 		return
 	}
 	if body.ID == "" || body.Kind == "" {
@@ -188,7 +188,7 @@ func (a *AdminServer) handleUpsertDrive(w http.ResponseWriter, r *http.Request) 
 	case errors.Is(err, sql.ErrNoRows):
 		// New drive.
 	default:
-		writeErr(w, http.StatusInternalServerError, err)
+		writeErr(w, r, http.StatusInternalServerError, err)
 		return
 	}
 	// Existing drives use credential-patch semantics. Access/refresh tokens and
@@ -251,7 +251,7 @@ func (a *AdminServer) handleUpsertDrive(w http.ResponseWriter, r *http.Request) 
 		PatchCredentials:  patchCredentials,
 	})
 	if saveErr != nil {
-		writeErr(w, http.StatusInternalServerError, saveErr)
+		writeErr(w, r, http.StatusInternalServerError, saveErr)
 		return
 	}
 	deferred := false

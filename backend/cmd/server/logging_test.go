@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"log"
 	"net/http"
@@ -43,7 +44,7 @@ func TestRequestLogMiddlewareCapturesRequestsButOmitsViewerPolling(t *testing.T)
 	if got := output.String(); !strings.Contains(got, "from 203.0.113.25 -") || strings.Contains(got, "127.0.0.1") {
 		t.Fatalf("access log did not use forwarded client IP: %q", got)
 	}
-	beforePoll, err := store.Query(applog.Query{Limit: 10})
+	beforePoll, err := store.Query(context.Background(), applog.Query{Limit: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,7 +60,7 @@ func TestRequestLogMiddlewareCapturesRequestsButOmitsViewerPolling(t *testing.T)
 	if output.Len() != 0 {
 		t.Fatalf("viewer request was logged: %q", output.String())
 	}
-	afterPoll, err := store.Query(applog.Query{Limit: 10})
+	afterPoll, err := store.Query(context.Background(), applog.Query{Limit: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,11 +79,65 @@ func TestRequestLogMiddlewareCapturesRequestsButOmitsViewerPolling(t *testing.T)
 	if got := panicOutput.String(); !strings.Contains(got, "[http] panic: boom") || !strings.Contains(got, "goroutine") {
 		t.Fatalf("panic log = %q", got)
 	}
-	panicLogs, err := store.Query(applog.Query{Source: applog.SourceApplication, Search: "panic: boom", Limit: 100})
+	panicLogs, err := store.Query(context.Background(), applog.Query{Source: applog.SourceApplication, Search: "panic: boom", Limit: 100})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(panicLogs.Entries) == 0 || !strings.Contains(panicLogs.Entries[0].Message, "[http] panic: boom") {
 		t.Fatalf("stored panic logs = %#v", panicLogs.Entries)
+	}
+}
+
+func TestRequestLogsCarryGeneratedIDsAndRedactCredentials(t *testing.T) {
+	store, err := applog.Open(applog.Config{Directory: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	var output bytes.Buffer
+	logger := log.New(&output, "", 0)
+	var requestID string
+	handler := requestLogMiddleware(logger, logger, store)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestID = applog.ContextFields(r.Context()).RequestID
+		if r.URL.Query().Get("deviceCode") != "private-code" {
+			t.Error("request parameters were modified")
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/status?deviceCode=private-code&loginUuid=private-uuid&dir=42", nil)
+	req.Header.Set("X-Request-ID", "untrusted-client-value")
+	handler.ServeHTTP(rr, req)
+	if requestID == "" || requestID == "untrusted-client-value" || rr.Header().Get("X-Request-ID") != requestID {
+		t.Fatal("request identity was not generated and propagated")
+	}
+	result, err := store.Query(context.Background(), applog.Query{Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Entries) != 1 || result.Entries[0].RequestID != requestID {
+		t.Fatalf("result=%+v", result)
+	}
+	if strings.Contains(output.String()+result.Entries[0].Message+result.Entries[0].Path, "private-") {
+		t.Fatal("credential leaked")
+	}
+}
+
+func TestPanicStackIsOneErrorEventWithRequestContext(t *testing.T) {
+	store, err := applog.Open(applog.Config{Directory: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	logger := log.New(store.Writer(applog.SourceApplication), "", 0)
+	handler := requestLogMiddleware(log.New(io.Discard, "", 0), logger, store)(middleware.Recoverer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { panic("test panic") })))
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/api/panic", nil))
+	result, err := store.Query(context.Background(), applog.Query{Source: applog.SourceApplication, Level: applog.LevelError, Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Entries) != 1 || !strings.Contains(result.Entries[0].Stack, "goroutine") || result.Entries[0].RequestID != rr.Header().Get("X-Request-ID") {
+		t.Fatalf("result=%+v", result)
 	}
 }

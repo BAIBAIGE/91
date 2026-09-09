@@ -32,7 +32,7 @@ type userDTO struct {
 func (a *AdminServer) handleListUsers(w http.ResponseWriter, r *http.Request) {
 	users, err := a.Catalog.ListUsers(r.Context())
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
+		writeErr(w, r, http.StatusInternalServerError, err)
 		return
 	}
 	out := make([]userDTO, 0, len(users))
@@ -48,7 +48,7 @@ func (a *AdminServer) handleListUsers(w http.ResponseWriter, r *http.Request) {
 func (a *AdminServer) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 	var body createUserReq
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeErr(w, http.StatusBadRequest, err)
+		writeErr(w, r, http.StatusBadRequest, err)
 		return
 	}
 	username := strings.TrimSpace(body.Username)
@@ -71,7 +71,7 @@ func (a *AdminServer) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 
 	hashed, err := auth.HashPassword(body.Password)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
+		writeErr(w, r, http.StatusInternalServerError, err)
 		return
 	}
 	id, err := a.Catalog.CreateUser(r.Context(), username, hashed, role)
@@ -80,7 +80,7 @@ func (a *AdminServer) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "username already exists", http.StatusConflict)
 			return
 		}
-		writeErr(w, http.StatusInternalServerError, err)
+		writeErr(w, r, http.StatusInternalServerError, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{"ok": true, "id": id})
@@ -98,7 +98,7 @@ func (a *AdminServer) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "user not found", http.StatusNotFound)
 			return
 		}
-		writeErr(w, http.StatusInternalServerError, err)
+		writeErr(w, r, http.StatusInternalServerError, err)
 		return
 	}
 	if currentSessionUserID(r.Context(), a.Catalog, r) == id {
@@ -108,7 +108,7 @@ func (a *AdminServer) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
 	if target.Role == "admin" {
 		admins, err := a.Catalog.CountAdmins(r.Context())
 		if err != nil {
-			writeErr(w, http.StatusInternalServerError, err)
+			writeErr(w, r, http.StatusInternalServerError, err)
 			return
 		}
 		if admins <= 1 {
@@ -121,11 +121,11 @@ func (a *AdminServer) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "user not found", http.StatusNotFound)
 			return
 		}
-		writeErr(w, http.StatusInternalServerError, err)
+		writeErr(w, r, http.StatusInternalServerError, err)
 		return
 	}
 	if err := a.Catalog.DeleteSessionsForUser(r.Context(), id); err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
+		writeErr(w, r, http.StatusInternalServerError, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
@@ -143,7 +143,7 @@ func (a *AdminServer) handleBanUser(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "user not found", http.StatusNotFound)
 			return
 		}
-		writeErr(w, http.StatusInternalServerError, err)
+		writeErr(w, r, http.StatusInternalServerError, err)
 		return
 	}
 	if currentSessionUserID(r.Context(), a.Catalog, r) == id {
@@ -153,7 +153,7 @@ func (a *AdminServer) handleBanUser(w http.ResponseWriter, r *http.Request) {
 	if target.Role == "admin" && !target.Banned {
 		activeAdmins, err := a.Catalog.CountActiveAdmins(r.Context())
 		if err != nil {
-			writeErr(w, http.StatusInternalServerError, err)
+			writeErr(w, r, http.StatusInternalServerError, err)
 			return
 		}
 		if activeAdmins <= 1 {
@@ -166,11 +166,11 @@ func (a *AdminServer) handleBanUser(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "user not found", http.StatusNotFound)
 			return
 		}
-		writeErr(w, http.StatusInternalServerError, err)
+		writeErr(w, r, http.StatusInternalServerError, err)
 		return
 	}
 	if err := a.Catalog.DeleteSessionsForUser(r.Context(), id); err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
+		writeErr(w, r, http.StatusInternalServerError, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
@@ -187,7 +187,7 @@ func (a *AdminServer) handleUnbanUser(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "user not found", http.StatusNotFound)
 			return
 		}
-		writeErr(w, http.StatusInternalServerError, err)
+		writeErr(w, r, http.StatusInternalServerError, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
@@ -203,7 +203,7 @@ func (a *AdminServer) handleResetPassword(w http.ResponseWriter, r *http.Request
 		Password string `json:"password"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeErr(w, http.StatusBadRequest, err)
+		writeErr(w, r, http.StatusBadRequest, err)
 		return
 	}
 	if len(body.Password) < 6 {
@@ -212,7 +212,7 @@ func (a *AdminServer) handleResetPassword(w http.ResponseWriter, r *http.Request
 	}
 	hashed, err := auth.HashPassword(body.Password)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
+		writeErr(w, r, http.StatusInternalServerError, err)
 		return
 	}
 	if err := a.Catalog.UpdateUserPassword(r.Context(), id, hashed); err != nil {
@@ -220,11 +220,11 @@ func (a *AdminServer) handleResetPassword(w http.ResponseWriter, r *http.Request
 			http.Error(w, "user not found", http.StatusNotFound)
 			return
 		}
-		writeErr(w, http.StatusInternalServerError, err)
+		writeErr(w, r, http.StatusInternalServerError, err)
 		return
 	}
 	if err := a.Catalog.DeleteSessionsForUser(r.Context(), id); err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
+		writeErr(w, r, http.StatusInternalServerError, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
@@ -256,7 +256,7 @@ type bannedIPDTO struct {
 func (a *AdminServer) handleListBannedIPs(w http.ResponseWriter, r *http.Request) {
 	ips, err := a.Catalog.ListBannedLoginIPs(r.Context())
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
+		writeErr(w, r, http.StatusInternalServerError, err)
 		return
 	}
 	out := make([]bannedIPDTO, 0, len(ips))
@@ -273,7 +273,7 @@ func (a *AdminServer) handleUnbanIP(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "IP not found", http.StatusNotFound)
 			return
 		}
-		writeErr(w, http.StatusInternalServerError, err)
+		writeErr(w, r, http.StatusInternalServerError, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})

@@ -84,7 +84,7 @@ type AdminServer struct {
 	OnPrepareDriveDelete           func(ctx context.Context, driveID string) error
 	OnDriveDeleteCleanup           func(ctx context.Context, driveID string) (int, error)
 	OnDriveRemoved                 func(driveID string)
-	OnScanRequested                func(driveID string) bool
+	OnScanRequested                func(context.Context, string) bool
 	OnCrawlerUploadRequested       func(driveID string) (bool, string)
 	OnStopDriveTasks               func(driveID string) bool
 	OnStopAllTasks                 func() int

@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -16,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/video-site/backend/internal/applog"
 	"github.com/video-site/backend/internal/catalog"
 	"github.com/video-site/backend/internal/drives"
 	"github.com/video-site/backend/internal/streamhttp"
@@ -183,6 +183,7 @@ func (w *Worker) processQueued(ctx context.Context, v *catalog.Video) {
 		w.queue.release(v.ID)
 		return
 	}
+	ctx = applog.WithFields(applog.NewTask(ctx, "fingerprint", w.Drive.ID()), applog.Fields{VideoID: v.ID, FileID: v.FileID})
 	if w.TaskGuard != nil {
 		release := w.TaskGuard()
 		if release == nil {
@@ -197,6 +198,9 @@ func (w *Worker) processQueued(ctx context.Context, v *catalog.Video) {
 	}
 	current, err := w.Catalog.GetVideo(ctx, v.ID)
 	if err != nil {
+		if ctx.Err() == nil {
+			applog.Error(ctx, "Read queued video failed", err, applog.Fields{Stage: "lookup"})
+		}
 		return
 	}
 	if current.SampledSHA256 != "" || current.FingerprintStatus == "ready" || current.Hidden {
@@ -222,20 +226,20 @@ func (w *Worker) processQueued(ctx context.Context, v *catalog.Video) {
 			}
 			until := time.Now().Add(wait)
 			w.cooldown.set(until)
-			log.Printf("[fingerprint] drive=%s rate limited; keep video=%s pending and cool down for %s: %v", w.Drive.ID(), current.ID, wait, err)
+			applog.Warn(ctx, fmt.Sprintf("Fingerprint rate limited; cooling down for %s", wait), err, applog.Fields{Stage: "compute"})
 			sleepContext(ctx, wait)
 			w.cooldown.clear(until)
 			return
 		}
-		log.Printf("[fingerprint] video=%s failed: %v", current.ID, err)
+		applog.Error(ctx, "Fingerprint computation failed", err, applog.Fields{Stage: "compute"})
 		_ = w.Catalog.UpdateVideoFingerprint(ctx, current.ID, "", "failed", err.Error())
 		return
 	}
 	if err := w.Catalog.UpdateVideoFingerprint(ctx, current.ID, sum, "ready", ""); err != nil {
-		log.Printf("[fingerprint] update video=%s: %v", current.ID, err)
+		applog.Error(ctx, "Save fingerprint failed", err, applog.Fields{Stage: "save"})
 		return
 	}
-	log.Printf("[fingerprint] video=%s ready sampled_sha256=%s", current.ID, sum)
+	applog.Info(ctx, "Fingerprint ready", applog.Fields{})
 }
 
 func Compute(ctx context.Context, drv drives.Drive, v *catalog.Video, cfg Config, hc *http.Client) (string, error) {

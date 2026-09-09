@@ -27,7 +27,7 @@ func (a *AdminServer) handleGetSettings(w http.ResponseWriter, r *http.Request) 
 	if a.Catalog != nil {
 		enabled, err := a.Catalog.AutoGenerateTagsEnabled(r.Context())
 		if err != nil {
-			writeErr(w, http.StatusInternalServerError, err)
+			writeErr(w, r, http.StatusInternalServerError, err)
 			return
 		}
 		autoGenerateTagsEnabled = enabled
@@ -42,23 +42,23 @@ func (a *AdminServer) handlePutSettings(w http.ResponseWriter, r *http.Request) 
 	w.Header().Set("Cache-Control", "no-store")
 	var raw map[string]json.RawMessage
 	if err := json.NewDecoder(r.Body).Decode(&raw); err != nil {
-		writeErr(w, http.StatusBadRequest, err)
+		writeErr(w, r, http.StatusBadRequest, err)
 		return
 	}
 	if _, ok := raw["builtinTagsEnabled"]; ok {
-		writeErr(w, http.StatusBadRequest, errors.New("builtinTagsEnabled is managed by config.yaml"))
+		writeErr(w, r, http.StatusBadRequest, errors.New("builtinTagsEnabled is managed by config.yaml"))
 		return
 	}
 
 	if v, ok := raw["theme"]; ok && a.SetTheme != nil {
 		var theme string
 		if err := json.Unmarshal(v, &theme); err != nil {
-			writeErr(w, http.StatusBadRequest, err)
+			writeErr(w, r, http.StatusBadRequest, err)
 			return
 		}
 		if theme != "" {
 			if err := a.SetTheme(theme); err != nil {
-				writeErr(w, http.StatusBadRequest, err)
+				writeErr(w, r, http.StatusBadRequest, err)
 				return
 			}
 		}
@@ -66,11 +66,11 @@ func (a *AdminServer) handlePutSettings(w http.ResponseWriter, r *http.Request) 
 	if v, ok := raw["autoGenerateTagsEnabled"]; ok && a.Catalog != nil {
 		var enabled bool
 		if err := json.Unmarshal(v, &enabled); err != nil {
-			writeErr(w, http.StatusBadRequest, err)
+			writeErr(w, r, http.StatusBadRequest, err)
 			return
 		}
 		if err := a.Catalog.SetAutoGenerateTagsEnabled(r.Context(), enabled); err != nil {
-			writeErr(w, http.StatusInternalServerError, err)
+			writeErr(w, r, http.StatusInternalServerError, err)
 			return
 		}
 	}
@@ -84,7 +84,7 @@ func (a *AdminServer) handlePutSettings(w http.ResponseWriter, r *http.Request) 
 	if a.Catalog != nil {
 		enabled, err := a.Catalog.AutoGenerateTagsEnabled(r.Context())
 		if err != nil {
-			writeErr(w, http.StatusInternalServerError, err)
+			writeErr(w, r, http.StatusInternalServerError, err)
 			return
 		}
 		resp.AutoGenerateTagsEnabled = enabled

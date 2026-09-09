@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/video-site/backend/internal/applog"
 	"github.com/video-site/backend/internal/catalog"
 	"github.com/video-site/backend/internal/drives"
 	"github.com/video-site/backend/internal/drives/localupload"
@@ -71,6 +72,8 @@ func skippedScanResult(driveID, message string) scanjob.Result {
 }
 
 func (a *App) runScanWithTaskContext(ctx context.Context, driveID string) (report scanjob.Result) {
+	ctx = applog.NewTask(ctx, "scan", driveID)
+	applog.Info(ctx, "Scan started", applog.Fields{})
 	report = scanjob.Result{DriveID: driveID, State: scanjob.Succeeded, StartedAt: time.Now()}
 	defer func() {
 		report.FinishedAt = time.Now()
@@ -98,9 +101,18 @@ func (a *App) runScanWithTaskContext(ctx context.Context, driveID string) (repor
 		if report.State == scanjob.Succeeded && report.ErrorCount > 0 {
 			report.State = scanjob.Partial
 		}
-		log.Printf("[scan] drive=%s finished state=%s scanned=%d added=%d errors=%d", driveID, report.State, report.ScannedCount, report.AddedCount, report.ErrorCount)
+		message := fmt.Sprintf("Scan finished state=%s scanned=%d added=%d errors=%d", report.State, report.ScannedCount, report.AddedCount, report.ErrorCount)
+		switch report.State {
+		case scanjob.Failed:
+			applog.Error(ctx, message, nil, applog.Fields{})
+		case scanjob.Partial, scanjob.Canceled:
+			applog.Warn(ctx, message, nil, applog.Fields{})
+		default:
+			applog.Info(ctx, message, applog.Fields{})
+		}
 	}()
 	fail := func(stage string, err error) {
+		applog.Error(ctx, "Scan failed", err, applog.Fields{Stage: stage})
 		report.State = scanjob.Failed
 		report.Message = err.Error()
 		if ctx.Err() == nil {
@@ -173,6 +185,7 @@ func (a *App) runScanWithTaskContext(ctx context.Context, driveID string) (repor
 		ctx, drv, driveConfig, result.Snapshot.SeenFileIDs, rateLimitBudget,
 	)
 	if skipCleanupErr != nil {
+		applog.Error(ctx, "Skipped-directory cleanup failed", skipCleanupErr, applog.Fields{Stage: "skip_cleanup"})
 		report.AddIssue("skip_cleanup", skipCleanupErr)
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			log.Printf("[skip-cleanup] drive=%s canceled: %v", driveID, ctxErr)
@@ -185,6 +198,7 @@ func (a *App) runScanWithTaskContext(ctx context.Context, driveID string) (repor
 		}
 	}
 	if err := a.cleanupScanResult(ctx, drv, result, skipCleanupResult.ProtectUnlocated); err != nil {
+		applog.Error(ctx, "Missing-file cleanup failed", err, applog.Fields{Stage: "presence_cleanup"})
 		report.AddIssue("presence_cleanup", err)
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			log.Printf("[cleanup] canceled stale cleanup drive=%s kind=%s: %v", drv.ID(), drv.Kind(), ctxErr)

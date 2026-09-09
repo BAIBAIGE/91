@@ -68,7 +68,7 @@ type shortsFeedResponse struct {
 func (s *Server) handleShortsNext(w http.ResponseWriter, r *http.Request) {
 	count, err := shortsQueryInt(r, "count", defaultShortsBatchSize)
 	if err != nil || count < 1 {
-		writeErr(w, http.StatusBadRequest, errors.New("invalid shorts count"))
+		writeErr(w, r, http.StatusBadRequest, errors.New("invalid shorts count"))
 		return
 	}
 	if count > maxShortsBatchSize {
@@ -77,24 +77,24 @@ func (s *Server) handleShortsNext(w http.ResponseWriter, r *http.Request) {
 
 	cursor, err := shortsQueryInt(r, "cursor", 0)
 	if err != nil || cursor < 0 {
-		writeErr(w, http.StatusBadRequest, errors.New("invalid shorts cursor"))
+		writeErr(w, r, http.StatusBadRequest, errors.New("invalid shorts cursor"))
 		return
 	}
 
 	feedToken := strings.TrimSpace(r.URL.Query().Get("feedToken"))
 	if len(feedToken) > 128 {
-		writeErr(w, http.StatusBadRequest, errors.New("invalid shorts feed token"))
+		writeErr(w, r, http.StatusBadRequest, errors.New("invalid shorts feed token"))
 		return
 	}
 	var videoIDs []string
 	if feedToken == "" {
 		if cursor != 0 {
-			writeErr(w, http.StatusBadRequest, errors.New("shorts cursor requires a feed token"))
+			writeErr(w, r, http.StatusBadRequest, errors.New("shorts cursor requires a feed token"))
 			return
 		}
 		videoIDs, err = s.Catalog.ListVisibleVideoIDs(r.Context())
 		if err != nil {
-			writeErr(w, http.StatusInternalServerError, err)
+			writeErr(w, r, http.StatusInternalServerError, err)
 			return
 		}
 		if len(videoIDs) > 0 {
@@ -103,7 +103,7 @@ func (s *Server) handleShortsNext(w http.ResponseWriter, r *http.Request) {
 			})
 			feedToken, err = newShortsFeedToken()
 			if err != nil {
-				writeErr(w, http.StatusInternalServerError, err)
+				writeErr(w, r, http.StatusInternalServerError, err)
 				return
 			}
 			s.storeShortsFeed(feedToken, videoIDs)
@@ -111,13 +111,13 @@ func (s *Server) handleShortsNext(w http.ResponseWriter, r *http.Request) {
 	} else {
 		videoIDs, err = s.loadShortsFeed(feedToken)
 		if err != nil {
-			writeErr(w, http.StatusGone, err)
+			writeErr(w, r, http.StatusGone, err)
 			return
 		}
 	}
 
 	if cursor > len(videoIDs) {
-		writeErr(w, http.StatusBadRequest, errors.New("shorts cursor is outside the feed"))
+		writeErr(w, r, http.StatusBadRequest, errors.New("shorts cursor is outside the feed"))
 		return
 	}
 
@@ -128,7 +128,7 @@ func (s *Server) handleShortsNext(w http.ResponseWriter, r *http.Request) {
 		count,
 	)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
+		writeErr(w, r, http.StatusInternalServerError, err)
 		return
 	}
 

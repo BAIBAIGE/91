@@ -50,16 +50,16 @@ type RemoteUploadJobDTO struct {
 
 func (s *Server) handleCreateRemoteUpload(w http.ResponseWriter, r *http.Request) {
 	if s.RemoteUploads == nil {
-		writeErr(w, http.StatusServiceUnavailable, errors.New("remote upload is not configured"))
+		writeErr(w, r, http.StatusServiceUnavailable, errors.New("remote upload is not configured"))
 		return
 	}
 	var body remoteUploadRequest
 	if err := decodeRemoteUploadJSON(w, r, &body); err != nil {
-		writeErr(w, http.StatusBadRequest, err)
+		writeErr(w, r, http.StatusBadRequest, err)
 		return
 	}
 	if strings.TrimSpace(body.URL) == "" {
-		writeErr(w, http.StatusBadRequest, errors.New("video URL is required"))
+		writeErr(w, r, http.StatusBadRequest, errors.New("video URL is required"))
 		return
 	}
 	tags, err := s.canonicalUploadTags(r.Context(), body.Tags)
@@ -68,7 +68,7 @@ func (s *Server) handleCreateRemoteUpload(w http.ResponseWriter, r *http.Request
 		if isUploadTagValidationError(err) {
 			status = http.StatusBadRequest
 		}
-		writeErr(w, status, err)
+		writeErr(w, r, status, err)
 		return
 	}
 	job, err := s.RemoteUploads.Create(r.Context(), remoteupload.CreateInput{
@@ -78,10 +78,10 @@ func (s *Server) handleCreateRemoteUpload(w http.ResponseWriter, r *http.Request
 	})
 	if err != nil {
 		if remoteupload.IsValidationError(err) {
-			writeErr(w, http.StatusBadRequest, err)
+			writeErr(w, r, http.StatusBadRequest, err)
 			return
 		}
-		writeErr(w, http.StatusInternalServerError, errors.New("failed to create remote upload job"))
+		writeErr(w, r, http.StatusInternalServerError, errors.New("failed to create remote upload job"))
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
@@ -90,21 +90,21 @@ func (s *Server) handleCreateRemoteUpload(w http.ResponseWriter, r *http.Request
 
 func (s *Server) handleListRemoteUploads(w http.ResponseWriter, r *http.Request) {
 	if s.RemoteUploads == nil {
-		writeErr(w, http.StatusServiceUnavailable, errors.New("remote upload is not configured"))
+		writeErr(w, r, http.StatusServiceUnavailable, errors.New("remote upload is not configured"))
 		return
 	}
 	limit := 20
 	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
 		value, err := strconv.Atoi(raw)
 		if err != nil || value < 1 || value > 100 {
-			writeErr(w, http.StatusBadRequest, errors.New("invalid remote upload limit"))
+			writeErr(w, r, http.StatusBadRequest, errors.New("invalid remote upload limit"))
 			return
 		}
 		limit = value
 	}
 	jobs, err := s.RemoteUploads.List(r.Context(), limit)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, errors.New("failed to list remote upload jobs"))
+		writeErr(w, r, http.StatusInternalServerError, errors.New("failed to list remote upload jobs"))
 		return
 	}
 	out := make([]RemoteUploadJobDTO, 0, len(jobs))
@@ -117,23 +117,23 @@ func (s *Server) handleListRemoteUploads(w http.ResponseWriter, r *http.Request)
 
 func (s *Server) handleCancelRemoteUpload(w http.ResponseWriter, r *http.Request) {
 	if s.RemoteUploads == nil {
-		writeErr(w, http.StatusServiceUnavailable, errors.New("remote upload is not configured"))
+		writeErr(w, r, http.StatusServiceUnavailable, errors.New("remote upload is not configured"))
 		return
 	}
 	id := strings.TrimSpace(routeParam(r, "jobId"))
 	if id == "" {
-		writeErr(w, http.StatusBadRequest, errors.New("remote upload job id is required"))
+		writeErr(w, r, http.StatusBadRequest, errors.New("remote upload job id is required"))
 		return
 	}
 	job, err := s.RemoteUploads.Cancel(r.Context(), id)
 	if err != nil {
 		switch {
 		case errors.Is(err, sql.ErrNoRows):
-			writeErr(w, http.StatusNotFound, errors.New("remote upload job not found"))
+			writeErr(w, r, http.StatusNotFound, errors.New("remote upload job not found"))
 		case errors.Is(err, catalog.ErrRemoteUploadTerminal):
-			writeErr(w, http.StatusConflict, err)
+			writeErr(w, r, http.StatusConflict, err)
 		default:
-			writeErr(w, http.StatusInternalServerError, errors.New("failed to cancel remote upload job"))
+			writeErr(w, r, http.StatusInternalServerError, errors.New("failed to cancel remote upload job"))
 		}
 		return
 	}

@@ -1,6 +1,7 @@
 package applog
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -34,11 +35,24 @@ func appendTestEntry(t *testing.T, store *Store, entry Entry) {
 
 func queryTestLogs(t *testing.T, store *Store, query Query) Snapshot {
 	t.Helper()
-	snapshot, err := store.Query(query)
+	snapshot, err := store.Query(context.Background(), query)
 	if err != nil {
 		t.Fatalf("query logs: %v", err)
 	}
 	return snapshot
+}
+
+func TestStoreDefaultSizeLimits(t *testing.T) {
+	store := openTestStore(t, t.TempDir(), 0, 0, 0)
+	if store.maxFileSizeBytes != 5*1024*1024 {
+		t.Fatalf("default file size = %d, want 5 MiB", store.maxFileSizeBytes)
+	}
+	if store.maxTotalSizeBytes != 30*1024*1024 {
+		t.Fatalf("default total size = %d, want 30 MiB", store.maxTotalSizeBytes)
+	}
+	if got := queryTestLogs(t, store, Query{}).MaxStorageBytes; got != 30*1024*1024 {
+		t.Fatalf("reported maximum storage = %d, want 30 MiB", got)
+	}
 }
 
 func TestStorePersistsStructuredEntriesAcrossRestart(t *testing.T) {
@@ -242,7 +256,7 @@ func TestStoreSupportsConcurrentWritesAndQueries(t *testing.T) {
 			writer := store.Writer(SourceApplication)
 			for i := 0; i < 50; i++ {
 				_, _ = writer.Write([]byte(fmt.Sprintf("worker-%d line-%d\n", worker, i)))
-				_, _ = store.Query(Query{Limit: 20, Search: "line"})
+				_, _ = store.Query(context.Background(), Query{Limit: 20, Search: "line"})
 			}
 		}(worker)
 	}

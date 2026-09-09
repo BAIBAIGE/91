@@ -868,7 +868,7 @@ func TestHandleRescanRejectsWhenNightlyBusy(t *testing.T) {
 	rr := httptest.NewRecorder()
 
 	(&AdminServer{
-		OnScanRequested: func(driveID string) bool {
+		OnScanRequested: func(_ context.Context, driveID string) bool {
 			called = true
 			return true
 		},
@@ -906,7 +906,7 @@ func TestHandleRescanReturnsAcceptedFlagAndBusyMessage(t *testing.T) {
 	rr := httptest.NewRecorder()
 
 	(&AdminServer{
-		OnScanRequested: func(driveID string) bool {
+		OnScanRequested: func(_ context.Context, driveID string) bool {
 			calledWith = driveID
 			return false
 		},

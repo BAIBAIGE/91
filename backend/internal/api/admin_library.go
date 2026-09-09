@@ -32,7 +32,7 @@ func (a *AdminServer) handleAdminListVideos(w http.ResponseWriter, r *http.Reque
 		"入库时间",
 	)
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, err)
+		writeErr(w, r, http.StatusBadRequest, err)
 		return
 	}
 	durationSecondsMin, durationSecondsMax, err := parseAdminVideoDurationRange(
@@ -40,7 +40,7 @@ func (a *AdminServer) handleAdminListVideos(w http.ResponseWriter, r *http.Reque
 		q.Get("durationMaxMinutes"),
 	)
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, err)
+		writeErr(w, r, http.StatusBadRequest, err)
 		return
 	}
 	items, total, err := a.Catalog.ListVideos(r.Context(), catalog.ListParams{
@@ -55,7 +55,7 @@ func (a *AdminServer) handleAdminListVideos(w http.ResponseWriter, r *http.Reque
 		PageSize:           size,
 	})
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
+		writeErr(w, r, http.StatusInternalServerError, err)
 		return
 	}
 	if a.GetPreviewGenerationVideoIDs != nil {
@@ -74,7 +74,7 @@ func (a *AdminServer) handleAdminListVideos(w http.ResponseWriter, r *http.Reque
 	}
 	tagMetadata, err := a.Catalog.ListVideoTagMetadata(r.Context(), videoIDs)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
+		writeErr(w, r, http.StatusInternalServerError, err)
 		return
 	}
 	mappedItems := mapAdminVideos(items)
@@ -173,7 +173,7 @@ func parseAdminVideoDurationRange(minRaw, maxRaw string) (minSeconds, maxSeconds
 func (a *AdminServer) handleVideoStats(w http.ResponseWriter, r *http.Request) {
 	current, blacklisted, err := a.Catalog.VideoManagementCounts(r.Context())
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
+		writeErr(w, r, http.StatusInternalServerError, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -200,7 +200,7 @@ func (a *AdminServer) handleListBlacklist(w http.ResponseWriter, r *http.Request
 		PageSize: size,
 	})
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
+		writeErr(w, r, http.StatusInternalServerError, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -214,11 +214,11 @@ func (a *AdminServer) handleListBlacklist(w http.ResponseWriter, r *http.Request
 func (a *AdminServer) handleStartBlacklistSourceDelete(w http.ResponseWriter, r *http.Request) {
 	var body BlacklistSourceDeleteRequest
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeErr(w, http.StatusBadRequest, err)
+		writeErr(w, r, http.StatusBadRequest, err)
 		return
 	}
 	if err := normalizeBlacklistSourceDeleteRequest(&body); err != nil {
-		writeErr(w, http.StatusBadRequest, err)
+		writeErr(w, r, http.StatusBadRequest, err)
 		return
 	}
 	accepted := false
@@ -298,16 +298,16 @@ func (a *AdminServer) handleRemoveBlacklist(w http.ResponseWriter, r *http.Reque
 	}
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			writeErr(w, http.StatusNotFound, err)
+			writeErr(w, r, http.StatusNotFound, err)
 			return
 		}
 		if errors.Is(err, catalog.ErrDeletedVideoNotRestorable) ||
 			errors.Is(err, catalog.ErrDeletedVideoSourceCheckRequired) ||
 			errors.Is(err, catalog.ErrDeletedVideoSourceMissing) {
-			writeErr(w, http.StatusConflict, err)
+			writeErr(w, r, http.StatusConflict, err)
 			return
 		}
-		writeErr(w, http.StatusInternalServerError, err)
+		writeErr(w, r, http.StatusInternalServerError, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})

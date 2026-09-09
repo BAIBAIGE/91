@@ -4,7 +4,9 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -51,6 +53,19 @@ func TestHandleLogsReturnsFilteredBoundedSnapshot(t *testing.T) {
 	}
 	if len(got.Entries) != 1 || got.Entries[0].Message != "worker failed: latest" {
 		t.Fatalf("entries = %#v", got.Entries)
+	}
+}
+
+func TestHandleLogsDoesNotWriteAnErrorForCanceledQueries(t *testing.T) {
+	store := newAdminLogsTestStore(t)
+	appendAdminLog(t, store, applog.Entry{Message: "existing entry"})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/logs", nil).WithContext(ctx)
+	rr := httptest.NewRecorder()
+	(&AdminServer{Logs: store}).handleLogs(rr, req)
+	if rr.Body.Len() != 0 {
+		t.Fatalf("canceled query produced a response: %s", rr.Body.String())
 	}
 }
 
@@ -180,7 +195,7 @@ func TestHandleLogsValidatesQuery(t *testing.T) {
 func TestHandleClearLogsRemovesPersistentHistoryAndInvalidatesCursor(t *testing.T) {
 	store := newAdminLogsTestStore(t)
 	appendAdminLog(t, store, applog.Entry{Source: applog.SourceApplication, Message: "before clear"})
-	before, err := store.Query(applog.Query{Limit: 10})
+	before, err := store.Query(context.Background(), applog.Query{Limit: 10})
 	if err != nil {
 		t.Fatalf("query before clear: %v", err)
 	}
@@ -193,7 +208,7 @@ func TestHandleClearLogsRemovesPersistentHistoryAndInvalidatesCursor(t *testing.
 	}
 
 	appendAdminLog(t, store, applog.Entry{Source: applog.SourceApplication, Message: "after clear"})
-	after, err := store.Query(applog.Query{Limit: 10, Cursor: before.NextCursor})
+	after, err := store.Query(context.Background(), applog.Query{Limit: 10, Cursor: before.NextCursor})
 	if err != nil {
 		t.Fatalf("query after clear: %v", err)
 	}
@@ -280,6 +295,44 @@ func newAdminLogsTestStore(t *testing.T) *applog.Store {
 	}
 	t.Cleanup(func() { _ = store.Close() })
 	return store
+}
+
+func TestWriteErrRecordsCauseAndRequestIdentity(t *testing.T) {
+	store := newAdminLogsTestStore(t)
+	previous := log.Writer()
+	log.SetOutput(store.Writer(applog.SourceApplication))
+	defer log.SetOutput(previous)
+	r := httptest.NewRequest(http.MethodGet, "/admin/api/drives", nil)
+	r = r.WithContext(applog.WithFields(r.Context(), applog.Fields{RequestID: "request-1"}))
+	writeErr(httptest.NewRecorder(), r, http.StatusInternalServerError, errors.New("database is locked"))
+	result, err := store.Query(context.Background(), applog.Query{Level: applog.LevelError, Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Entries) != 1 || result.Entries[0].Error != "database is locked" || result.Entries[0].RequestID != "request-1" {
+		t.Fatalf("result=%+v", result)
+	}
+}
+
+func TestLogsHistoryExportAndTimeRangeValidation(t *testing.T) {
+	store := newAdminLogsTestStore(t)
+	server := &AdminServer{Logs: store}
+	for i := 0; i < 12; i++ {
+		appendAdminLog(t, store, applog.Entry{Message: "retained log", Level: applog.LevelError})
+	}
+	rr := httptest.NewRecorder()
+	server.handleLogs(rr, httptest.NewRequest(http.MethodGet, "/admin/api/logs?download=1&limit=1&level=error", nil))
+	if rr.Code != http.StatusOK || strings.Count(rr.Body.String(), "retained log") != 12 {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Header().Get("Content-Disposition"), "attachment") {
+		t.Fatal("missing attachment header")
+	}
+	for _, query := range []string{"before=-1", "before=0", "before=1&cursor=anything", "from=invalid", "from=2026-09-10T00:00:00Z&to=2026-09-09T00:00:00Z"} {
+		if _, err := parseLogQuery(httptest.NewRequest(http.MethodGet, "/admin/api/logs?"+query, nil)); err == nil {
+			t.Fatalf("query accepted: %s", query)
+		}
+	}
 }
 
 func appendAdminLog(t *testing.T, store *applog.Store, entry applog.Entry) {

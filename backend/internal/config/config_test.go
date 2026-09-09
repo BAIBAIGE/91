@@ -151,7 +151,7 @@ func TestLoggingDefaultsAndCanBeDisabled(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !defaults.Logging.IsFileEnabled() || defaults.Logging.Directory != "./data/logs" ||
-		defaults.Logging.MaxFileSizeMB != 10 || defaults.Logging.MaxTotalSizeMB != 50 {
+		defaults.Logging.MaxFileSizeMB != 5 || defaults.Logging.MaxTotalSizeMB != 30 {
 		t.Fatalf("logging defaults = %+v", defaults.Logging)
 	}
 

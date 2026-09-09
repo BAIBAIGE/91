@@ -58,7 +58,7 @@ func main() {
 	}
 	// stderr is always kept as the operational log sink. The durable admin log
 	// file is attached after configuration paths have been resolved.
-	log.SetOutput(os.Stderr)
+	log.SetOutput(applog.Output(os.Stderr, nil))
 
 	cfgPath := "./config.yaml"
 	if v := os.Getenv("VIDEO_CONFIG"); v != "" {
@@ -100,6 +100,14 @@ func main() {
 		}
 	}
 
+	logStore := openRuntimeLogs(cfg.Logging)
+	if logStore != nil {
+		defer func() {
+			if err := logStore.Close(); err != nil {
+				fmt.Fprintf(os.Stderr, "close runtime log: %s\n", applog.Redact(err.Error()))
+			}
+		}()
+	}
 	if err := os.MkdirAll(filepath.Dir(cfg.Storage.DBPath), 0o755); err != nil {
 		log.Fatalf("mkdir db dir: %v", err)
 	}
@@ -159,29 +167,6 @@ func main() {
 			log.Fatalf("reload migrated config: %v", err)
 		}
 		log.Printf("[config] migrated runtime settings into config.yaml")
-	}
-
-	var logStore *applog.Store
-	if cfg.Logging.IsFileEnabled() {
-		logStore, err = applog.Open(applog.Config{
-			Directory:         cfg.Logging.Directory,
-			MaxLineBytes:      applog.DefaultMaxLineBytes,
-			MaxFileSizeBytes:  int64(cfg.Logging.MaxFileSizeMB) * 1024 * 1024,
-			MaxTotalSizeBytes: int64(cfg.Logging.MaxTotalSizeMB) * 1024 * 1024,
-		})
-		if err != nil {
-			log.Printf("[logging] file logging unavailable: %v", err)
-			logStore = nil
-		} else {
-			defer func() {
-				if closeErr := logStore.Close(); closeErr != nil {
-					fmt.Fprintf(os.Stderr, "close runtime log: %v\n", closeErr)
-				}
-			}()
-			log.SetOutput(io.MultiWriter(os.Stderr, logStore.Writer(applog.SourceApplication)))
-			log.Printf("[logging] durable runtime log enabled dir=%s max_file_mb=%d max_total_mb=%d",
-				logStore.Directory(), cfg.Logging.MaxFileSizeMB, cfg.Logging.MaxTotalSizeMB)
-		}
 	}
 
 	app := &App{
@@ -392,16 +377,17 @@ func main() {
 		OnDriveRemoved: func(driveID string) {
 			app.detachDrive(driveID)
 		},
-		OnScanRequested: func(driveID string) bool {
+		OnScanRequested: func(requestCtx context.Context, driveID string) bool {
+			taskCtx := applog.WithFields(ctx, applog.ContextFields(requestCtx))
 			// 爬虫类 drive 的"重扫"等同于手动触发一次爬取；其它 drive 走标准 scan
 			isScriptCrawler := false
 			if d, err := app.cat.GetDrive(ctx, driveID); err == nil && d != nil {
 				isScriptCrawler = d.Kind == scriptcrawler.Kind
 			}
 			if isScriptCrawler {
-				return app.scheduleScriptCrawlerCrawl(ctx, driveID)
+				return app.scheduleScriptCrawlerCrawl(taskCtx, driveID)
 			}
-			return app.scheduleScan(ctx, driveID)
+			return app.scheduleScan(taskCtx, driveID)
 		},
 		OnCrawlerUploadRequested: func(driveID string) (bool, string) {
 			return app.scheduleManualCrawlerUploadMigration(ctx, driveID)
@@ -560,6 +546,24 @@ func main() {
 		os.Exit(backup.RestartExitCode)
 	}
 	backupManager.Close()
+}
+
+func openRuntimeLogs(cfg config.Logging) *applog.Store {
+	if !cfg.IsFileEnabled() {
+		return nil
+	}
+	store, err := applog.Open(applog.Config{
+		Directory: cfg.Directory, MaxLineBytes: applog.DefaultMaxLineBytes,
+		MaxFileSizeBytes:  int64(cfg.MaxFileSizeMB) * 1024 * 1024,
+		MaxTotalSizeBytes: int64(cfg.MaxTotalSizeMB) * 1024 * 1024,
+	})
+	if err != nil {
+		log.Printf("[logging] file logging unavailable: %v", err)
+		return nil
+	}
+	log.SetOutput(applog.Output(os.Stderr, store))
+	log.Printf("[logging] durable runtime log enabled dir=%s max_file_mb=%d max_total_mb=%d", store.Directory(), cfg.MaxFileSizeMB, cfg.MaxTotalSizeMB)
+	return store
 }
 
 func loadApplicationConfig(path, workingDir string) (*config.Config, *config.Config, error) {

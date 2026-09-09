@@ -15,8 +15,8 @@ import (
 
 const maxBackupTransferJSONBytes int64 = 32 << 10
 
-func (a *AdminServer) handleListBackupTransfers(w http.ResponseWriter, _ *http.Request) {
-	if !a.backupTransfersAvailable(w) {
+func (a *AdminServer) handleListBackupTransfers(w http.ResponseWriter, r *http.Request) {
+	if !a.backupTransfersAvailable(w, r) {
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
@@ -24,7 +24,7 @@ func (a *AdminServer) handleListBackupTransfers(w http.ResponseWriter, _ *http.R
 }
 
 func (a *AdminServer) handleListBackupReceiveTransfers(w http.ResponseWriter, r *http.Request) {
-	if !a.backupTransfersAvailable(w) {
+	if !a.backupTransfersAvailable(w, r) {
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
@@ -32,7 +32,7 @@ func (a *AdminServer) handleListBackupReceiveTransfers(w http.ResponseWriter, r 
 }
 
 func (a *AdminServer) handleCancelBackupReceiveTransfer(w http.ResponseWriter, r *http.Request) {
-	if !a.backupTransfersAvailable(w) {
+	if !a.backupTransfersAvailable(w, r) {
 		return
 	}
 	if err := a.BackupTransfers.CancelReceiveTransfer(routeParam(r, "id")); err != nil {
@@ -44,7 +44,7 @@ func (a *AdminServer) handleCancelBackupReceiveTransfer(w http.ResponseWriter, r
 			errors.Is(err, backuptransfer.ErrTransferTerminal):
 			code = http.StatusConflict
 		}
-		writeErr(w, code, err)
+		writeErr(w, r, code, err)
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
@@ -52,7 +52,7 @@ func (a *AdminServer) handleCancelBackupReceiveTransfer(w http.ResponseWriter, r
 }
 
 func (a *AdminServer) handleCreateBackupTransfer(w http.ResponseWriter, r *http.Request) {
-	if !a.backupTransfersAvailable(w) {
+	if !a.backupTransfersAvailable(w, r) {
 		return
 	}
 	var input struct {
@@ -60,7 +60,7 @@ func (a *AdminServer) handleCreateBackupTransfer(w http.ResponseWriter, r *http.
 		ReceiveToken string `json:"receiveToken"`
 	}
 	if err := decodeBackupTransferJSON(w, r, &input); err != nil {
-		writeErr(w, http.StatusBadRequest, err)
+		writeErr(w, r, http.StatusBadRequest, err)
 		return
 	}
 	job, err := a.BackupTransfers.CreateTransfer(r.Context(), backuptransfer.CreateTransferInput{
@@ -75,14 +75,14 @@ func (a *AdminServer) handleCreateBackupTransfer(w http.ResponseWriter, r *http.
 		} else if errors.Is(err, backuptransfer.ErrTransferBusy) {
 			code = http.StatusConflict
 		}
-		writeErr(w, code, err)
+		writeErr(w, r, code, err)
 		return
 	}
 	writeJSON(w, http.StatusAccepted, job)
 }
 
 func (a *AdminServer) handleCancelBackupTransfer(w http.ResponseWriter, r *http.Request) {
-	if !a.backupTransfersAvailable(w) {
+	if !a.backupTransfersAvailable(w, r) {
 		return
 	}
 	job, err := a.BackupTransfers.CancelTransfer(routeParam(r, "id"))
@@ -91,14 +91,14 @@ func (a *AdminServer) handleCancelBackupTransfer(w http.ResponseWriter, r *http.
 		if errors.Is(err, backuptransfer.ErrTransferNotFound) {
 			code = http.StatusNotFound
 		}
-		writeErr(w, code, err)
+		writeErr(w, r, code, err)
 		return
 	}
 	writeJSON(w, http.StatusAccepted, job)
 }
 
 func (a *AdminServer) handleRetryBackupTransfer(w http.ResponseWriter, r *http.Request) {
-	if !a.backupTransfersAvailable(w) {
+	if !a.backupTransfersAvailable(w, r) {
 		return
 	}
 	job, err := a.BackupTransfers.RetryTransfer(routeParam(r, "id"))
@@ -107,27 +107,27 @@ func (a *AdminServer) handleRetryBackupTransfer(w http.ResponseWriter, r *http.R
 		if errors.Is(err, backuptransfer.ErrTransferNotFound) {
 			code = http.StatusNotFound
 		}
-		writeErr(w, code, err)
+		writeErr(w, r, code, err)
 		return
 	}
 	writeJSON(w, http.StatusAccepted, job)
 }
 
-func (a *AdminServer) handleListBackupReceiveTokens(w http.ResponseWriter, _ *http.Request) {
-	if !a.backupTransfersAvailable(w) {
+func (a *AdminServer) handleListBackupReceiveTokens(w http.ResponseWriter, r *http.Request) {
+	if !a.backupTransfersAvailable(w, r) {
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, a.BackupTransfers.ListReceiveTokens())
 }
 
-func (a *AdminServer) handleCreateBackupReceiveToken(w http.ResponseWriter, _ *http.Request) {
-	if !a.backupTransfersAvailable(w) {
+func (a *AdminServer) handleCreateBackupReceiveToken(w http.ResponseWriter, r *http.Request) {
+	if !a.backupTransfersAvailable(w, r) {
 		return
 	}
 	token, err := a.BackupTransfers.GenerateReceiveToken(10 * time.Minute)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
+		writeErr(w, r, http.StatusInternalServerError, err)
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
@@ -135,7 +135,7 @@ func (a *AdminServer) handleCreateBackupReceiveToken(w http.ResponseWriter, _ *h
 }
 
 func (a *AdminServer) handleRevokeBackupReceiveToken(w http.ResponseWriter, r *http.Request) {
-	if !a.backupTransfersAvailable(w) {
+	if !a.backupTransfersAvailable(w, r) {
 		return
 	}
 	if err := a.BackupTransfers.RevokeReceiveToken(routeParam(r, "id")); err != nil {
@@ -143,18 +143,18 @@ func (a *AdminServer) handleRevokeBackupReceiveToken(w http.ResponseWriter, r *h
 		if errors.Is(err, backuptransfer.ErrUnauthorized) {
 			code = http.StatusNotFound
 		}
-		writeErr(w, code, err)
+		writeErr(w, r, code, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
 func (a *AdminServer) handlePeerBackupCapabilities(w http.ResponseWriter, r *http.Request) {
-	if !a.backupTransfersAvailable(w) {
+	if !a.backupTransfersAvailable(w, r) {
 		return
 	}
 	if err := a.BackupTransfers.AuthorizeReceiveToken(peerBearerToken(r)); err != nil {
-		writePeerTransferError(w, err)
+		writePeerTransferError(w, r, err)
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
@@ -162,17 +162,17 @@ func (a *AdminServer) handlePeerBackupCapabilities(w http.ResponseWriter, r *htt
 }
 
 func (a *AdminServer) handlePeerBeginBackupImport(w http.ResponseWriter, r *http.Request) {
-	if !a.backupTransfersAvailable(w) {
+	if !a.backupTransfersAvailable(w, r) {
 		return
 	}
 	var input backuptransfer.ImportRequest
 	if err := decodeBackupTransferJSON(w, r, &input); err != nil {
-		writeErr(w, http.StatusBadRequest, err)
+		writeErr(w, r, http.StatusBadRequest, err)
 		return
 	}
 	status, err := a.BackupTransfers.BeginImport(r.Context(), peerBearerToken(r), input)
 	if err != nil {
-		writePeerTransferError(w, err)
+		writePeerTransferError(w, r, err)
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
@@ -180,12 +180,12 @@ func (a *AdminServer) handlePeerBeginBackupImport(w http.ResponseWriter, r *http
 }
 
 func (a *AdminServer) handlePeerBackupImportStatus(w http.ResponseWriter, r *http.Request) {
-	if !a.backupTransfersAvailable(w) {
+	if !a.backupTransfersAvailable(w, r) {
 		return
 	}
 	status, err := a.BackupTransfers.ImportStatus(r.Context(), peerBearerToken(r), routeParam(r, "id"))
 	if err != nil {
-		writePeerTransferError(w, err)
+		writePeerTransferError(w, r, err)
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
@@ -193,21 +193,21 @@ func (a *AdminServer) handlePeerBackupImportStatus(w http.ResponseWriter, r *htt
 }
 
 func (a *AdminServer) handlePeerBackupImportRange(w http.ResponseWriter, r *http.Request) {
-	if !a.backupTransfersAvailable(w) {
+	if !a.backupTransfersAvailable(w, r) {
 		return
 	}
 	index, err := strconv.Atoi(routeParam(r, "index"))
 	if err != nil || index < 0 {
-		writeErr(w, http.StatusBadRequest, errors.New("传输区间序号无效"))
+		writeErr(w, r, http.StatusBadRequest, errors.New("传输区间序号无效"))
 		return
 	}
 	offset, size, totalSize, err := peerContentRange(r.Header.Get("Content-Range"))
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, err)
+		writeErr(w, r, http.StatusBadRequest, err)
 		return
 	}
 	if r.ContentLength >= 0 && r.ContentLength != size {
-		writeErr(w, http.StatusBadRequest, errors.New("Content-Length 与传输区间不一致"))
+		writeErr(w, r, http.StatusBadRequest, errors.New("Content-Length 与传输区间不一致"))
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, backuptransfer.TransferRangeSize+1)
@@ -221,7 +221,7 @@ func (a *AdminServer) handlePeerBackupImportRange(w http.ResponseWriter, r *http
 		totalSize,
 		r.Body,
 	); err != nil {
-		writePeerTransferError(w, err)
+		writePeerTransferError(w, r, err)
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
@@ -229,12 +229,12 @@ func (a *AdminServer) handlePeerBackupImportRange(w http.ResponseWriter, r *http
 }
 
 func (a *AdminServer) handlePeerFinalizeBackupImport(w http.ResponseWriter, r *http.Request) {
-	if !a.backupTransfersAvailable(w) {
+	if !a.backupTransfersAvailable(w, r) {
 		return
 	}
 	status, err := a.BackupTransfers.FinalizeImport(r.Context(), peerBearerToken(r), routeParam(r, "id"))
 	if err != nil {
-		writePeerTransferError(w, err)
+		writePeerTransferError(w, r, err)
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
@@ -242,11 +242,11 @@ func (a *AdminServer) handlePeerFinalizeBackupImport(w http.ResponseWriter, r *h
 }
 
 func (a *AdminServer) handlePeerCancelBackupImport(w http.ResponseWriter, r *http.Request) {
-	if !a.backupTransfersAvailable(w) {
+	if !a.backupTransfersAvailable(w, r) {
 		return
 	}
 	if err := a.BackupTransfers.CancelImport(r.Context(), peerBearerToken(r), routeParam(r, "id")); err != nil {
-		writePeerTransferError(w, err)
+		writePeerTransferError(w, r, err)
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
@@ -301,7 +301,7 @@ func peerContentRange(value string) (offset, size, total int64, err error) {
 	return start, end - start + 1, total, nil
 }
 
-func writePeerTransferError(w http.ResponseWriter, err error) {
+func writePeerTransferError(w http.ResponseWriter, r *http.Request, err error) {
 	w.Header().Set("Cache-Control", "no-store")
 	code := http.StatusBadRequest
 	switch {
@@ -325,13 +325,13 @@ func writePeerTransferError(w http.ResponseWriter, err error) {
 	case errors.Is(err, backup.ErrInsufficientSpace):
 		code = http.StatusInsufficientStorage
 	}
-	writeErr(w, code, err)
+	writeErr(w, r, code, err)
 }
 
-func (a *AdminServer) backupTransfersAvailable(w http.ResponseWriter) bool {
+func (a *AdminServer) backupTransfersAvailable(w http.ResponseWriter, r *http.Request) bool {
 	if a.BackupTransfers != nil {
 		return true
 	}
-	writeErr(w, http.StatusServiceUnavailable, backuptransfer.ErrUnavailable)
+	writeErr(w, r, http.StatusServiceUnavailable, backuptransfer.ErrUnavailable)
 	return false
 }

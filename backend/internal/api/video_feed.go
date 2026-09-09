@@ -64,18 +64,18 @@ type videoFeedResponse struct {
 func (s *Server) handleVideoFeed(w http.ResponseWriter, r *http.Request) {
 	count, err := videoFeedQueryInt(r, "count", defaultVideoFeedBatchSize)
 	if err != nil || count < 1 || count > maxVideoFeedBatchSize {
-		writeErr(w, http.StatusBadRequest, errors.New("invalid video feed count"))
+		writeErr(w, r, http.StatusBadRequest, errors.New("invalid video feed count"))
 		return
 	}
 	cursor, err := videoFeedQueryInt(r, "cursor", 0)
 	if err != nil || cursor < 0 {
-		writeErr(w, http.StatusBadRequest, errors.New("invalid video feed cursor"))
+		writeErr(w, r, http.StatusBadRequest, errors.New("invalid video feed cursor"))
 		return
 	}
 
 	feedToken := strings.TrimSpace(r.URL.Query().Get("feedToken"))
 	if len(feedToken) > 128 {
-		writeErr(w, http.StatusBadRequest, errors.New("invalid video feed token"))
+		writeErr(w, r, http.StatusBadRequest, errors.New("invalid video feed token"))
 		return
 	}
 
@@ -84,7 +84,7 @@ func (s *Server) handleVideoFeed(w http.ResponseWriter, r *http.Request) {
 	var snapshotSeed videoFeedSnapshotSeed
 	if newFeed {
 		if cursor != 0 {
-			writeErr(w, http.StatusBadRequest, errors.New("video feed cursor requires a token"))
+			writeErr(w, r, http.StatusBadRequest, errors.New("video feed cursor requires a token"))
 			return
 		}
 		snapshotSeed, err = s.newVideoFeedSnapshot(r)
@@ -93,20 +93,20 @@ func (s *Server) handleVideoFeed(w http.ResponseWriter, r *http.Request) {
 			if errors.Is(err, errInvalidVideoFeedKind) {
 				status = http.StatusBadRequest
 			}
-			writeErr(w, status, err)
+			writeErr(w, r, status, err)
 			return
 		}
 		videoIDs = snapshotSeed.videoIDs
 	} else {
 		videoIDs, err = s.loadVideoFeed(feedToken)
 		if err != nil {
-			writeErr(w, http.StatusGone, err)
+			writeErr(w, r, http.StatusGone, err)
 			return
 		}
 	}
 
 	if cursor > len(videoIDs) {
-		writeErr(w, http.StatusBadRequest, errors.New("video feed cursor is outside the snapshot"))
+		writeErr(w, r, http.StatusBadRequest, errors.New("video feed cursor is outside the snapshot"))
 		return
 	}
 
@@ -117,14 +117,14 @@ func (s *Server) handleVideoFeed(w http.ResponseWriter, r *http.Request) {
 		count,
 	)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
+		writeErr(w, r, http.StatusInternalServerError, err)
 		return
 	}
 	exhausted := nextCursor >= len(videoIDs)
 	if newFeed && !exhausted {
 		candidateToken, err := newVideoFeedToken()
 		if err != nil {
-			writeErr(w, http.StatusInternalServerError, err)
+			writeErr(w, r, http.StatusInternalServerError, err)
 			return
 		}
 		feedToken, videoIDs = s.storeVideoFeed(

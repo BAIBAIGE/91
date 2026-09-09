@@ -14,7 +14,7 @@ import (
 func (a *AdminServer) handleDriveStorage(w http.ResponseWriter, r *http.Request) {
 	usage, err := collectLocalMediaStorage(r.Context(), a.Catalog, a.LocalPreviewDir)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
+		writeErr(w, r, http.StatusInternalServerError, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, usage)

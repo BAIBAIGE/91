@@ -224,16 +224,16 @@ func normalizeCrawlerProxyURL(raw, label string) (string, error) {
 func (a *AdminServer) handleGetDriveCredentials(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimSpace(chi.URLParam(r, "id"))
 	if id == "" {
-		writeErr(w, http.StatusBadRequest, errors.New("invalid drive id"))
+		writeErr(w, r, http.StatusBadRequest, errors.New("invalid drive id"))
 		return
 	}
 	drive, err := a.Catalog.GetDrive(r.Context(), id)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			writeErr(w, http.StatusNotFound, err)
+			writeErr(w, r, http.StatusNotFound, err)
 			return
 		}
-		writeErr(w, http.StatusInternalServerError, err)
+		writeErr(w, r, http.StatusInternalServerError, err)
 		return
 	}
 	credentials := make(map[string]string, len(drive.Credentials))
@@ -248,7 +248,7 @@ func (a *AdminServer) handleDeleteDrive(w http.ResponseWriter, r *http.Request) 
 	id := chi.URLParam(r, "id")
 	var body deleteDriveReq
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil && !errors.Is(err, io.EOF) {
-		writeErr(w, http.StatusBadRequest, err)
+		writeErr(w, r, http.StatusBadRequest, err)
 		return
 	}
 	if !body.DeleteVideos {
@@ -272,25 +272,25 @@ func (a *AdminServer) handleDeleteDrive(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if err := a.prepareDriveDelete(r.Context(), id); err != nil {
-		writeErr(w, http.StatusInternalServerError, fmt.Errorf("stop drive tasks before delete: %w", err))
+		writeErr(w, r, http.StatusInternalServerError, fmt.Errorf("stop drive tasks before delete: %w", err))
 		return
 	}
 	removed, err := a.OnDriveDeleteCleanup(r.Context(), id)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
+		writeErr(w, r, http.StatusInternalServerError, err)
 		return
 	}
 	deletedVideos = removed
 
 	if err := a.Catalog.DeleteDrive(r.Context(), id); err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
+		writeErr(w, r, http.StatusInternalServerError, err)
 		return
 	}
 	if a.OnDriveRemoved != nil {
 		a.OnDriveRemoved(id)
 	}
 	if err := completeDriveDelete(configLease); err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
+		writeErr(w, r, http.StatusInternalServerError, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "deletedVideos": deletedVideos})
@@ -338,7 +338,7 @@ func (a *AdminServer) handleRescan(w http.ResponseWriter, r *http.Request) {
 
 	accepted := true
 	if a.OnScanRequested != nil {
-		accepted = a.OnScanRequested(id)
+		accepted = a.OnScanRequested(r.Context(), id)
 	}
 	resp := map[string]any{"ok": true, "accepted": accepted}
 	if !accepted {
@@ -387,7 +387,7 @@ func (a *AdminServer) handleQuarkQRStart(w http.ResponseWriter, r *http.Request)
 	w.Header().Set("Cache-Control", "no-store")
 	session, err := a.getQuarkQRClient().Generate(r.Context())
 	if err != nil {
-		writeErr(w, http.StatusBadGateway, err)
+		writeErr(w, r, http.StatusBadGateway, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, session)
@@ -404,20 +404,20 @@ func (a *AdminServer) handleQuarkQRStatus(w http.ResponseWriter, r *http.Request
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&body); err != nil {
-		writeErr(w, http.StatusBadRequest, err)
+		writeErr(w, r, http.StatusBadRequest, err)
 		return
 	}
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		writeErr(w, http.StatusBadRequest, errors.New("request body must contain one JSON object"))
+		writeErr(w, r, http.StatusBadRequest, errors.New("request body must contain one JSON object"))
 		return
 	}
 	if strings.TrimSpace(body.Token) == "" {
-		writeErr(w, http.StatusBadRequest, errors.New("token is required"))
+		writeErr(w, r, http.StatusBadRequest, errors.New("token is required"))
 		return
 	}
 	status, err := a.getQuarkQRClient().Poll(r.Context(), body.Token)
 	if err != nil {
-		writeErr(w, http.StatusBadGateway, err)
+		writeErr(w, r, http.StatusBadGateway, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, status)
@@ -427,7 +427,7 @@ func (a *AdminServer) handleP115QRStart(w http.ResponseWriter, r *http.Request) 
 	w.Header().Set("Cache-Control", "no-store")
 	session, err := a.p115QRClient().Generate(r.Context())
 	if err != nil {
-		writeErr(w, http.StatusBadGateway, err)
+		writeErr(w, r, http.StatusBadGateway, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, session)
@@ -446,20 +446,20 @@ func (a *AdminServer) handleP115QRStatus(w http.ResponseWriter, r *http.Request)
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&body); err != nil {
-		writeErr(w, http.StatusBadRequest, err)
+		writeErr(w, r, http.StatusBadRequest, err)
 		return
 	}
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		writeErr(w, http.StatusBadRequest, errors.New("request body must contain one JSON object"))
+		writeErr(w, r, http.StatusBadRequest, errors.New("request body must contain one JSON object"))
 		return
 	}
 	if strings.TrimSpace(body.UID) == "" || body.Time <= 0 || strings.TrimSpace(body.Sign) == "" {
-		writeErr(w, http.StatusBadRequest, errors.New("uid, time and sign are required"))
+		writeErr(w, r, http.StatusBadRequest, errors.New("uid, time and sign are required"))
 		return
 	}
 	status, err := a.p115QRClient().Poll(r.Context(), body.UID, body.Time, body.Sign)
 	if err != nil {
-		writeErr(w, http.StatusBadGateway, err)
+		writeErr(w, r, http.StatusBadGateway, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, status)
@@ -468,7 +468,7 @@ func (a *AdminServer) handleP115QRStatus(w http.ResponseWriter, r *http.Request)
 func (a *AdminServer) handleP123QRStart(w http.ResponseWriter, r *http.Request) {
 	session, err := a.p123QRClient().Generate(r.Context())
 	if err != nil {
-		writeErr(w, http.StatusBadGateway, err)
+		writeErr(w, r, http.StatusBadGateway, err)
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
@@ -484,7 +484,7 @@ func (a *AdminServer) handleP123QRStatus(w http.ResponseWriter, r *http.Request)
 	}
 	status, err := a.p123QRClient().Poll(r.Context(), loginUUID, uniID)
 	if err != nil {
-		writeErr(w, http.StatusBadGateway, err)
+		writeErr(w, r, http.StatusBadGateway, err)
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
@@ -501,7 +501,7 @@ func (a *AdminServer) wopanQRClient() *wopan.QRClient {
 func (a *AdminServer) handleWopanQRStart(w http.ResponseWriter, r *http.Request) {
 	session, err := a.wopanQRClient().Generate(r.Context())
 	if err != nil {
-		writeErr(w, http.StatusBadGateway, err)
+		writeErr(w, r, http.StatusBadGateway, err)
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
@@ -516,7 +516,7 @@ func (a *AdminServer) handleWopanQRStatus(w http.ResponseWriter, r *http.Request
 	}
 	status, err := a.wopanQRClient().Poll(r.Context(), uuid)
 	if err != nil {
-		writeErr(w, http.StatusBadGateway, err)
+		writeErr(w, r, http.StatusBadGateway, err)
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
@@ -533,7 +533,7 @@ func (a *AdminServer) guangYaPanQRClient() *guangyapan.QRClient {
 func (a *AdminServer) handleGuangYaPanQRStart(w http.ResponseWriter, r *http.Request) {
 	session, err := a.guangYaPanQRClient().Generate(r.Context())
 	if err != nil {
-		writeErr(w, http.StatusBadGateway, err)
+		writeErr(w, r, http.StatusBadGateway, err)
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
@@ -548,7 +548,7 @@ func (a *AdminServer) handleGuangYaPanQRStatus(w http.ResponseWriter, r *http.Re
 	}
 	status, err := a.guangYaPanQRClient().Poll(r.Context(), deviceCode)
 	if err != nil {
-		writeErr(w, http.StatusBadGateway, err)
+		writeErr(w, r, http.StatusBadGateway, err)
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
@@ -637,7 +637,7 @@ func (a *AdminServer) handleSetDriveSkipDirs(w http.ResponseWriter, r *http.Requ
 	}
 	var body skipDirsReq
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeErr(w, http.StatusBadRequest, err)
+		writeErr(w, r, http.StatusBadRequest, err)
 		return
 	}
 	// 去重 + trim 空白；前端理论上保证清洁，这里再防一道。
@@ -669,12 +669,12 @@ func (a *AdminServer) handleSetDriveSkipDirs(w http.ResponseWriter, r *http.Requ
 			http.Error(w, "drive not found", http.StatusNotFound)
 			return
 		}
-		writeErr(w, http.StatusInternalServerError, err)
+		writeErr(w, r, http.StatusInternalServerError, err)
 		return
 	}
 	deferred, applyErr := commitDriveConfigUpdate(configLease, DriveConfigUpdateScan, nil)
 	if applyErr != nil {
-		writeErr(w, http.StatusInternalServerError, applyErr)
+		writeErr(w, r, http.StatusInternalServerError, applyErr)
 		return
 	}
 	resp := map[string]any{"ok": true, "skipDirIds": cleaned}
@@ -698,13 +698,13 @@ func (a *AdminServer) handleListDriveDirTree(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	if a.ListDriveDirChildren == nil {
-		writeErr(w, http.StatusInternalServerError, errors.New("dirtree not configured"))
+		writeErr(w, r, http.StatusInternalServerError, errors.New("dirtree not configured"))
 		return
 	}
 	parent := r.URL.Query().Get("parent")
 	entries, err := a.ListDriveDirChildren(r.Context(), id, parent)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
+		writeErr(w, r, http.StatusInternalServerError, err)
 		return
 	}
 	if entries == nil {

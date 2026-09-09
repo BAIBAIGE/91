@@ -18,12 +18,12 @@ const (
 )
 
 func (a *AdminServer) handleListBackups(w http.ResponseWriter, r *http.Request) {
-	if !a.backupsAvailable(w) {
+	if !a.backupsAvailable(w, r) {
 		return
 	}
 	result, err := a.Backups.List(r.Context())
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
+		writeErr(w, r, http.StatusInternalServerError, err)
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
@@ -31,7 +31,7 @@ func (a *AdminServer) handleListBackups(w http.ResponseWriter, r *http.Request) 
 }
 
 func (a *AdminServer) handleCreateBackup(w http.ResponseWriter, r *http.Request) {
-	if !a.backupsAvailable(w) {
+	if !a.backupsAvailable(w, r) {
 		return
 	}
 	var input struct {
@@ -43,14 +43,14 @@ func (a *AdminServer) handleCreateBackup(w http.ResponseWriter, r *http.Request)
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&input); err != nil {
 		if !errors.Is(err, io.EOF) {
-			writeErr(w, http.StatusBadRequest, err)
+			writeErr(w, r, http.StatusBadRequest, err)
 			return
 		}
 	} else {
 		bodyPresent = true
 		var trailing any
 		if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
-			writeErr(w, http.StatusBadRequest, errors.New("备份选项请求包含单个 JSON 对象"))
+			writeErr(w, r, http.StatusBadRequest, errors.New("备份选项请求包含单个 JSON 对象"))
 			return
 		}
 	}
@@ -60,7 +60,7 @@ func (a *AdminServer) handleCreateBackup(w http.ResponseWriter, r *http.Request)
 	}
 	if bodyPresent {
 		if !selection.Any() {
-			writeErr(w, http.StatusBadRequest, backup.ErrNoBackupContent)
+			writeErr(w, r, http.StatusBadRequest, backup.ErrNoBackupContent)
 			return
 		}
 	}
@@ -78,14 +78,14 @@ func (a *AdminServer) handleCreateBackup(w http.ResponseWriter, r *http.Request)
 		} else if errors.Is(err, backup.ErrNoBackupContent) {
 			code = http.StatusBadRequest
 		}
-		writeErr(w, code, err)
+		writeErr(w, r, code, err)
 		return
 	}
 	writeJSON(w, http.StatusAccepted, status)
 }
 
 func (a *AdminServer) handleCancelBackup(w http.ResponseWriter, r *http.Request) {
-	if !a.backupsAvailable(w) {
+	if !a.backupsAvailable(w, r) {
 		return
 	}
 	if err := a.Backups.Cancel(); err != nil {
@@ -93,14 +93,14 @@ func (a *AdminServer) handleCancelBackup(w http.ResponseWriter, r *http.Request)
 		if !errors.Is(err, backup.ErrNoRunningTask) {
 			code = http.StatusInternalServerError
 		}
-		writeErr(w, code, err)
+		writeErr(w, r, code, err)
 		return
 	}
 	writeJSON(w, http.StatusAccepted, map[string]bool{"ok": true})
 }
 
 func (a *AdminServer) handleDownloadBackup(w http.ResponseWriter, r *http.Request) {
-	if !a.backupsAvailable(w) {
+	if !a.backupsAvailable(w, r) {
 		return
 	}
 	file, info, name, err := a.Backups.OpenBackup(routeParam(r, "id"))
@@ -109,7 +109,7 @@ func (a *AdminServer) handleDownloadBackup(w http.ResponseWriter, r *http.Reques
 		if errors.Is(err, backup.ErrBackupNotFound) {
 			code = http.StatusNotFound
 		}
-		writeErr(w, code, err)
+		writeErr(w, r, code, err)
 		return
 	}
 	defer file.Close()
@@ -121,11 +121,11 @@ func (a *AdminServer) handleDownloadBackup(w http.ResponseWriter, r *http.Reques
 }
 
 func (a *AdminServer) handleDeleteBackup(w http.ResponseWriter, r *http.Request) {
-	if !a.backupsAvailable(w) {
+	if !a.backupsAvailable(w, r) {
 		return
 	}
 	if a.BackupTransfers != nil && a.BackupTransfers.BackupInUse(routeParam(r, "id")) {
-		writeErr(w, http.StatusConflict, errors.New("该备份正在发送到其它服务器，不能删除"))
+		writeErr(w, r, http.StatusConflict, errors.New("该备份正在发送到其它服务器，不能删除"))
 		return
 	}
 	if err := a.Backups.Delete(routeParam(r, "id")); err != nil {
@@ -136,14 +136,14 @@ func (a *AdminServer) handleDeleteBackup(w http.ResponseWriter, r *http.Request)
 			strings.Contains(err.Error(), "等待恢复") {
 			code = http.StatusConflict
 		}
-		writeErr(w, code, err)
+		writeErr(w, r, code, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
 func (a *AdminServer) handleBeginBackupUpload(w http.ResponseWriter, r *http.Request) {
-	if !a.backupsAvailable(w) {
+	if !a.backupsAvailable(w, r) {
 		return
 	}
 	var input struct {
@@ -153,7 +153,7 @@ func (a *AdminServer) handleBeginBackupUpload(w http.ResponseWriter, r *http.Req
 	decoder := json.NewDecoder(io.LimitReader(r.Body, 8<<10))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&input); err != nil {
-		writeErr(w, http.StatusBadRequest, err)
+		writeErr(w, r, http.StatusBadRequest, err)
 		return
 	}
 	session, err := a.Backups.BeginUpload(r.Context(), backup.BeginUploadInput{
@@ -165,14 +165,14 @@ func (a *AdminServer) handleBeginBackupUpload(w http.ResponseWriter, r *http.Req
 		if errors.Is(err, backup.ErrInsufficientSpace) {
 			code = http.StatusInsufficientStorage
 		}
-		writeErr(w, code, err)
+		writeErr(w, r, code, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, session)
 }
 
 func (a *AdminServer) handleBackupUploadStatus(w http.ResponseWriter, r *http.Request) {
-	if !a.backupsAvailable(w) {
+	if !a.backupsAvailable(w, r) {
 		return
 	}
 	session, err := a.Backups.UploadStatus(routeParam(r, "id"))
@@ -181,7 +181,7 @@ func (a *AdminServer) handleBackupUploadStatus(w http.ResponseWriter, r *http.Re
 		if errors.Is(err, backup.ErrUploadNotFound) {
 			code = http.StatusNotFound
 		}
-		writeErr(w, code, err)
+		writeErr(w, r, code, err)
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
@@ -189,12 +189,12 @@ func (a *AdminServer) handleBackupUploadStatus(w http.ResponseWriter, r *http.Re
 }
 
 func (a *AdminServer) handleBackupUploadChunk(w http.ResponseWriter, r *http.Request) {
-	if !a.backupsAvailable(w) {
+	if !a.backupsAvailable(w, r) {
 		return
 	}
 	index, err := strconv.Atoi(routeParam(r, "index"))
 	if err != nil || index < 0 {
-		writeErr(w, http.StatusBadRequest, errors.New("分片序号无效"))
+		writeErr(w, r, http.StatusBadRequest, errors.New("分片序号无效"))
 		return
 	}
 	session, err := a.Backups.PutChunk(
@@ -210,14 +210,14 @@ func (a *AdminServer) handleBackupUploadChunk(w http.ResponseWriter, r *http.Req
 		} else if errors.Is(err, backup.ErrUploadFinalizing) {
 			code = http.StatusConflict
 		}
-		writeErr(w, code, err)
+		writeErr(w, r, code, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, session)
 }
 
 func (a *AdminServer) handleFinalizeBackupUpload(w http.ResponseWriter, r *http.Request) {
-	if !a.backupsAvailable(w) {
+	if !a.backupsAvailable(w, r) {
 		return
 	}
 	var input struct {
@@ -227,7 +227,7 @@ func (a *AdminServer) handleFinalizeBackupUpload(w http.ResponseWriter, r *http.
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&input); err != nil {
-		writeErr(w, http.StatusBadRequest, err)
+		writeErr(w, r, http.StatusBadRequest, err)
 		return
 	}
 	var trailing any
@@ -235,7 +235,7 @@ func (a *AdminServer) handleFinalizeBackupUpload(w http.ResponseWriter, r *http.
 		if err == nil {
 			err = errors.New("请求只能包含一个 JSON 对象")
 		}
-		writeErr(w, http.StatusBadRequest, err)
+		writeErr(w, r, http.StatusBadRequest, err)
 		return
 	}
 	record, err := a.Backups.FinalizeUpload(r.Context(), routeParam(r, "id"), input.SHA256)
@@ -249,14 +249,14 @@ func (a *AdminServer) handleFinalizeBackupUpload(w http.ResponseWriter, r *http.
 		case errors.Is(err, backup.ErrInsufficientSpace):
 			code = http.StatusInsufficientStorage
 		}
-		writeErr(w, code, err)
+		writeErr(w, r, code, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, record)
 }
 
 func (a *AdminServer) handleCancelBackupUpload(w http.ResponseWriter, r *http.Request) {
-	if !a.backupsAvailable(w) {
+	if !a.backupsAvailable(w, r) {
 		return
 	}
 	if err := a.Backups.CancelUpload(routeParam(r, "id")); err != nil {
@@ -266,25 +266,25 @@ func (a *AdminServer) handleCancelBackupUpload(w http.ResponseWriter, r *http.Re
 		} else if errors.Is(err, backup.ErrUploadFinalizing) {
 			code = http.StatusConflict
 		}
-		writeErr(w, code, err)
+		writeErr(w, r, code, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
 func (a *AdminServer) handleRestoreBackup(w http.ResponseWriter, r *http.Request) {
-	if !a.backupsAvailable(w) {
+	if !a.backupsAvailable(w, r) {
 		return
 	}
 	var request backup.RestoreRequest
 	decoder := json.NewDecoder(io.LimitReader(r.Body, 8<<10))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&request); err != nil {
-		writeErr(w, http.StatusBadRequest, err)
+		writeErr(w, r, http.StatusBadRequest, err)
 		return
 	}
 	if request.Confirmation != "确认恢复" {
-		writeErr(w, http.StatusBadRequest, errors.New("请输入固定确认文本“确认恢复”"))
+		writeErr(w, r, http.StatusBadRequest, errors.New("请输入固定确认文本“确认恢复”"))
 		return
 	}
 	report, err := a.Backups.PrepareRestore(r.Context(), routeParam(r, "id"))
@@ -298,7 +298,7 @@ func (a *AdminServer) handleRestoreBackup(w http.ResponseWriter, r *http.Request
 		case errors.Is(err, backup.ErrInsufficientSpace):
 			code = http.StatusInsufficientStorage
 		}
-		writeErr(w, code, err)
+		writeErr(w, r, code, err)
 		return
 	}
 	writeRestoreAccepted(w, a.Backups.RestartManaged(), report)
@@ -343,10 +343,10 @@ func limitRestoreResponseMessages(messages []string) []string {
 	return append([]string(nil), messages...)
 }
 
-func (a *AdminServer) backupsAvailable(w http.ResponseWriter) bool {
+func (a *AdminServer) backupsAvailable(w http.ResponseWriter, r *http.Request) bool {
 	if a.Backups != nil {
 		return true
 	}
-	writeErr(w, http.StatusServiceUnavailable, errors.New("备份服务未配置"))
+	writeErr(w, r, http.StatusServiceUnavailable, errors.New("备份服务未配置"))
 	return false
 }

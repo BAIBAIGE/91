@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"math/rand/v2"
 	"net/http"
 	"net/url"
@@ -23,6 +22,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/video-site/backend/internal/applog"
 	"github.com/video-site/backend/internal/auth"
 	"github.com/video-site/backend/internal/catalog"
 	"github.com/video-site/backend/internal/drives/localstorage"
@@ -309,7 +309,7 @@ func (s *Server) handleGetPreviewSettings(w http.ResponseWriter, r *http.Request
 func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 	count, err := homeRecommendationCount(r)
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, err)
+		writeErr(w, r, http.StatusBadRequest, err)
 		return
 	}
 
@@ -323,7 +323,7 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 		count,
 	)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
+		writeErr(w, r, http.StatusInternalServerError, err)
 		return
 	}
 	recommendationSession.roundVideoIDs = roundVideoIDs
@@ -338,7 +338,7 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleHomeLatest(w http.ResponseWriter, r *http.Request) {
 	count, err := homeRecommendationCount(r)
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, err)
+		writeErr(w, r, http.StatusBadRequest, err)
 		return
 	}
 
@@ -352,7 +352,7 @@ func (s *Server) handleHomeLatest(w http.ResponseWriter, r *http.Request) {
 		count,
 	)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
+		writeErr(w, r, http.StatusInternalServerError, err)
 		return
 	}
 	session.latestVideoIDs = latestVideoIDs
@@ -387,7 +387,7 @@ func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
 	params := publicListParams(r)
 	items, total, err := s.Catalog.ListVideos(r.Context(), params)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
+		writeErr(w, r, http.StatusInternalServerError, err)
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
@@ -871,7 +871,7 @@ func (s *Server) handleTags(w http.ResponseWriter, r *http.Request) {
 
 	stats, err := s.Catalog.ListTags(r.Context())
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
+		writeErr(w, r, http.StatusInternalServerError, err)
 		return
 	}
 	out := make([]TagDTO, 0, len(stats))
@@ -892,7 +892,7 @@ func (s *Server) handleTags(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleUploadTags(w http.ResponseWriter, r *http.Request) {
 	tags, err := s.Catalog.ListUserSelectableTags(r.Context())
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
+		writeErr(w, r, http.StatusInternalServerError, err)
 		return
 	}
 	out := make([]TagDTO, 0, len(tags))
@@ -911,20 +911,20 @@ func (s *Server) handleUpdateVideoTags(w http.ResponseWriter, r *http.Request) {
 	id := routeParam(r, "id")
 	var body updateVideoTagsReq
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeErr(w, http.StatusBadRequest, err)
+		writeErr(w, r, http.StatusBadRequest, err)
 		return
 	}
 	if err := s.Catalog.SetManualVideoTags(r.Context(), id, body.Tags); err != nil {
 		if errors.Is(err, catalog.ErrUnknownTag) {
-			writeErr(w, http.StatusBadRequest, err)
+			writeErr(w, r, http.StatusBadRequest, err)
 			return
 		}
-		writeErr(w, http.StatusInternalServerError, err)
+		writeErr(w, r, http.StatusInternalServerError, err)
 		return
 	}
 	v, err := s.Catalog.GetVideo(r.Context(), id)
 	if err != nil {
-		writeErr(w, http.StatusNotFound, err)
+		writeErr(w, r, http.StatusNotFound, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, mapVideo(v))
@@ -934,7 +934,7 @@ func (s *Server) handleLike(w http.ResponseWriter, r *http.Request) {
 	id := routeParam(r, "id")
 	likes, err := s.Catalog.IncrementLike(r.Context(), id)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
+		writeErr(w, r, http.StatusInternalServerError, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"likes": likes})
@@ -950,11 +950,11 @@ func (s *Server) handleSetVideoReaction(w http.ResponseWriter, r *http.Request) 
 	decoder := json.NewDecoder(io.LimitReader(r.Body, 2048))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&body); err != nil {
-		writeErr(w, http.StatusBadRequest, err)
+		writeErr(w, r, http.StatusBadRequest, err)
 		return
 	}
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		writeErr(w, http.StatusBadRequest, errors.New("request body must contain one JSON object"))
+		writeErr(w, r, http.StatusBadRequest, errors.New("request body must contain one JSON object"))
 		return
 	}
 
@@ -968,11 +968,11 @@ func (s *Server) handleSetVideoReaction(w http.ResponseWriter, r *http.Request) 
 		switch {
 		case errors.Is(err, catalog.ErrInvalidVideoReaction),
 			errors.Is(err, catalog.ErrInvalidVideoReactionVisitID):
-			writeErr(w, http.StatusBadRequest, err)
+			writeErr(w, r, http.StatusBadRequest, err)
 		case errors.Is(err, sql.ErrNoRows):
-			writeErr(w, http.StatusNotFound, err)
+			writeErr(w, r, http.StatusNotFound, err)
 		default:
-			writeErr(w, http.StatusInternalServerError, err)
+			writeErr(w, r, http.StatusInternalServerError, err)
 		}
 		return
 	}
@@ -986,10 +986,10 @@ func (s *Server) handleUnlike(w http.ResponseWriter, r *http.Request) {
 	likes, err := s.Catalog.DecrementLike(r.Context(), id)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			writeErr(w, http.StatusNotFound, err)
+			writeErr(w, r, http.StatusNotFound, err)
 			return
 		}
-		writeErr(w, http.StatusInternalServerError, err)
+		writeErr(w, r, http.StatusInternalServerError, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"likes": likes})
@@ -1000,10 +1000,10 @@ func (s *Server) handleView(w http.ResponseWriter, r *http.Request) {
 	views, err := s.Catalog.IncrementView(r.Context(), id)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			writeErr(w, http.StatusNotFound, err)
+			writeErr(w, r, http.StatusNotFound, err)
 			return
 		}
-		writeErr(w, http.StatusInternalServerError, err)
+		writeErr(w, r, http.StatusInternalServerError, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"views": views})
@@ -1020,10 +1020,10 @@ func (s *Server) handleHideVideo(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			writeErr(w, http.StatusNotFound, err)
+			writeErr(w, r, http.StatusNotFound, err)
 			return
 		}
-		writeErr(w, http.StatusInternalServerError, err)
+		writeErr(w, r, http.StatusInternalServerError, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
@@ -1031,11 +1031,11 @@ func (s *Server) handleHideVideo(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleUploadVideo(w http.ResponseWriter, r *http.Request) {
 	if s.LocalDir == "" {
-		writeErr(w, http.StatusInternalServerError, errors.New("local storage is not configured"))
+		writeErr(w, r, http.StatusInternalServerError, errors.New("local storage is not configured"))
 		return
 	}
 	if err := r.ParseMultipartForm(32 << 20); err != nil {
-		writeErr(w, http.StatusBadRequest, err)
+		writeErr(w, r, http.StatusBadRequest, err)
 		return
 	}
 	if r.MultipartForm != nil {
@@ -1044,7 +1044,7 @@ func (s *Server) handleUploadVideo(w http.ResponseWriter, r *http.Request) {
 
 	file, header, err := r.FormFile("file")
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, errors.New("video file is required"))
+		writeErr(w, r, http.StatusBadRequest, errors.New("video file is required"))
 		return
 	}
 	defer file.Close()
@@ -1052,7 +1052,7 @@ func (s *Server) handleUploadVideo(w http.ResponseWriter, r *http.Request) {
 	originalName := filepath.Base(strings.TrimSpace(header.Filename))
 	ext := strings.ToLower(filepath.Ext(originalName))
 	if _, ok := allowedUploadExtensions[ext]; !ok {
-		writeErr(w, http.StatusBadRequest, fmt.Errorf("unsupported video extension: %s", ext))
+		writeErr(w, r, http.StatusBadRequest, fmt.Errorf("unsupported video extension: %s", ext))
 		return
 	}
 
@@ -1062,7 +1062,7 @@ func (s *Server) handleUploadVideo(w http.ResponseWriter, r *http.Request) {
 		if isUploadTagValidationError(err) {
 			status = http.StatusBadRequest
 		}
-		writeErr(w, status, err)
+		writeErr(w, r, status, err)
 		return
 	}
 
@@ -1072,23 +1072,23 @@ func (s *Server) handleUploadVideo(w http.ResponseWriter, r *http.Request) {
 		title = uploadTitleFromFileName(originalName)
 	}
 	if err := videoname.ValidateUploadTitle(title, ext); err != nil {
-		writeErr(w, http.StatusBadRequest, err)
+		writeErr(w, r, http.StatusBadRequest, err)
 		return
 	}
 
 	uploadID, err := newUploadID(now)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
+		writeErr(w, r, http.StatusInternalServerError, err)
 		return
 	}
 	storedName := videoname.UploadFileName(title, ext, uploadID, false)
 	dst, err := s.localUploadFilePath(storedName)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
+		writeErr(w, r, http.StatusInternalServerError, err)
 		return
 	}
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
+		writeErr(w, r, http.StatusInternalServerError, err)
 		return
 	}
 
@@ -1096,11 +1096,11 @@ func (s *Server) handleUploadVideo(w http.ResponseWriter, r *http.Request) {
 		storedName = videoname.UploadFileName(title, ext, uploadID, true)
 		dst, err = s.localUploadFilePath(storedName)
 		if err != nil {
-			writeErr(w, http.StatusInternalServerError, err)
+			writeErr(w, r, http.StatusInternalServerError, err)
 			return
 		}
 	} else if !os.IsNotExist(statErr) {
-		writeErr(w, http.StatusInternalServerError, statErr)
+		writeErr(w, r, http.StatusInternalServerError, statErr)
 		return
 	}
 	partPath := dst + ".part"
@@ -1114,7 +1114,7 @@ func (s *Server) handleUploadVideo(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
+		writeErr(w, r, http.StatusInternalServerError, err)
 		return
 	}
 	title = videoname.TitleFromFileName(storedName)
@@ -1122,22 +1122,22 @@ func (s *Server) handleUploadVideo(w http.ResponseWriter, r *http.Request) {
 	closeErr := out.Close()
 	if copyErr != nil {
 		_ = os.Remove(partPath)
-		writeErr(w, http.StatusInternalServerError, copyErr)
+		writeErr(w, r, http.StatusInternalServerError, copyErr)
 		return
 	}
 	if closeErr != nil {
 		_ = os.Remove(partPath)
-		writeErr(w, http.StatusInternalServerError, closeErr)
+		writeErr(w, r, http.StatusInternalServerError, closeErr)
 		return
 	}
 	if size <= 0 {
 		_ = os.Remove(partPath)
-		writeErr(w, http.StatusBadRequest, errors.New("uploaded video is empty"))
+		writeErr(w, r, http.StatusBadRequest, errors.New("uploaded video is empty"))
 		return
 	}
 	if err := os.Chmod(partPath, 0o644); err != nil {
 		_ = os.Remove(partPath)
-		writeErr(w, http.StatusInternalServerError, err)
+		writeErr(w, r, http.StatusInternalServerError, err)
 		return
 	}
 
@@ -1153,16 +1153,16 @@ func (s *Server) handleUploadVideo(w http.ResponseWriter, r *http.Request) {
 	}()
 	if _, err := os.Lstat(dst); err == nil {
 		_ = os.Remove(partPath)
-		writeErr(w, http.StatusConflict, errors.New("目标视频文件已存在，请重试"))
+		writeErr(w, r, http.StatusConflict, errors.New("目标视频文件已存在，请重试"))
 		return
 	} else if !os.IsNotExist(err) {
 		_ = os.Remove(partPath)
-		writeErr(w, http.StatusInternalServerError, err)
+		writeErr(w, r, http.StatusInternalServerError, err)
 		return
 	}
 	if err := os.Rename(partPath, dst); err != nil {
 		_ = os.Remove(partPath)
-		writeErr(w, http.StatusInternalServerError, err)
+		writeErr(w, r, http.StatusInternalServerError, err)
 		return
 	}
 
@@ -1182,13 +1182,13 @@ func (s *Server) handleUploadVideo(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.Catalog.UpsertVideo(r.Context(), video); err != nil {
 		_ = os.Remove(dst)
-		writeErr(w, http.StatusInternalServerError, err)
+		writeErr(w, r, http.StatusInternalServerError, err)
 		return
 	}
 	if len(tags) > 0 {
 		if err := s.Catalog.SetManualVideoTags(r.Context(), video.ID, tags); err != nil {
 			_ = os.Remove(dst)
-			writeErr(w, http.StatusInternalServerError, err)
+			writeErr(w, r, http.StatusInternalServerError, err)
 			return
 		}
 		if saved, err := s.Catalog.GetVideo(r.Context(), video.ID); err == nil {
@@ -1216,7 +1216,7 @@ func (s *Server) handleVideoSubtitles(w http.ResponseWriter, r *http.Request) {
 	}
 	subs, err := s.loadVideoSubtitles(r.Context(), v)
 	if err != nil {
-		writeErr(w, http.StatusBadGateway, err)
+		writeErr(w, r, http.StatusBadGateway, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, mapSubtitles(v.ID, subs))
@@ -1229,7 +1229,7 @@ func (s *Server) handleSubtitleFile(w http.ResponseWriter, r *http.Request) {
 	}
 	index, err := strconv.Atoi(routeParam(r, "index"))
 	if err != nil || index < 0 {
-		writeErr(w, http.StatusBadRequest, errors.New("invalid subtitle index"))
+		writeErr(w, r, http.StatusBadRequest, errors.New("invalid subtitle index"))
 		return
 	}
 	s.serveSubtitleSelection(w, r, v, index)
@@ -1242,7 +1242,7 @@ func (s *Server) visibleVideo(w http.ResponseWriter, r *http.Request, id string)
 		return nil, false
 	}
 	if v.Hidden {
-		writeErr(w, http.StatusNotFound, sql.ErrNoRows)
+		writeErr(w, r, http.StatusNotFound, sql.ErrNoRows)
 		return nil, false
 	}
 	return v, true
@@ -1933,13 +1933,16 @@ func writeJSON(w http.ResponseWriter, code int, body any) {
 	_ = json.NewEncoder(w).Encode(body)
 }
 
-func writeErr(w http.ResponseWriter, code int, err error) {
+func writeErr(w http.ResponseWriter, r *http.Request, code int, err error) {
+	if code >= http.StatusInternalServerError {
+		applog.Error(r.Context(), "HTTP request failed", err, applog.Fields{Component: "api", Stage: r.Method + " " + r.URL.Path})
+	}
 	writeJSON(w, code, map[string]string{"error": err.Error()})
 }
 
 func writeCatalogLookupError(w http.ResponseWriter, r *http.Request, err error) {
 	if errors.Is(err, sql.ErrNoRows) {
-		writeErr(w, http.StatusNotFound, sql.ErrNoRows)
+		writeErr(w, r, http.StatusNotFound, sql.ErrNoRows)
 		return
 	}
 	writeServiceUnavailable(w, r, "query catalog", err)
@@ -1949,7 +1952,7 @@ func writeServiceUnavailable(w http.ResponseWriter, r *http.Request, operation s
 	if r.Context().Err() != nil {
 		return
 	}
-	log.Printf("[api] %s method=%s path=%s: %v", operation, r.Method, r.URL.Path, err)
+	applog.Error(r.Context(), "Service unavailable", err, applog.Fields{Component: "api", Stage: operation + " " + r.Method + " " + r.URL.Path})
 	writeJSON(w, http.StatusServiceUnavailable, map[string]string{
 		"error": "service temporarily unavailable",
 	})

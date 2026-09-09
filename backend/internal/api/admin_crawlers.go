@@ -77,7 +77,7 @@ func (a *AdminServer) handleListCrawlers(w http.ResponseWriter, r *http.Request)
 	w.Header().Set("Cache-Control", "no-store")
 	all, err := a.Catalog.ListDrives(r.Context())
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
+		writeErr(w, r, http.StatusInternalServerError, err)
 		return
 	}
 	generationStatuses := map[string]DriveGenerationStatuses{}
@@ -92,7 +92,7 @@ func (a *AdminServer) handleListCrawlers(w http.ResponseWriter, r *http.Request)
 		}
 		assets, err := a.Catalog.CountCrawlerAssets(r.Context(), d.ID, crawlerVideoIDPrefixes(d))
 		if err != nil {
-			writeErr(w, http.StatusInternalServerError, err)
+			writeErr(w, r, http.StatusInternalServerError, err)
 			return
 		}
 		out = append(out, a.crawlerDTOForDrive(d, assets, generationStatuses[d.ID]))
@@ -198,7 +198,7 @@ func crawlerMetadataForDrive(d *catalog.Drive) scriptcrawler.Metadata {
 func (a *AdminServer) handleUpsertCrawler(w http.ResponseWriter, r *http.Request) {
 	var body upsertCrawlerReq
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeErr(w, http.StatusBadRequest, err)
+		writeErr(w, r, http.StatusBadRequest, err)
 		return
 	}
 	id := strings.TrimSpace(body.ID)
@@ -221,7 +221,7 @@ func (a *AdminServer) handleUpsertCrawler(w http.ResponseWriter, r *http.Request
 		case errors.Is(err, sql.ErrNoRows):
 			// Explicit ID for a new crawler.
 		default:
-			writeErr(w, http.StatusInternalServerError, err)
+			writeErr(w, r, http.StatusInternalServerError, err)
 			return
 		}
 	}
@@ -280,7 +280,7 @@ func (a *AdminServer) handleUpsertCrawler(w http.ResponseWriter, r *http.Request
 	if id == "" {
 		generatedID, err := a.generateCrawlerID(r.Context(), name)
 		if err != nil {
-			writeErr(w, http.StatusInternalServerError, err)
+			writeErr(w, r, http.StatusInternalServerError, err)
 			return
 		}
 		id = generatedID
@@ -308,7 +308,7 @@ func (a *AdminServer) handleUpsertCrawler(w http.ResponseWriter, r *http.Request
 	if err := a.Catalog.UpsertDriveWithOptions(r.Context(), d, catalog.DriveUpsertOptions{
 		PatchCredentials: existing != nil,
 	}); err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
+		writeErr(w, r, http.StatusInternalServerError, err)
 		return
 	}
 	// A script can be overwritten in place while script_path stays unchanged;
@@ -411,7 +411,7 @@ type testCrawlerScriptReq struct {
 func (a *AdminServer) handleTestCrawlerScript(w http.ResponseWriter, r *http.Request) {
 	var body testCrawlerScriptReq
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeErr(w, http.StatusBadRequest, err)
+		writeErr(w, r, http.StatusBadRequest, err)
 		return
 	}
 	scriptPath := strings.TrimSpace(body.ScriptPath)
@@ -434,12 +434,12 @@ func (a *AdminServer) handleTestCrawlerScript(w http.ResponseWriter, r *http.Req
 func (a *AdminServer) handleImportCrawlerScriptFile(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxCrawlerScriptBytes+1024*1024)
 	if err := r.ParseMultipartForm(maxCrawlerScriptBytes + 1024*1024); err != nil {
-		writeErr(w, http.StatusBadRequest, err)
+		writeErr(w, r, http.StatusBadRequest, err)
 		return
 	}
 	file, header, err := r.FormFile("file")
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, errors.New("file is required"))
+		writeErr(w, r, http.StatusBadRequest, errors.New("file is required"))
 		return
 	}
 	defer file.Close()
@@ -449,18 +449,18 @@ func (a *AdminServer) handleImportCrawlerScriptFile(w http.ResponseWriter, r *ht
 		name = header.Filename
 	}
 	if _, err := safeCrawlerScriptFileName(name); err != nil {
-		writeErr(w, http.StatusBadRequest, err)
+		writeErr(w, r, http.StatusBadRequest, err)
 		return
 	}
 	// 先读入并校验元信息，再落盘，避免坏脚本覆盖同名旧脚本
 	data, meta, err := readCrawlerScript(file, maxCrawlerScriptBytes)
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, err)
+		writeErr(w, r, http.StatusBadRequest, err)
 		return
 	}
 	scriptPath, err := a.saveCrawlerScript(r.Context(), name, bytes.NewReader(data), maxCrawlerScriptBytes)
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, err)
+		writeErr(w, r, http.StatusBadRequest, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"scriptPath": scriptPath, "name": meta.Name, "protocol": meta.Protocol})
@@ -469,17 +469,17 @@ func (a *AdminServer) handleImportCrawlerScriptFile(w http.ResponseWriter, r *ht
 func (a *AdminServer) handleImportCrawlerScriptURL(w http.ResponseWriter, r *http.Request) {
 	var body importCrawlerScriptURLReq
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeErr(w, http.StatusBadRequest, err)
+		writeErr(w, r, http.StatusBadRequest, err)
 		return
 	}
 	rawURL := strings.TrimSpace(body.URL)
 	u, err := url.Parse(rawURL)
 	if err != nil || u.Scheme == "" || u.Host == "" {
-		writeErr(w, http.StatusBadRequest, errors.New("脚本链接格式无效"))
+		writeErr(w, r, http.StatusBadRequest, errors.New("脚本链接格式无效"))
 		return
 	}
 	if u.Scheme != "http" && u.Scheme != "https" {
-		writeErr(w, http.StatusBadRequest, errors.New("脚本链接仅支持 http:// 或 https://"))
+		writeErr(w, r, http.StatusBadRequest, errors.New("脚本链接仅支持 http:// 或 https://"))
 		return
 	}
 	downloadURL := crawlerScriptDownloadURL(u)
@@ -490,22 +490,22 @@ func (a *AdminServer) handleImportCrawlerScriptURL(w http.ResponseWriter, r *htt
 	}
 	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, downloadURL.String(), nil)
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, err)
+		writeErr(w, r, http.StatusBadRequest, err)
 		return
 	}
 	req.Header.Set("User-Agent", "video-site-crawler-import/1.0")
 	resp, err := client.Do(req)
 	if err != nil {
-		writeErr(w, http.StatusBadGateway, err)
+		writeErr(w, r, http.StatusBadGateway, err)
 		return
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		writeErr(w, http.StatusBadGateway, fmt.Errorf("下载脚本失败: HTTP %d", resp.StatusCode))
+		writeErr(w, r, http.StatusBadGateway, fmt.Errorf("下载脚本失败: HTTP %d", resp.StatusCode))
 		return
 	}
 	if resp.ContentLength > maxCrawlerScriptBytes {
-		writeErr(w, http.StatusBadRequest, fmt.Errorf("脚本文件不能超过 %d KiB", maxCrawlerScriptBytes/1024))
+		writeErr(w, r, http.StatusBadRequest, fmt.Errorf("脚本文件不能超过 %d KiB", maxCrawlerScriptBytes/1024))
 		return
 	}
 
@@ -517,18 +517,18 @@ func (a *AdminServer) handleImportCrawlerScriptURL(w http.ResponseWriter, r *htt
 		name = "crawler.py"
 	}
 	if _, err := safeCrawlerScriptFileName(name); err != nil {
-		writeErr(w, http.StatusBadRequest, err)
+		writeErr(w, r, http.StatusBadRequest, err)
 		return
 	}
 	// 先读入并校验元信息，再落盘；从原链接更新时远端脚本损坏不会影响本地旧脚本
 	data, meta, err := readCrawlerScript(resp.Body, maxCrawlerScriptBytes)
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, err)
+		writeErr(w, r, http.StatusBadRequest, err)
 		return
 	}
 	scriptPath, err := a.saveCrawlerScript(r.Context(), name, bytes.NewReader(data), maxCrawlerScriptBytes)
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, err)
+		writeErr(w, r, http.StatusBadRequest, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"scriptPath": scriptPath, "name": meta.Name, "protocol": meta.Protocol, "sourceUrl": downloadURL.String()})
@@ -694,7 +694,7 @@ func (a *AdminServer) handleRunCrawler(w http.ResponseWriter, r *http.Request) {
 	}
 	accepted := true
 	if a.OnScanRequested != nil {
-		accepted = a.OnScanRequested(id)
+		accepted = a.OnScanRequested(r.Context(), id)
 	}
 	resp := map[string]any{"ok": true, "accepted": accepted}
 	if !accepted {
@@ -712,7 +712,7 @@ func (a *AdminServer) handleSetCrawlerPaused(w http.ResponseWriter, r *http.Requ
 	}
 	var body crawlerPausedReq
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeErr(w, http.StatusBadRequest, err)
+		writeErr(w, r, http.StatusBadRequest, err)
 		return
 	}
 	configLease, ok := a.beginDriveConfigUpdate(w, id)
@@ -728,7 +728,7 @@ func (a *AdminServer) handleSetCrawlerPaused(w http.ResponseWriter, r *http.Requ
 	if err := a.Catalog.PatchDriveCredentials(r.Context(), id, map[string]string{
 		"paused": strconv.FormatBool(body.Paused),
 	}); err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
+		writeErr(w, r, http.StatusInternalServerError, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "paused": body.Paused})
@@ -754,7 +754,7 @@ func (a *AdminServer) handleUploadCrawlerVideos(w http.ResponseWriter, r *http.R
 
 	assets, err := a.Catalog.CountCrawlerAssets(r.Context(), d.ID, crawlerVideoIDPrefixes(d))
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
+		writeErr(w, r, http.StatusInternalServerError, err)
 		return
 	}
 	generation := DriveGenerationStatuses{}
@@ -847,7 +847,7 @@ func (a *AdminServer) handleDeleteCrawler(w http.ResponseWriter, r *http.Request
 	}
 	d, err := a.Catalog.GetDrive(r.Context(), id)
 	if err != nil {
-		writeErr(w, http.StatusNotFound, err)
+		writeErr(w, r, http.StatusNotFound, err)
 		return
 	}
 	if !isCrawlerDriveKind(d.Kind) {
@@ -858,7 +858,7 @@ func (a *AdminServer) handleDeleteCrawler(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if err := a.prepareDriveDelete(r.Context(), id); err != nil {
-		writeErr(w, http.StatusInternalServerError, fmt.Errorf("stop crawler tasks before delete: %w", err))
+		writeErr(w, r, http.StatusInternalServerError, fmt.Errorf("stop crawler tasks before delete: %w", err))
 		return
 	}
 	if a.OnDriveDeleteCleanup == nil {
@@ -867,7 +867,7 @@ func (a *AdminServer) handleDeleteCrawler(w http.ResponseWriter, r *http.Request
 	}
 	deletedVideos, err := a.OnDriveDeleteCleanup(r.Context(), id)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
+		writeErr(w, r, http.StatusInternalServerError, err)
 		return
 	}
 
@@ -876,14 +876,14 @@ func (a *AdminServer) handleDeleteCrawler(w http.ResponseWriter, r *http.Request
 	deleteErr := a.Catalog.DeleteDrive(r.Context(), id)
 	persistence.RUnlock()
 	if deleteErr != nil {
-		writeErr(w, http.StatusInternalServerError, deleteErr)
+		writeErr(w, r, http.StatusInternalServerError, deleteErr)
 		return
 	}
 	if a.OnDriveRemoved != nil {
 		a.OnDriveRemoved(id)
 	}
 	if err := completeDriveDelete(configLease); err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
+		writeErr(w, r, http.StatusInternalServerError, err)
 		return
 	}
 	resp := map[string]any{

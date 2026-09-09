@@ -3,6 +3,7 @@ package applog
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
@@ -12,7 +13,9 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
+	"time"
 )
 
 const (
@@ -38,9 +41,12 @@ type logFileSnapshot struct {
 	modTimeUnixNano int64
 }
 
-func (s *Store) Query(query Query) (Snapshot, error) {
+func (s *Store) Query(ctx context.Context, query Query) (Snapshot, error) {
 	if s == nil {
 		return Snapshot{}, errors.New("log store is unavailable")
+	}
+	if err := ctx.Err(); err != nil {
+		return Snapshot{}, err
 	}
 	if query.Limit <= 0 {
 		query.Limit = defaultQueryLimit
@@ -57,15 +63,16 @@ func (s *Store) Query(query Query) (Snapshot, error) {
 		Entries:         []Entry{},
 		StorageBytes:    storageBytes,
 		MaxStorageBytes: maxStorageBytes,
+		WriteHealth:     s.Health(),
 	}
 	if strings.TrimSpace(query.Cursor) == "" {
-		return queryLogTail(files, query, base)
+		return queryLogTail(ctx, files, query, base)
 	}
 
 	cursor, err := decodeLogCursor(query.Cursor)
 	if err != nil {
 		base.Reset = true
-		return queryLogTail(files, query, base)
+		return queryLogTail(ctx, files, query, base)
 	}
 	startIndex, ok, err := locateLogCursor(files, cursor)
 	if err != nil {
@@ -73,10 +80,10 @@ func (s *Store) Query(query Query) (Snapshot, error) {
 	}
 	if !ok {
 		base.Reset = true
-		return queryLogTail(files, query, base)
+		return queryLogTail(ctx, files, query, base)
 	}
 
-	entries, nextCursor, err := queryLogsFromCursor(files, startIndex, cursor, query)
+	entries, nextCursor, err := queryLogsFromCursor(ctx, files, startIndex, cursor, query)
 	if err != nil {
 		return Snapshot{}, err
 	}
@@ -89,7 +96,7 @@ func (s *Store) Query(query Query) (Snapshot, error) {
 func (s *Store) snapshotFiles() ([]logFileSnapshot, int64, int64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.closed || s.file == nil {
+	if s.closed {
 		return nil, 0, 0, errors.New("log store is closed")
 	}
 
@@ -153,20 +160,24 @@ func closeLogFileSnapshots(files []logFileSnapshot) {
 	}
 }
 
-func queryLogTail(files []logFileSnapshot, query Query, result Snapshot) (Snapshot, error) {
+func queryLogTail(ctx context.Context, files []logFileSnapshot, query Query, result Snapshot) (Snapshot, error) {
 	reversed := make([]Entry, 0, query.Limit)
-	for i := len(files) - 1; i >= 0 && len(reversed) < query.Limit; i-- {
-		err := scanLogFileReverse(files[i], func(raw []byte) bool {
-			entry, ok := decodeEntry(raw)
-			if !ok || !entryMatches(entry, query) {
+	for i := len(files) - 1; i >= 0 && len(reversed) <= query.Limit; i-- {
+		err := scanLogFileReverse(ctx, files[i], func(raw []byte) bool {
+			entry, ok := decodeMatchingEntry(raw, query)
+			if !ok {
 				return true
 			}
 			reversed = append(reversed, entry)
-			return len(reversed) < query.Limit
+			return len(reversed) <= query.Limit
 		})
 		if err != nil {
 			return Snapshot{}, fmt.Errorf("read log file %s: %w", files[i].name, err)
 		}
+	}
+	result.HasMore = len(reversed) > query.Limit
+	if result.HasMore {
+		reversed = reversed[:query.Limit]
 	}
 	entries := make([]Entry, len(reversed))
 	for i := range reversed {
@@ -184,7 +195,10 @@ func queryLogTail(files []logFileSnapshot, query Query, result Snapshot) (Snapsh
 	return result, nil
 }
 
-func scanLogFileReverse(file logFileSnapshot, visit func([]byte) bool) error {
+func scanLogFileReverse(ctx context.Context, file logFileSnapshot, visit func([]byte) bool) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if file.boundary == 0 {
 		return nil
 	}
@@ -193,6 +207,9 @@ func scanLogFileReverse(file logFileSnapshot, visit func([]byte) bool) error {
 	pending := make([]byte, 0, chunkSize)
 	firstChunk := true
 	for position > 0 {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		start := position - chunkSize
 		if start < 0 {
 			start = 0
@@ -212,6 +229,9 @@ func scanLogFileReverse(file logFileSnapshot, visit func([]byte) bool) error {
 		}
 		firstChunk = false
 		for end > 0 {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			index := bytes.LastIndexByte(data[:end], '\n')
 			if index < 0 {
 				break
@@ -232,12 +252,15 @@ func scanLogFileReverse(file logFileSnapshot, visit func([]byte) bool) error {
 		position = start
 	}
 	if len(pending) > 0 {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		visit(bytes.TrimSuffix(pending, []byte{'\r'}))
 	}
 	return nil
 }
 
-func queryLogsFromCursor(files []logFileSnapshot, startIndex int, cursor logCursor, query Query) ([]Entry, string, error) {
+func queryLogsFromCursor(ctx context.Context, files []logFileSnapshot, startIndex int, cursor logCursor, query Query) ([]Entry, string, error) {
 	entries := make([]Entry, 0, query.Limit)
 	currentFile := files[startIndex]
 	currentOffset := cursor.Offset
@@ -245,6 +268,9 @@ func queryLogsFromCursor(files []logFileSnapshot, startIndex int, cursor logCurs
 
 scanFiles:
 	for i := startIndex; i < len(files); i++ {
+		if err := ctx.Err(); err != nil {
+			return nil, "", err
+		}
 		offset := int64(0)
 		if i == startIndex {
 			offset = cursor.Offset
@@ -260,13 +286,16 @@ scanFiles:
 		scanner.Buffer(make([]byte, 0, 64*1024), maxStructuredLogBytes)
 		position := offset
 		for scanner.Scan() {
+			if err := ctx.Err(); err != nil {
+				return nil, "", err
+			}
 			raw := scanner.Bytes()
 			position += int64(len(raw)) + 1
 			currentFile = files[i]
 			currentOffset = position
 			advanced = true
-			entry, ok := decodeEntry(raw)
-			if ok && entryMatches(entry, query) {
+			entry, ok := decodeMatchingEntry(raw, query)
+			if ok {
 				entries = append(entries, entry)
 				if len(entries) >= query.Limit {
 					break scanFiles
@@ -288,7 +317,16 @@ scanFiles:
 	return entries, nextCursor, nil
 }
 
-func entryMatches(entry Entry, query Query) bool {
+func entryMatchesMetadata(entry Entry, query Query) bool {
+	if query.Before != 0 && entry.ID >= query.Before {
+		return false
+	}
+	if !query.From.IsZero() && entry.Timestamp.Before(query.From) {
+		return false
+	}
+	if !query.To.IsZero() && entry.Timestamp.After(query.To) {
+		return false
+	}
 	if query.Source != "" && entry.Source != query.Source {
 		return false
 	}
@@ -298,17 +336,20 @@ func entryMatches(entry Entry, query Query) bool {
 	if query.Method != "" && entry.Method != query.Method {
 		return false
 	}
-	if query.Search == "" {
-		return true
-	}
+	return true
+}
+
+func entryMatchesSearch(entry Entry, search string) bool {
 	haystack := strings.ToLower(strings.Join([]string{
 		entry.Message,
 		entry.Path,
 		entry.Remote,
 		entry.RequestID,
+		entry.TaskID, entry.DriveID, entry.VideoID, entry.FileID, entry.Stage, entry.Component, entry.Error, entry.Stack,
+		entry.Timestamp.Format(time.RFC3339), strconv.Itoa(entry.Status), string(entry.Level), string(entry.Source),
 		string(entry.Method),
 	}, " "))
-	return strings.Contains(haystack, query.Search)
+	return strings.Contains(haystack, search)
 }
 
 func decodeEntry(raw []byte) (Entry, bool) {
@@ -328,6 +369,70 @@ func decodeEntry(raw []byte) (Entry, bool) {
 	return entry, true
 }
 
+func decodeMatchingEntry(raw []byte, query Query) (Entry, bool) {
+	entry, ok := decodeEntry(raw)
+	if !ok || !entryMatchesMetadata(entry, query) {
+		return Entry{}, false
+	}
+	// Search and output still use sanitized text, including older on-disk logs.
+	redactEntry(&entry)
+	if query.Search != "" && !entryMatchesSearch(entry, query.Search) {
+		return Entry{}, false
+	}
+	return entry, true
+}
+
+// Export reads a bounded snapshot of all retained files, not the viewer window.
+func (s *Store) Export(ctx context.Context, query Query, output io.Writer) error {
+	files, _, _, err := s.snapshotFiles()
+	if err != nil {
+		return err
+	}
+	defer closeLogFileSnapshots(files)
+	query.Search = strings.ToLower(strings.TrimSpace(query.Search))
+	for _, file := range files {
+		reader := bufio.NewScanner(io.NewSectionReader(file.file, 0, file.boundary))
+		reader.Buffer(make([]byte, 64*1024), maxStructuredLogBytes)
+		for reader.Scan() {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			entry, ok := decodeMatchingEntry(reader.Bytes(), query)
+			if !ok {
+				continue
+			}
+			if _, err := fmt.Fprintln(output, FormatEntry(entry)); err != nil {
+				return err
+			}
+		}
+		if err := reader.Err(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func FormatEntry(entry Entry) string {
+	redactEntry(&entry)
+	parts := []string{entry.Timestamp.Format(time.RFC3339), "[" + string(entry.Level) + "]", "[" + string(entry.Source) + "]"}
+	for _, field := range []struct{ key, value string }{
+		{"component", entry.Component}, {"requestId", entry.RequestID}, {"taskId", entry.TaskID}, {"driveId", entry.DriveID}, {"videoId", entry.VideoID}, {"fileId", entry.FileID}, {"stage", entry.Stage},
+	} {
+		if field.value != "" {
+			parts = append(parts, field.key+"="+strconv.Quote(field.value))
+		}
+	}
+	parts = append(parts, entry.Message)
+	if entry.Error != "" {
+		parts = append(parts, "error="+strconv.Quote(entry.Error))
+	}
+	line := strings.Join(parts, " ")
+	if entry.Stack != "" {
+		line += "\n" + entry.Stack
+	}
+	return line
+}
+
 func (s *Store) recoverLastID() (uint64, error) {
 	files, _, _, err := s.snapshotFiles()
 	if err != nil {
@@ -336,7 +441,7 @@ func (s *Store) recoverLastID() (uint64, error) {
 	defer closeLogFileSnapshots(files)
 	for i := len(files) - 1; i >= 0; i-- {
 		var lastID uint64
-		err := scanLogFileReverse(files[i], func(raw []byte) bool {
+		err := scanLogFileReverse(context.Background(), files[i], func(raw []byte) bool {
 			entry, ok := decodeEntry(raw)
 			if !ok {
 				return true

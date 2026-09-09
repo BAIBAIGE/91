@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/video-site/backend/internal/applog"
 	"github.com/video-site/backend/internal/catalog"
 	"github.com/video-site/backend/internal/drives"
 	"github.com/video-site/backend/internal/mediaasset"
@@ -35,6 +36,13 @@ type Config struct {
 	Width           int
 	Segments        int    // 兼容旧配置；当前 30 秒及以上视频固定使用 4 段
 	LocalDir        string // 本地预览视频和封面目录
+}
+
+func generationDriveID(drv drives.Drive) string {
+	if drv == nil {
+		return ""
+	}
+	return drv.ID()
 }
 
 type Generator struct {
@@ -1617,6 +1625,7 @@ func (w *Worker) prepareQueued(ctx context.Context, v *catalog.Video) func() {
 	if w.Catalog == nil || v.ID == "" || ctx.Err() != nil || !w.enabled() {
 		return nil
 	}
+	ctx = applog.WithFields(applog.NewTask(ctx, "preview", generationDriveID(w.Drive)), applog.Fields{VideoID: v.ID, FileID: v.FileID})
 	if w.TaskGuard != nil {
 		release := w.TaskGuard()
 		if release == nil {
@@ -1625,7 +1634,13 @@ func (w *Worker) prepareQueued(ctx context.Context, v *catalog.Video) func() {
 		taskRelease = release
 	}
 	current, err := w.Catalog.GetVideo(ctx, v.ID)
-	if err != nil || current.Hidden {
+	if err != nil {
+		if ctx.Err() == nil {
+			applog.Error(ctx, "Read queued video failed", err, applog.Fields{Stage: "lookup"})
+		}
+		return nil
+	}
+	if current.Hidden {
 		return nil
 	}
 	release, ok := acquireGenerationSlot(ctx, w.Limiter, &w.rateLimit, "preview", w.Drive)
@@ -1657,6 +1672,7 @@ func (w *ThumbWorker) processQueued(ctx context.Context, v *catalog.Video) {
 	if v == nil {
 		return
 	}
+	ctx = applog.WithFields(applog.NewTask(ctx, "thumb", generationDriveID(w.Drive)), applog.Fields{VideoID: v.ID, FileID: v.FileID})
 	w.followUpMu.Lock()
 	w.activeVideoID = v.ID
 	w.followUpMu.Unlock()
@@ -1918,7 +1934,7 @@ func (w *ThumbWorker) process(ctx context.Context, v *catalog.Video) bool {
 		if w.pauseForRecoverableError(ctx, v, err, "streamURL") {
 			return true
 		}
-		log.Printf("[thumb] streamURL %s: %v", v.Title, err)
+		applog.Error(ctx, "Thumbnail stream link failed: "+v.Title, err, applog.Fields{Component: "thumb", DriveID: generationDriveID(w.Drive), VideoID: v.ID, FileID: v.FileID, Stage: "streamURL"})
 		_ = w.Catalog.UpdateVideoMeta(ctx, v.ID, catalog.VideoMetaPatch{ThumbnailStatus: "failed"})
 		return false
 	}
@@ -1930,7 +1946,7 @@ func (w *ThumbWorker) process(ctx context.Context, v *catalog.Video) bool {
 		if w.pauseForRecoverableError(ctx, v, err, "generate") {
 			return true
 		}
-		log.Printf("[thumb] generate %s: %v", v.Title, err)
+		applog.Error(ctx, "Thumbnail generation failed: "+v.Title, err, applog.Fields{Component: "thumb", DriveID: generationDriveID(w.Drive), VideoID: v.ID, FileID: v.FileID, Stage: "generate"})
 		_ = w.Catalog.UpdateVideoMeta(ctx, v.ID, catalog.VideoMetaPatch{ThumbnailStatus: "failed"})
 		return false
 	}
@@ -1953,7 +1969,7 @@ func (w *ThumbWorker) probeDuration(ctx context.Context, v *catalog.Video, link 
 	if w.pauseForRecoverableError(ctx, v, err, "probe") {
 		return true
 	}
-	log.Printf("[thumb] probe %s: %v", v.Title, err)
+	applog.Error(ctx, "Thumbnail duration probe failed: "+v.Title, err, applog.Fields{Component: "thumb", DriveID: generationDriveID(w.Drive), VideoID: v.ID, Stage: "probe"})
 	return false
 }
 
@@ -1969,10 +1985,10 @@ func (w *ThumbWorker) generateThumbnailFromLink(ctx context.Context, v *catalog.
 		ThumbnailStatus: "ready",
 	}); err != nil {
 		_ = os.Remove(local)
-		log.Printf("[thumb] update %s after generate: %v", v.Title, err)
+		applog.Error(ctx, "Save thumbnail metadata failed: "+v.Title, err, applog.Fields{Component: "thumb", DriveID: generationDriveID(w.Drive), VideoID: v.ID, Stage: "save"})
 		return nil
 	}
-	log.Printf("[thumb] ready %s", v.Title)
+	applog.Info(ctx, "Thumbnail ready: "+v.Title, applog.Fields{Component: "thumb", DriveID: generationDriveID(w.Drive), VideoID: v.ID})
 	return nil
 }
 
@@ -2031,7 +2047,7 @@ func (w *Worker) process(ctx context.Context, v *catalog.Video) bool {
 		if w.pauseForRecoverableError(err, "streamURL", v.Title) {
 			return true
 		}
-		log.Printf("[preview] streamURL %s: %v", v.Title, err)
+		applog.Error(ctx, "Preview stream link failed: "+v.Title, err, applog.Fields{Component: "preview", DriveID: generationDriveID(w.Drive), VideoID: v.ID, FileID: v.FileID, Stage: "streamURL"})
 		w.Catalog.UpdatePreview(ctx, v.ID, "", "failed")
 		return false
 	}
@@ -2052,7 +2068,7 @@ func (w *Worker) process(ctx context.Context, v *catalog.Video) bool {
 		if w.pauseForRecoverableError(err, "generate", v.Title) {
 			return true
 		}
-		log.Printf("[preview] generate %s: %v", v.Title, err)
+		applog.Error(ctx, "Preview generation failed: "+v.Title, err, applog.Fields{Component: "preview", DriveID: generationDriveID(w.Drive), VideoID: v.ID, FileID: v.FileID, Stage: "generate"})
 		w.Catalog.UpdatePreview(ctx, v.ID, "", "failed")
 		return false
 	}
@@ -2060,7 +2076,7 @@ func (w *Worker) process(ctx context.Context, v *catalog.Video) bool {
 	defer persistence.RUnlock()
 	local, err := w.Gen.MoveToLocal(tmp, v.ID)
 	if err != nil {
-		log.Printf("[preview] move %s: %v", v.Title, err)
+		applog.Error(ctx, "Preview file move failed: "+v.Title, err, applog.Fields{Component: "preview", DriveID: generationDriveID(w.Drive), VideoID: v.ID, Stage: "move"})
 		w.Catalog.UpdatePreview(ctx, v.ID, "", "failed")
 		return false
 	}
@@ -2068,7 +2084,7 @@ func (w *Worker) process(ctx context.Context, v *catalog.Video) bool {
 	removePreviousLocalTeaser(v.PreviewLocal, local)
 	if err := w.Catalog.UpdatePreview(ctx, v.ID, local, "ready"); err != nil {
 		removePreviousLocalTeaser(local, "")
-		log.Printf("[preview] update %s after generate: %v", v.Title, err)
+		applog.Error(ctx, "Save preview metadata failed: "+v.Title, err, applog.Fields{Component: "preview", DriveID: generationDriveID(w.Drive), VideoID: v.ID, Stage: "save"})
 		return false
 	}
 	if w.OnPreviewReady != nil && v.ThumbnailURL == "" {
@@ -2077,7 +2093,7 @@ func (w *Worker) process(ctx context.Context, v *catalog.Video) bool {
 		ready.PreviewStatus = "ready"
 		w.OnPreviewReady(&ready)
 	}
-	log.Printf("[preview] ready %s (duration=%.1fs)", v.Title, duration)
+	applog.Info(ctx, fmt.Sprintf("Preview ready: %s (duration=%.1fs)", v.Title, duration), applog.Fields{Component: "preview", DriveID: generationDriveID(w.Drive), VideoID: v.ID})
 	return false
 }
 

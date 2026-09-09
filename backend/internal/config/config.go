@@ -398,13 +398,13 @@ func (c *Config) applyDefaults() error {
 		c.Logging.Directory = "./data/logs"
 	}
 	if c.Logging.MaxFileSizeMB == 0 {
-		c.Logging.MaxFileSizeMB = 10
+		c.Logging.MaxFileSizeMB = 5
 	}
 	if c.Logging.MaxFileSizeMB < 1 || c.Logging.MaxFileSizeMB > 1024 {
 		return errors.New("logging.max_file_size_mb must be between 1 and 1024")
 	}
 	if c.Logging.MaxTotalSizeMB == 0 {
-		c.Logging.MaxTotalSizeMB = 50
+		c.Logging.MaxTotalSizeMB = 30
 	}
 	if c.Logging.MaxTotalSizeMB < c.Logging.MaxFileSizeMB || c.Logging.MaxTotalSizeMB > 10240 {
 		return errors.New("logging.max_total_size_mb must be at least max_file_size_mb and no more than 10240")

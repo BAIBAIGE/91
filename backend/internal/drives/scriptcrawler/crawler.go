@@ -23,6 +23,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/video-site/backend/internal/applog"
 	"github.com/video-site/backend/internal/catalog"
 	"github.com/video-site/backend/internal/dedupe"
 	"github.com/video-site/backend/internal/fingerprint"
@@ -327,13 +328,28 @@ func (item Item) hasPayload() bool {
 		strings.TrimSpace(item.Media.LocalFile) != ""
 }
 
-func (c *Crawler) RunOnce(ctx context.Context, targetNew int) (*CrawlResult, error) {
+func (c *Crawler) RunOnce(ctx context.Context, targetNew int) (report *CrawlResult, runErr error) {
 	c.runMu.Lock()
 	defer c.runMu.Unlock()
 
 	if c.cfg.Driver == nil {
 		return nil, errors.New("scriptcrawler: driver not set")
 	}
+	ctx = applog.NewTask(ctx, "scriptcrawler", c.cfg.Driver.ID())
+	applog.Info(ctx, "Crawler run started", applog.Fields{})
+	defer func() {
+		if runErr != nil {
+			if errors.Is(runErr, context.Canceled) {
+				applog.Warn(ctx, "Crawler run canceled", runErr, applog.Fields{})
+				return
+			}
+			applog.Error(ctx, "Crawler run failed", runErr, applog.Fields{})
+		} else if report != nil && report.Failed > 0 {
+			applog.Warn(ctx, fmt.Sprintf("Crawler run finished with %d failed items", report.Failed), nil, applog.Fields{})
+		} else {
+			applog.Info(ctx, "Crawler run finished", applog.Fields{})
+		}
+	}()
 	if c.cfg.Catalog == nil {
 		return nil, errors.New("scriptcrawler: catalog not set")
 	}
@@ -572,17 +588,17 @@ func (c *Crawler) startScript(ctx context.Context, jobPath string, targetNew, ca
 		_ = stdout.Close()
 		return nil, nil, err
 	}
-	log.Printf("[scriptcrawler] drive=%s exec %s --job=%s unique_target=%d candidate_budget=%d", c.cfg.Driver.ID(), c.cfg.ScriptPath, jobPath, targetNew, candidateBudget)
+	applog.Info(ctx, fmt.Sprintf("Execute %s --job=%s unique_target=%d candidate_budget=%d", c.cfg.ScriptPath, jobPath, targetNew, candidateBudget), applog.Fields{Stage: "exec"})
 	if err := cmd.Start(); err != nil {
 		_ = stdout.Close()
 		_ = stderr.Close()
 		return nil, nil, err
 	}
-	go forwardScriptLog(c.cfg.Driver.ID(), stderr, c.cfg.MaxStderrBytes)
+	go forwardScriptLog(ctx, c.cfg.Driver.ID(), stderr, c.cfg.MaxStderrBytes)
 	return cmd, stdout, nil
 }
 
-func forwardScriptLog(driveID string, r io.Reader, maxBytes int64) {
+func forwardScriptLog(ctx context.Context, driveID string, r io.Reader, maxBytes int64) {
 	reader := bufio.NewReaderSize(r, maxStderrLineBytes)
 	line := make([]byte, 0, maxStderrLineBytes)
 	var consumed int64
@@ -594,7 +610,10 @@ func forwardScriptLog(driveID string, r io.Reader, maxBytes int64) {
 			if lineTruncated {
 				trimmed += "…"
 			}
-			log.Printf("[scriptcrawler:script] drive=%s %s", driveID, trimmed)
+			fields := applog.ContextFields(ctx)
+			fields.Component = "scriptcrawler:script"
+			fields.DriveID = driveID
+			applog.LogEntry(log.Default(), applog.Entry{Message: trimmed, Fields: fields})
 		}
 		line = line[:0]
 		lineTruncated = false

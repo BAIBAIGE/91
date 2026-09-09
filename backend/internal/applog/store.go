@@ -17,8 +17,8 @@ import (
 
 const (
 	DefaultMaxLineBytes      = 8 * 1024
-	DefaultMaxFileSizeBytes  = 10 * 1024 * 1024
-	DefaultMaxTotalSizeBytes = 200 * 1024 * 1024
+	DefaultMaxFileSizeBytes  = 5 * 1024 * 1024
+	DefaultMaxTotalSizeBytes = 30 * 1024 * 1024
 
 	activeLogFileName     = "runtime.log"
 	maxPathBytes          = 4 * 1024
@@ -56,6 +56,7 @@ const (
 // Entry is one durable JSONL record. HTTP fields are captured directly by the
 // request middleware so filtering never depends on parsing a rendered message.
 type Entry struct {
+	Fields
 	ID        uint64    `json:"id"`
 	Timestamp time.Time `json:"timestamp"`
 	Source    Source    `json:"source"`
@@ -66,8 +67,9 @@ type Entry struct {
 	Remote    string    `json:"remote,omitempty"`
 	Bytes     int       `json:"bytes,omitempty"`
 	Elapsed   string    `json:"elapsed,omitempty"`
-	RequestID string    `json:"requestId,omitempty"`
 	Message   string    `json:"message"`
+	Error     string    `json:"error,omitempty"`
+	Stack     string    `json:"stack,omitempty"`
 }
 
 type Query struct {
@@ -77,15 +79,27 @@ type Query struct {
 	Level  Level
 	Method Method
 	Search string
+	Before uint64
+	From   time.Time
+	To     time.Time
 }
 
 type Snapshot struct {
-	Entries         []Entry `json:"entries"`
-	Matched         int     `json:"matched"`
-	StorageBytes    int64   `json:"storageBytes"`
-	MaxStorageBytes int64   `json:"maxStorageBytes"`
-	NextCursor      string  `json:"nextCursor,omitempty"`
-	Reset           bool    `json:"reset,omitempty"`
+	Entries         []Entry     `json:"entries"`
+	Matched         int         `json:"matched"`
+	StorageBytes    int64       `json:"storageBytes"`
+	MaxStorageBytes int64       `json:"maxStorageBytes"`
+	NextCursor      string      `json:"nextCursor,omitempty"`
+	Reset           bool        `json:"reset,omitempty"`
+	HasMore         bool        `json:"hasMore"`
+	WriteHealth     WriteHealth `json:"writeHealth"`
+}
+
+type WriteHealth struct {
+	LastError     string     `json:"lastError,omitempty"`
+	FailedWrites  uint64     `json:"failedWrites"`
+	LastFailureAt *time.Time `json:"lastFailureAt,omitempty"`
+	LastSuccessAt *time.Time `json:"lastSuccessAt,omitempty"`
 }
 
 type Config struct {
@@ -110,6 +124,8 @@ type Store struct {
 	maxFileSizeBytes  int64
 	maxTotalSizeBytes int64
 	closed            bool
+	writeHealth       WriteHealth
+	lastWriteWarning  time.Time
 	now               func() time.Time
 }
 
@@ -196,17 +212,10 @@ func (w sourceWriter) Write(p []byte) (int, error) {
 	if w.store == nil {
 		return len(p), nil
 	}
-	text := strings.ReplaceAll(string(p), "\r\n", "\n")
-	var firstErr error
-	for _, line := range strings.Split(text, "\n") {
-		if strings.TrimSpace(line) == "" {
-			continue
-		}
-		if err := w.store.Append(w.source, line); err != nil && firstErr == nil {
-			firstErr = err
-		}
+	if strings.TrimSpace(string(p)) == "" {
+		return len(p), nil
 	}
-	return len(p), firstErr
+	return len(p), w.store.AppendEntry(loggedEntry(w.source, string(p)))
 }
 
 func (s *Store) Append(source Source, line string) error {
@@ -218,16 +227,42 @@ func (s *Store) Append(source Source, line string) error {
 	})
 }
 
-func (s *Store) AppendEntry(entry Entry) error {
+func (s *Store) AppendEntry(entry Entry) (writeErr error) {
 	if s == nil {
 		return errors.New("log store is unavailable")
 	}
 	entry = s.normalizeEntry(entry)
 
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.closed || s.file == nil {
+	defer func() {
+		now := s.now().UTC()
+		if writeErr != nil {
+			s.writeHealth.LastError = Redact(writeErr.Error())
+			s.writeHealth.FailedWrites++
+			s.writeHealth.LastFailureAt = &now
+			if s.lastWriteWarning.IsZero() || now.Sub(s.lastWriteWarning) >= 30*time.Second {
+				fmt.Fprintf(os.Stderr, "[logging] file write failed: %s\n", s.writeHealth.LastError)
+				s.lastWriteWarning = now
+			}
+		} else {
+			if s.writeHealth.LastError != "" {
+				fmt.Fprintln(os.Stderr, "[logging] file writes recovered")
+			}
+			s.writeHealth.LastError = ""
+			s.writeHealth.LastSuccessAt = &now
+		}
+		s.mu.Unlock()
+	}()
+	if s.closed {
 		return errors.New("log store is closed")
+	}
+	if s.file == nil {
+		if err := s.reopenActiveLocked(); err != nil {
+			return err
+		}
+		if err := s.cleanupLocked(); err != nil {
+			return err
+		}
 	}
 
 	s.nextID++
@@ -247,9 +282,13 @@ func (s *Store) AppendEntry(entry Entry) error {
 	}
 	written, err := s.file.Write(record)
 	if err != nil {
+		_ = s.file.Close()
+		s.file = nil
 		return fmt.Errorf("write log entry: %w", err)
 	}
 	if written != len(record) {
+		_ = s.file.Close()
+		s.file = nil
 		return io.ErrShortWrite
 	}
 	s.activeSize += int64(written)
@@ -263,6 +302,7 @@ func (s *Store) AppendEntry(entry Entry) error {
 }
 
 func (s *Store) normalizeEntry(entry Entry) Entry {
+	redactEntry(&entry)
 	if entry.Timestamp.IsZero() {
 		entry.Timestamp = time.Now()
 	}
@@ -275,8 +315,19 @@ func (s *Store) normalizeEntry(entry Entry) Entry {
 	entry.Remote = strings.Clone(truncateUTF8(strings.TrimSpace(entry.Remote), maxPathBytes))
 	entry.RequestID = strings.Clone(truncateUTF8(strings.TrimSpace(entry.RequestID), maxRequestIDBytes))
 	entry.Elapsed = strings.Clone(truncateUTF8(strings.TrimSpace(entry.Elapsed), 128))
+	entry.Error = truncateUTF8(entry.Error, s.maxLineBytes)
+	entry.Stack = truncateUTF8(entry.Stack, 32*1024)
+	entry.Component = truncateUTF8(entry.Component, 128)
+	entry.TaskID = truncateUTF8(entry.TaskID, maxRequestIDBytes)
+	entry.DriveID = truncateUTF8(entry.DriveID, maxPathBytes)
+	entry.VideoID = truncateUTF8(entry.VideoID, maxPathBytes)
+	entry.FileID = truncateUTF8(entry.FileID, maxPathBytes)
+	entry.Stage = truncateUTF8(entry.Stage, 128)
 	if entry.Level == "" {
 		entry.Level = classify(entry.Source, entry.Status, entry.Message)
+	}
+	if entry.Error != "" && entry.Level == LevelInfo {
+		entry.Level = LevelError
 	}
 	if !validMethod(entry.Method) {
 		entry.Method = ""
@@ -290,11 +341,18 @@ func (s *Store) normalizeEntry(entry Entry) Entry {
 	return entry
 }
 
+func (s *Store) Health() WriteHealth {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.writeHealth
+}
+
 func (s *Store) rotateLocked() error {
 	if err := s.file.Sync(); err != nil {
 		return fmt.Errorf("sync active log before rotation: %w", err)
 	}
 	if err := s.file.Close(); err != nil {
+		s.file = nil
 		return fmt.Errorf("close active log before rotation: %w", err)
 	}
 	s.file = nil
@@ -340,8 +398,17 @@ func (s *Store) reopenActiveLocked() error {
 	if err != nil {
 		return fmt.Errorf("reopen active log file: %w", err)
 	}
+	if err := repairTrailingPartialRecord(file); err != nil {
+		_ = file.Close()
+		return err
+	}
+	info, err := file.Stat()
+	if err != nil {
+		_ = file.Close()
+		return err
+	}
 	s.file = file
-	s.activeSize = 0
+	s.activeSize = info.Size()
 	return nil
 }
 
@@ -547,17 +614,18 @@ func classify(source Source, status int, message string) Level {
 
 	lower := strings.ToLower(message)
 	if containsAny(lower,
+		"[error]", " error:", " error ", " failed:", " failed ",
+		" failure:", " failure ", " fatal", " panic", "失败", "错误",
+		"permission denied", "deadline exceeded", "connection refused",
+	) || strings.HasSuffix(lower, " error") || strings.HasSuffix(lower, " failed") {
+		return LevelError
+	}
+	if containsAny(lower,
 		"[warn]", "warning", "warn:", " retry", "retry_", " skipping ", " skip ",
 		" skipped:", " canceled ", " canceled:", " cancelled ", " cancelled:",
 		" cooling down", " cooldown ", "cooldown=", "警告", "跳过", "重试", "取消",
 	) {
 		return LevelWarning
-	}
-	if containsAny(lower,
-		"[error]", " error:", " error ", " failed:", " failed ",
-		" failure:", " failure ", " fatal", " panic", "失败", "错误",
-	) || strings.HasSuffix(lower, " error") || strings.HasSuffix(lower, " failed") {
-		return LevelError
 	}
 	if hasPositiveCounter(lower, "errors=", "failed=", "failures=") {
 		return LevelWarning

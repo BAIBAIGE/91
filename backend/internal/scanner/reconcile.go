@@ -5,12 +5,12 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"log"
 	"path"
 	"slices"
 	"strings"
 	"time"
 
+	"github.com/video-site/backend/internal/applog"
 	"github.com/video-site/backend/internal/catalog"
 	"github.com/video-site/backend/internal/videoid"
 	"github.com/video-site/backend/internal/videoname"
@@ -49,7 +49,7 @@ func (s *Scanner) reconcileFile(ctx context.Context, file File, result *Result) 
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctxErr
 		}
-		result.addIssue(file, IssueTombstone, err)
+		result.addIssue(ctx, file, IssueTombstone, err)
 		return nil
 	}
 	if deleted {
@@ -67,7 +67,7 @@ func (s *Scanner) reconcileFile(ctx context.Context, file File, result *Result) 
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctxErr
 		}
-		result.addIssue(file, IssueTags, err)
+		result.addIssue(ctx, file, IssueTags, err)
 		assignments = nil
 	}
 	if err := ctx.Err(); err != nil {
@@ -79,7 +79,7 @@ func (s *Scanner) reconcileFile(ctx context.Context, file File, result *Result) 
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctxErr
 		}
-		result.addIssue(file, IssueLookup, err)
+		result.addIssue(ctx, file, IssueLookup, err)
 		return nil
 	}
 	if existing != nil {
@@ -143,7 +143,7 @@ func (s *Scanner) reconcileExisting(
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return ctxErr
 			}
-			result.addIssue(file, IssueMetadata, err)
+			result.addIssue(ctx, file, IssueMetadata, err)
 		} else {
 			result.Updated++
 		}
@@ -160,7 +160,7 @@ func (s *Scanner) reconcileExisting(
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctxErr
 		}
-		result.addIssue(file, IssueDuplicate, err)
+		result.addIssue(ctx, file, IssueDuplicate, err)
 		return nil
 	}
 	if duplicate != nil {
@@ -168,7 +168,7 @@ func (s *Scanner) reconcileExisting(
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return ctxErr
 			}
-			result.addIssue(file, IssueDuplicate, err)
+			result.addIssue(ctx, file, IssueDuplicate, err)
 			return nil
 		}
 		result.Duplicates++
@@ -178,7 +178,7 @@ func (s *Scanner) reconcileExisting(
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctxErr
 		}
-		result.addIssue(file, IssueTags, err)
+		result.addIssue(ctx, file, IssueTags, err)
 	}
 	return ctx.Err()
 }
@@ -221,7 +221,7 @@ func (s *Scanner) insertNew(
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctxErr
 		}
-		result.addIssue(file, IssueUpsert, err)
+		result.addIssue(ctx, file, IssueUpsert, err)
 		return nil
 	}
 	if !inserted {
@@ -233,7 +233,7 @@ func (s *Scanner) insertNew(
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return ctxErr
 			}
-			result.addIssue(file, IssueTags, err)
+			result.addIssue(ctx, file, IssueTags, err)
 		} else {
 			video.Tags = assignmentLabels(assignments)
 		}
@@ -246,7 +246,7 @@ func (s *Scanner) insertNew(
 	return ctx.Err()
 }
 
-func (r *Result) addIssue(file File, stage IssueStage, err error) {
+func (r *Result) addIssue(ctx context.Context, file File, stage IssueStage, err error) {
 	issue := Issue{
 		Stage:  stage,
 		DirID:  file.ParentID,
@@ -256,7 +256,7 @@ func (r *Result) addIssue(file File, stage IssueStage, err error) {
 	}
 	r.Issues = append(r.Issues, issue)
 	r.Stats.Errors++
-	log.Printf("[scanner] %v", issue)
+	applog.Error(ctx, "File reconciliation failed: "+file.Entry.Name, err, applog.Fields{Component: "scanner", DriveID: r.Snapshot.DriveID, FileID: file.Entry.ID, Stage: string(stage)})
 }
 
 func metadataPatchSet(patch catalog.VideoMetaPatch) bool {

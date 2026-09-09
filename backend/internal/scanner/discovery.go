@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/video-site/backend/internal/applog"
 	"github.com/video-site/backend/internal/drives"
 )
 
@@ -94,7 +95,7 @@ func (s *Scanner) discoverDir(
 				issue := Issue{Stage: IssueDiscovery, DirID: entry.ID, Name: entry.Name, Err: err}
 				snapshot.Issues = append(snapshot.Issues, issue)
 				stats.Errors++
-				log.Printf("[%s] %v", s.logPrefix(), issue)
+				applog.Error(ctx, "Directory discovery failed: "+entry.Name, err, applog.Fields{Component: s.logPrefix(), DriveID: s.Drive.ID(), FileID: entry.ID, Stage: string(IssueDiscovery)})
 			}
 			continue
 		}

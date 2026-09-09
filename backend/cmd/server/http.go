@@ -3,11 +3,13 @@ package main
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"fmt"
 	"io"
 	"log"
 	"mime"
 	"net/http"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -53,12 +55,11 @@ type capturedLogFormatter struct {
 
 func (f *capturedLogFormatter) NewLogEntry(r *http.Request) middleware.LogEntry {
 	remote := requestmeta.ClientIP(r)
-	requestForAccessLog := r
+	requestForAccessLog := r.Clone(r.Context())
+	requestForAccessLog.URL, _ = url.Parse(applog.RedactURL(r.URL.String()))
+	requestForAccessLog.RequestURI = applog.RedactURL(r.URL.RequestURI())
 	if remote != "" {
-		requestCopy := new(http.Request)
-		*requestCopy = *r
-		requestCopy.RemoteAddr = remote
-		requestForAccessLog = requestCopy
+		requestForAccessLog.RemoteAddr = remote
 	}
 	return &capturedLogEntry{
 		LogEntry:    f.access.NewLogEntry(requestForAccessLog),
@@ -83,7 +84,7 @@ func (e *capturedLogEntry) Write(status, bytes int, header http.Header, elapsed 
 	if e.logs == nil || e.request == nil {
 		return
 	}
-	target := e.request.URL.RequestURI()
+	target := applog.RedactURL(e.request.URL.RequestURI())
 	if target == "" {
 		target = "/"
 	}
@@ -117,17 +118,22 @@ func (e *capturedLogEntry) Write(status, bytes int, header http.Header, elapsed 
 		Remote:    remote,
 		Bytes:     bytes,
 		Elapsed:   elapsed.String(),
-		RequestID: requestID,
+		Fields:    applog.Fields{RequestID: requestID},
 		Message:   message,
 	})
 }
 
 func (e *capturedLogEntry) Panic(value any, stack []byte) {
-	if e.panicLogger != nil {
-		e.panicLogger.Printf("[http] panic: %v\n%s", value, stack)
-		return
+	logger := e.panicLogger
+	if logger == nil {
+		logger = log.New(applog.Output(os.Stderr, nil), "", log.LstdFlags)
 	}
-	fmt.Fprintf(os.Stderr, "[http] panic: %v\n%s", value, stack)
+	applog.LogEntry(logger, applog.Entry{
+		Timestamp: time.Now(), Source: applog.SourceApplication, Level: applog.LevelError,
+		Fields:  applog.ContextFields(e.request.Context()),
+		Message: fmt.Sprintf("[http] panic: %v", value), Stack: string(stack),
+		Method: applog.Method(e.request.Method), Path: e.request.URL.RequestURI(),
+	})
 }
 
 // requestLogMiddleware writes a human-readable access line to stdout and a
@@ -145,7 +151,11 @@ func requestLogMiddleware(accessLogger, panicLogger *log.Logger, logs *applog.St
 	return func(next http.Handler) http.Handler {
 		logged := requestLogger(next)
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path == "/admin/api/logs" {
+			requestID := applog.NewID()
+			ctx := context.WithValue(r.Context(), middleware.RequestIDKey, requestID)
+			r = r.WithContext(applog.WithFields(ctx, applog.Fields{RequestID: requestID}))
+			w.Header().Set("X-Request-ID", requestID)
+			if r.Method == http.MethodGet && r.URL.Path == "/admin/api/logs" {
 				next.ServeHTTP(w, r)
 				return
 			}
