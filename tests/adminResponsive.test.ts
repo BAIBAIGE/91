@@ -1243,6 +1243,7 @@ test("admin loading spinner rotates around icon center", () => {
   const pageLoading = ruleBody(adminCss, ".admin-loading");
 
   assert.match(spinner, /animation\s*:\s*admin-update-spin\s+0\.9s\s+linear\s+infinite/);
+  assert.match(adminCss, /@keyframes admin-update-spin\s*\{\s*to\s*\{\s*transform:\s*rotate\(360deg\)/);
   assert.match(spinner, /transform-box\s*:\s*fill-box/);
   assert.match(spinner, /transform-origin\s*:\s*center/);
   assert.match(spinner, /will-change\s*:\s*transform/);

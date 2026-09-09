@@ -665,6 +665,10 @@ body.admin-mobile-nav-open {
   will-change: transform;
 }
 
+@keyframes admin-update-spin {
+  to { transform: rotate(360deg); }
+}
+
 .admin-crawler-empty {
   flex: 1 1 auto;
   min-height: 0;
