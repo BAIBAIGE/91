@@ -1943,15 +1943,101 @@ body.admin-mobile-nav-open {
 .admin-generation-state.is-queued { background: rgba(255, 255, 255, 0.06); color: var(--text-muted); }
 .admin-generation-state.is-idle { background: var(--success-soft); color: var(--success); }
 
-.admin-scan-result {
-  margin-top: var(--space-3);
+.admin-detail-card.admin-scan-result {
+  container-type: inline-size;
+  padding: var(--space-4) var(--space-5);
+}
+
+.admin-scan-result__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 6px var(--space-3);
+}
+
+.admin-scan-result__header h2 {
+  margin: 0;
+  font-size: var(--font-md);
+  font-weight: var(--weight-semibold);
+  color: var(--text-strong);
+}
+
+.admin-scan-result__header svg { flex-shrink: 0; }
+
+.admin-scan-result__meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px var(--space-3);
+  color: var(--text-muted);
+  font-size: var(--font-xs);
+}
+
+.admin-scan-result__meta time {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.admin-scan-result__status {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.admin-scan-result__status.is-succeeded { color: var(--success); }
+.admin-scan-result__status.is-partial { color: var(--warning); }
+.admin-scan-result__status.is-failed { color: var(--danger); }
+
+.admin-scan-result__metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px var(--space-5);
+  margin: var(--space-3) 0 0;
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border-subtle);
+}
+
+.admin-scan-result__metric {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 2px var(--space-2);
+  min-width: 0;
+}
+
+.admin-scan-result__metric dt {
   color: var(--text-muted);
   font-size: var(--font-sm);
-  line-height: 1.6;
+  white-space: nowrap;
+}
+
+.admin-scan-result__metric dd {
+  margin: 0;
+  min-width: 0;
+  color: var(--text-strong);
+  font-size: var(--font-base);
+  font-weight: var(--weight-semibold);
+  font-variant-numeric: tabular-nums;
   overflow-wrap: anywhere;
 }
-.admin-scan-result p { margin: 6px 0; }
-.admin-scan-result__summary { white-space: pre-wrap; }
+
+.admin-scan-result__metric dd.is-zero { color: var(--text-muted); }
+.admin-scan-result__metric dd.is-error { color: var(--danger); }
+
+.admin-scan-result__empty {
+  margin: var(--space-3) 0 0;
+  color: var(--text-muted);
+  font-size: var(--font-sm);
+}
+
+@container (max-width: 380px) {
+  .admin-scan-result__metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
 
 /* =========================================================
  * Modal

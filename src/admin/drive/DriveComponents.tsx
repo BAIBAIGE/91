@@ -1,6 +1,5 @@
 import { Activity } from "lucide-react";
 import * as api from "../api";
-import { ScanResultDetails } from "./ScanResultDetails";
 import {
   generationStateLabel,
   generationStateClass,
@@ -188,10 +187,6 @@ export function DriveGenerationPanel({
           failed={d.fingerprintFailedCount}
         />
       </div>
-
-      {d.scanGenerationStatus?.result && (
-        <ScanResultDetails result={d.scanGenerationStatus.result} />
-      )}
 
       <div className="admin-detail-actions admin-generation-actions">
         <button

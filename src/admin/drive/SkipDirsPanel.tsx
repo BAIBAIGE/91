@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
-import { ChevronRight, Eye, EyeOff, Folder, FolderOpen, FolderX } from "lucide-react";
+import { ChevronRight, Eye, EyeOff, Folder, FolderOpen } from "lucide-react";
 import * as api from "../api";
+import { SkipDirsIcon } from "../icons/SkipDirsIcon";
 import { useToast } from "../ToastContext";
 import { SkipDirsLoadingIndicator } from "./SkipDirsLoadingIndicator";
 
@@ -205,7 +206,7 @@ export function SkipDirsPanel({ drive, onSaved }: SkipDirsPanelProps) {
     <div className="admin-detail-card admin-skipdirs-panel">
       <header className="admin-detail-card__title">
         <div className="admin-detail-card__title-left">
-          <FolderX size={16} />
+          <SkipDirsIcon />
           <span>扫描跳过目录</span>
         </div>
         {saveStatusText && (

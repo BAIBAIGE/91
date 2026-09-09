@@ -2,12 +2,13 @@ import {
   Activity,
   ArrowLeft,
   FolderTree,
-  FolderX,
   HardDrive,
 } from "lucide-react";
 import { useSearchParams } from "react-router";
 import { StorageSummary } from "./drive/StorageSummary";
 import { SkipDirsLoadingIndicator } from "./drive/SkipDirsLoadingIndicator";
+import { ScanResultDetails } from "./drive/ScanResultDetails";
+import { SkipDirsIcon } from "./icons/SkipDirsIcon";
 
 const DRIVE_LIST_SKELETON_COUNT = 6;
 const DRIVE_GENERATION_SECTIONS = [
@@ -149,6 +150,8 @@ export function DriveDetailLoading({ onBack }: { onBack: () => void }) {
             </div>
           </div>
 
+          <ScanResultDetails loading />
+
           <div className="admin-detail-card">
             <header className="admin-detail-card__title">
               <div className="admin-detail-card__title-left">
@@ -171,7 +174,7 @@ export function DriveDetailLoading({ onBack }: { onBack: () => void }) {
           <div className="admin-detail-card">
             <header className="admin-detail-card__title">
               <div className="admin-detail-card__title-left">
-                <FolderX size={16} />
+                <SkipDirsIcon />
                 <span>扫描跳过目录</span>
               </div>
             </header>

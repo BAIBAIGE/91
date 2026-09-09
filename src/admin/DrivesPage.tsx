@@ -46,6 +46,7 @@ import {
 } from "./drive/credentials";
 import { DeleteDriveModal } from "./drive/DeleteDriveModal";
 import { SkipDirsPanel } from "./drive/SkipDirsPanel";
+import { ScanResultDetails } from "./drive/ScanResultDetails";
 import { isGenerationBusy } from "./drive/scanResults";
 import { AdminEmptyVisual } from "./AdminEmptyVisual";
 import { useAdminFloatingActionSpace } from "./useAdminFloatingActionSpace";
@@ -643,6 +644,11 @@ export function DrivesPage() {
               onRegenFailed={() => handleRegenFailed(d)}
               onRegenFailedThumbnails={() => handleRegenFailedThumbnails(d)}
               onRegenFailedFingerprints={() => handleRegenFailedFingerprints(d)}
+            />
+
+            <ScanResultDetails
+              result={d.scanGenerationStatus?.result}
+              scanning={isGenerationBusy(d.scanGenerationStatus?.state ?? "idle")}
             />
 
             <div className="admin-detail-card">

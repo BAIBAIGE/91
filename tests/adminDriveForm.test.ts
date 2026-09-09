@@ -1234,6 +1234,13 @@ test("drive generation panel shows scan or crawler status first", () => {
   assert.match(constantsSource, /if \(state === "scanning"\) return "扫盘中"/);
 });
 
+test("drive scan results follow generation status in a separate card", () => {
+  assert.match(drivesPageSource, /<DriveGenerationPanel[\s\S]*?<ScanResultDetails\s+result=\{d\.scanGenerationStatus\?\.result\}\s+scanning=\{isGenerationBusy\(d\.scanGenerationStatus\?\.state \?\? "idle"\)\}\s*\/>[\s\S]*?本地存储占用/);
+  assert.doesNotMatch(driveComponentsSource, /ScanResultDetails|ScanStatusPanel/);
+  assert.match(drivesPageLoadingSource, /生成状态[\s\S]*?<ScanResultDetails loading \/>[\s\S]*?本地存储占用/);
+  assert.doesNotMatch(adminCss, /\.admin-drive-generation|\.admin-drive-scan__/);
+});
+
 test("drive management has no spider91 storage branch", () => {
   assert.doesNotMatch(drivesPageSource, /spider91|91Spider/);
   assert.doesNotMatch(constantsSource, /spider91|91Spider/);
@@ -1366,6 +1373,13 @@ test("drive preview generation has no per-drive switch", () => {
   assert.doesNotMatch(driveComponentsSource, /teaserEnabled|onToggleTeaser|togglingTeaserId/);
   assert.doesNotMatch(drivesPageSource, /setDriveTeaserEnabled|handleToggleTeaser/);
   assert.doesNotMatch(apiSource, /setDriveTeaserEnabled|teaser-enabled/);
+});
+
+test("skip-directory header uses the matching solid folder icon in loaded and loading views", () => {
+  assert.match(skipDirsPanelSource, /<SkipDirsIcon \/>/);
+  assert.match(drivesPageLoadingSource, /<SkipDirsIcon \/>/);
+  assert.doesNotMatch(skipDirsPanelSource, /FolderX/);
+  assert.doesNotMatch(drivesPageLoadingSource, /FolderX/);
 });
 
 test("drive skip directory tree uses persistent visibility icons without extra actions", () => {

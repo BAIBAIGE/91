@@ -1,4 +1,4 @@
-import type { ScanOutcome, ScanResult } from "../api";
+import type { ScanOutcome } from "../api";
 
 export const scanOutcomeLabels: Record<ScanOutcome, string> = {
   succeeded: "已完成",
@@ -20,6 +20,11 @@ export function isGenerationBusy(state: string): boolean {
   return ["scanning", "uploading", "generating", "cooling", "queued"].includes(state);
 }
 
-export function scanResultSummary(result: ScanResult): string {
-  return `已扫描 ${result.scannedCount} · 新增 ${result.addedCount} · 更新 ${result.updatedCount} · 重复跳过 ${result.duplicateCount} · 黑名单跳过 ${result.tombstonedCount} · 错误 ${result.errorCount}`;
-}
+export const scanResultMetrics = [
+  { key: "scannedCount", label: "已扫描" },
+  { key: "addedCount", label: "新增" },
+  { key: "updatedCount", label: "更新" },
+  { key: "duplicateCount", label: "重复跳过" },
+  { key: "tombstonedCount", label: "黑名单跳过" },
+  { key: "errorCount", label: "错误" },
+] as const;
