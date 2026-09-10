@@ -248,10 +248,11 @@ DELETE FROM videos
 			}
 		}
 	}
-	// Transient sessions, settings, and login bans are not part of the current
-	// backup protocol. They remain owned by the target environment on restore.
+	// Transient sessions, settings, and login protection are not part of the
+	// backup protocol. The optional failure table is recreated when SQLite opens.
 	for _, statement := range []string{
 		`DELETE FROM banned_login_ips`,
+		`DROP TABLE IF EXISTS login_failures`,
 		`DELETE FROM settings`,
 		`DELETE FROM admin_sessions`,
 		`DELETE FROM video_shares`,

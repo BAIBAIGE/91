@@ -132,6 +132,9 @@ func main() {
 		log.Fatalf("open catalog: %v", err)
 	}
 	defer cat.Close()
+	if err := cat.ResetLoginProtection(context.Background()); err != nil {
+		log.Fatalf("reset login protection at startup: %v", err)
+	}
 	if appliedRestore != nil {
 		if err := backup.CommitAppliedRestore(appliedRestore); err != nil {
 			log.Printf("[restore] restored catalog opened, but rollback cleanup/report write failed: %v", err)

@@ -256,6 +256,11 @@ func TestFullBackupContainsPersistentFilesAndExcludesTemporaryData(t *testing.T)
 	if err := env.cat.CreateSession(ctx, "backup-session", time.Hour, adminID); err != nil {
 		t.Fatal(err)
 	}
+	for i := 0; i < 3; i++ {
+		if _, err := env.cat.RecordLoginAttempt(ctx, "203.0.113.31", false, time.Now(), 30*time.Minute, 3); err != nil {
+			t.Fatal(err)
+		}
+	}
 	writeTestFile(t, filepath.Join(env.root, "previews", "cover.jpg"), []byte("cover"))
 	writeTestFile(t, filepath.Join(env.root, "previews", "teaser.mp4"), []byte("teaser"))
 	writeTestFile(t, filepath.Join(env.root, "previews", "framesigs", "video.fsig"), []byte("framesig"))
@@ -337,6 +342,19 @@ func TestFullBackupContainsPersistentFilesAndExcludesTemporaryData(t *testing.T)
 	}
 	if err := database.QueryRow(`SELECT COUNT(*) FROM admin_sessions`).Scan(&sessionCount); err != nil {
 		t.Fatal(err)
+	}
+	var loginFailuresTable, loginBans int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'login_failures'`).Scan(&loginFailuresTable); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.QueryRow(`SELECT COUNT(*) FROM banned_login_ips`).Scan(&loginBans); err != nil {
+		t.Fatal(err)
+	}
+	if loginFailuresTable != 0 || loginBans != 0 {
+		t.Fatalf("backup retained login protection: failures table=%d bans=%d", loginFailuresTable, loginBans)
+	}
+	if banned, err := env.cat.IsLoginIPBanned(ctx, "203.0.113.31"); err != nil || !banned {
+		t.Fatalf("backup changed live login protection: banned=%v err=%v", banned, err)
 	}
 	if adminCount != 1 || userCount != 1 || sessionCount != 0 {
 		t.Fatalf(

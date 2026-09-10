@@ -9,7 +9,6 @@ import (
 	"errors"
 	"log"
 	"net/http"
-	"sync"
 	"time"
 
 	"golang.org/x/crypto/bcrypt"
@@ -32,14 +31,6 @@ var ErrUserBanned = errors.New("user is banned")
 type Authenticator struct {
 	Catalog *catalog.Catalog
 	Now     func() time.Time
-
-	mu       sync.Mutex
-	failures map[string]loginFailure
-}
-
-type loginFailure struct {
-	Count int
-	First time.Time
 }
 
 type sessionIdentityContextKey struct{}
@@ -88,34 +79,15 @@ func (a *Authenticator) CheckCurrentPassword(r *http.Request, password string) (
 	return checkPassword(password, user.Password), nil
 }
 
-func (a *Authenticator) recordFailure(r *http.Request, ip string) error {
-	now := a.now()
-	a.mu.Lock()
-	if a.failures == nil {
-		a.failures = make(map[string]loginFailure)
-	}
-	f := a.failures[ip]
-	if f.First.IsZero() || now.Sub(f.First) > loginFailWindow {
-		f = loginFailure{First: now}
-	}
-	f.Count++
-	a.failures[ip] = f
-	shouldBan := f.Count >= loginFailThreshold
-	a.mu.Unlock()
-
-	if !shouldBan {
-		return nil
-	}
-	if err := a.Catalog.BanLoginIP(r.Context(), ip, "too many failed login attempts"); err != nil {
+func (a *Authenticator) recordLoginAttempt(r *http.Request, ip string, successful bool) error {
+	banned, err := a.Catalog.RecordLoginAttempt(r.Context(), ip, successful, a.now(), loginFailWindow, loginFailThreshold)
+	if err != nil {
 		return err
 	}
-	return ErrLoginIPBanned
-}
-
-func (a *Authenticator) clearFailures(ip string) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	delete(a.failures, ip)
+	if banned {
+		return ErrLoginIPBanned
+	}
+	return nil
 }
 
 func (a *Authenticator) now() time.Time {
@@ -209,7 +181,7 @@ func (a *Authenticator) UserLogin(w http.ResponseWriter, r *http.Request, user, 
 			return "", err
 		}
 		if ip != "" {
-			if err := a.recordFailure(r, ip); err != nil {
+			if err := a.recordLoginAttempt(r, ip, false); err != nil {
 				return "", err
 			}
 		}
@@ -222,7 +194,7 @@ func (a *Authenticator) UserLogin(w http.ResponseWriter, r *http.Request, user, 
 
 	if !checkPassword(pass, u.Password) {
 		if ip != "" {
-			if err := a.recordFailure(r, ip); err != nil {
+			if err := a.recordLoginAttempt(r, ip, false); err != nil {
 				return "", err
 			}
 		}
@@ -230,7 +202,9 @@ func (a *Authenticator) UserLogin(w http.ResponseWriter, r *http.Request, user, 
 	}
 
 	if ip != "" {
-		a.clearFailures(ip)
+		if err := a.recordLoginAttempt(r, ip, true); err != nil {
+			return "", err
+		}
 	}
 
 	token, err := randomToken()

@@ -12,7 +12,7 @@ import (
 	"github.com/video-site/backend/internal/catalog"
 )
 
-func TestLoginBansIPAfterThreeFailuresPermanently(t *testing.T) {
+func TestLoginBanLastsUntilStartupReset(t *testing.T) {
 	cat, err := catalog.Open(t.TempDir() + "/catalog.db")
 	if err != nil {
 		t.Fatalf("open catalog: %v", err)
@@ -60,10 +60,41 @@ func TestLoginBansIPAfterThreeFailuresPermanently(t *testing.T) {
 	reloaded := &Authenticator{Catalog: cat, Now: func() time.Time { return now }}
 	ok, err = login(reloaded, httptest.NewRecorder(), loginRequest("203.0.113.10"), "admin", "secret")
 	if ok {
-		t.Fatal("permanently banned ip logged in with correct credentials")
+		t.Fatal("banned ip logged in without a startup reset")
 	}
 	if !errors.Is(err, ErrLoginIPBanned) {
 		t.Fatalf("banned ip error = %v, want ErrLoginIPBanned", err)
+	}
+	if err := cat.ResetLoginProtection(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	restarted := &Authenticator{Catalog: cat, Now: func() time.Time { return now }}
+	if ok, err := login(restarted, httptest.NewRecorder(), loginRequest("203.0.113.10"), "admin", "wrong"); err != nil || ok {
+		t.Fatalf("first failure after restart ok=%v err=%v", ok, err)
+	}
+	if ok, err := login(restarted, httptest.NewRecorder(), loginRequest("203.0.113.10"), "admin", "secret"); err != nil || !ok {
+		t.Fatalf("login after restart ok=%v err=%v", ok, err)
+	}
+}
+
+func TestAuthenticatorsShareFailureCounts(t *testing.T) {
+	cat, err := catalog.Open(t.TempDir() + "/catalog.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cat.Close()
+	for i := 0; i < loginFailThreshold; i++ {
+		a := &Authenticator{Catalog: cat}
+		role, err := a.UserLogin(httptest.NewRecorder(), loginRequest("203.0.113.22"), "missing-user", "wrong")
+		if role != "" {
+			t.Fatal("missing user logged in")
+		}
+		if i < loginFailThreshold-1 && err != nil {
+			t.Fatal(err)
+		}
+		if i == loginFailThreshold-1 && !errors.Is(err, ErrLoginIPBanned) {
+			t.Fatalf("shared failures did not ban IP: %v", err)
+		}
 	}
 }
 

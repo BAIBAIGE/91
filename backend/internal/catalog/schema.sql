@@ -327,11 +327,17 @@ CREATE INDEX IF NOT EXISTS idx_video_shares_video
 CREATE INDEX IF NOT EXISTS idx_video_shares_session
     ON video_shares(id, session_hash, session_expires_at);
 
--- 管理后台登录永久封禁 IP
+-- 管理后台登录封禁 IP，服务启动或后台解封时清理
 CREATE TABLE IF NOT EXISTS banned_login_ips (
     ip         TEXT PRIMARY KEY,
     reason     TEXT NOT NULL DEFAULT '',
     created_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS login_failures (
+    ip              TEXT PRIMARY KEY,
+    failure_count   INTEGER NOT NULL,
+    first_failed_at INTEGER NOT NULL
 );
 
 -- 全局 key-value 设置（preview 开关等）

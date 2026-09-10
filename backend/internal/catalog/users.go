@@ -179,12 +179,20 @@ func (c *Catalog) ListBannedLoginIPs(ctx context.Context) ([]BannedIP, error) {
 }
 
 func (c *Catalog) UnbanLoginIP(ctx context.Context, ip string) error {
-	res, err := c.db.ExecContext(ctx, `DELETE FROM banned_login_ips WHERE ip = ?`, ip)
+	tx, err := c.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	res, err := tx.ExecContext(ctx, `DELETE FROM banned_login_ips WHERE ip = ?`, ip)
 	if err != nil {
 		return err
 	}
 	if rows, err := res.RowsAffected(); err == nil && rows == 0 {
 		return sql.ErrNoRows
 	}
-	return nil
+	if _, err := tx.ExecContext(ctx, `DELETE FROM login_failures WHERE ip = ?`, ip); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
