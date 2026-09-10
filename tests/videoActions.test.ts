@@ -47,6 +47,21 @@ test("detail like and dislike buttons are visually separated", () => {
   );
 });
 
+test("reaction hover feedback excludes touch devices and selected buttons", () => {
+  assert.match(
+    detailCss,
+    /@media \(hover:\s*hover\) and \(pointer:\s*fine\)\s*\{\s*\.vd-actions__pill:hover:not\(:disabled\):not\(\.is-active\)\s*\{[^}]*color:\s*var\(--text-strong\)/s
+  );
+  assert.doesNotMatch(
+    detailCss,
+    /\.vd-actions__pill:hover:not\(:disabled\)\s*\{/
+  );
+  assert.match(
+    detailCss,
+    /\.vd-actions__pill\.is-active\s*\{[^}]*background:\s*var\(--accent-softer\)[^}]*border-color:\s*var\(--border-accent\)[^}]*color:\s*var\(--accent\)/s
+  );
+});
+
 test("desktop share button matches the like button without changing narrow screens", () => {
   assert.match(
     detailCss,

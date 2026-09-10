@@ -910,10 +910,13 @@
   transition: all var(--transition-fast);
 }
 
-.vd-actions__pill:hover:not(:disabled) {
-  color: var(--text-strong);
-  background: rgba(255, 255, 255, 0.06);
-  border-color: var(--border-strong);
+/* Hover is transient feedback; it must not mask a selected reaction. */
+@media (hover: hover) and (pointer: fine) {
+  .vd-actions__pill:hover:not(:disabled):not(.is-active) {
+    color: var(--text-strong);
+    background: rgba(255, 255, 255, 0.06);
+    border-color: var(--border-strong);
+  }
 }
 
 .vd-actions__pill:focus-visible {
