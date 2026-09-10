@@ -212,8 +212,12 @@ func (a *Authenticator) UserLogin(w http.ResponseWriter, r *http.Request, user, 
 		return "", err
 	}
 	expiresAt := a.now().Add(sessionTTL)
-	if err := a.Catalog.CreateSessionUntil(r.Context(), token, expiresAt, u.ID); err != nil {
+	created, err := a.Catalog.CreateVerifiedUserSession(r.Context(), token, expiresAt, u.ID, u.Password)
+	if err != nil {
 		return "", err
+	}
+	if !created {
+		return "", nil
 	}
 
 	setSessionCookie(w, token, expiresAt)

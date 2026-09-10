@@ -20,6 +20,7 @@ import (
 
 func TestServerRestartClearsLoginProtection(t *testing.T) {
 	if os.Getenv("VIDEO_TEST_LOGIN_RESTART") == "1" {
+		os.Args = os.Args[:1]
 		main()
 		return
 	}

@@ -3966,6 +3966,20 @@ func (c *Catalog) CreateSessionUntil(ctx context.Context, token string, expiresA
 	return err
 }
 
+// CreateVerifiedUserSession prevents a login verified before a password reset
+// from creating a fresh session after that reset revoked the old sessions.
+func (c *Catalog) CreateVerifiedUserSession(ctx context.Context, token string, expiresAt time.Time, userID int64, passwordHash string) (bool, error) {
+	result, err := c.db.ExecContext(ctx, `
+INSERT INTO admin_sessions (token, created_at, expires_at, user_id)
+SELECT ?, ?, ?, id FROM users WHERE id = ? AND password = ? AND banned = 0`,
+		token, time.Now().UnixMilli(), expiresAt.UnixMilli(), userID, passwordHash)
+	if err != nil {
+		return false, err
+	}
+	rows, err := result.RowsAffected()
+	return rows == 1, err
+}
+
 func (c *Catalog) GetSession(ctx context.Context, token string) (SessionInfo, bool, error) {
 	var expires int64
 	var userID int64

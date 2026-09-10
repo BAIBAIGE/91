@@ -1,5 +1,9 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 const installSource = readFileSync(
@@ -36,4 +40,56 @@ test("installer distinguishes readiness failures from process start failures", (
     /service readiness check failed; see diagnostics above/
   );
   assert.doesNotMatch(installSource, /die "service failed to start"/);
+});
+
+test("password reset delegates to the server without prompting for a password", () => {
+  const start = installSource.indexOf("reset_password() {");
+  const end = installSource.indexOf("\nshow_menu()", start);
+  const resetSource = installSource.slice(start, end);
+  assert.match(resetSource, /\.\/server reset-password "\$@"/);
+  assert.doesNotMatch(resetSource, /python3|hash-password|new_pass|systemctl|read -r/);
+});
+
+const serverProbe = `#!/usr/bin/env node
+console.log(JSON.stringify({args: process.argv.slice(2), cwd: process.cwd(), config: process.env.VIDEO_CONFIG}));
+process.exit(Number(process.env.RESET_PROBE_EXIT ?? 0));
+`;
+
+test("installer reset forwards arguments, config, working directory and errors", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "91-password-reset-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  writeFileSync(join(root, "server"), serverProbe, { mode: 0o700 });
+  const installer = fileURLToPath(new URL("../install.sh", import.meta.url));
+  for (const exitCode of [0, 23]) {
+    const customConfig = join(root, "custom.yaml");
+    const result = spawnSync("bash", ["-c", 'source "$1" help >/dev/null; reset_password --user-id 7', "bash", installer], {
+      encoding: "utf8",
+      env: { ...process.env, INSTALL_PATH: root, VIDEO_CONFIG: customConfig, RESET_PROBE_EXIT: String(exitCode) },
+    });
+    assert.equal(result.status, exitCode, result.stderr);
+    assert.deepEqual(JSON.parse(result.stdout), { args: ["reset-password", "--user-id", "7"], cwd: root, config: customConfig });
+  }
+});
+
+test("Docker password reset bypasses configuration and version writes", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "91-docker-reset-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  writeFileSync(join(root, "server"), serverProbe, { mode: 0o700 });
+  const config = join(root, "data", "config.yaml");
+  const entrypoint = fileURLToPath(new URL("../docker-entrypoint.sh", import.meta.url));
+  const result = spawnSync("sh", [entrypoint, "./server", "reset-password", "--user-id", "4"], {
+    cwd: root,
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      VIDEO_CONFIG: config,
+      VIDEO_DATA_DIR: join(root, "data"),
+      VIDEO_VERSION_FILE: join(root, "version"),
+      VIDEO_IMAGE_VERSION: "test-version",
+    },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout), { args: ["reset-password", "--user-id", "4"], cwd: root, config });
+  assert.equal(existsSync(join(root, "data")), false);
+  assert.equal(existsSync(join(root, "version")), false);
 });

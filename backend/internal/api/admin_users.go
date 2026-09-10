@@ -223,10 +223,6 @@ func (a *AdminServer) handleResetPassword(w http.ResponseWriter, r *http.Request
 		writeErr(w, r, http.StatusInternalServerError, err)
 		return
 	}
-	if err := a.Catalog.DeleteSessionsForUser(r.Context(), id); err != nil {
-		writeErr(w, r, http.StatusInternalServerError, err)
-		return
-	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 

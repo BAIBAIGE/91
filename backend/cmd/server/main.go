@@ -46,8 +46,8 @@ const (
 )
 
 func main() {
-	if len(os.Args) > 1 && os.Args[1] == "hash-password" {
-		if err := runHashPasswordCommand(os.Stdin, os.Stdout); err != nil {
+	if handled, err := runServerCommand(os.Args[1:], os.Stdin, os.Stdout, os.Stderr); handled {
+		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
@@ -57,10 +57,7 @@ func main() {
 	// file is attached after configuration paths have been resolved.
 	log.SetOutput(applog.Output(os.Stderr, nil))
 
-	cfgPath := "./config.yaml"
-	if v := os.Getenv("VIDEO_CONFIG"); v != "" {
-		cfgPath = v
-	}
+	cfgPath := applicationConfigPath()
 	workingDir, err := os.Getwd()
 	if err != nil {
 		log.Fatalf("resolve startup directory: %v", err)

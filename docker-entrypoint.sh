@@ -1,6 +1,14 @@
 #!/bin/sh
 set -eu
 
+case "${1:-}" in
+  ./server|/opt/video-site-91/server)
+    if [ "${2:-}" = "reset-password" ]; then
+      exec "$@"
+    fi
+    ;;
+esac
+
 APP_DIR="/opt/video-site-91"
 DATA_DIR="${VIDEO_DATA_DIR:-$APP_DIR/data}"
 CONFIG="${VIDEO_CONFIG:-$DATA_DIR/config.yaml}"

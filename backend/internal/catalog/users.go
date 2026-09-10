@@ -143,15 +143,39 @@ func (c *Catalog) DeleteUser(ctx context.Context, id int64) error {
 }
 
 func (c *Catalog) UpdateUserPassword(ctx context.Context, id int64, hashedPassword string) error {
-	res, err := c.db.ExecContext(ctx,
+	return c.UpdateUserPasswordWithCheck(ctx, id, hashedPassword, nil)
+}
+
+// UpdateUserPasswordWithCheck changes the password and revokes sessions in one
+// transaction. Maintenance callers can check filesystem state while the SQLite
+// writer reservation prevents a restore from capturing an older password.
+func (c *Catalog) UpdateUserPasswordWithCheck(ctx context.Context, id int64, hashedPassword string, check func() error) error {
+	tx, err := c.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if check != nil {
+		if err := check(); err != nil {
+			return err
+		}
+	}
+	res, err := tx.ExecContext(ctx,
 		`UPDATE users SET password = ? WHERE id = ?`, hashedPassword, id)
 	if err != nil {
 		return err
 	}
-	if rows, err := res.RowsAffected(); err == nil && rows == 0 {
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
 		return sql.ErrNoRows
 	}
-	return err
+	if _, err := tx.ExecContext(ctx, `DELETE FROM admin_sessions WHERE user_id = ?`, id); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 type BannedIP struct {
