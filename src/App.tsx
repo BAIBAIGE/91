@@ -11,6 +11,7 @@ import {
   Route,
   Routes,
   useLocation,
+  useMatch,
   useNavigationType,
   type Location,
 } from "react-router";
@@ -368,8 +369,15 @@ function VideoDetailForeground() {
 }
 
 export default function App() {
-  useEffect(() => watchPreviewSettings(), []);
   const location = useLocation();
+  const { status } = useAuth();
+  const videoDetailMatch = useMatch("/video/:id");
+  const shouldSyncPreviews = status === "authed" &&
+    (isVideoListingPath(location.pathname) || videoDetailMatch !== null);
+  useEffect(() => {
+    if (shouldSyncPreviews) return watchPreviewSettings();
+  }, [shouldSyncPreviews]);
+
   const listingBackground = location.pathname.startsWith("/video/")
     ? readVideoListingBackground(location.state)
     : null;
