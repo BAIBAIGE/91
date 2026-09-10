@@ -18,6 +18,7 @@ import {
   type PlayerGestureFrame,
   type PlayerGesturePoint,
 } from "@/lib/playerGestures";
+import { disablePlayerVolumePersistence } from "@/lib/playerVolume";
 import {
   escapeHtml,
   formatSubtitleLabel,
@@ -487,6 +488,10 @@ function mountArtPlayer({
   art.template.$player.classList.add(PLAYER_SURFACE_CLASS);
 
   const video = art.video as VideoElementWithHls;
+  disablePlayerVolumePersistence(art.storage);
+  // ArtPlayer may have restored a cached volume during its constructor.
+  video.volume = DEFAULT_SETTINGS.volume;
+  video.muted = DEFAULT_SETTINGS.muted;
   video.setAttribute("referrerpolicy", MEDIA_REFERRER_POLICY);
   video.setAttribute("aria-label", title);
   video.setAttribute("controlsList", "nodownload");

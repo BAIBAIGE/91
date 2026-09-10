@@ -95,6 +95,10 @@ test("detail player does not persist ArtPlayer user settings", () => {
   assert.doesNotMatch(playerSource, /video-site:player-settings/);
   assert.match(playerSource, /volume:\s*DEFAULT_SETTINGS\.volume/);
   assert.match(playerSource, /muted:\s*DEFAULT_SETTINGS\.muted/);
+  assert.match(
+    playerSource,
+    /disablePlayerVolumePersistence\(art\.storage\);[\s\S]*?video\.volume = DEFAULT_SETTINGS\.volume;[\s\S]*?video\.muted = DEFAULT_SETTINGS\.muted;/
+  );
   assert.match(playerSource, /video\.playbackRate = DEFAULT_SETTINGS\.playbackRate/);
   assert.match(
     playerSource,
