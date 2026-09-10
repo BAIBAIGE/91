@@ -2650,7 +2650,17 @@
   }
 
   .vd-layout {
-    gap: var(--space-5);
+    gap: var(--space-4);
+  }
+
+  /* The layout gap owns the transition from info panels to recommendations. */
+  .vd-rail {
+    border-top: 0;
+    padding-top: 0;
+  }
+
+  .vd-rail__head {
+    padding: 0 0 var(--space-3);
   }
 
   .vd-main {
@@ -2911,10 +2921,6 @@
   }
 
   /* 推荐栏：横向紧凑列表。合集仍由移动端底部浮窗承载。 */
-  .vd-rail {
-    padding-top: var(--space-4);
-  }
-
   .vd-rail--collection-only,
   .vd-rail__tabs,
   .vd-rail__tabpanel--collection {

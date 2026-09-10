@@ -618,6 +618,28 @@ test("detail, collection, and info cards use a compact mobile stack", () => {
   );
 });
 
+test("mobile recommendations use one layout gap without stacked top spacing", () => {
+  const mobileStyles = stylesSource.slice(
+    stylesSource.lastIndexOf("@media (max-width: 768px)")
+  );
+  assert.match(
+    mobileStyles,
+    /\.vd-layout\s*\{\s*gap:\s*var\(--space-4\);/
+  );
+
+  const railRules = Array.from(mobileStyles.matchAll(/\.vd-rail\s*\{([^}]*)\}/g));
+  assert.ok(railRules.length > 0);
+  for (const [, rule] of railRules) {
+    assert.match(rule, /border-top:\s*0;/);
+    assert.match(rule, /padding-top:\s*0;/);
+  }
+
+  assert.match(
+    mobileStyles,
+    /\.vd-rail__head\s*\{\s*padding:\s*0 0 var\(--space-3\);/
+  );
+});
+
 test("mobile collection trigger stays hidden on desktop and becomes a bottom sheet on mobile", () => {
   assert.match(
     stylesSource,
