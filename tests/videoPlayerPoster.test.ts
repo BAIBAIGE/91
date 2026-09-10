@@ -423,10 +423,6 @@ test("detail player uses custom mobile gestures instead of ArtPlayer native gest
   assert.match(playerSource, /player\.appendChild\(hint\)/);
   assert.match(playerSource, /showPlayerGestureHud\(art, "volume", formatPercent\(normalized\)\)/);
   assert.match(playerSource, /showPlayerGestureHud\(art, "brightness", formatBrightnessPercent\(nextBrightness\)\)/);
-  assert.match(playerSource, /stroke-width="1\.7"/);
-  assert.match(playerSource, /M15\.4 9\.2a4\.2 4\.2 0 0 1 0 5\.6/);
-  assert.match(playerSource, /M4\.8 9\.7h3l4\.3-3\.6v11\.8l-4\.3-3\.6h-3/);
-  assert.doesNotMatch(playerSource, /stroke-width="2\.2"/);
   assert.doesNotMatch(playerSource, /onGestureHud\(`音量 /);
   assert.doesNotMatch(playerSource, /onGestureHud\(`亮度 /);
   assert.match(playerSource, /fullscreen:\s*true/);
@@ -435,6 +431,23 @@ test("detail player uses custom mobile gestures instead of ArtPlayer native gest
   assert.doesNotMatch(playerSource, /new VTTCue\(/);
   assert.doesNotMatch(playerSource, /onGestureHud\(`\$\{FAST_RATE\}x`/);
   assert.match(playerSource, /addEventListener\("touchmove", handleTouchMove, \{ passive: false \}\)/);
+});
+
+test("gesture HUD uses matching duotone volume and mute icons", () => {
+  const icons = playerSource.slice(
+    playerSource.indexOf("function playerGestureHudIcon("),
+    playerSource.indexOf("function noop()")
+  );
+  assert.equal((icons.match(/viewBox="0 0 640 640"/g) ?? []).length, 2);
+  assert.equal((icons.match(/opacity="\.4" fill="currentColor"/g) ?? []).length, 2);
+  assert.equal((icons.match(/Font Awesome Pro 7\.3\.1/g) ?? []).length, 2);
+  assert.match(icons, /d="M224 320C224 267 267 224 320 224/);
+  assert.match(icons, /d="M471\.3 174\.5C479\.7 164\.2/);
+  assert.equal((icons.match(/d="M64 272L64 368/g) ?? []).length, 1);
+  assert.match(icons, /const volumeMark = value === "0%"/);
+  assert.match(icons, /d="M432 264L544 376M544 264L432 376"[^>]*stroke-width="48"/);
+  assert.match(icons, /\$\{volumeMark\}/);
+  assert.doesNotMatch(icons, /viewBox="0 0 24 24"/);
 });
 
 test("detail player auto-hides controls during mobile fullscreen playback", () => {
