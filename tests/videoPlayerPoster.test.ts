@@ -403,7 +403,7 @@ test("detail player uses custom mobile gestures instead of ArtPlayer native gest
   assert.doesNotMatch(playerSource, /GESTURE_SEEK_DURATION_RATIO/);
   assert.doesNotMatch(playerSource, /GESTURE_SEEK_SENSITIVITY/);
   assert.match(playerSource, /handleSeekGesture\(event,\s*dx\)/);
-  assert.match(playerSource, /state\.startTime \+ \(dx \/ Math\.max\(1,\s*rect\.width\)\) \* duration/);
+  assert.match(playerSource, /state\.startTime \+ \(dx \/ Math\.max\(1,\s*state\.startPoint\.width\)\) \* duration/);
   assert.doesNotMatch(playerSource, /event\.touches\[0\]\.clientX - rect\.left/);
   assert.match(playerSource, /function bindMobilePlayerGestures/);
   assert.match(playerSource, /let suppressNextClick = false/);
@@ -421,7 +421,7 @@ test("detail player uses custom mobile gestures instead of ArtPlayer native gest
   assert.match(playerSource, /const PLAYER_GESTURE_HUD_CLASS = "video-player__art-gesture-hud"/);
   assert.match(playerSource, /setPlayerFastRateHint\(art, active\)/);
   assert.match(playerSource, /player\.appendChild\(hint\)/);
-  assert.match(playerSource, /showPlayerGestureHud\(art, "volume", formatPercent\(normalized\)\)/);
+  assert.match(playerSource, /showPlayerGestureHud\(art, "volume", formatPercent\(volume\)\)/);
   assert.match(playerSource, /showPlayerGestureHud\(art, "brightness", formatBrightnessPercent\(nextBrightness\)\)/);
   assert.doesNotMatch(playerSource, /onGestureHud\(`音量 /);
   assert.doesNotMatch(playerSource, /onGestureHud\(`亮度 /);
@@ -601,17 +601,19 @@ test("detail player fullscreen long-press rate hint lives inside ArtPlayer", () 
 });
 
 test("detail player mobile brightness gesture only filters the video surface", () => {
+  assert.match(playerSource, /classList\.add\(PLAYER_SURFACE_CLASS\)/);
+  assert.match(playerSource, /const PLAYER_SURFACE_CLASS = "video-player__art"/);
   assert.match(
     detailCss,
-    /\.video-player \.art-video,\s*\.video-player \.art-poster\s*\{[^}]*filter:\s*brightness\(var\(--video-player-brightness, 1\)\)/s
+    /\.video-player__art \.art-video,\s*\.video-player__art \.art-poster\s*\{[^}]*filter:\s*brightness\(var\(--video-player-brightness, 1\)\)/s
   );
   assert.match(
     detailCss,
-    /@media \(hover: none\) and \(pointer: coarse\)\s*\{[\s\S]*\.video-player \.art-video-player,[\s\S]*touch-action:\s*pan-y/s
+    /@media \(hover: none\) and \(pointer: coarse\)\s*\{[\s\S]*\.video-player__art,[\s\S]*touch-action:\s*pan-y/s
   );
   assert.match(
     detailCss,
-    /\.video-player \.art-video-player\.art-fullscreen,[\s\S]*\.video-player \.art-video-player\.art-fullscreen-web,[\s\S]*touch-action:\s*none/s
+    /\.video-player__art\.art-fullscreen,[\s\S]*\.video-player__art\.art-fullscreen-web,[\s\S]*touch-action:\s*none/s
   );
   assert.match(
     detailCss,

@@ -242,8 +242,8 @@
   background-size: contain;
 }
 
-.video-player .art-video,
-.video-player .art-poster {
+.video-player__art .art-video,
+.video-player__art .art-poster {
   filter: brightness(var(--video-player-brightness, 1));
 }
 
@@ -296,17 +296,17 @@
     display: flex;
   }
 
-  .video-player .art-video-player,
-  .video-player .art-video {
+  .video-player__art,
+  .video-player__art .art-video {
     touch-action: pan-y;
   }
 
-  .video-player .art-video-player.art-fullscreen,
-  .video-player .art-video-player.art-fullscreen .art-video,
-  .video-player .art-video-player.art-fullscreen-web,
-  .video-player .art-video-player.art-fullscreen-web .art-video,
-  .video-player .art-video-player.art-manual-orientation,
-  .video-player .art-video-player.art-manual-orientation .art-video {
+  .video-player__art.art-fullscreen,
+  .video-player__art.art-fullscreen .art-video,
+  .video-player__art.art-fullscreen-web,
+  .video-player__art.art-fullscreen-web .art-video,
+  .video-player__art.art-manual-orientation,
+  .video-player__art.art-manual-orientation .art-video {
     touch-action: none;
   }
 }

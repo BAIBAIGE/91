@@ -13,6 +13,12 @@ import {
 } from "@/lib/fullscreenSubtitleLayout";
 import { diagnosePlaybackSource } from "@/lib/playbackError";
 import {
+  getPlayerGesturePoint,
+  setPlayerGestureVolume,
+  type PlayerGestureFrame,
+  type PlayerGesturePoint,
+} from "@/lib/playerGestures";
+import {
   escapeHtml,
   formatSubtitleLabel,
   formatSubtitleOptionLabel,
@@ -76,8 +82,8 @@ type MobileGestureSide = "left" | "right";
 type PlayerGestureHudKind = "volume" | "brightness";
 type KeyboardSeekKey = "ArrowLeft" | "ArrowRight";
 type MobileGestureState = {
-  startX: number;
-  startY: number;
+  frame: PlayerGestureFrame;
+  startPoint: PlayerGesturePoint;
   startTime: number;
   startVolume: number;
   startBrightness: number;
@@ -147,6 +153,7 @@ const COMPACT_SETTING_LAYOUT = {
   itemHeight: 30,
 };
 const ORIENTATION_CONTROL_NAME = "orientationToggle";
+const PLAYER_SURFACE_CLASS = "video-player__art";
 const TRIPLE_SCREEN_CONTROL_NAME = "tripleScreen";
 const TRIPLE_SCREEN_RELAY_QUERY = "tripleScreenRelay";
 const MANUAL_ORIENTATION_CLASS = "art-manual-orientation";
@@ -188,6 +195,7 @@ const GESTURE_ACTIVATION_PX = 12;
 const GESTURE_DIRECTION_LOCK_RATIO = 1.2;
 const GESTURE_VERTICAL_SCALE = 1.15;
 const playerGestureHudTimers = new WeakMap<HTMLElement, number>();
+const playerBrightness = new WeakMap<Artplayer, number>();
 const tripleScreenBindings = new WeakMap<
   Artplayer,
   { toggle: () => void; destroy: () => void }
@@ -476,6 +484,7 @@ function mountArtPlayer({
 
   const art = new Artplayer(option);
   artRef.current = art;
+  art.template.$player.classList.add(PLAYER_SURFACE_CLASS);
 
   const video = art.video as VideoElementWithHls;
   video.setAttribute("referrerpolicy", MEDIA_REFERRER_POLICY);
@@ -485,7 +494,7 @@ function mountArtPlayer({
   video.disablePictureInPicture = false;
   video.loop = DEFAULT_SETTINGS.loop;
   video.playbackRate = DEFAULT_SETTINGS.playbackRate;
-  applyPlayerBrightness(art, DEFAULT_SETTINGS.brightness);
+  const unbindBrightness = bindPlayerBrightness(art);
 
   async function requestSubtitles() {
     if (
@@ -643,6 +652,7 @@ function mountArtPlayer({
     // 路由回退时必须先退出网页全屏，把节点移回 mount，再执行 destroy；
     // 否则 React 卸载详情页后，脱离组件树的全屏节点会继续覆盖新页面。
     if (art.fullscreenWeb) art.fullscreenWeb = false;
+    unbindBrightness();
     unbindFastRate();
     unbindMobileGestures();
     unbindProgressPreview();
@@ -1931,22 +1941,30 @@ function orientationLabel(mode: OrientationMode) {
   return mode === "landscape" ? "横屏" : "竖屏";
 }
 
+function bindPlayerBrightness(art: Artplayer) {
+  applyPlayerBrightness(art, DEFAULT_SETTINGS.brightness);
+  function restoreBrightness() {
+    // ArtPlayer restores the pre-fullscreen inline styles when leaving web fullscreen.
+    applyPlayerBrightness(art, getPlayerBrightness(art));
+  }
+  art.on("fullscreenWeb", restoreBrightness);
+  return () => {
+    art.off("fullscreenWeb", restoreBrightness);
+    playerBrightness.delete(art);
+  };
+}
+
 function applyPlayerBrightness(art: Artplayer, brightness: number) {
+  const value = Number(clamp(brightness, BRIGHTNESS_MIN, BRIGHTNESS_MAX).toFixed(2));
+  playerBrightness.set(art, value);
   art.template.$player.style.setProperty(
     "--video-player-brightness",
-    clamp(brightness, BRIGHTNESS_MIN, BRIGHTNESS_MAX).toFixed(2)
+    value.toFixed(2)
   );
 }
 
 function getPlayerBrightness(art: Artplayer) {
-  const raw = art.template.$player.style.getPropertyValue(
-    "--video-player-brightness"
-  );
-  if (!raw.trim()) return DEFAULT_SETTINGS.brightness;
-  const value = Number(raw);
-  return Number.isFinite(value)
-    ? clamp(value, BRIGHTNESS_MIN, BRIGHTNESS_MAX)
-    : DEFAULT_SETTINGS.brightness;
+  return playerBrightness.get(art) ?? DEFAULT_SETTINGS.brightness;
 }
 
 function seekGestureLabel(
@@ -2195,18 +2213,26 @@ function bindMobilePlayerGestures(
   }
 
   function handleTouchStart(event: TouchEvent) {
+    resetGesture();
     if (event.touches.length !== 1 || art.isLock) return;
 
     const touch = event.touches[0];
     const rect = player.getBoundingClientRect();
-    const localX = touch.clientX - rect.left;
+    const frame: PlayerGestureFrame = {
+      left: rect.left,
+      top: rect.top,
+      width: rect.width,
+      height: rect.height,
+      rotated: player.classList.contains(MANUAL_ORIENTATION_CLASS) || art.isRotate,
+    };
+    const startPoint = getPlayerGesturePoint(touch, frame);
     state = {
-      startX: touch.clientX,
-      startY: touch.clientY,
+      frame,
+      startPoint,
       startTime: video.currentTime || 0,
       startVolume: video.muted ? 0 : clamp(video.volume, 0, 1),
       startBrightness: getPlayerBrightness(art),
-      side: localX < rect.width / 2 ? "left" : "right",
+      side: startPoint.x < startPoint.width / 2 ? "left" : "right",
       mode: null,
       targetTime: video.currentTime || 0,
       moved: false,
@@ -2248,14 +2274,15 @@ function bindMobilePlayerGestures(
 
   function handleTouchMove(event: TouchEvent) {
     if (!state) return;
-    if (event.touches.length !== 1) {
+    if (event.touches.length !== 1 || art.isLock) {
       resetGesture();
       return;
     }
 
     const touch = event.touches[0];
-    const dx = touch.clientX - state.startX;
-    const dy = touch.clientY - state.startY;
+    const point = getPlayerGesturePoint(touch, state.frame);
+    const dx = point.x - state.startPoint.x;
+    const dy = point.y - state.startPoint.y;
 
     if (state.fastActive) {
       event.preventDefault();
@@ -2275,20 +2302,19 @@ function bindMobilePlayerGestures(
     }
 
     if (state.mode === "volume") {
-      handleVolumeGesture(touch.clientY);
+      handleVolumeGesture(point.y);
       return;
     }
 
-    handleBrightnessGesture(touch.clientY);
+    handleBrightnessGesture(point.y);
   }
 
   function handleSeekGesture(event: TouchEvent, dx: number) {
     if (!state) return;
     const duration = video.duration;
     if (!Number.isFinite(duration) || duration <= 0) return;
-    const rect = player.getBoundingClientRect();
     const targetTime = clamp(
-      state.startTime + (dx / Math.max(1, rect.width)) * duration,
+      state.startTime + (dx / Math.max(1, state.startPoint.width)) * duration,
       0,
       duration
     );
@@ -2300,20 +2326,22 @@ function bindMobilePlayerGestures(
 
   function handleVolumeGesture(currentY: number) {
     if (!state) return;
-    const rect = player.getBoundingClientRect();
-    const delta = (state.startY - currentY) / Math.max(1, rect.height);
-    const nextVolume = clamp(state.startVolume + delta, 0, 1);
-    const normalized = Math.round(nextVolume * 100) / 100;
-    video.volume = normalized;
-    video.muted = normalized <= 0;
-    showPlayerGestureHud(art, "volume", formatPercent(normalized));
+    const delta =
+      (state.startPoint.y - currentY) / Math.max(1, state.startPoint.height);
+    const volume = setPlayerGestureVolume(video, state.startVolume + delta);
+    if (volume === null) {
+      clearPlayerGestureHud(art);
+      art.notice.show = "当前浏览器不支持音量调节";
+      resetGesture();
+      return;
+    }
+    showPlayerGestureHud(art, "volume", formatPercent(volume));
   }
 
   function handleBrightnessGesture(currentY: number) {
     if (!state) return;
-    const rect = player.getBoundingClientRect();
     const delta =
-      ((state.startY - currentY) / Math.max(1, rect.height)) *
+      ((state.startPoint.y - currentY) / Math.max(1, state.startPoint.height)) *
       GESTURE_VERTICAL_SCALE;
     const nextBrightness = clamp(
       state.startBrightness + delta,
@@ -2350,6 +2378,9 @@ function bindMobilePlayerGestures(
   video.addEventListener("pause", resetGesture);
   video.addEventListener("ended", resetGesture);
   window.addEventListener("blur", resetGesture);
+  art.on("resize", resetGesture);
+  art.on("fullscreen", resetGesture);
+  art.on("fullscreenWeb", resetGesture);
 
   return () => {
     clearPlayerGestureHud(art);
@@ -2361,6 +2392,9 @@ function bindMobilePlayerGestures(
     video.removeEventListener("pause", resetGesture);
     video.removeEventListener("ended", resetGesture);
     window.removeEventListener("blur", resetGesture);
+    art.off("resize", resetGesture);
+    art.off("fullscreen", resetGesture);
+    art.off("fullscreenWeb", resetGesture);
   };
 }
 
