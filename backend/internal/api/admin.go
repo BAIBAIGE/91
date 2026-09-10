@@ -64,10 +64,6 @@ type AdminServer struct {
 	// ReleaseAPIURL and HTTPClient are injectable for tests. Production code leaves them empty.
 	ReleaseAPIURL string
 	HTTPClient    *http.Client
-	// SetupRequired 表示当前是否仍处于首次部署初始化状态。
-	SetupRequired func() bool
-	// OnSetup 持久化首次部署时设置的管理员账号密码，并更新运行中认证器。
-	OnSetup func(username, password string) error
 	// LocalPreviewDir is the local directory that stores generated preview videos and thumbs.
 	LocalPreviewDir string
 	// Hooks：外层注入实际执行者。

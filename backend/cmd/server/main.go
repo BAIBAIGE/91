@@ -2,8 +2,6 @@ package main
 
 import (
 	"context"
-	"database/sql"
-	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -13,7 +11,6 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
@@ -146,6 +143,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("configure config manager: %v", err)
 	}
+	if _, err := migrateLegacyAdmin(context.Background(), cat, configManager); err != nil {
+		log.Fatalf("migrate administrator configuration: %v", err)
+	}
 	legacyRuntimeSettings, err := loadLegacyRuntimeSettings(context.Background(), cat)
 	if err != nil {
 		log.Fatalf("load legacy runtime settings: %v", err)
@@ -247,18 +247,7 @@ func main() {
 		log.Fatalf("start remote upload: %v", err)
 	}
 
-	authr := &auth.Authenticator{
-		Username: cfg.Server.Admin.Username,
-		Password: cfg.Server.Admin.Password,
-		Catalog:  cat,
-	}
-	setupRequired := config.RequiresAdminSetup(cfg)
-	if !setupRequired {
-		if err := ensureConfigAdminUser(ctx, cat, cfg); err != nil {
-			log.Printf("[auth] migrate config admin: %v", err)
-		}
-	}
-	var setupMu sync.Mutex
+	authr := &auth.Authenticator{Catalog: cat}
 	versionFilePath := strings.TrimSpace(os.Getenv("VIDEO_VERSION_FILE"))
 	if versionFilePath == "" {
 		versionFilePath = filepath.Join(filepath.Dir(cfgPath), ".version")
@@ -324,44 +313,15 @@ func main() {
 	app.onTagsChanged = apiServer.InvalidateTagCache
 
 	adminServer := &api.AdminServer{
-		Catalog:         cat,
-		Auth:            authr,
-		Backups:         backupManager,
-		BackupTransfers: backupTransferManager,
-		Logs:            logStore,
-		ConfigManager:   configManager,
-		VersionFilePath: versionFilePath,
-		ImageVersion:    imageVersion,
-		GitHubRepo:      githubRepo,
-		SetupRequired: func() bool {
-			setupMu.Lock()
-			defer setupMu.Unlock()
-			return setupRequired
-		},
-		OnSetup: func(username, password string) error {
-			setupMu.Lock()
-			defer setupMu.Unlock()
-			if !setupRequired {
-				return nil
-			}
-			if err := configManager.UpdateAdminCredentials(username, password); err != nil {
-				return err
-			}
-			hashed, err := auth.HashPassword(password)
-			if err != nil {
-				return err
-			}
-			if _, err := cat.CreateUser(ctx, username, hashed, "admin"); err != nil {
-				return err
-			}
-			fileConfig.Server.Admin.Username = username
-			fileConfig.Server.Admin.Password = password
-			cfg.Server.Admin.Username = username
-			cfg.Server.Admin.Password = password
-			authr.SetCredentials(username, password)
-			setupRequired = false
-			return nil
-		},
+		Catalog:                cat,
+		Auth:                   authr,
+		Backups:                backupManager,
+		BackupTransfers:        backupTransferManager,
+		Logs:                   logStore,
+		ConfigManager:          configManager,
+		VersionFilePath:        versionFilePath,
+		ImageVersion:           imageVersion,
+		GitHubRepo:             githubRepo,
 		LocalPreviewDir:        cfg.Storage.LocalPreviewDir,
 		BeginDriveConfigUpdate: app.beginDriveConfigUpdate,
 		OnDriveRuntimeConfigChanged: func(driveID string) error {
@@ -621,27 +581,5 @@ func runHashPasswordCommand(r io.Reader, w io.Writer) error {
 		return fmt.Errorf("hash password: %w", err)
 	}
 	_, err = fmt.Fprintln(w, hashed)
-	return err
-}
-
-func ensureConfigAdminUser(ctx context.Context, cat *catalog.Catalog, cfg *config.Config) error {
-	if cat == nil || cfg == nil {
-		return nil
-	}
-	username := strings.TrimSpace(cfg.Server.Admin.Username)
-	password := cfg.Server.Admin.Password
-	if username == "" || password == "" {
-		return nil
-	}
-	if _, err := cat.GetUserByUsername(ctx, username); err == nil {
-		return nil
-	} else if !errors.Is(err, sql.ErrNoRows) {
-		return err
-	}
-	hashed, err := auth.HashPassword(password)
-	if err != nil {
-		return err
-	}
-	_, err = cat.CreateUser(ctx, username, hashed, "admin")
 	return err
 }

@@ -54,7 +54,7 @@ func TestOneTimeShareRouteClaimsOnceAndStreamsWithoutLogin(t *testing.T) {
 	}
 
 	const loginToken = "authenticated-session"
-	if err := cat.CreateSession(ctx, loginToken, time.Hour, 0); err != nil {
+	if err := cat.CreateSession(ctx, loginToken, time.Hour, createSessionUser(t, cat)); err != nil {
 		t.Fatalf("create login session: %v", err)
 	}
 	authenticator := &auth.Authenticator{Catalog: cat}

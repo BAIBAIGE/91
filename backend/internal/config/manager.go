@@ -150,6 +150,9 @@ func (m *Manager) ReadYAML() ([]byte, string, error) {
 	if err != nil {
 		return nil, "", fmt.Errorf("read config: %w", err)
 	}
+	if err := validateAdminConfigRemoved(data); err != nil {
+		return nil, "", err
+	}
 	return data, configVersion(data), nil
 }
 
@@ -158,6 +161,9 @@ func (m *Manager) ReadYAML() ([]byte, string, error) {
 func (m *Manager) ReplaceYAML(data []byte, expectedVersion string) (SaveResult, error) {
 	if m == nil {
 		return SaveResult{}, errors.New("configuration manager is unavailable")
+	}
+	if err := validateAdminConfigRemoved(data); err != nil {
+		return SaveResult{}, err
 	}
 	candidate, err := Parse(data)
 	if err != nil {
@@ -198,46 +204,6 @@ func (m *Manager) ReplaceYAML(data []byte, expectedVersion string) (SaveResult, 
 		RestartRequired: restartRequired,
 		Settings:        settings,
 	}, nil
-}
-
-// UpdateAdminCredentials routes first-run setup through the same serialized,
-// atomic writer as the configuration panel.
-func (m *Manager) UpdateAdminCredentials(username, password string) error {
-	if m == nil {
-		return errors.New("configuration manager is unavailable")
-	}
-	username = strings.TrimSpace(username)
-	if username == "" {
-		return errors.New("username is required")
-	}
-	if password == "" {
-		return errors.New("password is required")
-	}
-	m.updateMu.Lock()
-	defer m.updateMu.Unlock()
-	data, err := os.ReadFile(m.path)
-	if err != nil {
-		return fmt.Errorf("read config: %w", err)
-	}
-	updated, err := rewriteAdminCredentials(data, username, password)
-	if err != nil {
-		return err
-	}
-	parsed, err := Parse(updated)
-	if err != nil {
-		return err
-	}
-	fileMode := configFileMode(m.path)
-	if err := writeFileAtomically(m.path, updated, fileMode); err != nil {
-		return err
-	}
-	if _, err := m.publishLocked(parsed, configVersion(updated)); err != nil {
-		if restoreErr := writeFileAtomically(m.path, data, fileMode); restoreErr != nil {
-			err = errors.Join(err, fmt.Errorf("restore config after live apply failure: %w", restoreErr))
-		}
-		return fmt.Errorf("apply live configuration: %w", err)
-	}
-	return nil
 }
 
 // MigrateLegacyRuntimeSettings performs a one-time schema migration into the
@@ -371,6 +337,12 @@ func (m *Manager) Reload() (bool, error) {
 	m.mu.RUnlock()
 	if version == observedVersion {
 		return false, nil
+	}
+	if err := validateAdminConfigRemoved(data); err != nil {
+		m.mu.Lock()
+		m.observedVersion = version
+		m.mu.Unlock()
+		return false, err
 	}
 	parsed, err := Parse(data)
 	if err != nil {

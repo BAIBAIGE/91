@@ -1,7 +1,6 @@
 package config
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"os"
@@ -16,8 +15,6 @@ import (
 )
 
 const (
-	DefaultAdminUsername         = "admin"
-	DefaultAdminPassword         = "admin123"
 	DefaultNightlyDisabled       = false
 	DefaultNightlyStartTime      = "01:00"
 	DefaultNightlyTimezone       = schedule.DefaultTimezone
@@ -49,81 +46,11 @@ type Config struct {
 
 type Server struct {
 	Listen string `yaml:"listen"`
-	Admin  Admin  `yaml:"admin"`
 	// AllowedOrigins 是允许跨源访问的前端 Origin 白名单（如 "https://video.example.com"）。
 	// 默认空 → 不开启 CORS 跨源；同源部署（前后端在同一个域名 + 端口下）不需要配置此项。
 	// 浏览器对不在列表里的 Origin 不会拿到 Access-Control-Allow-Origin 头，自然就读不到响应。
 	// 不要写 "*"；带 cookie 的 CORS 必须是具体 Origin。
 	AllowedOrigins []string `yaml:"allowed_origins"`
-}
-
-type Admin struct {
-	Username string `yaml:"username"`
-	Password string `yaml:"password"`
-}
-
-func RequiresAdminSetup(c *Config) bool {
-	if c == nil {
-		return true
-	}
-	username := strings.TrimSpace(c.Server.Admin.Username)
-	password := c.Server.Admin.Password
-	if username == "" || password == "" {
-		return true
-	}
-	return username == DefaultAdminUsername && password == DefaultAdminPassword
-}
-
-func WriteAdminCredentials(path, username, password string) error {
-	username = strings.TrimSpace(username)
-	if username == "" {
-		return fmt.Errorf("username is required")
-	}
-	if password == "" {
-		return fmt.Errorf("password is required")
-	}
-
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return fmt.Errorf("read config: %w", err)
-	}
-	out, err := rewriteAdminCredentials(b, username, password)
-	if err != nil {
-		return err
-	}
-
-	return writeFileAtomically(path, out, configFileMode(path))
-}
-
-// RedactAdminCredentials clears only the configured administrator username and
-// password while preserving the rest of the YAML document, including unknown
-// fields that may belong to a newer application version.
-func RedactAdminCredentials(data []byte) ([]byte, error) {
-	return rewriteAdminCredentials(data, "", "")
-}
-
-func rewriteAdminCredentials(data []byte, username, password string) ([]byte, error) {
-	var root yaml.Node
-	if err := yaml.Unmarshal(data, &root); err != nil {
-		return nil, fmt.Errorf("parse config: %w", err)
-	}
-	doc := ensureDocumentMapping(&root)
-	server := ensureMappingValue(doc, "server")
-	admin := ensureMappingValue(server, "admin")
-	setScalarValue(admin, "username", username)
-	setScalarValue(admin, "password", password)
-
-	var out bytes.Buffer
-	enc := yaml.NewEncoder(&out)
-	enc.SetIndent(2)
-	if err := enc.Encode(&root); err != nil {
-		_ = enc.Close()
-		return nil, fmt.Errorf("encode config: %w", err)
-	}
-	if err := enc.Close(); err != nil {
-		return nil, fmt.Errorf("encode config: %w", err)
-	}
-	return out.Bytes(), nil
 }
 
 func ensureDocumentMapping(root *yaml.Node) *yaml.Node {

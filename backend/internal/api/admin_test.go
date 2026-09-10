@@ -101,6 +101,7 @@ func TestHandleLoginReturnsForbiddenForBannedIP(t *testing.T) {
 			t.Fatalf("close catalog: %v", err)
 		}
 	})
+	createSessionUser(t, cat)
 	if err := cat.BanLoginIP(ctx, "203.0.113.20", "test"); err != nil {
 		t.Fatalf("ban ip: %v", err)
 	}
@@ -111,7 +112,7 @@ func TestHandleLoginReturnsForbiddenForBannedIP(t *testing.T) {
 
 	(&AdminServer{
 		Catalog: cat,
-		Auth:    &auth.Authenticator{Username: "admin", Password: "secret", Catalog: cat},
+		Auth:    &auth.Authenticator{Catalog: cat},
 	}).handleLogin(rr, req)
 
 	if rr.Code != http.StatusForbidden {
@@ -129,7 +130,7 @@ func TestAuthenticationEndpointsReturnServiceUnavailableWhenCatalogFails(t *test
 	}
 	server := &AdminServer{
 		Catalog: cat,
-		Auth:    &auth.Authenticator{Username: "admin", Password: "secret", Catalog: cat},
+		Auth:    &auth.Authenticator{Catalog: cat},
 	}
 
 	tests := []struct {
@@ -181,9 +182,8 @@ func TestHandleLoginRequiresSetupBeforeDefaultLogin(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/admin/api/login", strings.NewReader(`{"username":"admin","password":"admin123"}`))
 	rr := httptest.NewRecorder()
 	(&AdminServer{
-		Catalog:       cat,
-		Auth:          &auth.Authenticator{Username: "admin", Password: "admin123", Catalog: cat},
-		SetupRequired: func() bool { return true },
+		Catalog: cat,
+		Auth:    &auth.Authenticator{Catalog: cat},
 	}).handleLogin(rr, req)
 
 	if rr.Code != http.StatusPreconditionRequired {
@@ -201,29 +201,24 @@ func TestHandleSetupStoresCredentialsAndCreatesSession(t *testing.T) {
 			t.Fatalf("close catalog: %v", err)
 		}
 	})
-	authr := &auth.Authenticator{Username: "admin", Password: "admin123", Catalog: cat}
-	setupRequired := true
-	var savedUser, savedPass string
+	authr := &auth.Authenticator{Catalog: cat}
 	req := httptest.NewRequest(http.MethodPost, "/admin/api/setup", strings.NewReader(`{"username":"owner","password":"secret123"}`))
 	rr := httptest.NewRecorder()
 
 	(&AdminServer{
-		Catalog:       cat,
-		Auth:          authr,
-		SetupRequired: func() bool { return setupRequired },
-		OnSetup: func(username, password string) error {
-			savedUser, savedPass = username, password
-			authr.SetCredentials(username, password)
-			setupRequired = false
-			return nil
-		},
+		Catalog: cat,
+		Auth:    authr,
 	}).handleSetup(rr, req)
 
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body = %s", rr.Code, rr.Body.String())
 	}
-	if savedUser != "owner" || savedPass != "secret123" {
-		t.Fatalf("saved credentials = %q/%q, want owner/secret123", savedUser, savedPass)
+	user, err := cat.GetUserByUsername(context.Background(), "owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if user.Role != "admin" || user.Password == "secret123" {
+		t.Fatal("administrator was not stored with a password hash")
 	}
 	cookies := rr.Result().Cookies()
 	if len(cookies) == 0 {
@@ -233,6 +228,15 @@ func TestHandleSetupStoresCredentialsAndCreatesSession(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("setup session valid=%v err=%v", ok, err)
 	}
+}
+
+func createSessionUser(t *testing.T, cat *catalog.Catalog) int64 {
+	t.Helper()
+	id, err := cat.CreateUser(context.Background(), "session-admin", "unused-password-hash", "admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return id
 }
 
 func TestHandleBanUserDeletesSessions(t *testing.T) {

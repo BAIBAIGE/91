@@ -9,7 +9,6 @@ import (
 	"image/color"
 	"image/jpeg"
 	"io"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
@@ -22,7 +21,6 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/video-site/backend/internal/api"
-	"github.com/video-site/backend/internal/auth"
 	"github.com/video-site/backend/internal/catalog"
 	"github.com/video-site/backend/internal/config"
 	"github.com/video-site/backend/internal/drives"
@@ -343,43 +341,6 @@ func TestListDriveDirChildrenRecordsMissingAttachWithoutOriginalFailure(t *testi
 	}
 	if got.Status != "error" || !strings.Contains(got.LastError, "drive drive-id not attached") {
 		t.Fatalf("status=%q lastError=%q, want missing-attach failure recorded", got.Status, got.LastError)
-	}
-}
-
-func TestEnsureConfigAdminUserMigratesCustomConfigAdmin(t *testing.T) {
-	ctx := context.Background()
-	cat, err := catalog.Open(t.TempDir() + "/catalog.db")
-	if err != nil {
-		t.Fatalf("open catalog: %v", err)
-	}
-	t.Cleanup(func() {
-		if err := cat.Close(); err != nil {
-			t.Fatalf("close catalog: %v", err)
-		}
-	})
-
-	cfg := &config.Config{}
-	cfg.Server.Admin.Username = "owner"
-	cfg.Server.Admin.Password = "secret123"
-
-	if err := ensureConfigAdminUser(ctx, cat, cfg); err != nil {
-		t.Fatalf("ensure config admin: %v", err)
-	}
-	u, err := cat.GetUserByUsername(ctx, "owner")
-	if err != nil {
-		t.Fatalf("get migrated user: %v", err)
-	}
-	if u.Role != "admin" {
-		t.Fatalf("role = %q, want admin", u.Role)
-	}
-
-	authr := &auth.Authenticator{Catalog: cat}
-	role, err := authr.UserLogin(httptest.NewRecorder(), httptest.NewRequest("POST", "/admin/api/login", nil), "owner", "secret123")
-	if err != nil {
-		t.Fatalf("login migrated user: %v", err)
-	}
-	if role != "admin" {
-		t.Fatalf("role = %q, want admin", role)
 	}
 }
 

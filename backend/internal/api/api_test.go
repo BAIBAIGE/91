@@ -819,7 +819,7 @@ func newHomeRecommendationTestRoute(t *testing.T, total, readyCount int) (*Serve
 	}
 
 	const token = "home-recommendation-session"
-	if err := cat.CreateSession(ctx, token, time.Hour, 0); err != nil {
+	if err := cat.CreateSession(ctx, token, time.Hour, createSessionUser(t, cat)); err != nil {
 		t.Fatalf("create session: %v", err)
 	}
 	server := &Server{Catalog: cat}
@@ -1964,7 +1964,7 @@ func TestShortsRouteRejectsRemovedPostEndpoint(t *testing.T) {
 		t.Fatalf("open catalog: %v", err)
 	}
 	t.Cleanup(func() { _ = cat.Close() })
-	if err := cat.CreateSession(ctx, "shorts-route-token", time.Hour, 0); err != nil {
+	if err := cat.CreateSession(ctx, "shorts-route-token", time.Hour, createSessionUser(t, cat)); err != nil {
 		t.Fatalf("create session: %v", err)
 	}
 

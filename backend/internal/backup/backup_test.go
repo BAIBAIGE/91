@@ -38,11 +38,7 @@ func newTestBackupEnv(t *testing.T) *testBackupEnv {
 	root := t.TempDir()
 	cfg := &config.Config{
 		Server: config.Server{
-			Listen: "127.0.0.1:9192",
-			Admin: config.Admin{
-				Username: "source-admin",
-				Password: "source-password",
-			},
+			Listen:         "127.0.0.1:9192",
 			AllowedOrigins: []string{"https://source.example"},
 		},
 		Storage: config.Storage{
@@ -362,9 +358,8 @@ func TestFullBackupContainsPersistentFilesAndExcludesTemporaryData(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if liveConfig.Server.Admin.Username != "source-admin" ||
-		liveConfig.Server.Admin.Password != "source-password" {
-		t.Fatalf("creating a backup changed the live administrator config: %+v", liveConfig.Server.Admin)
+	if liveConfig.Server.Listen != env.cfg.Server.Listen {
+		t.Fatalf("creating a backup changed the live server config: %+v", liveConfig.Server)
 	}
 }
 
@@ -2241,8 +2236,6 @@ func TestRestoreSwitchesAllDataPreservesTargetRuntimeConfigAndClearsSessions(t *
 	env.cfg.Preview.FFmpegPath = "/target/bin/ffmpeg"
 	env.cfg.Preview.FFprobePath = "/target/bin/ffprobe"
 	env.cfg.Preview.Enabled = false
-	env.cfg.Server.Admin.Username = "target-admin"
-	env.cfg.Server.Admin.Password = "target-password"
 	writeTestConfig(t, env.configPath, env.cfg)
 
 	report, err := env.manager.PrepareRestore(ctx, record.ID)
@@ -2381,10 +2374,6 @@ func TestRestoreSwitchesAllDataPreservesTargetRuntimeConfigAndClearsSessions(t *
 		restoredConfig.Logging.MaxTotalSizeMB != 300 {
 		t.Fatalf("target logging config was not preserved: %+v", restoredConfig.Logging)
 	}
-	if restoredConfig.Server.Admin.Username != "target-admin" ||
-		restoredConfig.Server.Admin.Password != "target-password" {
-		t.Fatalf("target administrator config was not preserved: %+v", restoredConfig.Server.Admin)
-	}
 	localDrive, err := restoredCatalog.GetDrive(ctx, "local-missing")
 	if err != nil {
 		t.Fatal(err)
@@ -2511,8 +2500,6 @@ func TestAppliedRestoreCanRollBackToOldData(t *testing.T) {
 	); err != nil {
 		t.Fatal(err)
 	}
-	env.cfg.Server.Admin.Username = "rollback-config-owner"
-	env.cfg.Server.Admin.Password = "rollback-config-password"
 	writeTestConfig(t, env.configPath, env.cfg)
 	if _, err := env.manager.PrepareRestore(context.Background(), record.ID); err != nil {
 		t.Fatal(err)
@@ -2562,9 +2549,8 @@ func TestAppliedRestoreCanRollBackToOldData(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rolledBackConfig.Server.Admin.Username != "rollback-config-owner" ||
-		rolledBackConfig.Server.Admin.Password != "rollback-config-password" {
-		t.Fatalf("administrator config was not restored after rollback: %+v", rolledBackConfig.Server.Admin)
+	if rolledBackConfig.Server.Listen != env.cfg.Server.Listen {
+		t.Fatalf("server config was not restored after rollback: %+v", rolledBackConfig.Server)
 	}
 }
 

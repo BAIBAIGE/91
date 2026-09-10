@@ -178,7 +178,11 @@ func TestRestoredPreviewServesWithRelativeTargetStorageConfig(t *testing.T) {
 	}
 
 	const sessionToken = "integration-session"
-	if err := restoredCatalog.CreateSession(ctx, sessionToken, time.Hour, 0); err != nil {
+	userID, err := restoredCatalog.CreateUser(ctx, "integration-admin", "unused-password-hash", "admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := restoredCatalog.CreateSession(ctx, sessionToken, time.Hour, userID); err != nil {
 		t.Fatal(err)
 	}
 	authenticator := &auth.Authenticator{Catalog: restoredCatalog}
@@ -207,10 +211,6 @@ func relativeStorageConfig() *config.Config {
 	return &config.Config{
 		Server: config.Server{
 			Listen: "127.0.0.1:9192",
-			Admin: config.Admin{
-				Username: "admin",
-				Password: "admin-password",
-			},
 		},
 		Storage: config.Storage{
 			DBPath:          "./data/video-site.db",

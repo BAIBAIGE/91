@@ -3,9 +3,6 @@ package catalog
 import (
 	"context"
 	"database/sql"
-	"fmt"
-	"strings"
-	"time"
 )
 
 type User struct {
@@ -18,21 +15,16 @@ type User struct {
 }
 
 func (c *Catalog) CreateUser(ctx context.Context, username, hashedPassword, role string) (int64, error) {
-	username = strings.TrimSpace(username)
-	if username == "" {
-		return 0, fmt.Errorf("username is required")
-	}
-	if role == "" {
-		role = "user"
-	}
-	now := time.Now().UnixMilli()
-	res, err := c.db.ExecContext(ctx,
-		`INSERT INTO users (username, password, role, banned, created_at) VALUES (?, ?, ?, 0, ?)`,
-		username, hashedPassword, role, now)
+	tx, err := c.db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, err
 	}
-	return res.LastInsertId()
+	defer tx.Rollback()
+	id, err := createUser(ctx, tx, username, hashedPassword, role)
+	if err != nil {
+		return 0, err
+	}
+	return id, tx.Commit()
 }
 
 func (c *Catalog) GetUserByUsername(ctx context.Context, username string) (*User, error) {

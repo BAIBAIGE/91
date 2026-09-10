@@ -65,7 +65,8 @@ func (a *AdminServer) handlePutConfigYAML(w http.ResponseWriter, r *http.Request
 		case errors.Is(err, config.ErrVersionConflict):
 			writeErr(w, r, http.StatusConflict, err)
 		case errors.Is(err, config.ErrInvalidNightlyStartTime),
-			errors.Is(err, config.ErrInvalidNightlyTimezone):
+			errors.Is(err, config.ErrInvalidNightlyTimezone),
+			errors.Is(err, config.ErrAdminConfigRemoved):
 			writeErr(w, r, http.StatusBadRequest, err)
 		default:
 			// YAML syntax and type errors are validation failures too. Disk I/O

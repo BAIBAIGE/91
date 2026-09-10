@@ -81,10 +81,6 @@ func newTransferTestBackupEnv(t *testing.T) *transferTestBackupEnv {
 	cfg := &config.Config{
 		Server: config.Server{
 			Listen: "127.0.0.1:9192",
-			Admin: config.Admin{
-				Username: "transfer-admin",
-				Password: "transfer-password",
-			},
 		},
 		Storage: config.Storage{
 			DBPath:          filepath.Join(root, "video-site.db"),

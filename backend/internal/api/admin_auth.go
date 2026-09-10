@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/video-site/backend/internal/auth"
+	"github.com/video-site/backend/internal/catalog"
 )
 
 type updateCheckDTO struct {
@@ -39,21 +40,27 @@ type setupReq struct {
 	Password string `json:"password"`
 }
 
-func (a *AdminServer) setupRequired() bool {
-	return a.SetupRequired != nil && a.SetupRequired()
-}
-
 func (a *AdminServer) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
-	writeJSON(w, http.StatusOK, map[string]any{"required": a.setupRequired()})
+	required, err := a.Catalog.AdminSetupRequired(r.Context())
+	if err != nil {
+		writeServiceUnavailable(w, r, "check administrator setup", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"required": required})
 }
 
 func (a *AdminServer) handleSetup(w http.ResponseWriter, r *http.Request) {
-	if !a.setupRequired() {
+	required, err := a.Catalog.AdminSetupRequired(r.Context())
+	if err != nil {
+		writeServiceUnavailable(w, r, "check administrator setup", err)
+		return
+	}
+	if !required {
 		http.Error(w, "setup already completed", http.StatusConflict)
 		return
 	}
-	if a.OnSetup == nil || a.Auth == nil {
+	if a.Auth == nil {
 		http.Error(w, "setup is not available", http.StatusInternalServerError)
 		return
 	}
@@ -68,12 +75,21 @@ func (a *AdminServer) handleSetup(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "username is required", http.StatusBadRequest)
 		return
 	}
-	if len(password) < 6 {
-		http.Error(w, "password must be at least 6 characters", http.StatusBadRequest)
+	if len(password) < 6 || len(password) > 72 {
+		http.Error(w, "password must be between 6 and 72 bytes", http.StatusBadRequest)
 		return
 	}
-	if err := a.OnSetup(username, password); err != nil {
+	hashed, err := auth.HashPassword(password)
+	if err != nil {
 		writeErr(w, r, http.StatusInternalServerError, err)
+		return
+	}
+	if err := a.Catalog.InitializeAdmin(r.Context(), username, hashed); err != nil {
+		if errors.Is(err, catalog.ErrAdminAlreadyInitialized) {
+			http.Error(w, "setup already completed", http.StatusConflict)
+			return
+		}
+		writeServiceUnavailable(w, r, "initialize administrator", err)
 		return
 	}
 	role, err := a.Auth.UserLogin(w, r, username, password)
@@ -93,7 +109,12 @@ func (a *AdminServer) handleSetup(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *AdminServer) handleLogin(w http.ResponseWriter, r *http.Request) {
-	if a.setupRequired() {
+	required, err := a.Catalog.AdminSetupRequired(r.Context())
+	if err != nil {
+		writeServiceUnavailable(w, r, "check administrator setup", err)
+		return
+	}
+	if required {
 		http.Error(w, "setup required", http.StatusPreconditionRequired)
 		return
 	}
@@ -144,22 +165,16 @@ func (a *AdminServer) handleMe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	role := "user"
-	if userID > 0 {
-		u, err := a.Catalog.GetUserByID(r.Context(), userID)
-		if errors.Is(err, sql.ErrNoRows) || (err == nil && u.Banned) {
-			writeJSON(w, http.StatusOK, map[string]any{"authenticated": false})
-			return
-		}
-		if err != nil {
-			writeServiceUnavailable(w, r, "load current user", err)
-			return
-		}
-		role = u.Role
-	} else {
-		role = "admin"
+	u, err := a.Catalog.GetUserByID(r.Context(), userID)
+	if errors.Is(err, sql.ErrNoRows) || (err == nil && u.Banned) {
+		writeJSON(w, http.StatusOK, map[string]any{"authenticated": false})
+		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"authenticated": true, "role": role})
+	if err != nil {
+		writeServiceUnavailable(w, r, "load current user", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"authenticated": true, "role": u.Role})
 }
 
 func (a *AdminServer) handleCheckUpdate(w http.ResponseWriter, r *http.Request) {

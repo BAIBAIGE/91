@@ -109,6 +109,29 @@ func TestConfigYAMLPutRejectsStaleAndInvalidWrites(t *testing.T) {
 	}
 }
 
+func TestConfigYAMLPutRejectsAdministratorCredentials(t *testing.T) {
+	server, path := newConfigAPIForTest(t, "server:\n  listen: ':8080'\n")
+	original, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := httptest.NewRecorder()
+	server.handlePutConfigYAML(res, httptest.NewRequest(http.MethodPut, "/admin/api/config.yaml", strings.NewReader("server:\n  admin:\n    username: owner\n    password: secret-password\n")))
+	if res.Code != http.StatusBadRequest || !strings.Contains(res.Body.String(), "server.admin") {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	if strings.Contains(res.Body.String(), "secret-password") {
+		t.Fatal("response exposed submitted password")
+	}
+	written, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(written) != string(original) {
+		t.Fatal("rejected administrator config was persisted")
+	}
+}
+
 func TestConfigYAMLPutReportsRestartForNonLiveFields(t *testing.T) {
 	server, _ := newConfigAPIForTest(t, "server:\n  listen: \":8080\"\nnightly:\n  start_time: \"01:00\"\n")
 	request := httptest.NewRequest(http.MethodPut, "/admin/api/config.yaml", strings.NewReader("server:\n  listen: \":9090\"\nnightly:\n  start_time: \"01:00\"\n"))
