@@ -32,12 +32,12 @@ sudo bash install.sh
 
 安装后自动注册 `91` 管理命令：
 ```bash
-91            # 打开管理菜单
-91 status     # 查看运行状态
-91 logs       # 查看日志
-91 update     # 更新到最新版本
-91 restart    # 重启服务
-91 stop       # 停止服务
+91                  # 打开管理菜单
+91 stop             # 停止服务
+91 restart          # 重启服务
+91 update           # 更新到最新版本
+91 status           # 查看运行状态
+91 reset-password   # 重置密码
 ```
 ### 方式二：Docker Compose 部署
 
@@ -55,8 +55,9 @@ docker compose up -d
 ```
 **常用命令：**
 ```bash
-docker compose pull && docker compose up -d   # 更新并重启
-docker compose logs -f                        # 查看日志
+docker compose pull && docker compose up -d             # 更新并重启
+docker exec -it video-site-91 ./server reset-password   # 重置密码
+docker compose logs -f                                  # 查看日志
 ```
 
 ## 数据存放位置
@@ -112,7 +113,7 @@ docker compose logs -f                        # 查看日志
 
 ## 捐赠
 
-💗如果这个项目对你有帮助，欢迎请我喝杯咖啡💗
+如果这个项目对你有帮助，欢迎请我喝杯咖啡
 
 <table>
   <tr>
