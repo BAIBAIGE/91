@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // OpenExisting opens a maintenance connection without creating or migrating
@@ -23,7 +24,13 @@ func OpenExisting(ctx context.Context, path string) (*Catalog, error) {
 	if !info.Mode().IsRegular() {
 		return nil, fmt.Errorf("database is not a regular file: %s", absolute)
 	}
-	location := &url.URL{Scheme: "file", Path: filepath.ToSlash(absolute)}
+	uriPath := filepath.ToSlash(absolute)
+	// Windows drive letters need a leading slash in a file URI; otherwise
+	// url.URL renders the drive as the authority (file://C:/...).
+	if !strings.HasPrefix(uriPath, "/") {
+		uriPath = "/" + uriPath
+	}
+	location := &url.URL{Scheme: "file", Path: uriPath}
 	query := location.Query()
 	query.Set("mode", "rw")
 	query.Set("_pragma", "busy_timeout(5000)")

@@ -140,6 +140,45 @@ func TestVerifiedSessionCannotOutlivePasswordReset(t *testing.T) {
 	}
 }
 
+func TestOpenExistingReadsAndWritesDatabasePaths(t *testing.T) {
+	for _, name := range []string{"accounts.db", "accounts #100% & 数据.db"} {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			path := filepath.Join(t.TempDir(), name)
+			db, err := sql.Open("sqlite", path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			if _, err := db.Exec(`CREATE TABLE existing_only (value TEXT); INSERT INTO existing_only VALUES ('original')`); err != nil {
+				t.Fatal(err)
+			}
+
+			c, err := OpenExisting(ctx, path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer c.Close()
+			var value string
+			if err := c.db.QueryRowContext(ctx, `SELECT value FROM existing_only`).Scan(&value); err != nil {
+				t.Fatal(err)
+			}
+			if value != "original" {
+				t.Fatalf("value=%q, want original", value)
+			}
+			if _, err := c.db.ExecContext(ctx, `UPDATE existing_only SET value = 'updated'`); err != nil {
+				t.Fatal(err)
+			}
+			if err := db.QueryRowContext(ctx, `SELECT value FROM existing_only`).Scan(&value); err != nil {
+				t.Fatal(err)
+			}
+			if value != "updated" {
+				t.Fatalf("value=%q, want updated in the original database", value)
+			}
+		})
+	}
+}
+
 func TestOpenExistingDoesNotCreateOrMigrateDatabase(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "missing.db")

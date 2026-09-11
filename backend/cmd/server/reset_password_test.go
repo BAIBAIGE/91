@@ -303,6 +303,9 @@ func TestResetPasswordCommandRechecksPendingRestoreAfterSelection(t *testing.T) 
 }
 
 func TestResetPasswordCommandRejectsReplacedDatabase(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("SQLite's Windows file handle prevents replacing an open database")
+	}
 	f := newResetPasswordFixture(t)
 	if err := f.cat.Close(); err != nil {
 		t.Fatal(err)
