@@ -344,16 +344,22 @@ export function UsersPage() {
       >
         <div className="admin-form">
           <div className="admin-form__row">
-            <label>用户名</label>
+            <label htmlFor="admin-create-username">用户名</label>
             <input
+              id="admin-create-username"
+              name="admin-create-username"
+              autoComplete="off"
               value={createUsername}
               onChange={(e) => setCreateUsername(e.target.value)}
               autoFocus
             />
           </div>
           <div className="admin-form__row">
-            <label>密码</label>
+            <label htmlFor="admin-create-password">密码</label>
             <PasswordInput
+              id="admin-create-password"
+              name="admin-create-password"
+              autoComplete="new-password"
               value={createPassword}
               onChange={(e) => setCreatePassword(e.target.value)}
               className={createPasswordError ? "is-invalid" : undefined}
@@ -404,8 +410,11 @@ export function UsersPage() {
       >
         <div className="admin-form">
           <div className="admin-form__row">
-            <label>新密码</label>
+            <label htmlFor="admin-reset-password">新密码</label>
             <PasswordInput
+              id="admin-reset-password"
+              name="admin-reset-password"
+              autoComplete="new-password"
               value={resetPasswordValue}
               onChange={(e) => setResetPasswordValue(e.target.value)}
               autoFocus
