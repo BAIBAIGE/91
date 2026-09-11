@@ -290,12 +290,19 @@ test("every card surface gates media, delayed intent, overlays and touch interce
   }
 });
 
-test("preview-only card animation selectors require the global switch", () => {
+test("card interaction feedback stays independent of preview-only animation", () => {
   const cards = readFileSync(new URL("../src/styles/video-card.css", import.meta.url), "utf8");
   const detail = readFileSync(new URL("../src/styles/video-detail.css", import.meta.url), "utf8");
-  assert.doesNotMatch(cards, /\.video-card:(?:hover|active)/);
+  assert.match(cards, /\.video-card:hover,/);
+  assert.match(cards, /\.video-card:focus-within\s*\{/);
+  assert.match(cards, /\.video-card:active::after\s*\{/);
+  assert.match(cards, /\.video-card:hover \.video-title\s*\{/);
+  assert.doesNotMatch(cards, /\.video-card\[data-preview-enabled="true"\]:(?:active|focus-within)/);
+  assert.doesNotMatch(cards, /\.video-card\[data-preview-enabled="false"\](?:,|::after)/);
   assert.match(cards, /\.video-card\[data-preview-enabled="true"\]:hover \.thumb-image/);
   assert.match(cards, /\[data-preview-enabled="false"\][\s\S]*?transition: none/);
   assert.match(detail, /\.vd-rail__item\[data-preview-enabled="true"\] \.vd-rail__link:hover \.vd-rail__thumb img/);
-  assert.match(detail, /\.vd-collection-item\[data-preview-enabled="true"\] \.vd-collection-item__link:active/);
+  assert.match(detail, /\.vd-collection-item__link:active\s*\{/);
+  assert.match(detail, /\.vd-rail__link:hover \.vd-rail__title\s*\{/);
+  assert.doesNotMatch(detail, /\[data-preview-enabled="false"\] \.vd-rail__(?:title|link)/);
 });

@@ -110,8 +110,8 @@
     box-shadow var(--transition-normal), background var(--transition-normal);
 }
 
-.video-card[data-preview-enabled="true"]:hover,
-.video-card[data-preview-enabled="true"]:focus-within {
+.video-card:hover,
+.video-card:focus-within {
   background: var(--bg-elevated);
   border-color: var(--border-default);
   box-shadow: var(--shadow-lg);
@@ -218,12 +218,9 @@
   opacity: 1;
 }
 
-/* Disabling previews must also stop an in-flight zoom or hover transition. */
-.video-card[data-preview-enabled="false"],
-.video-card[data-preview-enabled="false"]::after,
+/* Stop preview decoration while preserving card interaction feedback. */
 .video-card[data-preview-enabled="false"] .thumb-image,
-.video-card[data-preview-enabled="false"] .thumb-frame::after,
-.video-card[data-preview-enabled="false"] .video-title {
+.video-card[data-preview-enabled="false"] .thumb-frame::after {
   transition: none;
 }
 
@@ -463,7 +460,7 @@
   transition: color var(--transition-fast);
 }
 
-.video-card[data-preview-enabled="true"]:hover .video-title {
+.video-card:hover .video-title {
   color: var(--accent);
 }
 
@@ -812,7 +809,7 @@
     padding: 6px;
   }
 
-  .video-card[data-preview-enabled="true"]:hover {
+  .video-card:hover {
     transform: none;
     box-shadow: var(--shadow-sm);
   }
@@ -829,7 +826,7 @@
     transition: opacity var(--transition-fast);
   }
 
-  .video-card[data-preview-enabled="true"]:active::after {
+  .video-card:active::after {
     opacity: 1;
     transition-duration: 0ms;
   }
