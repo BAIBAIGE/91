@@ -1017,9 +1017,8 @@ func ffmpegHTTPInputOptions(link *drives.StreamLink) []string {
 }
 
 func ffmpegCommandError(tool string, err error, output []byte) error {
-	msg := fmt.Sprintf("%s: %v, stderr: %s", tool, err, redactURLs(string(output)))
-	wrapped := errors.New(msg)
-	if ffmpegOutputLooksRateLimited(output) {
+	wrapped := fmt.Errorf("%s: %w, stderr: %s", tool, err, redactURLs(string(output)))
+	if ffmpegOutputLooksRateLimited(output) || drives.ErrorMentionsHTTPStatus(err, http.StatusTooManyRequests) {
 		return &drives.RateLimitError{
 			Provider: "media source",
 			Err:      wrapped,
@@ -1871,7 +1870,7 @@ func driveErrorShouldCooldown(d drives.Drive, err error) bool {
 	}
 	switch d.Kind() {
 	case "p115":
-		return drives.ErrorMentionsHTTPStatus(err, http.StatusForbidden, http.StatusMethodNotAllowed, http.StatusTooManyRequests)
+		return drives.ErrorMentionsHTTPStatus(err, http.StatusMethodNotAllowed, http.StatusTooManyRequests)
 	case "pikpak":
 		return drives.ErrorMentionsHTTPStatus(err, http.StatusTooManyRequests, http.StatusInternalServerError, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout, 509)
 	case "p123":
@@ -2006,14 +2005,14 @@ func (w *ThumbWorker) generateThumbnailWithFallback(ctx context.Context, v *cata
 		switch {
 		case refreshErr == nil:
 			err = w.generateThumbnailFromLink(ctx, v, refreshed, duration)
-			if err == nil || generationStreamForbidden(err) || isRateLimitError(err) {
+			if err == nil || (isRateLimitError(err) && !generationStreamForbidden(err)) {
 				return err
 			}
 		case !errors.Is(refreshErr, drives.ErrGenerationStreamUnavailable):
 			return refreshErr
 		}
 	}
-	if isRateLimitError(err) {
+	if isRateLimitError(err) && !generationStreamForbidden(err) {
 		return err
 	}
 	original, originalErr := w.Drive.StreamURL(ctx, v.FileID)
@@ -2108,14 +2107,14 @@ func (w *Worker) generateTeaser(ctx context.Context, v *catalog.Video, link *dri
 			switch {
 			case refreshErr == nil:
 				tmp, err = w.Gen.Generate(ctx, refreshed, duration)
-				if err == nil || generationStreamForbidden(err) || isRateLimitError(err) {
+				if err == nil || (isRateLimitError(err) && !generationStreamForbidden(err)) {
 					return tmp, err
 				}
 			case !errors.Is(refreshErr, drives.ErrGenerationStreamUnavailable):
 				return "", refreshErr
 			}
 		}
-		if isRateLimitError(err) {
+		if isRateLimitError(err) && !generationStreamForbidden(err) {
 			return "", err
 		}
 		original, originalErr := w.Drive.StreamURL(ctx, v.FileID)

@@ -47,6 +47,13 @@ type GenerationStreamProvider interface {
 	GenerationStreamURL(ctx context.Context, fileID string, forceRefresh bool) (*StreamLink, error)
 }
 
+// GenerationStreamScanResetter resets optional stream availability when a new
+// scan starts. The state remains shared by its background generation workers
+// until the next scan, including work that finishes after discovery returns.
+type GenerationStreamScanResetter interface {
+	ResetGenerationStreamForScan()
+}
+
 // Uploader is the optional write capability of a drive. Callers that produce
 // remote files must assert it before starting work instead of discovering an
 // unsupported operation only after preparing a potentially large upload.
@@ -116,8 +123,8 @@ type StreamLink struct {
 var ErrNotSupported = errors.New("operation not supported by this drive")
 
 // ErrGenerationStreamUnavailable means the optional optimized generation
-// stream does not exist for this file. Callers may safely fall back to the
-// original StreamURL without treating the drive as unhealthy.
+// stream is unavailable for this file or the current scan. Callers may safely
+// fall back to the original StreamURL without treating the drive as unhealthy.
 var ErrGenerationStreamUnavailable = errors.New("generation stream unavailable")
 
 // RateLimitError 表示上游服务正在限流。RetryAfter 为 0 时由调用方选择默认冷却时间。

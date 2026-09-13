@@ -148,3 +148,45 @@ func TestScanReturnsSkippedWhenAnotherScanOwnsTheDrive(t *testing.T) {
 		t.Fatal("rejected scan cleared the running scan")
 	}
 }
+
+type generationResetScanDrive struct {
+	*serverTreeScanDrive
+	resets int
+	onList func()
+}
+
+func (d *generationResetScanDrive) ResetGenerationStreamForScan() { d.resets++ }
+
+func (d *generationResetScanDrive) List(ctx context.Context, dirID string) ([]drives.Entry, error) {
+	d.onList()
+	return d.serverTreeScanDrive.List(ctx, dirID)
+}
+
+func TestScanResetsGenerationStreamOnceBeforeDiscovery(t *testing.T) {
+	app, base := scanResultTestApp(t)
+	drv := &generationResetScanDrive{serverTreeScanDrive: base}
+	app.registry.Set(drv.ID(), drv)
+	for round := 1; round <= 2; round++ {
+		drv.onList = func() {
+			if drv.resets != round {
+				t.Errorf("resets before discovery=%d, want %d", drv.resets, round)
+			}
+		}
+		if result := app.runScan(context.Background(), drv.ID()); result.State != scanjob.Succeeded {
+			t.Fatalf("scan: %+v", result)
+		}
+		if drv.resets != round {
+			t.Fatalf("resets=%d, want %d", drv.resets, round)
+		}
+	}
+	if !app.beginDriveScanOrCrawl(drv.ID()) {
+		t.Fatal("could not reserve scan")
+	}
+	defer app.endDriveScanOrCrawl(drv.ID())
+	if result := app.runScan(context.Background(), drv.ID()); result.State != scanjob.Skipped {
+		t.Fatalf("duplicate scan: %+v", result)
+	}
+	if drv.resets != 2 {
+		t.Fatal("skipped scan reset the active session")
+	}
+}

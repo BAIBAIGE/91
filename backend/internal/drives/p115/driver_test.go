@@ -453,6 +453,7 @@ func TestGenerationStreamURLClassifiesUnavailableAndRateLimit(t *testing.T) {
 		// Online playback being refused must leave the ordinary download URL
 		// usable instead of cooling the drive down as if it were throttled.
 		{name: "forbidden", status: http.StatusForbidden, wantUnavailable: true},
+		{name: "server unavailable", status: http.StatusServiceUnavailable, wantUnavailable: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -487,7 +488,7 @@ func TestWrap115StreamTransientError(t *testing.T) {
 		{name: "405 waf html", err: errors.New(`<!doctypehtml><html><title>405</title><p>blocked</p>`), wantRateLimit: true},
 		{name: "429", err: errors.New("429 too many requests"), wantRateLimit: true},
 		{name: "403 authentication", err: errors.New("403 forbidden"), wantRateLimit: false},
-		{name: "tls timeout", err: errors.New("net/http: TLS handshake timeout"), wantRateLimit: true},
+		{name: "tls timeout", err: errors.New("net/http: TLS handshake timeout"), wantRateLimit: false},
 		{name: "blocked", err: errors.New("blocked by waf"), wantRateLimit: false},
 		{name: "auth", err: errors.New("invalid credential"), wantRateLimit: false},
 	}
@@ -678,5 +679,47 @@ func TestUploadAndReportSha1RejectsInvalidArgs(t *testing.T) {
 				t.Fatalf("err = %v, want containing %q", err, c.wantSubst)
 			}
 		})
+	}
+}
+
+func TestGenerationHTTPFailureRetriesOnNextCall(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if requests == 1 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		io.WriteString(w, "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1\nstream.m3u8\n")
+	}))
+	defer server.Close()
+	d := New(Config{ID: "115"})
+	d.hlsClient = server.Client()
+	d.hlsMasterBaseURL = server.URL
+	d.rememberPickCode("file", "pick")
+	_, err := d.GenerationStreamURL(context.Background(), "file", false)
+	if !errors.Is(err, drives.ErrGenerationStreamUnavailable) || !strings.Contains(err.Error(), "503") {
+		t.Fatalf("lost HTTP error: %v", err)
+	}
+	// The next caller retries immediately; its successful URL is then cached.
+	for i := 0; i < 2; i++ {
+		link, err := d.GenerationStreamURL(context.Background(), "file", false)
+		if err != nil || link == nil || link.URL != server.URL+"/stream.m3u8" {
+			t.Fatalf("generation stream after HTTP failure: link=%v err=%v", link, err)
+		}
+	}
+	if requests != 2 {
+		t.Fatalf("requests=%d, want one failure and one cached success", requests)
+	}
+}
+
+func TestOptionalHLSTransportFailureAllowsOriginalFallback(t *testing.T) {
+	cause := errors.New("TLS handshake timeout")
+	err := optionalHLSFailure("115 hls", cause)
+	if !errors.Is(err, drives.ErrGenerationStreamUnavailable) || !errors.Is(err, cause) {
+		t.Fatalf("lost classification or cause: %v", err)
+	}
+	if _, limited := drives.RateLimitRetryAfter(err); limited {
+		t.Fatal("transport error became drive throttling")
 	}
 }

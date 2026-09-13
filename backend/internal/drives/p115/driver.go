@@ -2,11 +2,11 @@ package p115
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log"
-	"net"
 	"net/http"
 	"net/url"
 	"path"
@@ -16,6 +16,7 @@ import (
 	"time"
 
 	sdk "github.com/SheltonZhu/115driver/pkg/driver"
+	"github.com/video-site/backend/internal/applog"
 	"github.com/video-site/backend/internal/drives"
 	"github.com/video-site/backend/internal/scopedproxy"
 	"github.com/video-site/backend/internal/streamhttp"
@@ -44,10 +45,26 @@ type generationStreamCall struct {
 	err     error
 }
 
+type generationStreamSession struct {
+	disabledErr error // protected by generationMu
+}
+
+type hlsBusinessError struct {
+	reason string
+}
+
+func (e *hlsBusinessError) Error() string {
+	return fmt.Sprintf("115 hls: %s: %s", drives.ErrGenerationStreamUnavailable, e.reason)
+}
+
+func (e *hlsBusinessError) Unwrap() error { return drives.ErrGenerationStreamUnavailable }
+
 type Driver struct {
-	id            string
-	cookie        string
-	rootID        string
+	id     string
+	cookie string
+	rootID string
+	// client holds the shared HTTP configuration and upload auth state.
+	// After Init, invoke SDK request methods through newSDKClient().
 	client        *sdk.Pan115Client
 	ua            string
 	uploadTempDir string
@@ -66,6 +83,7 @@ type Driver struct {
 	pickCodes          map[string]string
 	generationCache    map[string]cachedGenerationStream
 	generationInflight map[string]*generationStreamCall
+	generationSession  *generationStreamSession
 	hlsClient          *http.Client
 	hlsMasterBaseURL   string
 }
@@ -101,6 +119,7 @@ func New(c Config) *Driver {
 		pickCodes:          make(map[string]string),
 		generationCache:    make(map[string]cachedGenerationStream),
 		generationInflight: make(map[string]*generationStreamCall),
+		generationSession:  &generationStreamSession{},
 		hlsClient:          streamhttp.NewClient(20 * time.Second),
 		hlsMasterBaseURL:   p115HLSMasterBaseURL,
 	}
@@ -339,32 +358,6 @@ func p115HTMLTitleMentionsStatus(text string, statuses ...int) bool {
 	return false
 }
 
-func isTransient115StreamError(err error) bool {
-	if isTransient115UpstreamError(err) {
-		return true
-	}
-	if drives.ErrorMentionsHTTPStatus(err,
-		http.StatusInternalServerError,
-		http.StatusBadGateway,
-		http.StatusServiceUnavailable,
-		http.StatusGatewayTimeout,
-	) {
-		return true
-	}
-	var networkError net.Error
-	if errors.As(err, &networkError) && networkError.Timeout() {
-		return true
-	}
-	// Some SDK layers flatten *url.Error into plain text. Match only concrete
-	// transport failures here; authentication and ordinary API errors remain
-	// permanent failures.
-	text := strings.ToLower(err.Error())
-	return strings.Contains(text, "tls handshake timeout") ||
-		strings.Contains(text, "i/o timeout") ||
-		strings.Contains(text, "connection timed out") ||
-		strings.Contains(text, "connection reset by peer")
-}
-
 // ListDirsOnly 只列指定目录的直接**子目录**，不返回文件条目。专为 admin 后台
 // 的"设置跳过目录"树形浏览器优化 —— 那里只显示目录节点，文件无意义。
 //
@@ -427,7 +420,7 @@ func (d *Driver) ListDirsOnly(ctx context.Context, dirID string) ([]drives.Entry
 }
 
 func (d *Driver) Stat(ctx context.Context, fileID string) (*drives.Entry, error) {
-	f, err := d.client.GetFile(fileID)
+	f, err := d.newSDKClient().GetFile(fileID)
 	if err != nil {
 		return nil, fmt.Errorf("115 stat: %w", err)
 	}
@@ -449,7 +442,8 @@ func (d *Driver) StreamURLWithHeader(ctx context.Context, fileID string, header 
 
 func (d *Driver) streamURLWithUA(ctx context.Context, fileID string, ua string) (*drives.StreamLink, error) {
 	// 需要先拿到 pickCode
-	f, err := d.client.GetFile(fileID)
+	client := d.newSDKClient()
+	f, err := client.GetFile(fileID)
 	if err != nil {
 		return nil, wrap115StreamTransientError("115 get file", err)
 	}
@@ -481,6 +475,16 @@ func (d *Driver) streamURLWithUA(ctx context.Context, fileID string, ua string) 
 	}, nil
 }
 
+// ResetGenerationStreamForScan permits a fresh HLS attempt for the next scan.
+// Replacing the session prevents older in-flight requests from disabling it.
+func (d *Driver) ResetGenerationStreamForScan() {
+	d.generationMu.Lock()
+	defer d.generationMu.Unlock()
+	d.generationSession = &generationStreamSession{}
+	clear(d.generationCache)
+	clear(d.generationInflight)
+}
+
 // GenerationStreamURL resolves 115's online-playback HLS master playlist to a
 // signed media playlist. The account cookie is used only by this Go request;
 // FFmpeg receives the signed child URL plus ordinary UA/Referer headers.
@@ -491,6 +495,11 @@ func (d *Driver) GenerationStreamURL(ctx context.Context, fileID string, forceRe
 	}
 
 	d.generationMu.Lock()
+	session := d.generationSession
+	if session.disabledErr != nil {
+		d.generationMu.Unlock()
+		return nil, session.disabledErr
+	}
 	now := time.Now()
 	d.pruneGenerationCacheLocked(now)
 	if forceRefresh {
@@ -521,6 +530,19 @@ func (d *Driver) GenerationStreamURL(ctx context.Context, fileID string, forceRe
 	link, err := d.resolveGenerationStream(ctx, fileID)
 
 	d.generationMu.Lock()
+	var businessErr *hlsBusinessError
+	if errors.As(err, &businessErr) && session.disabledErr == nil {
+		session.disabledErr = err
+		if session == d.generationSession {
+			clear(d.generationCache)
+			log.Printf("[p115] hls disabled until next scan drive=%s file=%s: %v", d.id, fileID, err)
+		}
+	}
+	// A concurrent resolution may succeed after another file disabled HLS.
+	// Return the shared failure so those callers also fall back to originals.
+	if session.disabledErr != nil {
+		link, err = nil, session.disabledErr
+	}
 	if active := d.generationInflight[fileID]; active == call {
 		if err == nil && link != nil {
 			now := time.Now()
@@ -546,7 +568,7 @@ func (d *Driver) resolveGenerationStream(ctx context.Context, fileID string) (*d
 		if d.client == nil {
 			return nil, fmt.Errorf("115 hls get file: %w", drives.ErrGenerationStreamUnavailable)
 		}
-		f, err := d.client.GetFile(fileID)
+		f, err := d.newSDKClient().GetFile(fileID)
 		if err != nil {
 			return nil, wrap115StreamTransientError("115 hls get file", err)
 		}
@@ -577,18 +599,17 @@ func (d *Driver) resolveGenerationStream(ctx context.Context, fileID string) (*d
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, wrap115StreamTransientError("115 hls master", err)
+		return nil, optionalHLSFailure("115 hls master", err)
 	}
 	defer resp.Body.Close()
 	body, readErr := io.ReadAll(io.LimitReader(resp.Body, p115HLSMaxPlaylist+1))
 	if readErr != nil {
-		return nil, wrap115StreamTransientError("115 hls master read", readErr)
+		return nil, optionalHLSFailure("115 hls master read", readErr)
 	}
 	if resp.StatusCode != http.StatusOK {
 		err := fmt.Errorf("115 hls master status=%d", resp.StatusCode)
 		if resp.StatusCode == http.StatusMethodNotAllowed ||
-			resp.StatusCode == http.StatusTooManyRequests ||
-			resp.StatusCode >= http.StatusInternalServerError {
+			resp.StatusCode == http.StatusTooManyRequests {
 			return nil, wrap115StreamTransientError("115 hls master", err)
 		}
 		// The generation stream is an optional optimization, so a rejection
@@ -602,6 +623,31 @@ func (d *Driver) resolveGenerationStream(ctx context.Context, fileID string) (*d
 	}
 	if len(body) > p115HLSMaxPlaylist {
 		return nil, fmt.Errorf("115 hls: %w: playlist too large", drives.ErrGenerationStreamUnavailable)
+	}
+	// This endpoint can return HTTP 200 with a JSON business error instead
+	// of a playlist. Keep that reason while allowing the original source.
+	var failure struct {
+		State   *bool  `json:"state"`
+		Error   string `json:"error"`
+		Message string `json:"message"`
+		Msg     string `json:"msg"`
+	}
+	if json.Unmarshal(body, &failure) == nil && failure.State != nil && !*failure.State {
+		reason := strings.TrimSpace(failure.Error)
+		if reason == "" {
+			reason = strings.TrimSpace(failure.Message)
+		}
+		if reason == "" {
+			reason = strings.TrimSpace(failure.Msg)
+		}
+		if reason == "" {
+			reason = "provider rejected online playback"
+		}
+		reason = applog.Redact(reason)
+		if len(reason) > 256 {
+			reason = reason[:256]
+		}
+		return nil, &hlsBusinessError{reason: reason}
 	}
 	variantURL, err := selectHLSVariant(masterURL, string(body))
 	if err != nil {
@@ -754,16 +800,26 @@ func (d *Driver) downloadInfo(pickCode string, ua string) (*sdk.DownloadInfo, st
 	if ua == "" {
 		ua = d.ua
 	}
-	info, err := d.client.DownloadWithUA(pickCode, ua)
+	info, err := d.newSDKClient().DownloadWithUA(pickCode, ua)
 	if err != nil {
 		return nil, "", err
 	}
 	return info, ua, nil
 }
 
+// Online playback is optional. Transport failures must not prevent trying
+// the original; explicit provider throttling remains a stop signal.
+func optionalHLSFailure(operation string, err error) error {
+	wrapped := wrap115StreamTransientError(operation, err)
+	if _, limited := drives.RateLimitRetryAfter(wrapped); limited {
+		return wrapped
+	}
+	return fmt.Errorf("%w: %w", drives.ErrGenerationStreamUnavailable, wrapped)
+}
+
 func wrap115StreamTransientError(op string, err error) error {
 	wrapped := fmt.Errorf("%s: %w", op, err)
-	if !isTransient115StreamError(err) {
+	if !isTransient115UpstreamError(err) {
 		return wrapped
 	}
 	return &drives.RateLimitError{
@@ -790,7 +846,7 @@ func (d *Driver) Rename(ctx context.Context, fileID, newName string) error {
 	if newName == "" {
 		return errors.New("p115 rename: empty newName")
 	}
-	if err := d.client.Rename(fileID, newName); err != nil {
+	if err := d.newSDKClient().Rename(fileID, newName); err != nil {
 		return fmt.Errorf("p115 rename: %w", err)
 	}
 	return nil
@@ -807,7 +863,7 @@ func (d *Driver) Remove(ctx context.Context, fileID string) error {
 	if fileID == "" {
 		return errors.New("p115 remove: empty fileID")
 	}
-	if err := d.client.Delete(fileID); err != nil {
+	if err := d.newSDKClient().Delete(fileID); err != nil {
 		return fmt.Errorf("p115 remove: %w", err)
 	}
 	return nil

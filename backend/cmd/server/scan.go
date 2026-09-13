@@ -140,6 +140,9 @@ func (a *App) runScanWithTaskContext(ctx context.Context, driveID string) (repor
 		fail("config", err)
 		return report
 	}
+	if resetter, ok := drv.(drives.GenerationStreamScanResetter); ok {
+		resetter.ResetGenerationStreamForScan()
+	}
 	rateLimitBudget := scanner.NewRateLimitBudget()
 	result, err := a.scanDrive(ctx, drv, driveConfig, rateLimitBudget)
 	report.ScannedCount = result.Stats.Scanned
