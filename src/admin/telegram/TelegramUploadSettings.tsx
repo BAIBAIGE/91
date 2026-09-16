@@ -104,6 +104,16 @@ export function TelegramUploadSettings() {
         <h3 id="tg-upload-title">
           <CloudUpload size={16} aria-hidden="true" />网盘转存
         </h3>
+        {dirty && (
+          <button
+            type="button"
+            className="tg-cancel-changes"
+            disabled={disabled}
+            onClick={() => setDraft(loaded)}
+          >
+            取消更改
+          </button>
+        )}
         <button
           type="submit"
           form="tg-upload-form"
@@ -199,11 +209,6 @@ export function TelegramUploadSettings() {
               />
             </label>
           </div>
-          {dirty && (
-            <p className="tg-note" role="status">
-              有未保存更改
-            </p>
-          )}
         </fieldset>
       </form>
     </section>

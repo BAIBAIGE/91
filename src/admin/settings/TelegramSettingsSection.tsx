@@ -1,6 +1,4 @@
-import { Link } from "react-router";
 import { TelegramIcon } from "@/components/icons/TelegramIcon";
-import { useTelegramAvailability } from "../telegram/useTelegramAvailability";
 import { SettingsSection } from "./SettingsSection";
 import type { SettingsDraft, VisualField } from "./configYaml";
 import "@/styles/telegram.css";
@@ -21,7 +19,6 @@ export function TelegramSettingsSection({
   draft,
   onChange,
 }: Props) {
-  const { enabled } = useTelegramAvailability();
   return (
     <div className="admin-telegram-settings" hidden={!active}>
       <SettingsSection
@@ -40,7 +37,6 @@ export function TelegramSettingsSection({
               >
                 启用 Telegram
               </label>
-              <p className="tg-note">保存后生效。</p>
             </div>
             <button
               id="telegram-enabled-toggle"
@@ -62,8 +58,8 @@ export function TelegramSettingsSection({
             aria-labelledby="tg-credentials-title"
           >
             <h3 id="tg-credentials-title">机器人凭据</h3>
-            <div className="tg-fields">
-              <label className="tg-field-wide">
+            <div className="tg-fields tg-fields--thirds">
+              <label>
                 Bot Token
                 <input
                   type="text"
@@ -106,9 +102,9 @@ export function TelegramSettingsSection({
             aria-labelledby="tg-access-title"
           >
             <h3 id="tg-access-title">接收设置</h3>
-            <div className="tg-fields">
-              <label>
-                允许的用户 ID
+            <div className="tg-fields tg-fields--thirds">
+              <label className="tg-field--single-line">
+                <span>允许的用户 ID（机器人仅接收指定用户发送的视频）</span>
                 <input
                   value={draft.telegramAllowedUserIds}
                   onChange={(e) =>
@@ -116,10 +112,9 @@ export function TelegramSettingsSection({
                   }
                   placeholder="123456789, 987654321"
                 />
-                <small>仅接收这些用户的视频；向机器人发送 /id 获取 ID。</small>
               </label>
               <label>
-                站点地址
+                站点地址（选填）
                 <input
                   type="url"
                   value={draft.telegramSiteBaseUrl}
@@ -128,7 +123,6 @@ export function TelegramSettingsSection({
                   }
                   placeholder="https://video.example.com"
                 />
-                <small>选填，用于生成“打开视频”链接。</small>
               </label>
             </div>
           </section>
@@ -137,7 +131,7 @@ export function TelegramSettingsSection({
             aria-labelledby="tg-deployment-title"
           >
             <h3 id="tg-deployment-title">部署与下载设置</h3>
-            <div className="tg-fields">
+            <div className="tg-fields tg-fields--thirds">
               <label>
                 Local Bot API 地址
                 <input
@@ -150,7 +144,7 @@ export function TelegramSettingsSection({
                 />
               </label>
               <label>
-                共享视频目录
+                视频存放目录
                 <input
                   required
                   value={draft.telegramLocalFilesRoot}
@@ -158,10 +152,9 @@ export function TelegramSettingsSection({
                     onChange("telegramLocalFilesRoot", e.target.value)
                   }
                 />
-                <small>视频保存在此目录的 library 子目录中，无需复制。项目需要读写权限。</small>
               </label>
             </div>
-            <div className="tg-fields tg-fields--limits">
+            <div className="tg-fields tg-fields--thirds">
               <label>
                 文件上限（GiB）
                 <input
@@ -208,11 +201,6 @@ export function TelegramSettingsSection({
             </div>
           </section>
         </fieldset>
-        {enabled === true && (
-          <Link className="tg-text-link" to="/admin/telegram">
-            连接状态、网盘转存与导入记录 →
-          </Link>
-        )}
       </SettingsSection>
     </div>
   );
