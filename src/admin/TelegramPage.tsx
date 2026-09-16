@@ -249,13 +249,9 @@ function TelegramWorkspace() {
           >
             <option value="">全部状态</option>
             {Object.entries({
-              queued: "排队中",
-              downloading: "获取中",
-              validating: "校验中",
-              saving: "入库中",
+              active: "处理中",
               completed: "已保存",
               failed: "失败",
-              canceled: "已取消",
             }).map(([value, label]) => (
               <option key={value} value={value}>
                 {label}

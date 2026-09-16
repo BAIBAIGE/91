@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -149,5 +151,105 @@ func TestImportAPIHidesPrivateSourceAndUsesCursor(t *testing.T) {
 	server.handleImportList(rr, httptest.NewRequest("GET", "/admin/api/import-jobs?before="+jobs[0].Sequence, nil))
 	if rr.Code != 200 || strings.TrimSpace(rr.Body.String()) != "[]" {
 		t.Fatalf("cursor response %d %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestImportAPIStateFiltersBeforePagination(t *testing.T) {
+	ctx := context.Background()
+	c := openRemoteUploadAPICatalog(t)
+	if _, _, err := c.TelegramOffset(ctx, 123); err != nil {
+		t.Fatal(err)
+	}
+	fixtures := []struct {
+		state                 string
+		active, retry, cancel bool
+	}{
+		{state: "queued", active: true},
+		{state: "completed"},
+		{state: "downloading", active: true},
+		{state: "failed"},
+		{state: "validating", active: true},
+		{state: "canceled"},
+		{state: "saving", active: true},
+		{state: "queued", active: true, retry: true},
+		{state: "downloading", active: true, cancel: true},
+	}
+	wantIDs := map[string][]string{}
+	wantStates := map[string]string{}
+	var updateID int64
+	// Mix more than one page of active imports with terminal jobs and HTTP jobs.
+	for batch := 0; batch < 6; batch++ {
+		for _, fixture := range fixtures {
+			updateID++
+			id := fmt.Sprintf("tg-%d", updateID)
+			receipt := catalog.TelegramReceipt{BotID: 123, UpdateID: updateID, MessageID: updateID, ChatID: 42, SenderID: 42}
+			source := &catalog.TelegramSource{BotID: 123, SenderID: 42, FileID: id, UniqueID: id, Size: 5}
+			if err := c.AcceptTelegramUpdate(ctx, receipt, source, id, id, 100); err != nil {
+				t.Fatal(err)
+			}
+			if fixture.state != catalog.RemoteUploadQueued {
+				if err := c.TransitionRemoteUploadJob(ctx, id, catalog.RemoteUploadQueued, fixture.state); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if fixture.retry {
+				if err := c.TransitionRemoteUploadJob(ctx, id, catalog.RemoteUploadQueued, catalog.RemoteUploadDownloading); err != nil {
+					t.Fatal(err)
+				}
+				if err := c.DelayImport(ctx, id, "network", time.Hour, true); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if fixture.cancel {
+				if _, err := c.CancelRemoteUploadJob(ctx, id); err != nil {
+					t.Fatal(err)
+				}
+			}
+			wantIDs[""] = append(wantIDs[""], id)
+			wantIDs[fixture.state] = append(wantIDs[fixture.state], id)
+			wantStates[id] = fixture.state
+			if fixture.active {
+				wantIDs["active"] = append(wantIDs["active"], id)
+			}
+		}
+		if _, err := c.CreateRemoteUploadJob(ctx, fmt.Sprintf("http-%d", batch), "https://example.com/video.mp4", "example", "HTTP video", nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	server := &AdminServer{Catalog: c}
+	for filter, want := range wantIDs {
+		slices.Reverse(want)
+		t.Run("state="+filter, func(t *testing.T) {
+			query := url.Values{"source": {"telegram"}, "state": {filter}}
+			for offset := 0; ; offset += 30 {
+				rr := httptest.NewRecorder()
+				server.handleImportList(rr, httptest.NewRequest("GET", "/admin/api/import-jobs?"+query.Encode(), nil))
+				if rr.Code != http.StatusOK {
+					t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+				}
+				var jobs []ImportJobDTO
+				if err := json.Unmarshal(rr.Body.Bytes(), &jobs); err != nil {
+					t.Fatal(err)
+				}
+				pageSize := min(30, len(want)-offset)
+				if len(jobs) != pageSize {
+					t.Fatalf("offset=%d: got %d jobs, want %d", offset, len(jobs), pageSize)
+				}
+				for i, job := range jobs {
+					if job.ID != want[offset+i] || job.State != wantStates[job.ID] {
+						t.Fatalf("offset=%d index=%d: got %s (%s), want %s (%s)", offset, i, job.ID, job.State, want[offset+i], wantStates[want[offset+i]])
+					}
+				}
+				if len(jobs) < 30 {
+					break
+				}
+				query.Set("before", jobs[len(jobs)-1].Sequence)
+			}
+		})
+	}
+	rr := httptest.NewRecorder()
+	server.handleImportList(rr, httptest.NewRequest("GET", "/admin/api/import-jobs?state=unknown", nil))
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("unknown state accepted: %d", rr.Code)
 	}
 }

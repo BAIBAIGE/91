@@ -213,11 +213,27 @@ func (c *Catalog) TelegramVideoID(ctx context.Context, botID int64, uniqueID str
 	return id, err
 }
 
-func (c *Catalog) ListImportJobs(ctx context.Context, source, state string, before int64, limit int) ([]*RemoteUploadJob, error) {
+// ImportJobFilterActive groups unfinished imports without changing their stored states.
+const ImportJobFilterActive = "active"
+
+func (c *Catalog) ListImportJobs(ctx context.Context, source, stateFilter string, before int64, limit int) ([]*RemoteUploadJob, error) {
 	if limit < 1 || limit > 100 {
 		limit = 30
 	}
-	rows, err := c.db.QueryContext(ctx, `SELECT `+remoteUploadJobCols+` FROM remote_upload_jobs WHERE (?='' OR source_kind=?) AND (?='' OR state=?) AND (?=0 OR sequence<?) ORDER BY sequence DESC LIMIT ?`, source, source, state, state, before, before, limit)
+	query := `SELECT ` + remoteUploadJobCols + ` FROM remote_upload_jobs WHERE (?='' OR source_kind=?)`
+	args := []any{source, source}
+	switch stateFilter {
+	case "":
+	case ImportJobFilterActive:
+		query += ` AND state IN (?, ?, ?, ?)`
+		args = append(args, RemoteUploadQueued, RemoteUploadDownloading, RemoteUploadValidating, RemoteUploadSaving)
+	default:
+		query += ` AND state=?`
+		args = append(args, stateFilter)
+	}
+	query += ` AND (?=0 OR sequence<?) ORDER BY sequence DESC LIMIT ?`
+	args = append(args, before, before, limit)
+	rows, err := c.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}

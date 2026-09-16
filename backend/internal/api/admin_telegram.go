@@ -92,7 +92,7 @@ func (a *AdminServer) handleImportList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch state {
-	case "", catalog.RemoteUploadQueued, catalog.RemoteUploadDownloading, catalog.RemoteUploadValidating, catalog.RemoteUploadSaving, catalog.RemoteUploadCompleted, catalog.RemoteUploadFailed, catalog.RemoteUploadCanceled:
+	case "", catalog.ImportJobFilterActive, catalog.RemoteUploadQueued, catalog.RemoteUploadDownloading, catalog.RemoteUploadValidating, catalog.RemoteUploadSaving, catalog.RemoteUploadCompleted, catalog.RemoteUploadFailed, catalog.RemoteUploadCanceled:
 	default:
 		writeErr(w, r, 400, errors.New("无效的任务状态"))
 		return
