@@ -1,7 +1,7 @@
 // Package scopedproxy routes HTTP requests through an explicitly configured
 // proxy only when their context opts in. It lets a shared drive client serve
-// ordinary playback/list operations directly while one crawler upload uses a
-// crawler-specific proxy.
+// ordinary playback/list operations normally while crawler or Telegram upload
+// tasks use their own proxies.
 package scopedproxy
 
 import (

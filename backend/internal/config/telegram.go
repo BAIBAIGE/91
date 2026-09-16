@@ -8,6 +8,8 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
+
+	"github.com/video-site/backend/internal/scopedproxy"
 )
 
 type Telegram struct {
@@ -24,6 +26,7 @@ type Telegram struct {
 	FetchTimeoutSeconds int     `yaml:"fetch_timeout_seconds" json:"fetchTimeoutSeconds"`
 	UploadDriveID       string  `yaml:"upload_drive_id" json:"uploadDriveId"`
 	UploadDirectory     string  `yaml:"upload_directory" json:"uploadDirectory"`
+	UploadProxy         string  `yaml:"upload_proxy" json:"-"`
 }
 
 var telegramTokenPattern = regexp.MustCompile(`^[0-9]+:[A-Za-z0-9_-]+$`)
@@ -49,6 +52,11 @@ func (t *Telegram) Validate() error {
 		t.AllowedUserIDs = []int64{}
 	}
 	t.UploadDriveID = strings.TrimSpace(t.UploadDriveID)
+	proxy, err := scopedproxy.Normalize(t.UploadProxy)
+	if err != nil {
+		return errors.New("telegram.upload_proxy 必须为有效的 HTTP、HTTPS、SOCKS5 或 SOCKS5H 代理地址")
+	}
+	t.UploadProxy = proxy
 	t.UploadDirectory = strings.TrimSpace(t.UploadDirectory)
 	if t.UploadDirectory == "" {
 		t.UploadDirectory = "Telegram"

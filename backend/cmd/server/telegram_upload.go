@@ -37,6 +37,7 @@ func (a *App) runTelegramUploadMigration(ctx context.Context) error {
 		return telegramupload.Run(taskCtx, telegramupload.Config{
 			Catalog: a.cat, Target: target, LocalDirectory: a.localUploadDir(),
 			TargetDirectory: cfg.UploadDirectory,
+			UploadProxy:     cfg.UploadProxy,
 			OnMigrated:      func(v *catalog.Video) { migrated = append(migrated, v) },
 		})
 	}()

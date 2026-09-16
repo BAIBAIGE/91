@@ -82,11 +82,16 @@ func (i *Integration) Status() Status {
 	s, status := i.active, i.status
 	i.mu.RUnlock()
 	if s != nil {
-		return s.Status()
-	}
-	if n, err := mediaimport.AvailableBytes(status.Config.LocalFilesRoot); err == nil {
+		status = s.Status()
+	} else if n, err := mediaimport.AvailableBytes(status.Config.LocalFilesRoot); err == nil {
 		status.CacheAvailableBytes = n
 	}
+	// Transfer settings are applied by the next upload task, independently of
+	// the receiver session's configuration snapshot.
+	cfg := i.configManager.TelegramSettings()
+	status.Config.UploadDriveID = cfg.UploadDriveID
+	status.Config.UploadDirectory = cfg.UploadDirectory
+	status.Config.UploadProxy = cfg.UploadProxy
 	return status
 }
 func (i *Integration) Available() bool { s := i.session(); return s != nil && s.Available() }
@@ -143,8 +148,10 @@ func (i *Integration) setStatus(cfg config.Telegram, state, message string) {
 }
 func (i *Integration) reconcile(ctx context.Context) {
 	cfg := i.configManager.TelegramSettings()
-	// Only Telegram edits rebuild a session; unrelated YAML edits leave it running.
-	raw, _ := yaml.Marshal(cfg)
+	// Cloud transfer settings do not affect polling or active TG downloads.
+	receiverCfg := cfg
+	receiverCfg.UploadDriveID, receiverCfg.UploadDirectory, receiverCfg.UploadProxy = "", "", ""
+	raw, _ := yaml.Marshal(receiverCfg)
 	digest := sha256.Sum256(raw)
 	version := hex.EncodeToString(digest[:])
 	if version != i.version {

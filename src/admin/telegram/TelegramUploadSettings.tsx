@@ -179,6 +179,25 @@ export function TelegramUploadSettings() {
                 placeholder="Telegram"
               />
             </label>
+            <label className="tg-field-wide">
+              上传代理
+              <input
+                value={draft?.telegramUploadProxy ?? ""}
+                disabled={!draft?.telegramUploadDriveId}
+                onChange={(event) =>
+                  setDraft(
+                    (current) =>
+                      current && {
+                        ...current,
+                        telegramUploadProxy: event.target.value,
+                      },
+                  )
+                }
+                placeholder="支持 HTTP/HTTPS 和 SOCKS5/SOCKS5H"
+                autoComplete="off"
+                spellCheck={false}
+              />
+            </label>
           </div>
           {dirty && (
             <p className="tg-note" role="status">

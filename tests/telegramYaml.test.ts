@@ -7,7 +7,7 @@ test("Telegram settings and credentials round-trip through the shared YAML draft
     const before = parseConfig(source).draft;
     const draft = { ...before, telegramEnabled: true, telegramBotToken: "123:test_token", telegramApiId: 1234,
       telegramApiHash: "12345678901234567890123456789012", telegramAllowedUserIds: "123, 456",
-      telegramUploadDriveId: "cloud", telegramUploadDirectory: "Telegram/videos", telegramMaxPendingJobs: 25 };
+      telegramUploadDriveId: "cloud", telegramUploadDirectory: "Telegram/videos", telegramUploadProxy: "socks5h://user:pass@proxy:1080", telegramMaxPendingJobs: 25 };
     const output = applyVisualFields(source, draft, changedVisualFields(before, draft));
     assert.deepEqual(parseConfig(output).draft, draft);
     assert.equal(configDocument(output).getIn(["telegram", "api_hash"]), draft.telegramApiHash);
@@ -45,7 +45,7 @@ test("clearing Telegram credentials writes empty values instead of retaining old
 });
 
 test("Telegram YAML rejects mismatched types and invalid user ID lists", () => {
-  for (const source of ["telegram: []", "telegram: { enabled: yes }", "telegram: { api_id: text }", "telegram: { api_hash: 12345678901234567890123456789012 }", "telegram: { allowed_user_ids: [-1] }"]) {
+  for (const source of ["telegram: []", "telegram: { enabled: yes }", "telegram: { api_id: text }", "telegram: { api_hash: 12345678901234567890123456789012 }", "telegram: { allowed_user_ids: [-1] }", "telegram: { upload_proxy: 7890 }"]) {
     assert.throws(() => parseConfig(source), /telegram/);
   }
 });
@@ -59,10 +59,26 @@ test("upload settings preserve concurrent credentials and untouched upload field
   assert.equal(output, latest.replace("upload_drive_id: cloud", "upload_drive_id: new-cloud"));
 });
 
-test("clearing the upload target keeps its directory and Telegram connection settings", () => {
-  const source = "telegram: { enabled: true, bot_token: '123:token', upload_drive_id: cloud, upload_directory: Telegram/videos }\n";
+test("clearing the upload target keeps its directory, proxy and Telegram connection settings", () => {
+  const source = "telegram: { enabled: true, bot_token: '123:token', upload_drive_id: cloud, upload_directory: Telegram/videos, upload_proxy: 'http://proxy:7890' }\n";
   const before = parseConfig(source).draft;
   const draft = { ...before, telegramUploadDriveId: "" };
   const output = applyVisualFields(source, draft, changedVisualFields(before, draft));
   assert.deepEqual(parseConfig(output).draft, draft);
+});
+
+test("upload proxy edits and clearing preserve comments and concurrent target changes", () => {
+  for (const source of [
+    "# config\ntelegram:\n  upload_drive_id: cloud\n  upload_proxy: 'http://old:7890' # proxy\n  unknown_key: keep\n",
+    "telegram: { upload_drive_id: cloud, upload_proxy: 'http://old:7890', unknown_key: keep }\n",
+  ]) {
+    const before = parseConfig(source).draft;
+    for (const proxy of ["socks5h://user:p%40ss@proxy:1080", ""]) {
+      const draft = { ...before, telegramUploadProxy: proxy };
+      const latest = source.replace("upload_drive_id: cloud", "upload_drive_id: new-cloud");
+      const output = applyVisualFields(latest, draft, changedVisualFields(before, draft));
+      assert.equal(output, latest.replace("'http://old:7890'", `'${proxy}'`));
+      assert.equal(parseConfig(output).draft.telegramUploadProxy, proxy);
+    }
+  }
 });

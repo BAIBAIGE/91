@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"path"
@@ -19,6 +20,7 @@ import (
 	"github.com/video-site/backend/internal/drives/localupload"
 	"github.com/video-site/backend/internal/drives/telegramstorage"
 	"github.com/video-site/backend/internal/persistence"
+	"github.com/video-site/backend/internal/scopedproxy"
 )
 
 type localSource interface {
@@ -31,6 +33,7 @@ type Config struct {
 	Target          drives.Drive
 	LocalDirectory  string
 	TargetDirectory string
+	UploadProxy     string
 	OnMigrated      func(*catalog.Video)
 }
 
@@ -43,6 +46,10 @@ func Run(ctx context.Context, cfg Config) error {
 	uploader, ok := cfg.Target.(drives.Uploader)
 	if !ok {
 		return errors.New("目标网盘不支持上传")
+	}
+	uploadCtx, err := scopedproxy.WithURL(ctx, cfg.UploadProxy)
+	if err != nil {
+		return errors.New("TG 转存代理地址无效，请检查 telegram.upload_proxy 配置")
 	}
 	parent := ""
 	var existing map[string][]drives.Entry
@@ -60,11 +67,11 @@ func Run(ctx context.Context, cfg Config) error {
 			break
 		}
 		if parent == "" {
-			parent, err = uploader.EnsureDir(ctx, cfg.TargetDirectory)
+			parent, err = uploader.EnsureDir(uploadCtx, cfg.TargetDirectory)
 			if err != nil || strings.TrimSpace(parent) == "" {
 				return errors.New("无法创建或读取 TG 转存目标目录")
 			}
-			entries, err := cfg.Target.List(ctx, parent)
+			entries, err := cfg.Target.List(uploadCtx, parent)
 			if err != nil {
 				return errors.New("无法检查目标目录中已有的 TG 文件")
 			}
@@ -78,7 +85,7 @@ func Run(ctx context.Context, cfg Config) error {
 			if err := ctx.Err(); err != nil {
 				return err
 			}
-			if err := transferOne(ctx, cfg, uploader, parent, existing, v); err != nil {
+			if err := transferOne(uploadCtx, cfg, uploader, parent, existing, v); err != nil {
 				if ctx.Err() != nil {
 					return ctx.Err()
 				}
@@ -145,7 +152,10 @@ func transferOne(ctx context.Context, cfg Config, uploader drives.Uploader, pare
 			f.Close()
 			return errors.New("本地视频在读取期间发生变化")
 		}
-		fileID, err = uploader.Upload(ctx, parent, name, f, info.Size())
+		// Retain ownership of f: HTTP clients close request bodies that implement
+		// io.Closer. A section reader preserves seek/parallel reads for drivers
+		// without allowing them to close the local file before we do.
+		fileID, err = uploader.Upload(ctx, parent, name, io.NewSectionReader(f, 0, info.Size()), info.Size())
 		closeErr := f.Close()
 		if err != nil {
 			if delay, limited := drives.RateLimitRetryAfter(err); limited {

@@ -121,6 +121,24 @@ func TestIntegrationWaitsForSupervisorAndAppliesChanges(t *testing.T) {
 	if i.session() != old {
 		t.Fatal("unrelated YAML edit rebuilt Telegram session")
 	}
+	input.UploadDriveID = "cloud"
+	input.UploadDirectory = "Telegram/videos"
+	for _, proxy := range []string{"http://user:private_proxy_password@proxy.example:7890", "socks5h://proxy.example:1080", ""} {
+		input.UploadProxy = proxy
+		saveTelegramYAML(t, i, input)
+		i.reconcile(ctx)
+		if i.session() != old || old.runCtx.Err() != nil {
+			t.Fatal("transfer settings interrupted Telegram receiver")
+		}
+		status := i.Status()
+		if status.Config.UploadDriveID != input.UploadDriveID || status.Config.UploadDirectory != input.UploadDirectory || status.Config.UploadProxy != proxy {
+			t.Fatal("transfer status retained stale configuration")
+		}
+		raw, err := json.Marshal(status)
+		if err != nil || strings.Contains(string(raw), "proxy") || strings.Contains(string(raw), "private_proxy_password") {
+			t.Fatal("status exposed proxy credentials", err)
+		}
+	}
 	input.AllowedUserIDs = []int64{77}
 	saveTelegramYAML(t, i, input)
 	i.reconcile(ctx)

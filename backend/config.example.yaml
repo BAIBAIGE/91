@@ -73,7 +73,7 @@ remote_upload:
   # 直链下载正文连续无数据的超时时间（秒）。
   idle_timeout_seconds: 120
 
-# Telegram：热更新，变更后重建接收器，下载任务会等待重连后重试。
+# Telegram：热更新，接入设置变更后重建接收器，下载任务会等待重连后重试。
 # 需部署配套 Bot API 服务；保存后请在 Telegram 页面确认连接状态。
 telegram:
   # 启用需完整凭据；关闭会停止接收器和配套 Bot API 进程。
@@ -100,3 +100,6 @@ telegram:
   # 转存沿用 nightly 调度，保存不会立即执行转存。
   upload_drive_id: ""
   upload_directory: "Telegram"
+  # 仅用于 TG 网盘转存，支持 HTTP、HTTPS、SOCKS5、SOCKS5H，可含用户名和密码。
+  # 留空使用默认网络连接（包括环境代理）；修改后从下一次转存任务生效。
+  upload_proxy: ""

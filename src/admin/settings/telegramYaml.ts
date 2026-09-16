@@ -15,6 +15,7 @@ export const TELEGRAM_DEFAULTS = {
   telegramFetchTimeoutSeconds: 1800,
   telegramUploadDriveId: "",
   telegramUploadDirectory: "Telegram",
+  telegramUploadProxy: "",
 };
 
 export type TelegramDraft = typeof TELEGRAM_DEFAULTS;
@@ -34,6 +35,7 @@ export const TELEGRAM_YAML_KEYS: Record<TelegramField, string> = {
   telegramFetchTimeoutSeconds: "fetch_timeout_seconds",
   telegramUploadDriveId: "upload_drive_id",
   telegramUploadDirectory: "upload_directory",
+  telegramUploadProxy: "upload_proxy",
 };
 export const TELEGRAM_FIELDS = Object.keys(
   TELEGRAM_YAML_KEYS,
