@@ -25,6 +25,7 @@ import (
 	"github.com/video-site/backend/internal/drives/pikpak"
 	"github.com/video-site/backend/internal/drives/quark"
 	"github.com/video-site/backend/internal/drives/scriptcrawler"
+	"github.com/video-site/backend/internal/drives/telegramstorage"
 	"github.com/video-site/backend/internal/drives/webdav"
 	"github.com/video-site/backend/internal/drives/wopan"
 	"github.com/video-site/backend/internal/fingerprint"
@@ -1173,6 +1174,9 @@ func (a *App) attachLocalUpload(ctx context.Context) error {
 	a.registry.Set(drv.ID(), drv)
 
 	a.startDriveGenerationWorkers(ctx, drv.ID(), drv, true)
+	tg := telegramstorage.New(a.cat)
+	a.registry.Set(tg.ID(), tg)
+	a.startDriveGenerationWorkers(ctx, tg.ID(), tg, true)
 	return nil
 }
 

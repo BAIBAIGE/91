@@ -1,0 +1,26 @@
+# Use alongside docker-compose.yml. Both services must mount the cache at the
+# same absolute path, because getFile returns paths from the Bot API process.
+services:
+  video-site-91:
+    volumes:
+      - telegram-cache:/var/lib/telegram-bot-api
+      - telegram-control:/opt/video-site-91/data/telegram-control
+    depends_on:
+      - telegram-bot-api
+  telegram-bot-api:
+    image: ghcr.io/nianzhibai/telegram-bot-api-for-91:stable
+    command: ["--http-port", "7878"]
+    group_add: ["0"]
+    stop_grace_period: 30s
+    volumes:
+      - telegram-cache:/var/lib/telegram-bot-api
+      - telegram-control:/run/video-site-telegram:ro
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+volumes:
+  telegram-cache:
+  telegram-control:

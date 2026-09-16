@@ -384,8 +384,8 @@ func (s *Server) mapShortsItems(
 		}
 		if label, ok := driveLabels[video.DriveID]; ok {
 			dto.SourceLabel = label
-		} else if drive, err := s.Catalog.GetDrive(ctx, video.DriveID); err == nil {
-			label := driveKindLabel(drive.Kind)
+		} else {
+			label := s.videoSourceLabel(ctx, video)
 			driveLabels[video.DriveID] = label
 			dto.SourceLabel = label
 		}

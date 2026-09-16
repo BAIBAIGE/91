@@ -28,6 +28,12 @@ var (
 
 type RemoteUploadJob struct {
 	ID               string
+	SourceKind       string
+	SourcePayload    string
+	Stage            string
+	RetryCount       int
+	NextAttempt      int64
+	Sequence         int64
 	SourceURL        string
 	SourceLabel      string
 	RequestedTitle   string
@@ -119,6 +125,7 @@ func (c *Catalog) ListRemoteUploadJobs(ctx context.Context, limit int) ([]*Remot
 	rows, err := c.db.QueryContext(ctx, `
 SELECT `+remoteUploadJobCols+`
   FROM remote_upload_jobs
+ WHERE source_kind = 'http'
  ORDER BY sequence DESC
  LIMIT ?`, limit)
 	if err != nil {
@@ -141,6 +148,10 @@ SELECT `+remoteUploadJobCols+`
 // worker is started in production, but the conditional UPDATE also keeps this
 // safe if startup code is accidentally invoked twice.
 func (c *Catalog) ClaimNextRemoteUploadJob(ctx context.Context) (*RemoteUploadJob, error) {
+	return c.ClaimNextImportJob(ctx, true)
+}
+
+func (c *Catalog) ClaimNextImportJob(ctx context.Context, allowTelegram bool) (*RemoteUploadJob, error) {
 	tx, err := c.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
@@ -151,9 +162,10 @@ func (c *Catalog) ClaimNextRemoteUploadJob(ctx context.Context) (*RemoteUploadJo
 	err = tx.QueryRowContext(ctx, `
 SELECT id
   FROM remote_upload_jobs
- WHERE state = ? AND cancel_requested = 0
+ WHERE state = ? AND cancel_requested = 0 AND next_attempt <= ?
+ AND (source_kind = 'http' OR (source_kind = 'telegram' AND ?))
  ORDER BY sequence ASC
- LIMIT 1`, RemoteUploadQueued).Scan(&id)
+ LIMIT 1`, RemoteUploadQueued, time.Now().UnixMilli(), allowTelegram).Scan(&id)
 	if err != nil {
 		return nil, err
 	}
@@ -235,9 +247,8 @@ resolved_title = ?, updated_at = ?`,
 	)
 }
 
-// FinalizeRemoteUpload atomically creates the local-upload video, writes its
-// tag assignments, and moves the job into completed. The caller has already
-// made finalFile durable; if this transaction fails it removes that file.
+// FinalizeRemoteUpload atomically publishes an acquired video, its tags, and
+// the completed job. The caller has already made its source file durable.
 func (c *Catalog) FinalizeRemoteUpload(
 	ctx context.Context,
 	jobID string,
@@ -256,12 +267,12 @@ func (c *Catalog) FinalizeRemoteUpload(
 	}
 	defer tx.Rollback()
 
-	var state string
+	var state, sourceKind string
 	var cancelRequested int
 	if err := tx.QueryRowContext(ctx, `
-SELECT state, cancel_requested
+SELECT state, cancel_requested, source_kind
   FROM remote_upload_jobs
- WHERE id = ?`, jobID).Scan(&state, &cancelRequested); err != nil {
+ WHERE id = ?`, jobID).Scan(&state, &cancelRequested, &sourceKind); err != nil {
 		return err
 	}
 	if cancelRequested != 0 {
@@ -271,6 +282,15 @@ SELECT state, cancel_requested
 		return ErrRemoteUploadInvalidTransition
 	}
 
+	if video.DriveID == TelegramLocalDriveID {
+		var owner string
+		if err := tx.QueryRowContext(ctx, `SELECT job_id FROM telegram_local_files WHERE file_id=?`, video.FileID).Scan(&owner); err != nil {
+			return err
+		}
+		if owner != jobID || sourceKind != "telegram" {
+			return errors.New("catalog: TG file belongs to another import")
+		}
+	}
 	type assignment struct {
 		tagID    int64
 		label    string
@@ -279,6 +299,16 @@ SELECT state, cancel_requested
 	}
 	assignments := make([]assignment, 0, len(manualTags)+len(autoTags))
 	seen := make(map[string]struct{})
+	if sourceKind == "telegram" {
+		tag, err := ensureTelegramTagTx(ctx, tx)
+		if err != nil {
+			return err
+		}
+		seen[strings.ToLower(tag.Label)] = struct{}{}
+		assignments = append(assignments, assignment{
+			tagID: tag.ID, label: tag.Label, source: "telegram", evidence: "Telegram 视频导入",
+		})
+	}
 	if len(manualTags) > 0 {
 		for _, label := range manualTags {
 			tag, err := getTagByLabelTxRaw(ctx, tx, label)
@@ -409,6 +439,9 @@ UPDATE remote_upload_jobs
 		return err
 	} else if affected != 1 {
 		return ErrRemoteUploadInvalidTransition
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE telegram_files SET video_id = ? WHERE job_id = ?`, video.ID, jobID); err != nil {
+		return err
 	}
 	if err := tx.Commit(); err != nil {
 		return err
@@ -626,11 +659,14 @@ UPDATE remote_upload_jobs
 }
 
 func (c *Catalog) DeleteExpiredRemoteUploadJobs(ctx context.Context, before time.Time) (int64, error) {
+	if err := c.CompactTelegramHistory(ctx, time.Now().Add(-30*24*time.Hour)); err != nil {
+		return 0, err
+	}
 	res, err := c.db.ExecContext(ctx, `
 DELETE FROM remote_upload_jobs
  WHERE state IN (?, ?, ?)
    AND finished_at > 0
-   AND finished_at < ?`,
+   AND finished_at < ? AND source_kind = 'http'`,
 		RemoteUploadCompleted,
 		RemoteUploadFailed,
 		RemoteUploadCanceled,
@@ -694,7 +730,7 @@ const remoteUploadJobCols = `
 id, source_url, source_label, requested_title, resolved_title, tags, state,
 bytes_downloaded, total_bytes, cancel_requested, error_message,
 temp_file, final_file, completed_video_id,
-created_at, started_at, updated_at, finished_at`
+created_at, started_at, updated_at, finished_at, source_kind, source_payload, stage, retry_count, next_attempt, sequence`
 
 func scanRemoteUploadJob(row rowScanner) (*RemoteUploadJob, error) {
 	var job RemoteUploadJob
@@ -720,6 +756,7 @@ func scanRemoteUploadJob(row rowScanner) (*RemoteUploadJob, error) {
 		&startedAt,
 		&updatedAt,
 		&finishedAt,
+		&job.SourceKind, &job.SourcePayload, &job.Stage, &job.RetryCount, &job.NextAttempt, &job.Sequence,
 	); err != nil {
 		return nil, err
 	}

@@ -326,7 +326,7 @@ test("configuration panel follows the CLIProxy configuration workspace UI", () =
   );
   assert.match(
     pageSource,
-    /<header className="admin-config-header">\s*<ConfigPageMeta[\s\S]*?className="admin-config-mode-switch"/
+    /<header className="admin-config-header">[\s\S]*?<ConfigPageMeta[\s\S]*?className="admin-config-mode-switch"/
   );
   assert.match(
     adminCss,
@@ -369,7 +369,7 @@ test("configuration panel follows the CLIProxy configuration workspace UI", () =
   );
   assert.match(
     adminCss,
-    /\.admin-config-section-nav\s*\{[^}]*position:\s*sticky[^}]*display:\s*flex;[^}]*overflow-x:\s*auto;[^}]*overflow-y:\s*hidden;[^}]*border-bottom:\s*1px solid var\(--border-default\)/s
+    /\.admin-config-section-nav\s*\{[^}]*display:\s*flex;[^}]*overflow-x:\s*auto;[^}]*overflow-y:\s*hidden;[^}]*border-bottom:\s*1px solid var\(--border-default\)/s
   );
   assert.match(
     adminCss,

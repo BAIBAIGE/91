@@ -1,87 +1,102 @@
-# backend 配置示例。首次启动若未发现 config.yaml，会基于此文件自动创建。
+# 首次启动时用于创建 config.yaml；已有实例请修改实际配置或使用配置面板。
+# 热更新：保存后自动应用。重启生效：保存后需重启网站服务。
+# 更换路径或地址时，需自行迁移数据、调整挂载和端口映射。
+
+# 服务：重启生效。
 server:
-  # 本地开发默认配合 vite.config.ts 的代理端口。
+  # 监听地址；本地开发需与 Vite 代理端口一致。
   listen: "127.0.0.1:9192"
-  # 管理员账号在首次访问时创建，仅存储在数据库中，不在此文件配置。
-  # CORS 白名单：允许跨源访问的前端 Origin 列表。默认空 = 不允许任何跨源请求。
-  # 同源部署（前后端在同一域名 + 端口下，由 nginx 反代）不需要配此项。
-  # 仅在前后端分别部署在不同域名/端口、且需要前端 fetch 后端时填写。
-  # 不要写 "*"；带 cookie 的 CORS 必须列具体 Origin。
-  # 示例：
-  # allowed_origins:
-  #   - "https://video.example.com"
-  #   - "http://127.0.0.1:9191"
+  # CORS 白名单；同源部署留空，跨源部署填写完整 Origin，如 https://video.example.com。
   allowed_origins: []
 
+# 存储：重启生效；更换目录前需停服迁移数据。
 storage:
-  # SQLite 数据库文件路径
+  # SQLite 数据库文件。
   db_path: "./data/video-site.db"
-  # 本地预览视频和封面目录
+  # 封面和预览目录；其父目录同时用于存放上传文件、临时文件和爬虫数据。
   local_preview_dir: "./data/previews"
 
+# 日志：重启生效。
 logging:
-  # 后台日志同时保留在磁盘；stdout/stderr 仍继续交给 Docker 或 systemd 收集。
+  # 是否将运行日志写入文件。
   file_enabled: true
-  # 放在 data 下可随 Docker 数据卷持久化，但不会进入业务备份包。
   directory: "./data/logs"
-  # 单个日志文件达到此大小后轮转。
+  # 单文件上限和总量上限（MiB）；超限后轮转或清理最旧日志。
   max_file_size_mb: 5
-  # 超过总量后从最旧的轮转文件开始清理。
   max_total_size_mb: 30
 
+# 扫描：重启生效；定时扫描由 nightly 调度，递归不限深度。
 scanner:
-  # 已废弃：旧版的"每天 02:00-07:00 按 IntervalSeconds 间隔重复扫盘"已被移除。
-  # 现在所有定时任务统一由 nightly 调度器控制（默认每天 01:00 跑一条完整流水线）。
-  # 字段保留仅为兼容旧 yaml，运行时被忽略。
-  interval_seconds: 0
-  # 已废弃：扫描会递归到叶子目录，不限制目录深度。
-  # 字段保留仅为兼容旧 yaml，运行时被忽略。
-  max_depth: 5
-  # 被扫描的扩展名
+  # 扫描的文件扩展名。
   video_extensions: [".mp4", ".mkv", ".mov", ".webm", ".avi", ".strm"]
 
+# 定时任务：热更新，影响后续调度，不中断正在执行的任务。
 nightly:
-  # 停止每日定时任务；不影响后台手动执行“扫描所有网盘”。
+  # 停用自动调度；手动执行不受影响。
   disabled: false
-  # 凌晨流水线的每日启动时间，24 小时制 HH:mm；后台保存后会热更新。
-  # 运行时会统一编排扫描、媒体资产生成和后续清理任务。
+  # 每日启动时间（HH:mm）和任务时区（IANA 名称）。
   start_time: "01:00"
-  # 启动时间使用的 IANA 时区；仅影响应用调度，不修改服务器系统时区。
   timezone: "Asia/Shanghai"
 
+# 标签：热更新。
 tags:
-  # 是否启用系统内置标签包；后台保存后会热更新。
+  # 启用内置标签包。
   builtin_pack_enabled: true
 
-# 全局媒体生成额度，所有网盘（含本地上传与爬虫）共享，范围 1-5，支持热更新。
-# 默认最多同时生成 1 个封面、1 个预览、1 个指纹，三类任务独立；扫盘仍按网盘并行。
+# 媒体生成：热更新；各类并发数独立，所有来源共享，范围 1–5。
 generation:
   thumbnail_concurrency: 1
   preview_concurrency: 1
   fingerprint_concurrency: 1
 
+# 预览：enabled 热更新，其余字段重启后用于后续生成。
 preview:
-  # 全局预览视频开关，控制生成与卡片预览，默认开启，可热更新；封面不受影响
+  # 控制预览生成和卡片预览；封面不受影响。
   enabled: true
-  # ffmpeg / ffprobe 可执行文件名或绝对路径
+  # 已安装的 ffmpeg / ffprobe 命令名或绝对路径。
   ffmpeg_path: "ffmpeg"
   ffprobe_path: "ffprobe"
-  # 每个封面/预览 ffmpeg 的解码、编码和滤镜线程数，范围 1-16，修改后重启生效。
+  # 单个 ffmpeg 进程的线程数，范围 1–16。
   ffmpeg_threads: 1
-  # 预览视频每段时长（秒），实际生成时每段最多 3 秒
-  duration_seconds: 3
-  # 兼容旧配置；当前 30 秒以下最多 3 段，30 秒及以上固定 4 段
-  segments: 3
-  # 预览视频宽度
+  # 预览宽度（像素）；已有预览不会自动重新生成。
   width: 480
 
+# 视频中转：重启生效。
 proxy:
-  # 是否允许播放器为“三屏画面”请求服务端全量中转视频流。
-  # 关闭后，支持直链的网盘仍保持 302，避免客户端主动消耗服务端上行带宽。
+  # 允许播放器强制请求服务端中转；关闭后，支持直链的网盘仍使用跳转。
   allow_forced_relay: true
 
+# 下载：重启生效。
 remote_upload:
-  # 视频直链后台下载时始终保留的数据盘空间，默认 1 GiB。
+  # 直链和 Telegram 导入保留的磁盘空间（字节），默认 1 GiB。
   disk_reserve_bytes: 1073741824
-  # 已收到响应头后，正文连续无数据多久判定失败。
+  # 直链下载正文连续无数据的超时时间（秒）。
   idle_timeout_seconds: 120
+
+# Telegram：热更新，变更后重建接收器，下载任务会等待重连后重试。
+# 需部署配套 Bot API 服务；保存后请在 Telegram 页面确认连接状态。
+telegram:
+  # 启用需完整凭据；关闭会停止接收器和配套 Bot API 进程。
+  enabled: false
+  # BotFather 提供的机器人 Token。
+  bot_token: ""
+  # Telegram 应用凭据；修改后自动重启配套 Bot API 进程。
+  api_id: 0
+  api_hash: ""
+  # 已部署的 Bot API 地址；原生后端通常使用 http://127.0.0.1:7878。
+  api_base_url: "http://telegram-bot-api:7878"
+  # 共享视频目录；双方须以相同绝对路径读写同一文件系统。
+  # 视频在 library 子目录中直接入库，不复制到普通上传目录。
+  local_files_root: "/var/lib/telegram-bot-api"
+  # 允许发送视频的用户 ID；留空时仅响应 /id 等引导消息。
+  allowed_user_ids: []
+  # 选填，用于生成机器人回复中的视频链接。
+  site_base_url: ""
+  # 单文件上限（字节）、待处理任务上限、文件获取超时（秒）。
+  max_file_size_bytes: 4294967296
+  max_pending_jobs: 100
+  fetch_timeout_seconds: 1800
+  # 后续转存任务使用的网盘和相对目录；网盘留空时仅保存到本地。
+  # 转存沿用 nightly 调度，保存不会立即执行转存。
+  upload_drive_id: ""
+  upload_directory: "Telegram"

@@ -5,6 +5,7 @@ import {
   loadDrivesPage,
   loadLogsPage,
   loadSettingsPage,
+  loadTelegramPage,
   loadTagsPage,
   loadUsersPage,
   loadVideosPage,
@@ -22,6 +23,7 @@ const loadersByPath = {
   "/admin/backup": loadBackupPage,
   "/admin/logs": loadLogsPage,
   "/admin/settings": loadSettingsPage,
+  "/admin/telegram": loadTelegramPage,
 } satisfies Record<AdminPagePath, AdminPageModuleLoader>;
 
 const adminPageModules = ADMIN_PAGE_TITLES.map(({ path }) => ({

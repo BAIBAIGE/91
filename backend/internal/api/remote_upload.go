@@ -12,13 +12,13 @@ import (
 	"time"
 
 	"github.com/video-site/backend/internal/catalog"
-	"github.com/video-site/backend/internal/remoteupload"
+	"github.com/video-site/backend/internal/mediaimport"
 )
 
 const maxRemoteUploadRequestBytes = 64 << 10
 
 type RemoteUploadService interface {
-	Create(context.Context, remoteupload.CreateInput) (*catalog.RemoteUploadJob, error)
+	Create(context.Context, mediaimport.CreateInput) (*catalog.RemoteUploadJob, error)
 	List(context.Context, int) ([]*catalog.RemoteUploadJob, error)
 	Cancel(context.Context, string) (*catalog.RemoteUploadJob, error)
 }
@@ -71,13 +71,13 @@ func (s *Server) handleCreateRemoteUpload(w http.ResponseWriter, r *http.Request
 		writeErr(w, r, status, err)
 		return
 	}
-	job, err := s.RemoteUploads.Create(r.Context(), remoteupload.CreateInput{
+	job, err := s.RemoteUploads.Create(r.Context(), mediaimport.CreateInput{
 		URL:   body.URL,
 		Title: body.Title,
 		Tags:  tags,
 	})
 	if err != nil {
-		if remoteupload.IsValidationError(err) {
+		if mediaimport.IsValidationError(err) {
 			writeErr(w, r, http.StatusBadRequest, err)
 			return
 		}
@@ -124,6 +124,13 @@ func (s *Server) handleCancelRemoteUpload(w http.ResponseWriter, r *http.Request
 	if id == "" {
 		writeErr(w, r, http.StatusBadRequest, errors.New("remote upload job id is required"))
 		return
+	}
+	if s.Catalog != nil {
+		existing, err := s.Catalog.GetRemoteUploadJob(r.Context(), id)
+		if err != nil || existing.SourceKind != "http" {
+			writeErr(w, r, http.StatusNotFound, errors.New("remote upload job not found"))
+			return
+		}
 	}
 	job, err := s.RemoteUploads.Cancel(r.Context(), id)
 	if err != nil {

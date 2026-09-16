@@ -1376,6 +1376,9 @@ func TestHandleUploadVideoSavesFileVideoTagsAndQueuesPreview(t *testing.T) {
 	if got.Title != "用户上传标题" {
 		t.Fatalf("title = %q, want submitted title", got.Title)
 	}
+	if got.Author != "" || dto.Author != "" {
+		t.Fatalf("upload without author must remain empty: stored=%q response=%q", got.Author, dto.Author)
+	}
 	if got.FileID != "用户上传标题.mp4" || got.FileName != got.FileID {
 		t.Fatalf("file identity = id %q name %q, want title-based physical name", got.FileID, got.FileName)
 	}

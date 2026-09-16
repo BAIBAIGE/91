@@ -6,6 +6,7 @@ export const ADMIN_PAGE_TITLES = [
   { path: "/admin/users", title: "用户管理" },
   { path: "/admin/backup", title: "备份恢复" },
   { path: "/admin/logs", title: "日志查看" },
+  { path: "/admin/telegram", title: "Telegram" },
   { path: "/admin/settings", title: "配置面板" },
 ] as const;
 

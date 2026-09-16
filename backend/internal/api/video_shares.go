@@ -265,7 +265,7 @@ func (s *Server) availableVideo(ctx context.Context, id string) (*catalog.Video,
 	if v.Hidden {
 		return nil, sql.ErrNoRows
 	}
-	if v.DriveID == localUploadDriveID {
+	if v.DriveID == localUploadDriveID || v.DriveID == catalog.TelegramLocalDriveID {
 		return v, nil
 	}
 	if _, err := s.Catalog.GetDrive(ctx, v.DriveID); err == nil {
@@ -301,9 +301,7 @@ func (s *Server) mapSharedVideoDetail(ctx context.Context, v *catalog.Video, sha
 	dto.Href = ""
 	dto.Thumbnail = s.sharedThumbnailURL(v, shareID)
 	dto.PreviewSrc = sharedAssetURL(shareID, "preview", v.PreviewUpdatedAt)
-	if d, err := s.Catalog.GetDrive(ctx, v.DriveID); err == nil {
-		dto.SourceLabel = driveKindLabel(d.Kind)
-	}
+	dto.SourceLabel = s.videoSourceLabel(ctx, v)
 	return VideoDetailDTO{
 		VideoDTO:    dto,
 		VideoSrc:    sharedAssetURL(shareID, "stream", time.Time{}),

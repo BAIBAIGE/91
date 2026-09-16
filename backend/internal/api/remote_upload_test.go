@@ -15,11 +15,11 @@ import (
 
 	"github.com/video-site/backend/internal/auth"
 	"github.com/video-site/backend/internal/catalog"
-	"github.com/video-site/backend/internal/remoteupload"
+	"github.com/video-site/backend/internal/mediaimport"
 )
 
 type fakeRemoteUploadService struct {
-	createInput remoteupload.CreateInput
+	createInput mediaimport.CreateInput
 	createJob   *catalog.RemoteUploadJob
 	createErr   error
 	listLimit   int
@@ -32,7 +32,7 @@ type fakeRemoteUploadService struct {
 
 func (f *fakeRemoteUploadService) Create(
 	_ context.Context,
-	input remoteupload.CreateInput,
+	input mediaimport.CreateInput,
 ) (*catalog.RemoteUploadJob, error) {
 	f.createInput = input
 	return f.createJob, f.createErr

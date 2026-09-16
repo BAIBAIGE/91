@@ -68,6 +68,11 @@ type Remover interface {
 	Remove(ctx context.Context, fileID string) error
 }
 
+// LocalFileProvider exposes a local source without assuming its directory layout.
+type LocalFileProvider interface {
+	LocalPath(context.Context, string) (string, error)
+}
+
 // SourceFile carries the catalog metadata available when an administrator
 // requests deletion of the original source file.
 type SourceFile struct {

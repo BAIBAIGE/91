@@ -29,6 +29,9 @@ func validateArchiveDatabaseScope(ctx context.Context, databasePath string, mani
 	}
 	database.SetMaxOpenConns(1)
 	defer database.Close()
+	if err := validateTelegramArchiveScope(ctx, database, selection); err != nil {
+		return err
+	}
 
 	drives := make(map[string]struct{})
 	databaseLocalDrives := make(map[string]struct{})
@@ -222,6 +225,48 @@ func requireArchiveTableEmpty(ctx context.Context, database *sql.DB, table strin
 	}
 	if count != 0 {
 		return fmt.Errorf("contains %d rows", count)
+	}
+	return nil
+}
+
+// Telegram tables are optional in older archives. When present, they must not
+// smuggle receiver sessions or downloadable source metadata into an archive.
+func validateTelegramArchiveScope(ctx context.Context, db *sql.DB, selection BackupSelection) error {
+	var payloadColumn int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('remote_upload_jobs') WHERE name='source_payload'`).Scan(&payloadColumn); err != nil {
+		return err
+	}
+	if payloadColumn > 0 {
+		var private int
+		if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM remote_upload_jobs WHERE source_kind='telegram' AND source_payload!=''`).Scan(&private); err != nil {
+			return err
+		}
+		if private > 0 {
+			return fmt.Errorf("backup: Telegram source metadata must be empty")
+		}
+	}
+
+	for _, table := range []string{"telegram_settings", "telegram_connections", "telegram_receipts", "telegram_files", "telegram_local_files"} {
+		var present int
+		if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?`, table).Scan(&present); err != nil {
+			return err
+		}
+		if present == 0 {
+			continue
+		}
+		if table != "telegram_files" || !selection.UploadStorage {
+			if err := requireArchiveTableEmpty(ctx, db, table); err != nil {
+				return err
+			}
+			continue
+		}
+		var invalid int
+		if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM telegram_files WHERE file_id!='' OR video_id='' OR video_id NOT IN (SELECT id FROM videos) OR job_id NOT IN (SELECT id FROM remote_upload_jobs)`).Scan(&invalid); err != nil {
+			return err
+		}
+		if invalid != 0 {
+			return fmt.Errorf("backup: invalid Telegram file mappings")
+		}
 	}
 	return nil
 }

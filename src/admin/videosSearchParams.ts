@@ -4,12 +4,14 @@ const CRAWLER_SOURCE_PREFIX = "crawler:";
 
 export type AdminVideosSourceKey =
   | "all"
+  | "telegram"
   | `drive:${string}`
   | `crawler:${string}`;
 
 export type AdminVideosSourceFilter = {
   driveId: string;
   crawlerId: string;
+  sourceKind: "" | "telegram";
 };
 
 export function readAdminVideosPage(params: URLSearchParams): number {
@@ -60,21 +62,24 @@ export function adminVideosSourceFilter(
     return {
       driveId: sourceKey.slice(DRIVE_SOURCE_PREFIX.length),
       crawlerId: "",
+      sourceKind: "",
     };
   }
   if (sourceKey.startsWith(CRAWLER_SOURCE_PREFIX)) {
     return {
       driveId: "",
       crawlerId: sourceKey.slice(CRAWLER_SOURCE_PREFIX.length),
+      sourceKind: "",
     };
   }
-  return { driveId: "", crawlerId: "" };
+  return { driveId: "", crawlerId: "", sourceKind: sourceKey === "telegram" ? "telegram" : "" };
 }
 
 function normalizeAdminVideosSourceKey(
   value: string | null
 ): AdminVideosSourceKey {
   const sourceKey = value?.trim() ?? "";
+  if (sourceKey === "telegram") return "telegram";
   if (sourceKey.startsWith(DRIVE_SOURCE_PREFIX)) {
     const id = sourceKey.slice(DRIVE_SOURCE_PREFIX.length).trim();
     return id ? `drive:${id}` : "all";

@@ -551,6 +551,8 @@ func normalizeVideoTagSource(source string) string {
 		return "manual"
 	case "crawler":
 		return "crawler"
+	case "telegram":
+		return "telegram"
 	case "series":
 		return "series"
 	case "propagated":
@@ -577,7 +579,7 @@ func videoTagAssignmentPriority(source string) int {
 	switch normalizeVideoTagSource(source) {
 	case "manual":
 		return 100
-	case "crawler":
+	case "crawler", "telegram":
 		return 90
 	case "series":
 		return 80

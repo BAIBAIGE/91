@@ -1,6 +1,6 @@
 //go:build windows
 
-package remoteupload
+package mediaimport
 
 import (
 	"errors"

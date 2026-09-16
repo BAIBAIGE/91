@@ -312,6 +312,12 @@ func (m *Manager) Estimate(ctx context.Context) (Estimate, error) {
 		estimate.FileCount += count
 		estimate.TotalBytes += size
 	}
+	tgCount, tgSize, err := m.catalog.TelegramLocalStorageSize(ctx)
+	if err != nil {
+		return Estimate{}, err
+	}
+	estimate.FileCount += tgCount
+	estimate.TotalBytes += tgSize
 	count, size, err := m.estimateLocalStorageResources(ctx, false)
 	if err != nil {
 		return Estimate{}, err
@@ -367,6 +373,13 @@ func (m *Manager) EstimateForSelection(ctx context.Context, selection BackupSele
 		}
 	}
 	if selection.UploadStorage {
+		count, size, err := m.catalog.TelegramLocalStorageSize(ctx)
+		if err != nil {
+			return Estimate{}, err
+		}
+		estimate.FileCount += count
+		estimate.TotalBytes += size
+
 		if err := addSource("uploads", filepath.Join(m.assetRoot, "uploads")); err != nil {
 			return Estimate{}, err
 		}
@@ -866,6 +879,11 @@ func (m *Manager) createSnapshot(
 			if err := m.snapshotSelectedLocalStorage(ctx, snapshotRoot, state); err != nil {
 				return snapshotSelectionState{}, err
 			}
+		}
+	}
+	if selection.UploadStorage {
+		if err := m.snapshotTelegramUploads(ctx, snapshotRoot, state); err != nil {
+			return snapshotSelectionState{}, err
 		}
 	}
 	return state, nil

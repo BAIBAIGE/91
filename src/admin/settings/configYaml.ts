@@ -1,4 +1,8 @@
 import {
+ TELEGRAM_DEFAULTS, TELEGRAM_FIELDS, TELEGRAM_YAML_KEYS,
+ telegramDraftFromDocument, telegramFieldValue, type TelegramDraft,
+} from "./telegramYaml";
+import {
   Scalar,
   isMap,
   isScalar,
@@ -10,7 +14,7 @@ import {
   type YAMLMap,
 } from "yaml";
 
-export type SettingsDraft = {
+export type SettingsDraft = TelegramDraft & {
   previewEnabled: boolean;
   nightlyDisabled: boolean;
   nightlyStartTime: string;
@@ -24,6 +28,7 @@ export type SettingsDraft = {
 export type VisualField = keyof SettingsDraft;
 
 export const DEFAULT_DRAFT: SettingsDraft = {
+  ...TELEGRAM_DEFAULTS,
   previewEnabled: true,
   nightlyDisabled: false,
   nightlyStartTime: "01:00",
@@ -190,6 +195,7 @@ function draftFromDocument(document: ReturnType<typeof configDocument>): Setting
     builtinTagsEnabled = configuredBuiltinTags;
   }
   return {
+    ...telegramDraftFromDocument(document),
     previewEnabled,
     nightlyDisabled,
     nightlyStartTime,
@@ -818,6 +824,47 @@ function integerSettingEdits(
   ];
 }
 
+// Edit only the selected value so comments and unrelated YAML remain intact.
+function telegramSettingEdits(
+ source: string, document: ReturnType<typeof configDocument>, key: string,
+ value: string | number | boolean | number[]
+): SourceEdit[] {
+ const root = isMap(document.contents) ? document.contents as ParsedMap : null;
+ const sectionPair = root ? findPair(root, "telegram") : undefined;
+ const rendered = JSON.stringify(value);
+ const entry = `${key}: ${rendered}`;
+ if (!sectionPair) {
+  if (root && isFlowMap(root)) return [insertFlowMapEntry(source, root, `telegram: { ${entry} }`)];
+  const position = root?.range?.[2] ?? document.range?.[1] ?? source.length;
+  return [insertLinesAtBoundary(source, position, ["telegram:", `  ${entry}`])];
+ }
+ const node = sectionPair.value;
+ if (!node || (isScalar(node) && node.value === null && (!node.range || node.range[0] === node.range[1]))) {
+  return [insertAfterEmptyMapKey(source, sectionPair, entry, "telegram")];
+ }
+ if (isScalar(node) && node.value === null) {
+  const range = requiredRange(node, "telegram");
+  return [{start: range[0], end: range[1], text: `{ ${entry} }`}];
+ }
+ if (!isMap(node)) throw new Error("telegram 必须是映射对象");
+ const section = node as ParsedMap;
+ const pair = findPair(section, key);
+ if (!pair) return [isFlowMap(section) ? insertFlowMapEntry(source, section, entry) : insertBlockMapEntry(source, section, entry, "telegram")];
+ if (typeof value === "string") return [replaceStringPairValue(source, pair, value, `telegram.${key}`)];
+ if (typeof value === "boolean") return [replaceBooleanPairValue(source, pair, value, `telegram.${key}`)];
+ if (typeof value === "number") return [replaceIntegerPairValue(source, pair, value, `telegram.${key}`)];
+ if (pair.value?.range && pair.value.range[0] < pair.value.range[1]) {
+  const range = pair.value.range;
+  // Block sequences include their final newline in the value range.
+  const suffix = source.slice(range[0], range[1]).endsWith("\n") ? lineEnding(source) : "";
+  return [{start: range[0], end: range[1], text: rendered + suffix}];
+ }
+ const keyRange = requiredRange(pair.key, `telegram.${key}`);
+ const colon = source.indexOf(":", keyRange[1]);
+ if (colon < 0) throw new Error(`无法定位 telegram.${key}`);
+ return [{start: colon + 1, end: colon + 1, text: ` ${rendered}`}];
+}
+
 function applySourceEdits(source: string, edits: readonly SourceEdit[]) {
   const ordered = [...edits].sort((left, right) => right.start - left.start);
   let boundary = source.length;
@@ -898,6 +945,13 @@ export function applyVisualFields(
     );
   }
 
+  for (const field of TELEGRAM_FIELDS) {
+    if (!fields.has(field)) continue;
+    updated = applySourceEdits(updated, telegramSettingEdits(
+      updated, configDocument(updated), TELEGRAM_YAML_KEYS[field], telegramFieldValue(draft, field)
+    ));
+  }
+
   // Source ranges perform the write, while a fresh parse verifies that the
   // localized edit still produced one valid YAML document.
   configDocument(updated);
@@ -929,6 +983,9 @@ export function changedVisualFields(saved: SettingsDraft, draft: SettingsDraft) 
   }
   if (saved.fingerprintConcurrency !== draft.fingerprintConcurrency) {
     fields.add("fingerprintConcurrency");
+  }
+  for (const field of TELEGRAM_FIELDS) {
+    if (saved[field] !== draft[field]) fields.add(field);
   }
   return fields;
 }

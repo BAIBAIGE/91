@@ -1,4 +1,4 @@
-package remoteupload
+package mediaimport
 
 import (
 	"context"
@@ -7,22 +7,20 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"io"
 	"mime"
 	"net/http"
 	"net/url"
 	"os"
 	"path"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/video-site/backend/internal/applog"
 	"github.com/video-site/backend/internal/catalog"
 	"github.com/video-site/backend/internal/drives/localupload"
+	"github.com/video-site/backend/internal/drives/telegramstorage"
 	"github.com/video-site/backend/internal/persistence"
 	"github.com/video-site/backend/internal/videoname"
 )
@@ -61,9 +59,11 @@ type Config struct {
 	DiskReserve     int64
 	IdleTimeout     time.Duration
 	OnVideoUploaded func(*catalog.Video)
+	TelegramSource  FileSource
 }
 
 type Manager struct {
+	telegramSource  FileSource
 	catalog         *catalog.Catalog
 	uploadDir       string
 	ffprobePath     string
@@ -125,6 +125,7 @@ func New(cfg Config) (*Manager, error) {
 	}
 	m := &Manager{
 		catalog:         cfg.Catalog,
+		telegramSource:  cfg.TelegramSource,
 		uploadDir:       cfg.UploadDir,
 		ffprobePath:     cfg.FFprobePath,
 		diskReserve:     cfg.DiskReserve,
@@ -159,6 +160,9 @@ func (m *Manager) Start(parent context.Context) error {
 		return nil
 	}
 
+	if err := m.cleanupAbandonedTelegram(parent); err != nil {
+		return err
+	}
 	refs, err := m.catalog.ListInterruptedRemoteUploadArtifacts(parent)
 	if err != nil {
 		return fmt.Errorf("remote upload: inspect interrupted jobs: %w", err)
@@ -244,6 +248,11 @@ func (m *Manager) Cancel(ctx context.Context, id string) (*catalog.RemoteUploadJ
 	if err != nil {
 		return nil, err
 	}
+	if job.State == catalog.RemoteUploadCanceled {
+		if err := m.discardTelegram(ctx, job); err != nil {
+			return nil, err
+		}
+	}
 	if job.CancelRequested {
 		m.currentMu.Lock()
 		if m.currentID == job.ID && m.currentCancel != nil {
@@ -273,13 +282,14 @@ func (m *Manager) run() {
 		}
 		select {
 		case <-cleanupTicker.C:
+			_ = m.cleanupAbandonedTelegram(m.runCtx)
 			_, _ = m.catalog.DeleteExpiredRemoteUploadJobs(
 				context.Background(),
 				time.Now().Add(-retentionPeriod),
 			)
 		default:
 		}
-		job, err := m.catalog.ClaimNextRemoteUploadJob(m.runCtx)
+		job, err := m.catalog.ClaimNextImportJob(m.runCtx, m.telegramSource != nil && m.telegramSource.Available())
 		if err == nil {
 			m.process(job)
 			continue
@@ -297,6 +307,7 @@ func (m *Manager) run() {
 		case <-m.wake:
 			retryTimer.Stop()
 		case <-cleanupTicker.C:
+			_ = m.cleanupAbandonedTelegram(m.runCtx)
 			retryTimer.Stop()
 			_, _ = m.catalog.DeleteExpiredRemoteUploadJobs(
 				context.Background(),
@@ -330,11 +341,10 @@ func (m *Manager) process(job *catalog.RemoteUploadJob) {
 	defer cleanupCancel()
 	current, getErr := m.catalog.GetRemoteUploadJob(cleanupCtx, job.ID)
 	if getErr == nil {
-		_ = m.cleanupArtifactRef(catalog.RemoteUploadCleanupRef{
-			JobID:     current.ID,
-			TempFile:  current.TempFile,
-			FinalFile: current.FinalFile,
-		})
+		if cleanupErr := m.cleanupArtifactRef(catalog.RemoteUploadCleanupRef{JobID: current.ID, TempFile: current.TempFile, FinalFile: current.FinalFile}); cleanupErr != nil {
+			applog.Error(jobCtx, "Import cleanup failed; artifacts retained for recovery", cleanupErr, applog.Fields{Stage: "cleanup"})
+			return
+		}
 	}
 
 	if m.runCtx.Err() != nil {
@@ -346,6 +356,7 @@ func (m *Manager) process(job *catalog.RemoteUploadJob) {
 	if errors.Is(err, catalog.ErrRemoteUploadCanceled) ||
 		errors.Is(err, context.Canceled) ||
 		(current != nil && current.CancelRequested) {
+		_ = m.discardTelegram(cleanupCtx, job)
 		if cancelErr := m.catalog.MarkRemoteUploadCanceled(cleanupCtx, job.ID); cancelErr != nil &&
 			!errors.Is(cancelErr, catalog.ErrRemoteUploadTerminal) {
 			applog.Error(jobCtx, "Cancellation cleanup failed", cancelErr, applog.Fields{Stage: "cancel"})
@@ -353,6 +364,24 @@ func (m *Manager) process(job *catalog.RemoteUploadJob) {
 		return
 	}
 
+	var sourceErr *SourceError
+	if errors.As(err, &sourceErr) && (sourceErr.WaitForAvailability || (sourceErr.RetryAfter > 0 && job.RetryCount < 3)) {
+		delay := sourceErr.RetryAfter
+		if delay <= 0 {
+			delay = time.Minute
+		}
+		backoff := []time.Duration{10 * time.Second, time.Minute, 5 * time.Minute}
+		if job.RetryCount < 3 && delay < backoff[job.RetryCount] {
+			delay = backoff[job.RetryCount]
+		}
+		if delayErr := m.catalog.DelayImport(cleanupCtx, job.ID, sourceErr.Message, delay, !sourceErr.WaitForAvailability); delayErr != nil {
+			if errors.Is(delayErr, catalog.ErrRemoteUploadCanceled) || (current != nil && current.CancelRequested) {
+				_ = m.catalog.MarkRemoteUploadCanceled(cleanupCtx, job.ID)
+			}
+		}
+		return
+	}
+	_ = m.discardTelegram(cleanupCtx, job)
 	message := publicJobError(err)
 	if failErr := m.catalog.FailRemoteUploadJob(cleanupCtx, job.ID, message); failErr != nil &&
 		!errors.Is(failErr, catalog.ErrRemoteUploadTerminal) {
@@ -365,34 +394,53 @@ func (m *Manager) processJob(ctx context.Context, job *catalog.RemoteUploadJob) 
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	part, err := os.CreateTemp(m.uploadDir, ".remote-"+job.ID+"-*.part")
-	if err != nil {
-		applog.Error(ctx, "Create download temporary file failed", err, applog.Fields{Stage: "create_file"})
-		return taskError("无法创建下载临时文件")
-	}
-	partPath := part.Name()
-	partName := filepath.Base(partPath)
-	if err := m.catalog.SetRemoteUploadTempFile(ctx, job.ID, partName); err != nil {
-		_ = part.Close()
-		_ = os.Remove(partPath)
-		return err
-	}
-
-	metadata, err := m.download(ctx, job, part)
-	closeErr := part.Close()
-	if err != nil {
-		return err
-	}
-	if closeErr != nil {
-		applog.Error(ctx, "Close download file failed", closeErr, applog.Fields{Stage: "close_file"})
-		return taskError("无法保存下载文件")
+	var metadata downloadMetadata
+	var source SourceFile
+	var partPath, partName string
+	var err error
+	if job.SourceKind == "telegram" {
+		if m.telegramSource == nil {
+			return taskError("Telegram 未启用")
+		}
+		source, err = m.telegramSource.Fetch(ctx, job, func(stage string, done, total int64) error {
+			if err := m.catalog.SetImportStage(ctx, job.ID, stage); err != nil {
+				return err
+			}
+			return m.catalog.UpdateRemoteUploadProgress(ctx, job.ID, done, total)
+		})
+		if err != nil {
+			return err
+		}
+		if source.DriveID != telegramstorage.DriveID || source.FileID == "" || source.Path == "" {
+			return taskError("TG 视频存储信息无效")
+		}
+		partPath = source.Path
+		metadata = downloadMetadata{Size: source.Size, Total: source.Size, ContentType: source.MIME, ContentDisposition: mime.FormatMediaType("attachment", map[string]string{"filename": source.Name})}
+	} else {
+		part, e := os.CreateTemp(m.uploadDir, ".remote-"+job.ID+"-*.part")
+		if e != nil {
+			return taskError("无法创建下载临时文件")
+		}
+		partPath, partName = part.Name(), filepath.Base(part.Name())
+		if err = m.catalog.SetRemoteUploadTempFile(ctx, job.ID, partName); err != nil {
+			part.Close()
+			os.Remove(partPath)
+			return err
+		}
+		metadata, err = m.download(ctx, job, part)
+		closeErr := part.Close()
+		if err != nil {
+			return err
+		}
+		if closeErr != nil {
+			return taskError("无法保存下载文件")
+		}
+		if err = os.Chmod(partPath, 0644); err != nil {
+			return taskError("无法设置下载文件权限")
+		}
 	}
 	if metadata.Size <= 0 {
 		return taskError("远程视频为空文件")
-	}
-	if err := os.Chmod(partPath, 0o644); err != nil {
-		applog.Error(ctx, "Set download permissions failed", err, applog.Fields{Stage: "permissions"})
-		return taskError("无法设置下载文件权限")
 	}
 	if err := m.catalog.UpdateRemoteUploadProgress(ctx, job.ID, metadata.Size, metadata.Total); err != nil {
 		return err
@@ -437,9 +485,27 @@ func (m *Manager) processJob(ctx context.Context, job *catalog.RemoteUploadJob) 
 			persistence.RUnlock()
 		}
 	}()
-	video, err := m.publishFile(ctx, job.ID, partName, title, ext, metadata.Size)
-	if err != nil {
-		return err
+	var video *catalog.Video
+	if job.SourceKind == "telegram" {
+		info, statErr := os.Stat(source.Path)
+		if statErr != nil || !info.Mode().IsRegular() || info.Size() != source.Size {
+			return taskError("TG 视频文件已变化")
+		}
+		video = &catalog.Video{
+			ID:            telegramstorage.DriveID + "-" + job.ID,
+			DriveID:       source.DriveID,
+			FileID:        source.FileID,
+			FileName:      videoname.UploadFileName(title, ext, job.ID, false),
+			Title:         title,
+			Size:          source.Size,
+			Ext:           strings.TrimPrefix(ext, "."),
+			PreviewStatus: "pending",
+		}
+	} else {
+		video, err = m.publishFile(ctx, job.ID, partName, title, ext, metadata.Size)
+		if err != nil {
+			return err
+		}
 	}
 	autoTags, err := m.catalog.MatchTagAssignments(
 		ctx,
@@ -464,135 +530,6 @@ func (m *Manager) processJob(ctx context.Context, job *catalog.RemoteUploadJob) 
 		m.onVideoUploaded(video)
 	}
 	return nil
-}
-
-type downloadMetadata struct {
-	Size               int64
-	Total              int64
-	ContentDisposition string
-	ContentType        string
-	FinalURL           *url.URL
-	OriginalURL        *url.URL
-}
-
-func (m *Manager) download(
-	ctx context.Context,
-	job *catalog.RemoteUploadJob,
-	dst *os.File,
-) (downloadMetadata, error) {
-	u, err := m.validateURL(ctx, job.SourceURL)
-	if err != nil {
-		return downloadMetadata{}, err
-	}
-	bodyCtx, cancelBody := context.WithCancel(ctx)
-	defer cancelBody()
-	req, err := http.NewRequestWithContext(bodyCtx, http.MethodGet, u.String(), nil)
-	if err != nil {
-		return downloadMetadata{}, taskError("无法创建远程下载请求")
-	}
-	req.Header.Set("Accept-Encoding", "identity")
-	response, err := m.client.Do(req)
-	if err != nil {
-		if ctx.Err() != nil {
-			return downloadMetadata{}, ctx.Err()
-		}
-		applog.Error(ctx, "Remote video connection failed", err, applog.Fields{Stage: "connect"})
-		return downloadMetadata{}, taskError("远程视频连接失败")
-	}
-	defer response.Body.Close()
-	if response.StatusCode < 200 || response.StatusCode > 299 {
-		return downloadMetadata{}, taskError(
-			"远程服务器返回 HTTP " + strconv.Itoa(response.StatusCode),
-		)
-	}
-	contentType := strings.ToLower(strings.TrimSpace(response.Header.Get("Content-Type")))
-	if mediaType, _, err := mime.ParseMediaType(contentType); err == nil {
-		contentType = strings.ToLower(mediaType)
-	}
-	if isHLSContentType(contentType) ||
-		(response.Request != nil && response.Request.URL != nil && isHLSPath(response.Request.URL.EscapedPath())) {
-		return downloadMetadata{}, taskError("不支持 HLS/m3u8 链接")
-	}
-
-	total := response.ContentLength
-	if total < 0 {
-		total = 0
-	}
-	if total > 0 {
-		if err := m.ensureDiskSpace(total); err != nil {
-			return downloadMetadata{}, err
-		}
-	}
-	if err := m.catalog.UpdateRemoteUploadProgress(ctx, job.ID, 0, total); err != nil {
-		return downloadMetadata{}, err
-	}
-
-	var idleFired atomic.Bool
-	watchdog := time.AfterFunc(m.idleTimeout, func() {
-		idleFired.Store(true)
-		cancelBody()
-	})
-	defer watchdog.Stop()
-
-	buffer := make([]byte, 1<<20)
-	var downloaded int64
-	lastProgress := time.Now()
-	for {
-		n, readErr := response.Body.Read(buffer)
-		if n > 0 {
-			watchdog.Reset(m.idleTimeout)
-			if err := m.ensureDiskSpace(int64(n)); err != nil {
-				return downloadMetadata{}, err
-			}
-			written, writeErr := dst.Write(buffer[:n])
-			if writeErr != nil || written != n {
-				if writeErr == nil {
-					writeErr = io.ErrShortWrite
-				}
-				applog.Error(ctx, "Write download file failed", writeErr, applog.Fields{Stage: "write_file"})
-				return downloadMetadata{}, taskError("无法写入下载文件")
-			}
-			downloaded += int64(n)
-			if time.Since(lastProgress) >= time.Second {
-				if err := m.catalog.UpdateRemoteUploadProgress(ctx, job.ID, downloaded, total); err != nil {
-					return downloadMetadata{}, err
-				}
-				lastProgress = time.Now()
-			}
-		}
-		if readErr != nil {
-			if errors.Is(readErr, io.EOF) {
-				break
-			}
-			if idleFired.Load() {
-				return downloadMetadata{}, taskError(
-					fmt.Sprintf("远程服务器连续 %d 秒未发送数据", int(m.idleTimeout.Seconds())),
-				)
-			}
-			if ctx.Err() != nil {
-				return downloadMetadata{}, ctx.Err()
-			}
-			applog.Error(ctx, "Read remote video failed", readErr, applog.Fields{Stage: "read"})
-			return downloadMetadata{}, taskError("远程视频下载中断")
-		}
-	}
-	if err := dst.Sync(); err != nil {
-		applog.Error(ctx, "Sync download file failed", err, applog.Fields{Stage: "sync"})
-		return downloadMetadata{}, taskError("无法同步下载文件")
-	}
-
-	finalURL := u
-	if response.Request != nil && response.Request.URL != nil {
-		finalURL = response.Request.URL
-	}
-	return downloadMetadata{
-		Size:               downloaded,
-		Total:              total,
-		ContentDisposition: response.Header.Get("Content-Disposition"),
-		ContentType:        contentType,
-		FinalURL:           finalURL,
-		OriginalURL:        u,
-	}, nil
 }
 
 func (m *Manager) ensureDiskSpace(nextWrite int64) error {
@@ -669,7 +606,6 @@ func (m *Manager) publishFile(
 			FileID:        storedName,
 			FileName:      storedName,
 			Title:         resolvedTitle,
-			Author:        "用户上传",
 			Size:          size,
 			Ext:           strings.TrimPrefix(ext, "."),
 			PreviewStatus: "pending",
@@ -884,6 +820,10 @@ type taskError string
 func (e taskError) Error() string { return string(e) }
 
 func publicJobError(err error) string {
+	var source *SourceError
+	if errors.As(err, &source) {
+		return source.Message
+	}
 	var safe taskError
 	if errors.As(err, &safe) {
 		return safe.Error()
@@ -906,4 +846,48 @@ func randomID(prefix string) (string, error) {
 		time.Now().UnixNano(),
 		hex.EncodeToString(suffix[:]),
 	), nil
+}
+
+func (m *Manager) discardTelegram(ctx context.Context, job *catalog.RemoteUploadJob) error {
+	if job.SourceKind != "telegram" || m.telegramSource == nil {
+		return nil
+	}
+	// A queued cancellation may race a retry. Do not release an acquisition
+	// already claimed by the worker; it will resolve its own terminal state.
+	m.currentMu.Lock()
+	defer m.currentMu.Unlock()
+	if m.currentID == job.ID {
+		return nil
+	}
+	if err := persistence.RLockContext(ctx); err != nil {
+		return err
+	}
+	defer persistence.RUnlock()
+	err := m.telegramSource.Discard(ctx, job)
+	if err != nil {
+		applog.Error(ctx, "TG 视频清理失败，将在后续维护中重试", err, applog.Fields{Component: "telegram", Stage: "cleanup"})
+	}
+	return err
+}
+func (m *Manager) cleanupAbandonedTelegram(ctx context.Context) error {
+	m.currentMu.Lock()
+	defer m.currentMu.Unlock()
+	if err := persistence.RLockContext(ctx); err != nil {
+		return err
+	}
+	defer persistence.RUnlock()
+	ids, err := m.catalog.AbandonedTelegramLocalFiles(ctx)
+	if err != nil {
+		return err
+	}
+	storage := telegramstorage.New(m.catalog)
+	for _, id := range ids {
+		if id == m.currentID+".media" {
+			continue
+		}
+		if err := storage.Remove(ctx, id); err != nil {
+			applog.Error(ctx, "TG 视频清理失败，将在后续维护中重试", err, applog.Fields{Component: "telegram", Stage: "cleanup"})
+		}
+	}
+	return nil
 }

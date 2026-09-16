@@ -13,6 +13,7 @@ import {
   X,
 } from "lucide-react";
 import { VideoIcon } from "@/components/icons/VideoIcon";
+import { TelegramIcon } from "@/components/icons/TelegramIcon";
 import * as api from "./api";
 import { AdminGlobalActions } from "./AdminGlobalActions";
 import { AdminPageActionsProvider } from "./AdminPageActions";
@@ -23,6 +24,10 @@ import { Modal } from "./Modal";
 import { getAdminPageTitle, shouldShowAdminPageHeader } from "./adminPageTitle";
 import { preloadRemainingAdminPageModules } from "./adminPagePreload";
 import { SpiderIcon } from "./icons/SpiderIcon";
+import {
+  useSyncTelegramAvailability,
+  useTelegramAvailability,
+} from "./telegram/useTelegramAvailability";
 import {
   resolveAdminScrollTarget,
   type AdminScrollRouteIdentity,
@@ -73,6 +78,7 @@ export function AdminLayout() {
   const navigate = useNavigate();
   const { show } = useToast();
   const isLogsPage = location.pathname.startsWith("/admin/logs");
+  const isTelegramPage = location.pathname.startsWith("/admin/telegram");
   const currentPageTitle = getAdminPageTitle(location.pathname);
   const showCurrentPageHeader = shouldShowAdminPageHeader(
     location.pathname,
@@ -93,6 +99,8 @@ export function AdminLayout() {
   const [availableUpdate, setAvailableUpdate] = useState<api.UpdateCheck | null>(null);
 
   useAdminPageModulePreload(location.pathname);
+  useSyncTelegramAvailability(location.pathname);
+  const { enabled: telegramEnabled } = useTelegramAvailability();
 
   useEffect(() => {
     document.title = currentPageTitle;
@@ -423,6 +431,21 @@ export function AdminLayout() {
                 <span className="admin-nav__title">爬虫管理</span>
               </span>
             </NavLink>
+            {telegramEnabled === true && (
+              <NavLink
+                to="/admin/telegram"
+                className={({ isActive }) =>
+                  `admin-nav__link ${isActive ? "is-active" : ""}`
+                }
+              >
+                <span className="admin-nav__icon" aria-hidden="true">
+                  <TelegramIcon size={15} />
+                </span>
+                <span className="admin-nav__text">
+                  <span className="admin-nav__title">Telegram</span>
+                </span>
+              </NavLink>
+            )}
           </div>
           <div className="admin-nav__group">
             <span className="admin-nav__group-label">管理</span>
@@ -518,7 +541,7 @@ export function AdminLayout() {
       />
       <main
         ref={mainScrollRef}
-        className={`admin-main${isLogsPage ? " admin-main--logs" : ""}`}
+        className={`admin-main${isLogsPage ? " admin-main--logs" : ""}${isTelegramPage ? " admin-main--telegram" : ""}`}
       >
         {showCurrentPageHeader && (
           <header className="admin-current-page-header">

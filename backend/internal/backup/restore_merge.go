@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/video-site/backend/internal/catalog"
 )
 
 // mergeSelectiveRestoreDatabase overlays a filtered backup catalog on top of
@@ -27,6 +29,9 @@ func mergeSelectiveRestoreDatabase(
 	}
 	database.SetMaxOpenConns(1)
 	defer database.Close()
+	if err := catalog.MigrateImportDatabase(ctx, database); err != nil {
+		return err
+	}
 	if _, err := database.ExecContext(ctx, `ATTACH DATABASE ? AS backup_source`, sourcePath); err != nil {
 		return fmt.Errorf("backup: attach filtered backup database: %w", err)
 	}
@@ -50,6 +55,7 @@ func mergeSelectiveRestoreDatabase(
 	}
 	if selection.UploadStorage {
 		mergedDriveIDs["local-upload"] = struct{}{}
+		mergedDriveIDs[catalog.TelegramLocalDriveID] = struct{}{}
 	}
 	if err := createTextSet(ctx, tx, "restore_replaced_drives", replacedDriveIDs); err != nil {
 		rollback()
@@ -163,6 +169,9 @@ func mergeSelectiveRestoreDatabase(
 	// Sessions and shares are runtime state and are never imported.
 	for _, statement := range []string{
 		`DELETE FROM main.admin_sessions`,
+		`DELETE FROM main.telegram_receipts`,
+		`UPDATE main.telegram_connections SET needs_reconnect=1`,
+		`INSERT INTO main.telegram_connections(bot_id,needs_reconnect) VALUES(0,1) ON CONFLICT(bot_id) DO UPDATE SET needs_reconnect=1`,
 		`DELETE FROM main.video_shares`,
 		`DELETE FROM main.shorts_feed_sessions`,
 	} {
@@ -342,6 +351,9 @@ func mergeRemoteUploadJobs(ctx context.Context, tx *sql.Tx) error {
 		return err
 	}
 	if err := copyCommonTableRows(ctx, tx, "remote_upload_jobs", map[string]struct{}{"sequence": {}}); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO main.telegram_files(bot_id,file_unique_id,file_id,job_id,video_id) SELECT bot_id,file_unique_id,'',job_id,video_id FROM backup_source.telegram_files WHERE video_id!='' AND video_id IN (SELECT id FROM main.videos)`); err != nil {
 		return err
 	}
 	now := timeNowMillis()

@@ -389,6 +389,9 @@ UPDATE video_tags
 }
 
 func redirectDuplicateVideoReferencesTx(ctx context.Context, tx *sql.Tx, duplicateID, canonicalID string) error {
+	if _, err := tx.ExecContext(ctx, `UPDATE telegram_files SET video_id=? WHERE video_id=?`, canonicalID, duplicateID); err != nil {
+		return err
+	}
 	if _, err := tx.ExecContext(ctx, `
 UPDATE deleted_videos
    SET canonical_video_id = ?

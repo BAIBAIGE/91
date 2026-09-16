@@ -14,7 +14,9 @@ import (
 	"github.com/video-site/backend/internal/catalog"
 	"github.com/video-site/backend/internal/config"
 	"github.com/video-site/backend/internal/drives/quark"
+	"github.com/video-site/backend/internal/mediaimport"
 	"github.com/video-site/backend/internal/scanjob"
+	"github.com/video-site/backend/internal/telegram"
 )
 
 type DriveConfigUpdateScope uint8
@@ -43,6 +45,8 @@ type DriveConfigUpdateLease interface {
 }
 
 type AdminServer struct {
+	Telegram        *telegram.Integration
+	Imports         *mediaimport.Manager
 	Catalog         *catalog.Catalog
 	Auth            *auth.Authenticator
 	Backups         *backup.Manager
@@ -303,6 +307,13 @@ func (a *AdminServer) Register(r chi.Router) {
 			r.Delete("/banned-ips/{ip}", a.handleUnbanIP)
 
 			// 配置文件与其它独立设置
+			r.Get("/telegram/status", a.handleTelegramStatus)
+			r.Post("/telegram/test", a.handleTelegramTest)
+			r.Post("/telegram/prepare-polling", a.handleTelegramPrepare)
+			r.Post("/telegram/resume", a.handleTelegramResume)
+			r.Get("/import-jobs", a.handleImportList)
+			r.Post("/import-jobs/{jobId}/cancel", a.handleImportCancel)
+			r.Post("/import-jobs/{jobId}/retry", a.handleImportRetry)
 			r.Get("/config.yaml", a.handleGetConfigYAML)
 			r.Put("/config.yaml", a.handlePutConfigYAML)
 			r.Get("/settings", a.handleGetSettings)

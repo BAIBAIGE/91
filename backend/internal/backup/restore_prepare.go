@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/video-site/backend/internal/catalog"
 	"github.com/video-site/backend/internal/config"
 	"github.com/video-site/backend/internal/localpath"
 	"github.com/video-site/backend/internal/mediaasset"
@@ -509,6 +510,9 @@ func rewriteRestoredDatabase(
 		return ValidationReport{}, err
 	}
 	defer database.Close()
+	if err := catalog.MigrateImportDatabase(ctx, database); err != nil {
+		return ValidationReport{}, err
+	}
 	tx, err := database.BeginTx(ctx, nil)
 	if err != nil {
 		return ValidationReport{}, err
@@ -773,6 +777,9 @@ SELECT id, COALESCE(restore_payload, '') FROM deleted_videos WHERE COALESCE(rest
 	now := time.Now().UnixMilli()
 	for _, statement := range []string{
 		`DELETE FROM video_shares`,
+		`DELETE FROM telegram_receipts`,
+		`DELETE FROM telegram_connections`,
+		`INSERT INTO telegram_connections(bot_id,needs_reconnect) VALUES(0,1)`,
 		`DELETE FROM shorts_feed_sessions`,
 	} {
 		if _, err := tx.ExecContext(ctx, statement); err != nil {

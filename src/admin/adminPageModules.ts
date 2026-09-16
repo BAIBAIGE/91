@@ -26,3 +26,5 @@ export const loadLogsPage = reusableModuleLoader(() => import("./LogsPage"));
 export const loadSettingsPage = reusableModuleLoader(
   () => import("./SettingsPage")
 );
+
+export const loadTelegramPage = reusableModuleLoader(() => import("./TelegramPage"));

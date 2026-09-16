@@ -1,4 +1,4 @@
-package remoteupload
+package mediaimport
 
 import (
 	"context"
@@ -53,6 +53,7 @@ func TestManagerDownloadsValidatesAndFinalizesVideo(t *testing.T) {
 		t.Fatalf("get video: %v", err)
 	}
 	if video.Title != "remote-clip" ||
+		video.Author != "" ||
 		video.Ext != "mp4" ||
 		len(video.Tags) != 1 ||
 		video.Tags[0] != "奶子" {

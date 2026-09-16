@@ -66,6 +66,10 @@ func Open(path string) (*Catalog, error) {
 		return nil, fmt.Errorf("apply schema: %w", err)
 	}
 	c := &Catalog{db: db}
+	if err := c.migrateImports(context.Background()); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate imports: %w", err)
+	}
 	if err := c.migrate(context.Background()); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("migrate catalog: %w", err)
@@ -457,16 +461,20 @@ func (c *Catalog) ListHiddenVideos(ctx context.Context) ([]*Video, error) {
 // must be committed with drive/file identity; otherwise readers can observe a
 // video on the destination drive while it still belongs to the source folder.
 type VideoDriveMigration struct {
-	DriveID     string
-	FileID      string
-	ContentHash string
-	ParentID    string
-	DirName     string
-	FileName    string
-	Title       string
+	// Optional source identity guards against deletion or another migration
+	// while an external upload was in progress.
+	SourceDriveID string
+	SourceFileID  string
+	DriveID       string
+	FileID        string
+	ContentHash   string
+	ParentID      string
+	DirName       string
+	FileName      string
+	Title         string
 }
 
-// MigrateVideoToDrive atomically rewrites a crawler video row after it has been
+// MigrateVideoToDrive atomically rewrites a video row after it has been
 // uploaded to another drive. The video id is preserved so tags, favorites,
 // likes and view records keep pointing at the same logical video.
 //
@@ -486,7 +494,7 @@ func (c *Catalog) MigrateVideoToDrive(ctx context.Context, videoID string, targe
 		       file_name    = CASE WHEN ? != '' THEN ? ELSE file_name END,
 		       title        = CASE WHEN ? != '' THEN ? ELSE title END,
 		       updated_at   = ?
-		 WHERE id = ?`,
+		 WHERE id = ? AND (? = '' OR drive_id = ?) AND (? = '' OR file_id = ?)`,
 		target.DriveID,
 		target.FileID,
 		target.ContentHash,
@@ -499,6 +507,8 @@ func (c *Catalog) MigrateVideoToDrive(ctx context.Context, videoID string, targe
 		target.Title,
 		time.Now().UnixMilli(),
 		videoID,
+		target.SourceDriveID, target.SourceDriveID,
+		target.SourceFileID, target.SourceFileID,
 	)
 	if err != nil {
 		return err
@@ -1280,7 +1290,7 @@ func (c *Catalog) ListVideosByIDPrefix(ctx context.Context, prefix string) ([]*V
 func (c *Catalog) ListVideosWithMissingDrive(ctx context.Context) ([]*Video, error) {
 	rows, err := c.db.QueryContext(ctx,
 		`SELECT `+allVideoCols+` FROM videos
-		 WHERE drive_id != 'local-upload'
+		 WHERE drive_id NOT IN ('local-upload','telegram-local')
 		   AND NOT EXISTS (
 		       SELECT 1
 		         FROM drives
@@ -2595,6 +2605,7 @@ type ListParams struct {
 	Keyword               string
 	DriveID               string
 	CrawlerID             string
+	SourceKind            string // telegram; import provenance independent of current drive
 	Tag                   string
 	Sort                  string // latest | hot | recent
 	ThumbnailReadyOnly    bool
@@ -2630,6 +2641,9 @@ func buildVideoListQuery(p ListParams) videoListQuery {
 	if p.DriveID != "" {
 		where = append(where, "drive_id = ?")
 		args = append(args, p.DriveID)
+	}
+	if p.SourceKind == "telegram" {
+		where = append(where, "videos.id IN ("+telegramVideoIDsSQL+")")
 	}
 	if crawlerID := strings.TrimSpace(p.CrawlerID); crawlerID != "" {
 		where = append(where, `EXISTS (
@@ -4108,7 +4122,7 @@ COALESCE(preview_file_id, ''), COALESCE(preview_local, ''), COALESCE(preview_upd
 	published_at, created_at, updated_at
 	`
 
-const activeDriveWhereSQL = `(videos.drive_id = 'local-upload'
+const activeDriveWhereSQL = `(videos.drive_id IN ('local-upload','telegram-local')
 	OR EXISTS (
 		SELECT 1
 		  FROM drives
@@ -4587,7 +4601,7 @@ func deletedVideoRestorePolicy(v *DeletedVideo, driveKind string) string {
 		v.Reason == DeletedVideoReasonDuplicate {
 		return DeletedVideoRestorePolicyNone
 	}
-	if strings.TrimSpace(v.DriveID) == "local-upload" {
+	if strings.TrimSpace(v.DriveID) == "local-upload" || strings.TrimSpace(v.DriveID) == TelegramLocalDriveID {
 		return DeletedVideoRestorePolicyDirect
 	}
 	if strings.TrimSpace(driveKind) == "scriptcrawler" {

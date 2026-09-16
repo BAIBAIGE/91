@@ -103,7 +103,7 @@ test("failed or malformed settings responses do not enable previews", async (t) 
 });
 
 test("saving config immediately updates the shared frontend policy", async (t) => {
-  const result = { settings: { previewEnabled: false }, restartRequired: false };
+  const result = { settings: { previewEnabled: false, telegramEnabled: false }, restartRequired: false };
   t.mock.method(globalThis, "fetch", async () => Response.json(result));
   applyPreviewEnabled(true);
   previewController.setActiveId("already-generated");

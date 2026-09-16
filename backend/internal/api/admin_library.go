@@ -18,6 +18,11 @@ import (
 
 func (a *AdminServer) handleAdminListVideos(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
+	sourceKind := strings.TrimSpace(q.Get("sourceKind"))
+	if sourceKind != "" && sourceKind != "telegram" {
+		writeErr(w, r, http.StatusBadRequest, errors.New("无效的视频导入渠道"))
+		return
+	}
 	page, _ := strconv.Atoi(q.Get("page"))
 	size, _ := strconv.Atoi(q.Get("size"))
 	if page <= 0 {
@@ -47,6 +52,7 @@ func (a *AdminServer) handleAdminListVideos(w http.ResponseWriter, r *http.Reque
 		Keyword:            q.Get("keyword"),
 		DriveID:            q.Get("driveId"),
 		CrawlerID:          strings.TrimSpace(q.Get("crawlerId")),
+		SourceKind:         sourceKind,
 		CreatedAtFrom:      createdAtFrom,
 		CreatedAtBefore:    createdAtBefore,
 		DurationSecondsMin: durationSecondsMin,

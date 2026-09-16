@@ -278,7 +278,7 @@ func (a *App) cleanupScanResult(
 	result scanner.Result,
 	protectUnlocated bool,
 ) error {
-	if drv.Kind() == scriptcrawler.Kind || drv.ID() == localupload.DriveID {
+	if drv.Kind() == scriptcrawler.Kind || (drv.ID() == localupload.DriveID || drv.ID() == catalog.TelegramLocalDriveID) {
 		return nil
 	}
 	mode := missingFileCleanupMode(result.Snapshot)
@@ -394,7 +394,7 @@ func (a *App) cleanupSkippedDriveVideos(
 	seenFileIDs map[string]struct{},
 	rateLimitBudget *scanner.RateLimitBudget,
 ) (skipCleanupResult, error) {
-	if drv == nil || driveConfig == nil || drv.Kind() == scriptcrawler.Kind || drv.ID() == localupload.DriveID {
+	if drv == nil || driveConfig == nil || drv.Kind() == scriptcrawler.Kind || (drv.ID() == localupload.DriveID || drv.ID() == catalog.TelegramLocalDriveID) {
 		return skipCleanupResult{}, nil
 	}
 	currentDirIDs := normalizedDirIDSet(driveConfig.SkipDirIDs)

@@ -1,0 +1,49 @@
+package main
+
+import (
+	"context"
+	"errors"
+
+	"github.com/video-site/backend/internal/catalog"
+	"github.com/video-site/backend/internal/drives"
+	"github.com/video-site/backend/internal/telegramupload"
+)
+
+func (a *App) runTelegramUploadMigration(ctx context.Context) error {
+	if a == nil || a.cat == nil {
+		return nil
+	}
+	cfg := a.configManager.TelegramSettings()
+	if cfg.UploadDriveID == "" {
+		return nil
+	}
+	var migrated []*catalog.Video
+	err := func() error {
+		// Target drive edits/removal participate in the same admission and
+		// cancellation mechanism as scanning and crawler uploads.
+		taskCtx, done := a.registerDriveTaskContextWaiting(ctx, cfg.UploadDriveID, 0)
+		defer done()
+		if err := taskCtx.Err(); err != nil {
+			return err
+		}
+		row, err := a.activeDriveConfig(taskCtx, cfg.UploadDriveID)
+		if err != nil || row == nil || !drives.CapabilitiesForKind(row.Kind).Upload {
+			return errors.New("TG 转存目标不存在或不支持上传，请检查 Telegram 设置")
+		}
+		target, ok := a.registry.Get(cfg.UploadDriveID)
+		if !ok {
+			return errors.New("TG 转存目标网盘尚未连接")
+		}
+		return telegramupload.Run(taskCtx, telegramupload.Config{
+			Catalog: a.cat, Target: target, LocalDirectory: a.localUploadDir(),
+			TargetDirectory: cfg.UploadDirectory,
+			OnMigrated:      func(v *catalog.Video) { migrated = append(migrated, v) },
+		})
+	}()
+	// Release the upload's drive admission before admitting generation work;
+	// an intervening drive edit must not deadlock behind its own upload task.
+	for _, v := range migrated {
+		a.enqueueUploadedVideo(ctx, v)
+	}
+	return err
+}

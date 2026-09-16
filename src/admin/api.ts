@@ -1,4 +1,5 @@
 import { applyPreviewEnabled } from "../lib/previewSettings";
+import { applyTelegramEnabled } from "./telegram/availability";
 
 // 管理后台 API 客户端
 // 所有请求都带 cookie，401 会抛错让路由守卫跳登录
@@ -1028,6 +1029,7 @@ export type AdminVideoList = {
 export type AdminVideoListParams = {
   driveId?: string;
   crawlerId?: string;
+  sourceKind?: "" | "telegram";
   createdFrom?: string;
   createdTo?: string;
   durationMinMinutes?: string;
@@ -1043,6 +1045,7 @@ export function listVideos(
   const qs = new URLSearchParams();
   if (params.driveId) qs.set("driveId", params.driveId);
   if (params.crawlerId) qs.set("crawlerId", params.crawlerId);
+  if (params.sourceKind) qs.set("sourceKind", params.sourceKind);
   if (params.createdFrom) qs.set("createdFrom", params.createdFrom);
   if (params.createdTo) qs.set("createdTo", params.createdTo);
   if (params.durationMinMinutes) qs.set("durationMinMinutes", params.durationMinMinutes);
@@ -1258,6 +1261,7 @@ export type ConfigSaveResult = {
   version: string;
   restartRequired: boolean;
   settings: {
+    telegramEnabled: boolean;
     nightlyDisabled: boolean;
     nightlyStartTime: string;
     nightlyTimezone: string;
@@ -1327,6 +1331,7 @@ export async function updateConfigYAML(
   if (!res.ok) throw new Error(await configResponseError(res));
   const result = (await res.json()) as ConfigSaveResult;
   applyPreviewEnabled(result.settings.previewEnabled);
+  applyTelegramEnabled(result.settings.telegramEnabled);
   return result;
 }
 
@@ -1443,3 +1448,39 @@ export function unbanIP(ip: string) {
     method: "DELETE",
   });
 }
+
+// Telegram imports use the same authenticated administrator API as settings.
+export type TelegramConfig = {
+  enabled: boolean;
+  apiBaseUrl: string;
+  localFilesRoot: string;
+  allowedUserIds: number[];
+  siteBaseUrl: string;
+  maxFileSizeBytes: number;
+  maxPendingJobs: number;
+  fetchTimeoutSeconds: number;
+  uploadDriveId: string;
+  uploadDirectory: string;
+};
+export type TelegramStatus = {
+  enabled: boolean;
+  connection: {
+    enabled: boolean; state: string; botId: string; username: string; error: string;
+    lastPoll: string; lastMessage: string; cacheAvailableBytes: number;
+    notificationFailures: number; config: TelegramConfig;
+  };
+};
+export type ImportJob = {
+  id: string; state: string; title?: string; sourceKind: string; stage: string;
+  bytesDownloaded: number; totalBytes: number; error?: string;
+  createdAt: string; videoHref?: string; canCancel: boolean; canRetry: boolean;
+  cancelRequested?: boolean; sequence: string; senderId?: string;
+  retryCount: number; nextAttempt: number;
+};
+export const getTelegramStatus = (signal?: AbortSignal) => request<TelegramStatus>("/telegram/status", { signal });
+export const testTelegram = () => request<{username: string}>("/telegram/test", {method: "POST"});
+export const prepareTelegramPolling = () => request<void>("/telegram/prepare-polling", {method:"POST"});
+export const resumeTelegram = () => request<void>("/telegram/resume", {method:"POST"});
+export const listTelegramImports = (state = "", before = "") => request<ImportJob[]>(`/import-jobs?${new URLSearchParams({source: "telegram", state, before})}`);
+export const cancelImport = (id: string) => request<ImportJob>(`/import-jobs/${encodeURIComponent(id)}/cancel`, {method:"POST"});
+export const retryImport = (id: string) => request<void>(`/import-jobs/${encodeURIComponent(id)}/retry`, {method:"POST"});

@@ -118,3 +118,10 @@ func (d *Driver) uploadPath(fileID string) (string, error) {
 	}
 	return path, nil
 }
+
+func (d *Driver) LocalPath(ctx context.Context, id string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	return d.uploadPath(id)
+}

@@ -10,6 +10,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/video-site/backend/internal/catalog"
 )
 
 // snapshotSelectionState is the small amount of catalog state needed while
@@ -19,6 +21,7 @@ type snapshotSelectionState struct {
 	SelectedVideoIDs      map[string]struct{}
 	SelectedPreviewPaths  map[string]string
 	SelectedUploadFiles   map[string]struct{}
+	TelegramUploadFiles   map[string]catalog.TelegramLocalFile
 	SelectedCrawlerDrives map[string]struct{}
 	LocalStorageRoots     []snapshotLocalStorageRoot
 }
@@ -104,6 +107,9 @@ func filterSnapshotDatabase(
 	}
 	database.SetMaxOpenConns(1)
 	defer database.Close()
+	if err := catalog.MigrateImportDatabase(ctx, database); err != nil {
+		return snapshotSelectionState{}, err
+	}
 
 	tx, err := database.BeginTx(ctx, nil)
 	if err != nil {
@@ -163,6 +169,10 @@ func filterSnapshotDatabase(
 		SelectedPreviewPaths:  make(map[string]string),
 		SelectedUploadFiles:   make(map[string]struct{}),
 		SelectedCrawlerDrives: make(map[string]struct{}),
+	}
+	if err := normalizeTelegramSnapshot(ctx, tx, &state); err != nil {
+		rollback()
+		return snapshotSelectionState{}, err
 	}
 	for _, drive := range drives {
 		if !driveKindSelected(drive.kind, selection) {
@@ -254,6 +264,12 @@ DELETE FROM videos
 		`DELETE FROM banned_login_ips`,
 		`DROP TABLE IF EXISTS login_failures`,
 		`DELETE FROM settings`,
+		`DELETE FROM telegram_settings`,
+		`DELETE FROM telegram_connections`,
+		`DELETE FROM telegram_receipts`,
+		`DELETE FROM telegram_files WHERE video_id='' OR video_id NOT IN (SELECT id FROM videos)`,
+		`UPDATE telegram_files SET file_id=''`,
+		`UPDATE remote_upload_jobs SET source_payload='' WHERE source_kind='telegram'`,
 		`DELETE FROM admin_sessions`,
 		`DELETE FROM video_shares`,
 		`DELETE FROM shorts_feed_sessions`,
@@ -274,6 +290,10 @@ DELETE FROM videos
 		return snapshotSelectionState{}, err
 	}
 	if !selection.UploadStorage {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM telegram_files`); err != nil {
+			rollback()
+			return snapshotSelectionState{}, err
+		}
 		if _, err := tx.ExecContext(ctx, `DELETE FROM remote_upload_jobs`); err != nil {
 			rollback()
 			return snapshotSelectionState{}, err

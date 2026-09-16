@@ -1,0 +1,364 @@
+package catalog
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"time"
+)
+
+// The physical remote_upload_jobs table is shared by HTTP and Telegram imports.
+// Keeping its name preserves the existing backup and video-deduplication links.
+func (c *Catalog) migrateImports(ctx context.Context) error {
+	for _, col := range []struct{ name, definition string }{
+		{"source_kind", "TEXT NOT NULL DEFAULT 'http'"},
+		{"source_payload", "TEXT NOT NULL DEFAULT ''"},
+		{"stage", "TEXT NOT NULL DEFAULT ''"},
+		{"retry_count", "INTEGER NOT NULL DEFAULT 0"},
+		{"next_attempt", "INTEGER NOT NULL DEFAULT 0"},
+	} {
+		if err := c.addColumnIfMissing(ctx, "remote_upload_jobs", col.name, col.definition); err != nil {
+			return err
+		}
+	}
+	_, err := c.db.ExecContext(ctx, `
+ CREATE TABLE IF NOT EXISTS telegram_local_files (
+  file_id TEXT PRIMARY KEY, root TEXT NOT NULL, job_id TEXT NOT NULL UNIQUE
+ );
+ CREATE TABLE IF NOT EXISTS telegram_connections (
+  bot_id INTEGER PRIMARY KEY, next_offset INTEGER NOT NULL DEFAULT 0,
+  needs_reconnect INTEGER NOT NULL DEFAULT 0
+ );
+ CREATE TABLE IF NOT EXISTS telegram_files (
+  bot_id INTEGER NOT NULL, file_unique_id TEXT NOT NULL, file_id TEXT NOT NULL,
+  job_id TEXT NOT NULL DEFAULT '', video_id TEXT NOT NULL DEFAULT '',
+  PRIMARY KEY(bot_id,file_unique_id)
+ );
+ CREATE TABLE IF NOT EXISTS telegram_receipts (
+  bot_id INTEGER NOT NULL, update_id INTEGER NOT NULL, chat_id INTEGER NOT NULL,
+  message_id INTEGER NOT NULL, sender_id INTEGER NOT NULL,
+  job_id TEXT NOT NULL DEFAULT '', response TEXT NOT NULL DEFAULT '',
+  reply_id INTEGER NOT NULL DEFAULT 0, delivered TEXT NOT NULL DEFAULT '',
+  attempts INTEGER NOT NULL DEFAULT 0, next_attempt INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL, PRIMARY KEY(bot_id,update_id),
+  UNIQUE(bot_id,chat_id,message_id)
+ );
+ CREATE INDEX IF NOT EXISTS idx_telegram_receipt_jobs ON telegram_receipts(job_id);
+ CREATE INDEX IF NOT EXISTS idx_telegram_file_jobs ON telegram_files(job_id);
+ `)
+	return err
+}
+
+type TelegramSource struct {
+	BotID    int64  `json:"botId"`
+	SenderID int64  `json:"senderId"`
+	FileID   string `json:"fileId"`
+	UniqueID string `json:"uniqueId"`
+	FileName string `json:"fileName"`
+	Size     int64  `json:"size"`
+	MIME     string `json:"mime"`
+}
+
+type TelegramReceipt struct {
+	BotID     int64
+	UpdateID  int64
+	ChatID    int64
+	MessageID int64
+	SenderID  int64
+	JobID     string
+	Response  string
+	ReplyID   int64
+	Delivered string
+	Attempts  int
+}
+
+func (c *Catalog) TelegramOffset(ctx context.Context, botID int64) (int64, bool, error) {
+	_, err := c.db.ExecContext(ctx, `INSERT OR IGNORE INTO telegram_connections(bot_id,needs_reconnect) VALUES(?,COALESCE((SELECT needs_reconnect FROM telegram_connections WHERE bot_id=0),0))`, botID)
+	if err != nil {
+		return 0, false, err
+	}
+	var offset int64
+	var paused bool
+	err = c.db.QueryRowContext(ctx, `SELECT next_offset, needs_reconnect FROM telegram_connections WHERE bot_id=?`, botID).Scan(&offset, &paused)
+	return offset, paused, err
+}
+
+func (c *Catalog) ResumeTelegram(ctx context.Context, botID int64) error {
+	_, err := c.db.ExecContext(ctx, `UPDATE telegram_connections SET needs_reconnect=0 WHERE bot_id=? OR bot_id=0`, botID)
+	return err
+}
+
+// AcceptTelegramUpdate commits the receipt, file claim, task and cursor together.
+// Rejected messages also advance the cursor, so one bad message cannot block it.
+func (c *Catalog) AcceptTelegramUpdate(ctx context.Context, receipt TelegramReceipt, source *TelegramSource, id, title string, limit int) error {
+	tx, err := c.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var exists int
+	err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM telegram_receipts WHERE bot_id=? AND (update_id=? OR (chat_id=? AND message_id=?))`, receipt.BotID, receipt.UpdateID, receipt.ChatID, receipt.MessageID).Scan(&exists)
+	if err != nil {
+		return err
+	}
+	if exists == 0 {
+		if source != nil && receipt.Response == "" {
+			var jobID, videoID string
+			err = tx.QueryRowContext(ctx, `SELECT job_id,video_id FROM telegram_files WHERE bot_id=? AND file_unique_id=?`, source.BotID, source.UniqueID).Scan(&jobID, &videoID)
+			if err != nil && !errors.Is(err, sql.ErrNoRows) {
+				return err
+			}
+			var state string
+			if jobID != "" {
+				err = tx.QueryRowContext(ctx, `SELECT state FROM remote_upload_jobs WHERE id=?`, jobID).Scan(&state)
+				if err != nil && !errors.Is(err, sql.ErrNoRows) {
+					return err
+				}
+			}
+			var valid int
+			if videoID != "" {
+				if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM videos WHERE id=?`, videoID).Scan(&valid); err != nil {
+					return err
+				}
+			}
+			if valid > 0 || state == RemoteUploadQueued || state == RemoteUploadDownloading || state == RemoteUploadValidating || state == RemoteUploadSaving {
+				receipt.JobID = jobID
+			} else {
+				var pending int
+				if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM remote_upload_jobs WHERE source_kind='telegram' AND state IN ('queued','downloading','validating','saving')`).Scan(&pending); err != nil {
+					return err
+				}
+				if pending >= limit {
+					receipt.Response = "队列已满，请稍后重新发送视频"
+				} else {
+					payload, err := json.Marshal(source)
+					if err != nil {
+						return err
+					}
+					_, err = tx.ExecContext(ctx, `INSERT INTO remote_upload_jobs(id,source_kind,source_payload,source_label,requested_title,tags,state,total_bytes,created_at,updated_at) VALUES(?,'telegram',?,'Telegram',?,'[]','queued',?,?,?)`, id, string(payload), title, source.Size, time.Now().UnixMilli(), time.Now().UnixMilli())
+					if err != nil {
+						return err
+					}
+					receipt.JobID = id
+					_, err = tx.ExecContext(ctx, `INSERT INTO telegram_files(bot_id,file_unique_id,file_id,job_id,video_id) VALUES(?,?,?,?,'') ON CONFLICT(bot_id,file_unique_id) DO UPDATE SET file_id=excluded.file_id,job_id=excluded.job_id,video_id=''`, source.BotID, source.UniqueID, source.FileID, id)
+					if err != nil {
+						return err
+					}
+				}
+			}
+			// Refresh a bot-scoped file ID without exposing it through task APIs.
+			_, err = tx.ExecContext(ctx, `UPDATE telegram_files SET file_id=? WHERE bot_id=? AND file_unique_id=?`, source.FileID, source.BotID, source.UniqueID)
+			if err != nil {
+				return err
+			}
+		}
+		_, err = tx.ExecContext(ctx, `INSERT INTO telegram_receipts(bot_id,update_id,chat_id,message_id,sender_id,job_id,response,created_at) VALUES(?,?,?,?,?,?,?,?)`, receipt.BotID, receipt.UpdateID, receipt.ChatID, receipt.MessageID, receipt.SenderID, receipt.JobID, receipt.Response, time.Now().UnixMilli())
+		if err != nil {
+			return err
+		}
+	}
+	_, err = tx.ExecContext(ctx, `UPDATE telegram_connections SET next_offset=? WHERE bot_id=?`, receipt.UpdateID+1, receipt.BotID)
+	if err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (c *Catalog) LatestTelegramFileID(ctx context.Context, s TelegramSource) (string, error) {
+	var id string
+	err := c.db.QueryRowContext(ctx, `SELECT file_id FROM telegram_files WHERE bot_id=? AND file_unique_id=?`, s.BotID, s.UniqueID).Scan(&id)
+	return id, err
+}
+
+const telegramVideoIDsSQL = `
+ SELECT video_id FROM telegram_files WHERE video_id!=''
+ UNION
+ SELECT completed_video_id FROM remote_upload_jobs WHERE source_kind='telegram' AND state='completed'
+`
+
+// ListLocalTelegramVideos uses durable import provenance, not editable tags.
+// A cursor keeps a failed upload from blocking later videos in this sweep.
+func (c *Catalog) ListLocalTelegramVideos(ctx context.Context, afterID string, limit int) ([]*Video, error) {
+	if limit < 1 || limit > 500 {
+		limit = 100
+	}
+	rows, err := c.db.QueryContext(ctx, `SELECT `+allVideoCols+` FROM videos
+WHERE drive_id IN ('local-upload','telegram-local') AND COALESCE(hidden,0)=0 AND id>?
+AND id IN (`+telegramVideoIDsSQL+`)
+ORDER BY id LIMIT ?`, afterID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*Video
+	for rows.Next() {
+		v, err := scanVideo(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
+}
+
+func (c *Catalog) InvalidateMissingTelegramVideo(ctx context.Context, botID int64, uniqueID string) error {
+	_, err := c.db.ExecContext(ctx, `UPDATE telegram_files SET video_id='' WHERE bot_id=? AND file_unique_id=?`, botID, uniqueID)
+	return err
+}
+func (c *Catalog) TelegramVideoID(ctx context.Context, botID int64, uniqueID string) (string, error) {
+	var id string
+	err := c.db.QueryRowContext(ctx, `SELECT video_id FROM telegram_files WHERE bot_id=? AND file_unique_id=?`, botID, uniqueID).Scan(&id)
+	return id, err
+}
+
+func (c *Catalog) ListImportJobs(ctx context.Context, source, state string, before int64, limit int) ([]*RemoteUploadJob, error) {
+	if limit < 1 || limit > 100 {
+		limit = 30
+	}
+	rows, err := c.db.QueryContext(ctx, `SELECT `+remoteUploadJobCols+` FROM remote_upload_jobs WHERE (?='' OR source_kind=?) AND (?='' OR state=?) AND (?=0 OR sequence<?) ORDER BY sequence DESC LIMIT ?`, source, source, state, state, before, before, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []*RemoteUploadJob{}
+	for rows.Next() {
+		j, err := scanRemoteUploadJob(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, j)
+	}
+	return out, rows.Err()
+}
+
+func (c *Catalog) SetImportStage(ctx context.Context, id, stage string) error {
+	return c.updateActiveRemoteUpload(ctx, id, `stage=?,updated_at=?`, stage, time.Now().UnixMilli())
+}
+
+func (c *Catalog) DelayImport(ctx context.Context, id, message string, delay time.Duration, count bool) error {
+	increment := 0
+	if count {
+		increment = 1
+	}
+	res, err := c.db.ExecContext(ctx, `UPDATE remote_upload_jobs SET state='queued',stage='retry_wait',retry_count=retry_count+?,next_attempt=?,error_message=?,temp_file='',final_file='',completed_video_id='',bytes_downloaded=0,updated_at=? WHERE id=? AND cancel_requested=0 AND state IN ('downloading','validating','saving')`, increment, time.Now().Add(delay).UnixMilli(), message, time.Now().UnixMilli(), id)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n != 1 {
+		return c.remoteUploadTransitionError(ctx, id)
+	}
+	return nil
+}
+
+func (c *Catalog) RetryTelegramImport(ctx context.Context, id string, botID int64) error {
+	tx, err := c.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var state, payload string
+	err = tx.QueryRowContext(ctx, `SELECT state,source_payload FROM remote_upload_jobs WHERE id=? AND source_kind='telegram'`, id).Scan(&state, &payload)
+	if err != nil {
+		return err
+	}
+	if state != RemoteUploadFailed && state != RemoteUploadCanceled {
+		return ErrRemoteUploadInvalidTransition
+	}
+	var s TelegramSource
+	if err = json.Unmarshal([]byte(payload), &s); err != nil {
+		return err
+	}
+	if s.BotID != botID {
+		return errors.New("请连接提交该任务的机器人后重试")
+	}
+	var mapped, video string
+	if err = tx.QueryRowContext(ctx, `SELECT job_id,video_id FROM telegram_files WHERE bot_id=? AND file_unique_id=?`, botID, s.UniqueID).Scan(&mapped, &video); err != nil {
+		return err
+	}
+	if mapped != id || video != "" {
+		return errors.New("该文件已有更新的任务或已保存的视频")
+	}
+	_, err = tx.ExecContext(ctx, `UPDATE remote_upload_jobs SET state='queued',stage='',retry_count=0,next_attempt=0,cancel_requested=0,error_message='',finished_at=0,updated_at=? WHERE id=?`, time.Now().UnixMilli(), id)
+	if err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, `UPDATE telegram_receipts SET delivered='',attempts=0,next_attempt=0 WHERE job_id=?`, id)
+	if err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (c *Catalog) PendingTelegramReceipts(ctx context.Context, botID int64) ([]TelegramReceipt, error) {
+	rows, err := c.db.QueryContext(ctx, `SELECT r.bot_id,r.update_id,r.chat_id,r.message_id,r.sender_id,r.job_id,r.response,r.reply_id,r.delivered,r.attempts FROM telegram_receipts r LEFT JOIN remote_upload_jobs j ON j.id=r.job_id WHERE r.bot_id=? AND r.attempts<8 AND r.next_attempt<=? AND r.response!='__ignore__' AND (r.delivered='' OR (r.job_id!='' AND (j.state IN ('queued','downloading','validating','saving') OR (j.state IN ('completed','failed','canceled') AND r.delivered!=j.state)))) ORDER BY r.next_attempt,r.created_at LIMIT 30`, botID, time.Now().UnixMilli())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []TelegramReceipt{}
+	for rows.Next() {
+		var r TelegramReceipt
+		if err := rows.Scan(&r.BotID, &r.UpdateID, &r.ChatID, &r.MessageID, &r.SenderID, &r.JobID, &r.Response, &r.ReplyID, &r.Delivered, &r.Attempts); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+func (c *Catalog) SaveTelegramNotification(ctx context.Context, r TelegramReceipt, reply int64, state string, delay time.Duration) error {
+	if delay > 0 {
+		_, err := c.db.ExecContext(ctx, `UPDATE telegram_receipts SET attempts=attempts+1,next_attempt=? WHERE bot_id=? AND update_id=?`, time.Now().Add(delay).UnixMilli(), r.BotID, r.UpdateID)
+		return err
+	}
+	// Active tasks are revisited for progress updates at most every five seconds.
+	// Scheduling unchanged content too prevents older jobs starving new receipts.
+	_, err := c.db.ExecContext(ctx, `UPDATE telegram_receipts SET reply_id=?,delivered=?,attempts=0,next_attempt=? WHERE bot_id=? AND update_id=?`, reply, state, time.Now().Add(5*time.Second).UnixMilli(), r.BotID, r.UpdateID)
+	return err
+}
+
+func (c *Catalog) TelegramNotificationFailures(ctx context.Context, botID int64) int {
+	var n int
+	_ = c.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM telegram_receipts WHERE bot_id=? AND attempts>=8 AND delivered!='expired'`, botID).Scan(&n)
+	return n
+}
+
+func DecodeTelegramSource(j *RemoteUploadJob) (TelegramSource, error) {
+	var s TelegramSource
+	err := json.Unmarshal([]byte(j.SourcePayload), &s)
+	if err == nil && (s.BotID == 0 || s.FileID == "" || s.UniqueID == "") {
+		err = fmt.Errorf("invalid Telegram source")
+	}
+	return s, err
+}
+
+// MigrateImportDatabase upgrades a staged archive, never the live restore target.
+func MigrateImportDatabase(ctx context.Context, db *sql.DB) error {
+	return (&Catalog{db: db}).migrateImports(ctx)
+}
+
+// CompactTelegramHistory keeps only the small task/result anchors required by
+// permanent file deduplication and message idempotency. Expired failures must
+// be resubmitted; we no longer retain their downloadable file references.
+func (c *Catalog) CompactTelegramHistory(ctx context.Context, before time.Time) error {
+	tx, err := c.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err = tx.ExecContext(ctx, `UPDATE remote_upload_jobs SET source_payload='' WHERE source_kind='telegram' AND state IN ('completed','failed','canceled') AND finished_at>0 AND finished_at<?`, before.UnixMilli()); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE telegram_files SET file_id='' WHERE job_id IN (SELECT id FROM remote_upload_jobs WHERE state IN ('completed','failed','canceled') AND finished_at>0 AND finished_at<?)`, before.UnixMilli()); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE telegram_receipts SET response='__ignore__',delivered='expired',attempts=8 WHERE created_at<? AND (job_id='' OR job_id IN (SELECT id FROM remote_upload_jobs WHERE state IN ('completed','failed','canceled') AND finished_at>0 AND finished_at<?))`, before.UnixMilli(), before.UnixMilli()); err != nil {
+		return err
+	}
+	return tx.Commit()
+}

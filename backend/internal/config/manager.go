@@ -24,6 +24,7 @@ var ErrVersionConflict = errors.New("config.yaml changed since it was loaded")
 // LiveSettings is the subset of config.yaml that the running process can
 // safely apply without rebuilding its long-lived dependencies.
 type LiveSettings struct {
+	TelegramEnabled        bool   `json:"telegramEnabled"`
 	PreviewEnabled         bool   `json:"previewEnabled"`
 	ThumbnailConcurrency   int    `json:"thumbnailConcurrency"`
 	FingerprintConcurrency int    `json:"fingerprintConcurrency"`
@@ -98,6 +99,7 @@ func liveSettingsFromConfig(cfg *Config) LiveSettings {
 		return DefaultLiveSettings()
 	}
 	return LiveSettings{
+		TelegramEnabled:        cfg.Telegram.Enabled,
 		PreviewEnabled:         cfg.Preview.Enabled,
 		NightlyDisabled:        cfg.Nightly.Disabled,
 		NightlyStartTime:       cfg.Nightly.StartTime,
@@ -456,6 +458,7 @@ func removeLiveDocumentValues(document any) {
 	if !ok {
 		return
 	}
+	delete(root, "telegram")
 	removeNestedValue(root, "nightly", "start_time")
 	removeNestedValue(root, "nightly", "cron_hour")
 	removeNestedValue(root, "nightly", "timezone")

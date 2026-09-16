@@ -45,7 +45,7 @@ test("normal videos keep responsive capacities while blacklist pages contain twe
   );
   assert.match(
     videosPageSource,
-    /const activeListQueryKey = JSON\.stringify\(\[\s*page,\s*pageSize,\s*searchKeyword,\s*sourceDriveId,\s*sourceCrawlerId,\s*appliedFilters,?\s*\]\);/
+    /const activeListQueryKey = JSON\.stringify\(\[\s*page,\s*pageSize,\s*searchKeyword,\s*sourceDriveId,\s*sourceCrawlerId,\s*sourceKind,\s*appliedFilters,?\s*\]\);/
   );
   assert.match(videosPageSource, /api\.listVideos\(\{[\s\S]*?page,[\s\S]*?size: pageSize,[\s\S]*?keyword: searchKeyword,[\s\S]*?driveId: sourceDriveId,[\s\S]*?crawlerId: sourceCrawlerId,[\s\S]*?\.\.\.appliedFilters/);
 });
@@ -77,19 +77,19 @@ test("normal videos keep source navigation separate from composable advanced fil
   assert.match(videosPageSource, /hasLocalUploads=\{hasLocalUploads\}/);
   assert.match(videosPageSource, /sourceCatalogLoaded=\{sourceCatalogLoaded\}/);
   assert.match(sourceNavigationSource, /if \(sourceCatalogLoaded\) \{[\s\S]*?sourceItems\.push\(/);
-  assert.match(sourceNavigationSource, /\.\.\.\(hasLocalUploads[\s\S]*?label: "本地上传",[\s\S]*?upload: true,[\s\S]*?: \[\]\)/);
+  assert.match(sourceNavigationSource, /\.\.\.\(hasLocalUploads[\s\S]*?label: "本地存储",[\s\S]*?upload: true,[\s\S]*?: \[\]\)/);
   assert.ok(
     sourceNavigationSource.indexOf("...drives") <
-      sourceNavigationSource.indexOf('label: "本地上传"')
+      sourceNavigationSource.indexOf('label: "本地存储"')
   );
   assert.ok(
-    sourceNavigationSource.indexOf('label: "本地上传"') <
+    sourceNavigationSource.indexOf('label: "本地存储"') <
       sourceNavigationSource.indexOf("...crawlers")
   );
-  assert.match(videosPageSource, /import \{ UploadIcon \} from "@\/components\/icons\/UploadIcon";/);
+  assert.match(videosPageSource, /import \{ LocalStorageIcon \} from "@\/components\/icons\/LocalStorageIcon";/);
   assert.match(videosPageSource, /import \{ FilterAllIcon \} from "@\/components\/icons\/FilterAllIcon";/);
   assert.match(sourceNavigationSource, /<FilterAllIcon size=\{15\} className="admin-video-source-tab__glyph is-all" \/>/);
-  assert.match(sourceNavigationSource, /<UploadIcon size=\{15\} className="admin-video-source-tab__glyph is-upload" \/>/);
+  assert.match(sourceNavigationSource, /<LocalStorageIcon size=\{15\} className="admin-video-source-tab__glyph is-upload" \/>/);
   assert.match(filterAllIconSource, /<rect x="3\.5" y="3\.5" width="5" height="5" rx="1\.4" \/>/);
   assert.match(filterAllIconSource, /<circle cx="12" cy="12" r="1\.6" fill="currentColor" stroke="none" \/>/);
   assert.match(sourceNavigationSource, /`drive:\$\{drive\.id\}`/);
@@ -265,7 +265,7 @@ test("empty video tabs use the correct visual and distinguish search misses", ()
   const blacklistSource = videosPageSource.slice(videosPageSource.indexOf("function BlacklistTab"));
   assert.match(
     currentSource,
-    /const hasActiveSearch =\s*searchKeyword\.trim\(\)\.length > 0 \|\|\s*!!sourceDriveId \|\|\s*!!sourceCrawlerId \|\|\s*activeAdvancedFilterCount > 0;/
+    /const hasActiveSearch =\s*searchKeyword\.trim\(\)\.length > 0 \|\|\s*!!sourceDriveId \|\|\s*!!sourceCrawlerId \|\|\s*!!sourceKind \|\|\s*activeAdvancedFilterCount > 0;/
   );
   assert.match(blacklistSource, /const hasActiveSearch = searchKeyword\.trim\(\)\.length > 0;/);
   assert.doesNotMatch(currentSource, /hasVideoActions|批量选择/);

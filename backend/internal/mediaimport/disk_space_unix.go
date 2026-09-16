@@ -1,6 +1,6 @@
 //go:build !windows
 
-package remoteupload
+package mediaimport
 
 import "golang.org/x/sys/unix"
 

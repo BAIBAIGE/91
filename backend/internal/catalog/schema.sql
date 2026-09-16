@@ -130,7 +130,7 @@ CREATE TABLE IF NOT EXISTS video_tags (
     video_id   TEXT NOT NULL,
     tag_id     INTEGER NOT NULL,
     -- auto=规则引擎 / manual=人工 / legacy=旧数据回填 / crawler=爬虫脚本或爬虫名 /
-    -- series=番号系列 / propagated=同类传播
+    -- series=番号系列 / propagated=同类传播 / telegram=Telegram 导入来源
     source     TEXT NOT NULL DEFAULT 'auto',
     evidence   TEXT NOT NULL DEFAULT '',          -- 命中证据，如 "文件名:翘臀"
     created_at INTEGER NOT NULL,
@@ -367,3 +367,13 @@ CREATE TABLE IF NOT EXISTS shorts_feed_sessions (
 );
 CREATE INDEX IF NOT EXISTS idx_shorts_feed_sessions_last_access
     ON shorts_feed_sessions(last_access);
+
+-- Private Telegram integration configuration, omitted from exported backups.
+CREATE TABLE IF NOT EXISTS telegram_settings (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    config TEXT NOT NULL,
+    bot_token TEXT NOT NULL DEFAULT '',
+    api_id INTEGER NOT NULL DEFAULT 0,
+    api_hash TEXT NOT NULL DEFAULT '',
+    version TEXT NOT NULL
+);

@@ -6,6 +6,7 @@ import {
   useRef,
   useState,
   type FormEvent,
+  type ReactNode,
 } from "react";
 import {
   Check,
@@ -15,8 +16,10 @@ import {
   RefreshCw,
   SlidersHorizontal,
   Tags,
-  type LucideIcon,
 } from "lucide-react";
+import { TelegramIcon } from "@/components/icons/TelegramIcon";
+import { useSearchParams } from "react-router";
+import { TelegramSettingsSection } from "./settings/TelegramSettingsSection";
 import { invalidateTagsCache } from "@/data/videos";
 import * as api from "./api";
 import { useToast } from "./ToastContext";
@@ -71,7 +74,7 @@ type PendingSave = {
 };
 
 type EditorTab = "visual" | "source";
-type SectionID = "config-automation" | "config-preview" | "config-tags";
+type SectionID = "config-automation" | "config-preview" | "config-tags" | "config-telegram";
 
 const NIGHTLY_TIMEZONE_OPTIONS = [
   "Asia/Shanghai",
@@ -106,7 +109,7 @@ const CONFIG_FIELD_COUNT = Object.keys(DEFAULT_DRAFT).length;
 const SECTION_META: Array<{
   id: SectionID;
   title: string;
-  icon: LucideIcon;
+  icon: (props: { size?: number }) => ReactNode;
 }> = [
   {
     id: "config-automation",
@@ -122,6 +125,11 @@ const SECTION_META: Array<{
     id: "config-tags",
     title: "内置标签",
     icon: Tags,
+  },
+  {
+    id: "config-telegram",
+    title: "Telegram",
+    icon: TelegramIcon,
   },
 ];
 
@@ -145,19 +153,55 @@ function ConfigPageMeta({ statusClass, statusText }: ConfigPageMetaProps) {
 }
 
 export function SettingsPage() {
-  const floatingActionPageRef = useAdminFloatingActionSpace<HTMLFormElement>();
+  const floatingActionPageRef = useAdminFloatingActionSpace<HTMLDivElement>();
+  const sectionNavRef = useRef<HTMLElement>(null);
   const { show } = useToast();
   const [loaded, setLoaded] = useState<LoadedConfig | null>(null);
   const [draft, setDraft] = useState<SettingsDraft>(DEFAULT_DRAFT);
   const [workingYAML, setWorkingYAML] = useState("");
   const [sourceTouched, setSourceTouched] = useState(false);
   const [activeTab, setActiveTab] = useState<EditorTab>("visual");
-  const [activeSection, setActiveSection] = useState<SectionID>("config-automation");
+  const [searchParams, setSearchParams] = useSearchParams();
+  const activeSection = SECTION_META.find(
+    ({ id }) => id === `config-${searchParams.get("section")}`
+  )?.id ?? "config-automation";
+  const telegramSelected = activeTab === "visual" && activeSection === "config-telegram";
   const [sourceError, setSourceError] = useState("");
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [saving, setSaving] = useState(false);
   const [pendingSave, setPendingSave] = useState<PendingSave | null>(null);
+
+  function setActiveSection(section: SectionID) {
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current);
+      next.set("section", section.replace("config-", ""));
+      return next;
+    });
+  }
+
+  useEffect(() => {
+    if (activeSection === "config-telegram") {
+      setActiveTab("visual");
+    }
+  }, [activeSection]);
+
+  useEffect(() => {
+    const nav = sectionNavRef.current;
+    if (!nav || activeTab !== "visual") return;
+    const keepSelectedTabVisible = () => {
+      const selected = nav.querySelector<HTMLElement>('[aria-selected="true"]');
+      if (!selected) return;
+      const navRect = nav.getBoundingClientRect();
+      const tabRect = selected.getBoundingClientRect();
+      if (tabRect.left < navRect.left) nav.scrollLeft += tabRect.left - navRect.left;
+      else if (tabRect.right > navRect.right) nav.scrollLeft += tabRect.right - navRect.right;
+    };
+    keepSelectedTabVisible();
+    const observer = new ResizeObserver(keepSelectedTabVisible);
+    observer.observe(nav);
+    return () => observer.disconnect();
+  }, [activeSection, activeTab, loading, loadError]);
 
   const visualDirtyFields = useMemo(
     () => (loaded ? changedVisualFields(loaded.visual, draft) : new Set<VisualField>()),
@@ -468,11 +512,10 @@ export function SettingsPage() {
 
   return (
     <>
-      <form
+      <div
         ref={floatingActionPageRef}
         className="admin-page admin-page--with-floating-actions admin-config-page"
         aria-busy={loading}
-        onSubmit={prepareSave}
       >
         <header className="admin-config-header">
           <ConfigPageMeta statusClass={statusClass} statusText={statusText} />
@@ -502,36 +545,36 @@ export function SettingsPage() {
           </div>
         </header>
 
-        {activeTab === "visual" ? (
-          <div className="admin-config-visual">
-            <nav
-              className="admin-config-section-nav"
-              role="tablist"
-              aria-label="配置分组"
-            >
-              {SECTION_META.map((section) => {
-                const Icon = section.icon;
-                return (
-                  <button
-                    key={section.id}
-                    id={`${section.id}-tab`}
-                    type="button"
-                    role="tab"
-                    aria-selected={activeSection === section.id}
-                    aria-controls={section.id}
-                    className={activeSection === section.id ? "is-active" : ""}
-                    onClick={() => setActiveSection(section.id)}
-                  >
-                    <span className="admin-config-section-nav__icon" aria-hidden="true">
-                      <Icon size={15} />
-                    </span>
-                    <span className="admin-config-section-nav__label">{section.title}</span>
-                  </button>
-                );
-              })}
-            </nav>
-
-            <div className="admin-config-sections">
+        <div className="admin-config-visual" hidden={activeTab !== "visual"}>
+          <nav
+            ref={sectionNavRef}
+            className="admin-config-section-nav"
+            role="tablist"
+            aria-label="配置分组"
+          >
+            {SECTION_META.map((section) => {
+              const Icon = section.icon;
+              return (
+                <button
+                  key={section.id}
+                  id={`${section.id}-tab`}
+                  type="button"
+                  role="tab"
+                  aria-selected={activeSection === section.id}
+                  aria-controls={section.id}
+                  className={activeSection === section.id ? "is-active" : ""}
+                  onClick={() => setActiveSection(section.id)}
+                >
+                  <span className="admin-config-section-nav__icon" aria-hidden="true">
+                    <Icon size={15} />
+                  </span>
+                  <span className="admin-config-section-nav__label">{section.title}</span>
+                </button>
+              );
+            })}
+          </nav>
+          <div className="admin-config-sections">
+            <form id="config-visual-form" onSubmit={prepareSave}>
               {activeSection === "config-automation" && (
                 <SettingsSection
                   id="config-automation"
@@ -752,17 +795,19 @@ export function SettingsPage() {
                   </SettingsRow>
                 </SettingsSection>
               )}
-            </div>
+              <TelegramSettingsSection active={telegramSelected} disabled={controlsDisabled} draft={draft} onChange={updateVisualField} />
+            </form>
           </div>
-        ) : (
-          <div>
+        </div>
+        {activeTab === "source" && (
+          <form id="config-source-form" onSubmit={prepareSave}>
             <ConfigSourceWorkspace
               value={workingYAML}
               error={sourceError}
               disabled={controlsDisabled}
               onChange={handleSourceChange}
             />
-          </div>
+          </form>
         )}
 
         <div
@@ -793,6 +838,7 @@ export function SettingsPage() {
               !generationConcurrencyValid ||
               Boolean(sourceError)
             }
+            form={activeTab === "source" ? "config-source-form" : "config-visual-form"}
             title="预览并保存配置"
             aria-label="预览并保存配置"
           >
@@ -804,7 +850,7 @@ export function SettingsPage() {
             {dirty && <span className="admin-config-actions__dirty-dot" aria-hidden="true" />}
           </button>
         </div>
-      </form>
+      </div>
 
       {pendingSave && (
         <Suspense fallback={null}>

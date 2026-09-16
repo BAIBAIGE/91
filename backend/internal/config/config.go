@@ -42,6 +42,8 @@ type Config struct {
 	Nightly      Nightly      `yaml:"nightly"`
 	Tags         Tags         `yaml:"tags"`
 	RemoteUpload RemoteUpload `yaml:"remote_upload"`
+	// Telegram configuration is persisted in YAML and applied without restarting.
+	Telegram Telegram `yaml:"telegram"`
 }
 
 type Server struct {
@@ -302,6 +304,9 @@ func Parse(data []byte) (*Config, error) {
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
 	if err := c.applyDefaults(); err != nil {
+		return nil, err
+	}
+	if err := c.Telegram.Validate(); err != nil {
 		return nil, err
 	}
 	return &c, nil

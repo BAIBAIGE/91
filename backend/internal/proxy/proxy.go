@@ -613,7 +613,7 @@ func driveLabel(kind string) string {
 		return "WebDAV"
 	case "quark":
 		return "夸克网盘"
-	case "localstorage", "local-upload":
+	case "localstorage", "local-upload", "telegram-local":
 		return "本地存储"
 	default:
 		return "网盘"

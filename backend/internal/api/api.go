@@ -433,9 +433,7 @@ func (s *Server) handleVideoDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	dto := mapVideo(v)
-	if d, err := s.Catalog.GetDrive(r.Context(), v.DriveID); err == nil {
-		dto.SourceLabel = driveKindLabel(d.Kind)
-	}
+	dto.SourceLabel = s.videoSourceLabel(r.Context(), v)
 
 	detail := VideoDetailDTO{
 		VideoDTO:    dto,
@@ -1172,7 +1170,6 @@ func (s *Server) handleUploadVideo(w http.ResponseWriter, r *http.Request) {
 		FileID:        storedName,
 		FileName:      storedName,
 		Title:         title,
-		Author:        "用户上传",
 		Size:          size,
 		Ext:           strings.TrimPrefix(ext, "."),
 		PreviewStatus: "pending",
@@ -1712,6 +1709,18 @@ func thumbnailURLMatchesVideoID(value, videoID string) bool {
 	return err == nil && decoded == videoID
 }
 
+// Built-in upload storage is mounted by the application and intentionally has
+// no configured drive row. Resolve it before looking up external drives.
+func (s *Server) videoSourceLabel(ctx context.Context, v *catalog.Video) string {
+	if v.DriveID == localUploadDriveID || v.DriveID == catalog.TelegramLocalDriveID {
+		return driveKindLabel(localUploadDriveID)
+	}
+	if d, err := s.Catalog.GetDrive(ctx, v.DriveID); err == nil {
+		return driveKindLabel(d.Kind)
+	}
+	return ""
+}
+
 func driveKindLabel(kind string) string {
 	switch kind {
 	case "quark":
@@ -1732,7 +1741,7 @@ func driveKindLabel(kind string) string {
 		return "Google Drive"
 	case "webdav":
 		return "WebDAV"
-	case localstorage.Kind:
+	case localstorage.Kind, localUploadDriveID:
 		return "本地存储"
 	default:
 		return kind

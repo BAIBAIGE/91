@@ -42,7 +42,8 @@ internal/
   fingerprint/              跨盘去重指纹
   nightly/                  每日维护流水线
   crawlerupload/            把爬虫产物迁移到目标网盘
-  remoteupload/             公网视频直链的安全下载与持久化单 worker
+  mediaimport/              视频导入调度、直链下载和公共入库流程
+  telegram/                 Telegram 私聊接收、Local Bot API 文件获取及结果通知
   …                         转码、标签、字幕、相似度、路径与文件名规则等小包
 data/                       运行时数据：主库、封面、上传、爬虫产物（不在版本库）
 ```
@@ -115,7 +116,8 @@ internal/
   streamhttp/               共享的重定向策略，跳转时不泄漏网盘凭据
   nightly/                  每日一条维护流水线：扫盘 → 爬虫 → 上传迁移 → 去重维护
   crawlerupload/            把爬虫落地的视频迁移到目标网盘并改写 catalog 行
-  remoteupload/             视频直链任务、SSRF 防护、磁盘保护和下载 worker
+  mediaimport/              视频导入任务、SSRF 防护、磁盘保护和下载 worker
+  telegram/                 Telegram 消息幂等、文件去重及机器人通知
   tagging/                  标签匹配规则、番号识别
   fixedtags/                内置标签包及其匹配规则
   mediasim/                 标题相似度 + 封面 SSIM + teaser 帧签名，供近重复判定使用

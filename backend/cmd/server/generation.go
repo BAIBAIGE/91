@@ -391,7 +391,7 @@ func (a *App) fingerprintQueueingBusy(driveID string) bool {
 }
 
 func shouldScanDrive(d drives.Drive) bool {
-	if d == nil || d.ID() == localupload.DriveID {
+	if d == nil || (d.ID() == localupload.DriveID || d.ID() == catalog.TelegramLocalDriveID) {
 		return false
 	}
 	// 爬虫类 drive 由专用 crawl 阶段触发，不参与普通 scan

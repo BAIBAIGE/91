@@ -10,6 +10,7 @@
 //	         wait for all scans, then all thumb / preview-video queues to be idle
 //	Phase 1b: reconcile generated thumbnails/previews against local storage
 //	          enqueue repaired pending rows and wait for their queues to drain
+//	Phase 1c: upload Telegram local videos to their configured cloud drive
 //	Phase 2: if any script crawler configured
 //	           crawl + enqueue preview video for new videos
 //	         wait until preview-video queues are idle
@@ -111,6 +112,10 @@ type Config struct {
 
 	// RunMigration runs crawlerupload.Migrator.RunOnce for Phase 3.
 	RunMigration func(ctx context.Context) error
+
+	// RunTelegramUpload is independent of crawler configuration and runs only
+	// in the scheduled/full pipeline, never during a manual scan-all.
+	RunTelegramUpload func(ctx context.Context) error
 
 	// RestoreCrawlerVideos scans one crawler's retained local source directory
 	// after new-video generation and upload have completed.
@@ -573,6 +578,16 @@ func (r *Runner) runPipeline(ctx context.Context) {
 	}
 	if !r.runLocalAssetReconciliationPhase(ctx, "nightly", "phase 1b") {
 		return
+	}
+	if r.shouldStop(ctx, "nightly", "Telegram upload") {
+		return
+	}
+	if r.cfg.RunTelegramUpload != nil {
+		log.Printf("[nightly] Telegram upload phase")
+		if err := r.cfg.RunTelegramUpload(ctx); err != nil {
+			log.Printf("[nightly] Telegram upload: %v", err)
+			r.recordIssue("telegram_upload", err)
+		}
 	}
 
 	// ---------- Phase 2 ----------

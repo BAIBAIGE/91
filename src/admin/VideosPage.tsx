@@ -41,7 +41,8 @@ import {
 } from "./AdminRouteCache";
 import { SearchPanel } from "@/components/SearchPanel";
 import { FilterAllIcon } from "@/components/icons/FilterAllIcon";
-import { UploadIcon } from "@/components/icons/UploadIcon";
+import { LocalStorageIcon } from "@/components/icons/LocalStorageIcon";
+import { TelegramIcon } from "@/components/icons/TelegramIcon";
 
 const DESKTOP_CURRENT_VIDEOS_PAGE_SIZE = 16;
 const MOBILE_CURRENT_VIDEOS_PAGE_SIZE = 10;
@@ -59,6 +60,10 @@ function requestVideoSourceCatalog() {
     api.listDrives(),
     api.listCrawlers(),
     api.listVideos({ driveId: LOCAL_UPLOAD_SOURCE_ID, page: 1, size: 1 }),
+    Promise.all([
+      api.getTelegramStatus(),
+      api.listVideos({ sourceKind: "telegram", page: 1, size: 1 }),
+    ]).then(([status, videos]) => status.connection.enabled && videos.total > 0),
   ]);
 }
 
@@ -94,6 +99,7 @@ export function VideosPage() {
   const [drives, setDrives] = useState<api.AdminDrive[]>([]);
   const [crawlers, setCrawlers] = useState<api.AdminCrawler[]>([]);
   const [hasLocalUploads, setHasLocalUploads] = useState(false);
+  const [hasTelegramVideos, setHasTelegramVideos] = useState(false);
   const [sourceCatalogLoaded, setSourceCatalogLoaded] = useState(false);
   const sourceCatalogRequestRef = useRef(0);
   const { show } = useToast();
@@ -118,7 +124,7 @@ export function VideosPage() {
       const requestID = ++sourceCatalogRequestRef.current;
       const results = await requestVideoSourceCatalog();
       if (requestID !== sourceCatalogRequestRef.current) return;
-      const [driveResult, crawlerResult, localUploadResult] = results;
+      const [driveResult, crawlerResult, localUploadResult, telegramResult] = results;
 
       if (driveResult.status === "fulfilled") {
         setDrives(driveResult.value ?? []);
@@ -146,9 +152,14 @@ export function VideosPage() {
         show(
           localUploadResult.reason instanceof Error
             ? localUploadResult.reason.message
-            : "本地上传来源加载失败",
+            : "本地存储来源加载失败",
           "error"
         );
+      }
+      if (telegramResult.status === "fulfilled") {
+        setHasTelegramVideos(telegramResult.value);
+      } else if (reportErrors) {
+        show("Telegram 来源加载失败", "error");
       }
       setSourceCatalogLoaded(true);
     },
@@ -199,6 +210,7 @@ export function VideosPage() {
         drives={drives}
         crawlers={crawlers}
         hasLocalUploads={hasLocalUploads}
+        hasTelegramVideos={hasTelegramVideos}
         sourceCatalogLoaded={sourceCatalogLoaded}
         activeSourceKey={activeSourceKey}
         blacklistActive={activeView === "blacklist"}
@@ -210,6 +222,7 @@ export function VideosPage() {
           drives={drives}
           sourceDriveId={activeSourceFilter.driveId}
           sourceCrawlerId={activeSourceFilter.crawlerId}
+          sourceKind={activeSourceFilter.sourceKind}
           page={page}
           setPage={setPage}
         />
@@ -229,6 +242,7 @@ function VideoSourceNavigation({
   drives,
   crawlers,
   hasLocalUploads,
+  hasTelegramVideos,
   sourceCatalogLoaded,
   activeSourceKey,
   blacklistActive,
@@ -238,6 +252,7 @@ function VideoSourceNavigation({
   drives: api.AdminDrive[];
   crawlers: api.AdminCrawler[];
   hasLocalUploads: boolean;
+  hasTelegramVideos: boolean;
   sourceCatalogLoaded: boolean;
   activeSourceKey: AdminVideosSourceKey;
   blacklistActive: boolean;
@@ -250,6 +265,7 @@ function VideoSourceNavigation({
     drive?: api.AdminDrive;
     crawler?: api.AdminCrawler;
     upload?: boolean;
+    telegram?: boolean;
     all?: boolean;
   }> = [{ key: "all", label: "全部", all: true }];
 
@@ -266,10 +282,13 @@ function VideoSourceNavigation({
         ? [
             {
               key: `drive:${LOCAL_UPLOAD_SOURCE_ID}` as AdminVideosSourceKey,
-              label: "本地上传",
+              label: "本地存储",
               upload: true,
             },
           ]
+        : []),
+      ...(hasTelegramVideos
+        ? [{ key: "telegram" as const, label: "Telegram", telegram: true }]
         : []),
       ...crawlers.map((crawler) => ({
         key: `crawler:${crawler.id}` as AdminVideosSourceKey,
@@ -297,6 +316,7 @@ function VideoSourceNavigation({
                 drive={source.drive}
                 crawler={source.crawler}
                 upload={source.upload}
+                telegram={source.telegram}
                 all={source.all}
               />
               <span className="admin-video-source-tab__label">{source.label}</span>
@@ -321,18 +341,23 @@ function VideoSourceNavigationIcon({
   drive,
   crawler,
   upload,
+  telegram,
   all,
 }: {
   drive?: api.AdminDrive;
   crawler?: api.AdminCrawler;
   upload?: boolean;
+  telegram?: boolean;
   all?: boolean;
 }) {
   if (all) {
     return <FilterAllIcon size={15} className="admin-video-source-tab__glyph is-all" />;
   }
   if (upload) {
-    return <UploadIcon size={15} className="admin-video-source-tab__glyph is-upload" />;
+    return <LocalStorageIcon size={15} className="admin-video-source-tab__glyph is-upload" />;
+  }
+  if (telegram) {
+    return <TelegramIcon size={16} className="admin-video-source-tab__glyph is-telegram" />;
   }
   if (drive) {
     const iconSrc = driveKindIconPath(drive.kind);
@@ -358,12 +383,14 @@ function CurrentVideosTab({
   drives,
   sourceDriveId,
   sourceCrawlerId,
+  sourceKind,
   page,
   setPage,
 }: {
   drives: api.AdminDrive[];
   sourceDriveId: string;
   sourceCrawlerId: string;
+  sourceKind: "" | "telegram";
   page: number;
   setPage: PageSetter;
 }) {
@@ -401,6 +428,7 @@ function CurrentVideosTab({
     searchKeyword,
     sourceDriveId,
     sourceCrawlerId,
+    sourceKind,
     appliedFilters,
   ]);
   const activeListQueryKeyRef = useRef(activeListQueryKey);
@@ -418,6 +446,7 @@ function CurrentVideosTab({
         keyword: searchKeyword,
         driveId: sourceDriveId,
         crawlerId: sourceCrawlerId,
+        sourceKind,
         ...appliedFilters,
       });
       if (requestId !== listRequestIdRef.current || queryKey !== activeListQueryKeyRef.current) return;
@@ -447,6 +476,7 @@ function CurrentVideosTab({
         keyword: searchKeyword,
         driveId: sourceDriveId,
         crawlerId: sourceCrawlerId,
+        sourceKind,
         ...appliedFilters,
       });
       if (queryKey !== activeListQueryKeyRef.current) return;
@@ -467,7 +497,7 @@ function CurrentVideosTab({
 
   useEffect(() => {
     refresh();
-  }, [page, searchKeyword, pageSize, sourceDriveId, sourceCrawlerId, appliedFilters]);
+  }, [page, searchKeyword, pageSize, sourceDriveId, sourceCrawlerId, sourceKind, appliedFilters]);
 
   useEffect(() => {
     let active = true;
@@ -485,7 +515,7 @@ function CurrentVideosTab({
 
   useEffect(() => {
     setSelectedIds(new Set());
-  }, [searchKeyword, sourceDriveId, sourceCrawlerId, appliedFilters]);
+  }, [searchKeyword, sourceDriveId, sourceCrawlerId, sourceKind, appliedFilters]);
 
   useEffect(() => {
     if (previousPageSizeRef.current === pageSize) return;
@@ -507,6 +537,7 @@ function CurrentVideosTab({
     searchKeyword,
     sourceDriveId,
     sourceCrawlerId,
+    sourceKind,
     appliedFilters,
     routeActive,
   ]);
@@ -531,7 +562,7 @@ function CurrentVideosTab({
   }, [list, trackedRegenCount]);
 
   const driveNameMap = new Map(drives.map((d) => [d.id, d.name || d.id]));
-  driveNameMap.set(LOCAL_UPLOAD_SOURCE_ID, "上传来源");
+  driveNameMap.set(LOCAL_UPLOAD_SOURCE_ID, "本地存储");
 
   const listItems = list;
   const editingVideo = editing ? (listItems.find((v) => v.id === editing.id) ?? editing) : null;
@@ -548,6 +579,7 @@ function CurrentVideosTab({
     searchKeyword.trim().length > 0 ||
     !!sourceDriveId ||
     !!sourceCrawlerId ||
+    !!sourceKind ||
     activeAdvancedFilterCount > 0;
   const allPageSelected =
     listItems.length > 0 && listItems.every((video) => selectedIds.has(video.id));
@@ -1031,7 +1063,7 @@ function BlacklistTab({
   }, [searchKeyword]);
 
   const driveNameMap = new Map(drives.map((d) => [d.id, d.name || d.id]));
-  driveNameMap.set(LOCAL_UPLOAD_SOURCE_ID, "上传来源");
+  driveNameMap.set(LOCAL_UPLOAD_SOURCE_ID, "本地存储");
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const listQueryPending = loading || resolvedListQueryKey !== activeListQueryKey;
   const listQuerySettled = !loading && resolvedListQueryKey === activeListQueryKey;
@@ -1912,6 +1944,7 @@ function tagAssignmentSourceLabel(source: string): string {
   if (source === "series") return "系列";
   if (source === "propagated") return "传播";
   if (source === "crawler") return "爬虫";
+  if (source === "telegram") return "Telegram";
   if (source === "legacy") return "自动生成";
   return source || "未知";
 }

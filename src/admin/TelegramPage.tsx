@@ -1,0 +1,371 @@
+import { useEffect, useState } from "react";
+import { Link, Navigate } from "react-router";
+import {
+  CheckCircle2,
+  CircleAlert,
+  Circle,
+  Loader2,
+  ArrowUpRight,
+  FileVideo,
+  History,
+  Radio,
+} from "lucide-react";
+import * as api from "./api";
+import { useAdminRouteActive } from "./AdminRouteCache";
+import { useToast } from "./ToastContext";
+import { formatBytes } from "./storageFormat";
+import { importStageLabel } from "./telegram/config";
+import { useTelegramAvailability } from "./telegram/useTelegramAvailability";
+import { TelegramUploadSettings } from "./telegram/TelegramUploadSettings";
+import "@/styles/telegram.css";
+
+const stateLabels: Record<string, string> = {
+  disabled: "未启用",
+  connecting: "连接中",
+  waiting_config: "等待配置凭据",
+  waiting_service: "等待 Bot API 服务",
+  connected: "连接正常",
+  error: "连接异常",
+  conflict: "接收冲突",
+  needs_reconnect: "等待恢复接收",
+};
+const dateLabel = (value?: string) =>
+  !value || value.startsWith("0001-")
+    ? "尚无记录"
+    : new Date(value).toLocaleString();
+
+export function TelegramPage() {
+  const active = useAdminRouteActive();
+  const { enabled, error } = useTelegramAvailability();
+  if (enabled === false) {
+    return active ? (
+      <Navigate to="/admin/settings?section=telegram" replace />
+    ) : null;
+  }
+  if (enabled === null) {
+    if (!error) return null;
+    return (
+      <div className="admin-page telegram-page">
+        <p className="tg-error" role="alert">
+          {error}
+        </p>
+        <Link to="/admin/settings?section=telegram">前往 Telegram 配置</Link>
+      </div>
+    );
+  }
+  return <TelegramWorkspace />;
+}
+
+function TelegramWorkspace() {
+  const active = useAdminRouteActive();
+  const { show } = useToast();
+  const [status, setStatus] = useState<api.TelegramStatus>();
+  const [jobs, setJobs] = useState<api.ImportJob[]>([]);
+  const [filter, setFilter] = useState("");
+  const [cursor, setCursor] = useState("");
+  const [history, setHistory] = useState<string[]>([]);
+  const [busy, setBusy] = useState("");
+  const [error, setError] = useState("");
+  const [refresh, setRefresh] = useState(0);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!active) return;
+    setLoading(true);
+    let disposed = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const poll = async () => {
+      try {
+        const [connection, tasks] = await Promise.all([
+          api.getTelegramStatus(),
+          api.listTelegramImports(filter, cursor),
+        ]);
+        if (!disposed) {
+          setStatus(connection);
+          setJobs(tasks);
+          setError("");
+        }
+      } catch (err) {
+        if (!disposed)
+          setError(err instanceof Error ? err.message : "加载失败");
+      }
+      if (!disposed) {
+        setLoading(false);
+        timer = setTimeout(poll, 5000);
+      }
+    };
+    void poll();
+    return () => {
+      disposed = true;
+      clearTimeout(timer);
+    };
+  }, [active, filter, cursor, refresh]);
+
+  async function run(name: string, action: () => Promise<void>) {
+    setBusy(name);
+    try {
+      await action();
+      setRefresh((n) => n + 1);
+    } catch (err) {
+      show(err instanceof Error ? err.message : "操作失败", "error");
+    } finally {
+      setBusy("");
+    }
+  }
+  const connection = status?.connection;
+  const connectionError =
+    !!connection &&
+    ["error", "conflict", "needs_reconnect"].includes(connection.state);
+  const connecting = !connection || connection.state === "connecting";
+  const StatusIcon =
+    connection?.state === "connected"
+      ? CheckCircle2
+      : connectionError
+        ? CircleAlert
+        : connecting
+          ? Loader2
+          : Circle;
+
+  return (
+    <div className="admin-page telegram-page">
+      {error && (
+        <p className="tg-error" role="alert">
+          {error}
+        </p>
+      )}
+      <div className="tg-overview">
+        <section className="tg-panel" aria-labelledby="tg-connection">
+          <div className="tg-heading">
+            <h3 id="tg-connection">
+              <Radio size={16} aria-hidden="true" />连接状态
+            </h3>
+            <button
+              type="button"
+              className="admin-btn"
+              disabled={!!busy || !connection?.enabled}
+              onClick={() =>
+                void run("test", async () => {
+                  const result = await api.testTelegram();
+                  show(`已连接 @${result.username}，共享目录可读`, "success");
+                })
+              }
+            >
+              {busy === "test" && <Loader2 size={14} className="tg-spin" />}
+              测试连接
+            </button>
+          </div>
+          <p
+            role="status"
+            className={`tg-status ${connection?.state === "connected" ? "is-connected" : connectionError ? "is-error" : ""}`}
+          >
+            <StatusIcon
+              size={17}
+              className={connecting ? "tg-spin" : undefined}
+              aria-hidden="true"
+            />
+            {connection
+              ? (stateLabels[connection.state] ?? connection.state)
+              : "正在读取状态…"}
+            {connection?.username && <span>@{connection.username}</span>}
+          </p>
+          {connection?.error && <p className="tg-error">{connection.error}</p>}
+          {connection?.state === "connected" &&
+            !connection.config.allowedUserIds?.length && (
+              <p className="tg-note">
+                向机器人发送 /id，并在连接配置中添加允许的用户。
+              </p>
+            )}
+          <dl className="tg-connection-metrics">
+            <div>
+              <dt>最近连接</dt>
+              <dd>{dateLabel(connection?.lastPoll)}</dd>
+            </div>
+            <div>
+              <dt>最近消息</dt>
+              <dd>{dateLabel(connection?.lastMessage)}</dd>
+            </div>
+            <div>
+              <dt>存储可用</dt>
+              <dd>
+                {connection ? formatBytes(connection.cacheAvailableBytes) : "—"}
+              </dd>
+            </div>
+          </dl>
+          {!!connection?.notificationFailures && (
+            <p className="tg-note">
+              有 {connection.notificationFailures}{" "}
+              条结果通知发送失败，视频保存结果不受影响。
+            </p>
+          )}
+          {(connection?.state === "needs_reconnect" ||
+            connection?.error.includes("webhook")) && (
+            <div className="tg-actions tg-panel-footer">
+              {connection?.state === "needs_reconnect" && (
+                <button
+                  className="admin-btn"
+                  disabled={!!busy}
+                  onClick={() =>
+                    void run("resume", async () => {
+                      await api.resumeTelegram();
+                      show("已恢复接收", "success");
+                    })
+                  }
+                >
+                  恢复接收
+                </button>
+              )}
+              {connection?.error.includes("webhook") && (
+                <button
+                  className="admin-btn"
+                  disabled={!!busy}
+                  onClick={() =>
+                    void run("prepare", async () => {
+                      await api.prepareTelegramPolling();
+                      show("已切换为轮询，将保留未处理消息", "success");
+                    })
+                  }
+                >
+                  切换为轮询接收
+                </button>
+              )}
+            </div>
+          )}
+        </section>
+        <TelegramUploadSettings />
+      </div>
+      <section className="tg-panel" aria-labelledby="tg-jobs">
+        <div className="tg-heading">
+          <h3 id="tg-jobs">
+            <History size={16} aria-hidden="true" />导入记录
+          </h3>
+          <select
+            aria-label="任务状态"
+            value={filter}
+            onChange={(e) => {
+              setFilter(e.target.value);
+              setCursor("");
+              setHistory([]);
+            }}
+          >
+            <option value="">全部状态</option>
+            {Object.entries({
+              queued: "排队中",
+              downloading: "获取中",
+              validating: "校验中",
+              saving: "入库中",
+              completed: "已保存",
+              failed: "失败",
+              canceled: "已取消",
+            }).map(([value, label]) => (
+              <option key={value} value={value}>
+                {label}
+              </option>
+            ))}
+          </select>
+        </div>
+        {loading ? (
+          <p className="tg-empty" role="status">
+            正在加载记录…
+          </p>
+        ) : (
+          !jobs.length &&
+          !error && (
+            <div className="tg-empty">
+              <p>{filter ? "暂无此状态的记录" : "暂无导入记录"}</p>
+              {!filter && (
+                <span>连接机器人后，发送或转发一个视频即可开始。</span>
+              )}
+            </div>
+          )
+        )}
+        <div className="tg-jobs" hidden={loading}>
+          {jobs.map((job) => (
+            <article key={job.id} className="tg-job">
+              <div className="tg-job-icon" aria-hidden="true">
+                <FileVideo size={20} />
+              </div>
+              <div className="tg-job-content">
+                <h4 className="tg-job-title">{job.title || "未命名视频"}</h4>
+                <div className="tg-metrics">
+                  <span>{formatBytes(job.totalBytes)}</span>
+                  <span>{dateLabel(job.createdAt)}</span>
+                  {job.senderId && <span>用户{job.senderId}</span>}
+                  {job.retryCount > 0 && <span>已重试 {job.retryCount} 次</span>}
+                </div>
+                {job.state === "downloading" && (
+                  <p className="tg-note">
+                    <Loader2 className="tg-spin" size={13} />
+                    正在获取文件，大视频可能需要几分钟。
+                  </p>
+                )}
+                {job.error && <p className="tg-error">{job.error}</p>}
+              </div>
+              <span className={`tg-job-status tg-job-status--${job.state}`}>
+                {importStageLabel(job)}
+              </span>
+              {(job.videoHref || job.canCancel || job.canRetry) && (
+                <div className="tg-actions tg-job-actions">
+                  {job.videoHref && (
+                    <Link className="admin-btn" to={job.videoHref}>
+                      打开视频<ArrowUpRight size={14} aria-hidden="true" />
+                    </Link>
+                  )}
+                  {job.canCancel && (
+                    <button
+                      className="admin-btn"
+                      disabled={!!busy}
+                      onClick={() =>
+                        void run(job.id, async () => {
+                          await api.cancelImport(job.id);
+                        })
+                      }
+                    >
+                      取消
+                    </button>
+                  )}
+                  {job.canRetry && (
+                    <button
+                      className="admin-btn"
+                      disabled={!!busy}
+                      onClick={() =>
+                        void run(job.id, async () => {
+                          await api.retryImport(job.id);
+                        })
+                      }
+                    >
+                      重试
+                    </button>
+                  )}
+                </div>
+              )}
+            </article>
+          ))}
+        </div>
+        {(history.length > 0 || jobs.length >= 30) && (
+          <nav className="tg-actions tg-pagination" aria-label="导入记录分页">
+            <button
+              className="admin-btn"
+              disabled={loading || !history.length}
+              onClick={() => {
+                setCursor(history[history.length - 1]);
+                setHistory((h) => h.slice(0, -1));
+              }}
+            >
+              上一页
+            </button>
+            <button
+              className="admin-btn"
+              disabled={loading || jobs.length < 30}
+              onClick={() => {
+                setHistory((h) => [...h, cursor]);
+                setCursor(jobs[jobs.length - 1].sequence);
+              }}
+            >
+              下一页
+            </button>
+          </nav>
+        )}
+      </section>
+    </div>
+  );
+}

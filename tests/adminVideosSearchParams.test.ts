@@ -50,11 +50,25 @@ test("admin video sources use typed URL keys without colliding drive and crawler
   assert.deepEqual(adminVideosSourceFilter("drive:shared"), {
     driveId: "shared",
     crawlerId: "",
+    sourceKind: "",
   });
   assert.deepEqual(adminVideosSourceFilter("crawler:shared"), {
     driveId: "",
     crawlerId: "shared",
+    sourceKind: "",
   });
+});
+
+test("Telegram source remains distinct from storage and survives URL round trips", () => {
+  const params = withAdminVideosSourceKey(new URLSearchParams("page=2"), "telegram");
+  assert.equal(readAdminVideosSourceKey(params), "telegram");
+  assert.deepEqual(adminVideosSourceFilter("telegram"), {
+    driveId: "", crawlerId: "", sourceKind: "telegram",
+  });
+  assert.deepEqual(adminVideosSourceFilter("drive:telegram"), {
+    driveId: "telegram", crawlerId: "", sourceKind: "",
+  });
+  assert.equal(withAdminVideosSourceKey(params, "all").has("source"), false);
 });
 
 test("admin video source updates preserve the active view and remove the default source", () => {

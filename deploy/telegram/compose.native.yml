@@ -1,0 +1,23 @@
+# Run from the project root:
+# docker compose -f deploy/telegram/compose.native.yml up -d --pull always
+name: video-site-telegram
+services:
+  telegram-bot-api:
+    image: ${TELEGRAM_BOT_API_IMAGE:-ghcr.io/nianzhibai/telegram-bot-api-for-91:stable}
+    command: ["--http-port", "7878"]
+    # Match the native backend service, which runs as root in this deployment.
+    # If its user changes, update this UID:GID and the shared directory permissions.
+    user: "0:0"
+    stop_grace_period: 30s
+    ports:
+      - "127.0.0.1:7878:7878"
+    volumes:
+      - /var/lib/telegram-bot-api:/var/lib/telegram-bot-api
+      # Default project database directory for a backend/ working directory.
+      - ../../backend/data/telegram-control:/run/video-site-telegram:ro
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

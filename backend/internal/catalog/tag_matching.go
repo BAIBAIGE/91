@@ -80,7 +80,7 @@ func (c *Catalog) buildMatcher(ctx context.Context) (*tagging.Matcher, error) {
 			return nil, err
 		}
 		origin = strings.ToLower(strings.TrimSpace(origin))
-		if origin == avSeriesOrigin {
+		if origin == avSeriesOrigin || origin == telegramTagOrigin {
 			continue
 		}
 		if !builtinTagsEnabled && normalizeTagSource(source) == fixedtags.SourceBuiltin {

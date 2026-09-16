@@ -1,4 +1,4 @@
-package remoteupload
+package mediaimport
 
 import (
 	"context"

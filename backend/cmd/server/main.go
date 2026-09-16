@@ -27,11 +27,12 @@ import (
 	"github.com/video-site/backend/internal/crawlerupload"
 	"github.com/video-site/backend/internal/drives/scriptcrawler"
 	"github.com/video-site/backend/internal/fingerprint"
+	"github.com/video-site/backend/internal/mediaimport"
 	"github.com/video-site/backend/internal/nightly"
 	"github.com/video-site/backend/internal/preview"
 	"github.com/video-site/backend/internal/proxy"
-	"github.com/video-site/backend/internal/remoteupload"
 	"github.com/video-site/backend/internal/subtitles"
+	"github.com/video-site/backend/internal/telegram"
 )
 
 const (
@@ -230,12 +231,23 @@ func main() {
 	}
 	go app.runFingerprintReconciler(ctx)
 
-	remoteUploader, err := remoteupload.New(remoteupload.Config{
-		Catalog:     cat,
-		UploadDir:   app.localUploadDir(),
-		FFprobePath: cfg.Preview.FFprobePath,
-		DiskReserve: cfg.RemoteUpload.DiskReserveBytes,
-		IdleTimeout: time.Duration(cfg.RemoteUpload.IdleTimeoutSeconds) * time.Second,
+	if err := migrateTelegramConfig(ctx, cat, configManager); err != nil {
+		log.Fatalf("migrate Telegram settings: %v", err)
+	}
+	telegramService := telegram.NewIntegration(cat, configManager, app.localUploadDir(), cfg.RemoteUpload.DiskReserveBytes, filepath.Join(dataRoot, "telegram-control"))
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = telegramService.Shutdown(shutdownCtx)
+	}()
+
+	remoteUploader, err := mediaimport.New(mediaimport.Config{
+		TelegramSource: telegramService,
+		Catalog:        cat,
+		UploadDir:      app.localUploadDir(),
+		FFprobePath:    cfg.Preview.FFprobePath,
+		DiskReserve:    cfg.RemoteUpload.DiskReserveBytes,
+		IdleTimeout:    time.Duration(cfg.RemoteUpload.IdleTimeoutSeconds) * time.Second,
 		OnVideoUploaded: func(v *catalog.Video) {
 			app.enqueueUploadedVideo(ctx, v)
 		},
@@ -246,6 +258,8 @@ func main() {
 	if err := remoteUploader.Start(ctx); err != nil {
 		log.Fatalf("start remote upload: %v", err)
 	}
+	telegramService.SetWake(remoteUploader.Wake)
+	telegramService.Start(ctx)
 
 	authr := &auth.Authenticator{Catalog: cat}
 	versionFilePath := strings.TrimSpace(os.Getenv("VIDEO_VERSION_FILE"))
@@ -313,6 +327,8 @@ func main() {
 	app.onTagsChanged = apiServer.InvalidateTagCache
 
 	adminServer := &api.AdminServer{
+		Telegram:               telegramService,
+		Imports:                remoteUploader,
 		Catalog:                cat,
 		Auth:                   authr,
 		Backups:                backupManager,
@@ -454,6 +470,7 @@ func main() {
 		WaitPreviewQueuesIdle:       app.waitAllPreviewQueuesIdle,
 		RunLocalAssetReconciliation: app.reconcileLocalGeneratedAssets,
 		RunMigration:                app.runCrawlerUploadMigration,
+		RunTelegramUpload:           app.runTelegramUploadMigration,
 		RestoreCrawlerVideos:        app.restoreScriptCrawlerVideos,
 		RunDedupeAssetCleanup:       app.cleanupDuplicateVideoAssets,
 	})

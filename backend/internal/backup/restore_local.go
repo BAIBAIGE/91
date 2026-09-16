@@ -164,6 +164,7 @@ SELECT videos.id
 		`DELETE FROM video_shares WHERE video_id IN (SELECT id FROM restore_discarded_local_videos)`,
 		`DELETE FROM video_tags WHERE video_id IN (SELECT id FROM restore_discarded_local_videos)`,
 		`UPDATE remote_upload_jobs SET completed_video_id = '' WHERE completed_video_id IN (SELECT id FROM restore_discarded_local_videos)`,
+		`DELETE FROM telegram_files WHERE video_id IN (SELECT id FROM restore_discarded_local_videos)`,
 		`DELETE FROM videos WHERE id IN (SELECT id FROM restore_discarded_local_videos)`,
 		`DELETE FROM scans WHERE drive_id IN (
 			SELECT id FROM drives WHERE lower(trim(kind)) = 'localstorage'
@@ -291,6 +292,7 @@ SELECT id, drive_id, file_id
 		`UPDATE video_tags
 		    SET video_id = (SELECT new_id FROM restore_local_video_ids WHERE old_id = video_tags.video_id)
 		  WHERE video_id IN (SELECT old_id FROM restore_local_video_ids)`,
+		`UPDATE telegram_files SET video_id = (SELECT new_id FROM restore_local_video_ids WHERE old_id = telegram_files.video_id) WHERE video_id IN (SELECT old_id FROM restore_local_video_ids)`,
 		`UPDATE remote_upload_jobs
 		    SET completed_video_id = (SELECT new_id FROM restore_local_video_ids WHERE old_id = remote_upload_jobs.completed_video_id)
 		  WHERE completed_video_id IN (SELECT old_id FROM restore_local_video_ids)`,

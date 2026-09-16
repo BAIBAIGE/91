@@ -361,7 +361,7 @@ test("admin video management separates source navigation from the modal advanced
   assert.match(videosPageSource, /function AdvancedVideoFilters/);
   assert.match(videosPageSource, /function VideoSourceNavigation/);
   assert.match(videosPageSource, /aria-label="视频来源筛选"/);
-  assert.match(videosPageSource, /label: "本地上传"/);
+  assert.match(videosPageSource, /label: "本地存储"/);
   assert.match(videosPageSource, /`drive:\$\{drive\.id\}`/);
   assert.match(videosPageSource, /`crawler:\$\{crawler\.id\}`/);
   assert.match(videosPageSource, />黑名单管理<\/span>/);
