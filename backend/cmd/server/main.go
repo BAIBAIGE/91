@@ -144,30 +144,12 @@ func main() {
 	if err != nil {
 		log.Fatalf("configure config manager: %v", err)
 	}
-	if _, err := migrateLegacyAdmin(context.Background(), cat, configManager); err != nil {
-		log.Fatalf("migrate administrator configuration: %v", err)
+	if err := migrateApplicationConfig(context.Background(), cat, configManager); err != nil {
+		log.Fatalf("migrate config.yaml: %v", err)
 	}
-	legacyRuntimeSettings, err := loadLegacyRuntimeSettings(context.Background(), cat)
+	fileConfig, cfg, err = loadApplicationConfig(cfgPath, workingDir)
 	if err != nil {
-		log.Fatalf("load legacy runtime settings: %v", err)
-	}
-	configMigrated, err := configManager.MigrateLegacyRuntimeSettings(legacyRuntimeSettings)
-	if err != nil {
-		log.Fatalf("migrate config.yaml runtime settings: %v", err)
-	}
-	if err := cat.DeleteSettings(
-		context.Background(),
-		legacyNightlyStartTimeSetting,
-		legacyBuiltinTagsEnabledSetting,
-	); err != nil {
-		log.Fatalf("remove migrated SQLite configuration: %v", err)
-	}
-	if configMigrated {
-		fileConfig, cfg, err = loadApplicationConfig(cfgPath, workingDir)
-		if err != nil {
-			log.Fatalf("reload migrated config: %v", err)
-		}
-		log.Printf("[config] migrated runtime settings into config.yaml")
+		log.Fatalf("reload migrated config: %v", err)
 	}
 
 	app := &App{
@@ -231,9 +213,6 @@ func main() {
 	}
 	go app.runFingerprintReconciler(ctx)
 
-	if err := migrateTelegramConfig(ctx, cat, configManager); err != nil {
-		log.Fatalf("migrate Telegram settings: %v", err)
-	}
 	telegramService := telegram.NewIntegration(cat, configManager, app.localUploadDir(), cfg.RemoteUpload.DiskReserveBytes, filepath.Join(dataRoot, "telegram-control"))
 	defer func() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

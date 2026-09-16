@@ -11,6 +11,8 @@ go build -o server ./cmd/server
 
 前端开发在仓库根目录 `npm run dev`，vite 会把 `/api`、`/p`、`/admin/api`、`/peer` 代理到 9192。所有配置项及注释见 [config.example.yaml](config.example.yaml)，正文只在涉及行为时提及个别配置。
 
+每次启动时，服务会先迁移旧版数据库配置，再按随程序打包的 `config.example.yaml` 重建实际配置：保留模板中同名字段的已有值（包括 `false`、`0`、空字符串和空列表），缺失字段使用模板默认值，字段顺序和注释统一采用模板，模板外的字段及自定义注释会被清理。更新完成后原子替换原文件并保留文件权限；配置没有变化时不会重复写入。升级无需手动复制模板，Docker 和原生部署使用同一流程。
+
 ## 目录
 
 仓库根目录是前端（Vite + React），`backend/` 是本文档描述的 Go 服务：
@@ -227,7 +229,7 @@ flowchart TB
 
 `cmd/server/main.go` 的顺序是刻意安排的：
 
-1. 读 `config.yaml`（缺失则从模板复制）、建 `data/` 目录、打开 SQLite。
+1. 读 `config.yaml`（缺失则从模板复制）、建 `data/` 目录、打开 SQLite；迁移旧设置后按当前模板更新配置，再加载最终配置。
 2. 挂载本地内置盘（`localupload`），启动指纹补扫协程。
 3. 恢复视频直链任务：删除中断的 `.part`，把执行中任务从字节 0 重新排队，并启动唯一下载 worker。
 4. 装配 `api.Server` / `api.AdminServer`，注册 chi 路由，挂前端静态资源。
