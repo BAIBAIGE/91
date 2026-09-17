@@ -20,6 +20,7 @@ COPY backend/go.mod backend/go.sum ./
 COPY backend/vendor/ vendor/
 COPY backend/cmd/ cmd/
 COPY backend/internal/ internal/
+COPY backend/config_template.go backend/config.example.yaml ./
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/server ./cmd/server
 
 # ---- Stage 3: Runtime ----
