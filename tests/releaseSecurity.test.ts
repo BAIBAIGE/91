@@ -51,6 +51,6 @@ test("container and release builds use supported Node and run checks", () => {
   assert.match(releaseWorkflow, /node-version: "24"/);
   assert.match(
     dockerWorkflow,
-    /run: npm run check[\s\S]*?uses: docker\/build-push-action@v6/
+    /run: npm run check[\s\S]*?uses: docker\/build-push-action@v7/
   );
 });
