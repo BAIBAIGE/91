@@ -1,0 +1,168 @@
+name: Telegram Bot API image
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+    # GitHub applies path filters to branch pushes, but not tag pushes.
+    paths:
+      - "deploy/telegram/**"
+      - ".github/workflows/telegram-image.yml"
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "deploy/telegram/**"
+      - ".github/workflows/telegram-image.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    outputs:
+      image: ${{ steps.image.outputs.name }}
+      tags: ${{ steps.meta.outputs.tags }}
+      labels: ${{ steps.meta.outputs.labels }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Test Telegram supervisor
+        run: python3 -m unittest discover -s deploy/telegram -p 'test_*.py'
+
+      - name: Determine image name
+        id: image
+        shell: bash
+        run: echo "name=$REGISTRY/${GITHUB_REPOSITORY_OWNER,,}/telegram-bot-api-for-91" >> "$GITHUB_OUTPUT"
+
+      - name: Extract Telegram image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.image.outputs.name }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=tag
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,prefix=sha-
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=raw,value=stable,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+
+  build:
+    name: Build Telegram (${{ matrix.arch }})
+    needs: prepare
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build Telegram image
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: ./deploy/telegram
+          platforms: linux/${{ matrix.arch }}
+          labels: ${{ needs.prepare.outputs.labels }}
+          # Publish immutable digests; only the merge job updates shared tags.
+          outputs: type=image,name=${{ needs.prepare.outputs.image }},push-by-digest=true,name-canonical=true,push=${{ github.event_name != 'pull_request' }}
+          cache-from: type=gha,scope=telegram-bot-api-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=telegram-bot-api-${{ matrix.arch }}
+
+      - name: Export image digest
+        if: github.event_name != 'pull_request'
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/digests"
+          printf '%s\n' "$DIGEST" > "$RUNNER_TEMP/digests/digest.txt"
+
+      - name: Upload image digest
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: telegram-digests-${{ matrix.arch }}
+          path: ${{ runner.temp }}/digests/digest.txt
+          if-no-files-found: error
+          retention-days: 1
+          overwrite: true
+
+  publish:
+    name: Publish multi-platform Telegram image
+    needs: [prepare, build]
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read
+      packages: write
+    steps:
+      - name: Download image digests
+        uses: actions/download-artifact@v4
+        with:
+          path: ${{ runner.temp }}/digests
+          pattern: telegram-digests-*
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Merge and publish image manifests
+        env:
+          IMAGE: ${{ needs.prepare.outputs.image }}
+          TAGS: ${{ needs.prepare.outputs.tags }}
+        shell: bash
+        run: |
+          sources=()
+          for arch in amd64 arm64; do
+            digest=$(cat "$RUNNER_TEMP/digests/telegram-digests-$arch/digest.txt")
+            if [[ ! "$digest" =~ ^sha256:[a-f0-9]{64}$ ]]; then
+              echo "Invalid image digest for $arch" >&2
+              exit 1
+            fi
+            sources+=("$IMAGE@$digest")
+          done
+          tags=()
+          while IFS= read -r tag; do
+            if [[ -n "$tag" ]]; then
+              tags+=(--tag "$tag")
+            fi
+          done <<< "$TAGS"
+          docker buildx imagetools create "${tags[@]}" "${sources[@]}"
