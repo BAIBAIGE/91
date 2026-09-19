@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -175,6 +176,50 @@ func TestClassifyStreamErrorRecognizesConfiguredDriveAuthFailures(t *testing.T) 
 	} {
 		if code, category := classifyStreamError(errors.New(text)); code != "drive_auth_failed" || category != "auth" {
 			t.Fatalf("classify %q = (%q, %q)", text, code, category)
+		}
+	}
+}
+
+func TestServeStreamUsesProviderFailureClassification(t *testing.T) {
+	tests := []struct {
+		kind drives.ProviderErrorKind
+		code string
+	}{
+		{drives.ProviderErrorAuth, "drive_auth_failed"},
+		{drives.ProviderErrorUnavailable, "drive_upstream_unavailable"},
+		{drives.ProviderErrorOther, "drive_stream_failed"},
+	}
+	for _, tt := range tests {
+		for _, initializing := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/init=%v", tt.kind, initializing), func(t *testing.T) {
+				// The account endpoint and an earlier rejection can mention tokens
+				// even when the final failure is a network/configuration problem.
+				err := fmt.Errorf("guangyapan init: %w", &drives.ProviderError{
+					Kind: tt.kind,
+					Err:  errors.New("guangyapan refresh: refresh_token request failed"),
+				})
+				registry := NewRegistry()
+				p := New(registry)
+				if initializing {
+					p.SetDriveInitError("guangyapan", "guangyapan", err)
+				} else {
+					registry.Set("guangyapan", &proxyResultDrive{
+						kind: "guangyapan", results: []proxyDriveResult{{err: err}},
+					})
+				}
+				rr := httptest.NewRecorder()
+				p.ServeStream(rr, httptest.NewRequest(http.MethodGet, "/p/stream/guangyapan/file", nil), "guangyapan", "file")
+				var payload streamErrorResponse
+				if err := json.Unmarshal(rr.Body.Bytes(), &payload); err != nil {
+					t.Fatal(err)
+				}
+				if rr.Code != http.StatusBadGateway || payload.Code != tt.code {
+					t.Fatalf("status=%d payload=%+v, want %s", rr.Code, payload, tt.code)
+				}
+				if tt.kind == drives.ProviderErrorUnavailable && payload.Message != "光鸭网盘上游服务暂时不可用，请稍后重试。" {
+					t.Fatalf("temporary failure message = %q", payload.Message)
+				}
+			})
 		}
 	}
 }

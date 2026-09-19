@@ -132,6 +132,24 @@ var ErrNotSupported = errors.New("operation not supported by this drive")
 // fall back to the original StreamURL without treating the drive as unhealthy.
 var ErrGenerationStreamUnavailable = errors.New("generation stream unavailable")
 
+// ProviderErrorKind lets callers distinguish rejected credentials from an
+// unavailable provider without guessing from words such as "refresh token".
+type ProviderErrorKind string
+
+const (
+	ProviderErrorAuth        ProviderErrorKind = "auth"
+	ProviderErrorUnavailable ProviderErrorKind = "unavailable"
+	ProviderErrorOther       ProviderErrorKind = "other"
+)
+
+type ProviderError struct {
+	Kind ProviderErrorKind
+	Err  error
+}
+
+func (e *ProviderError) Error() string { return e.Err.Error() }
+func (e *ProviderError) Unwrap() error { return e.Err }
+
 // RateLimitError 表示上游服务正在限流。RetryAfter 为 0 时由调用方选择默认冷却时间。
 type RateLimitError struct {
 	Provider   string

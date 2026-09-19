@@ -68,6 +68,7 @@ type Driver struct {
 	apiNext         map[string]time.Time
 	apiCooldown     time.Time
 	apiRateInterval time.Duration
+	authRetryDelay  time.Duration
 	uploadGate      chan struct{}
 
 	// newOSSBucket is intentionally unset in production. Tests inject the
@@ -156,6 +157,7 @@ func New(c Config) *Driver {
 		onCredentialsUpdate: c.OnCredentialsUpdate,
 		apiNext:             make(map[string]time.Time),
 		apiRateInterval:     defaultAPIRateInterval,
+		authRetryDelay:      500 * time.Millisecond,
 		uploadGate:          make(chan struct{}, 1),
 		files:               make(map[string]drives.Entry),
 	}
@@ -175,17 +177,27 @@ func (d *Driver) Init(ctx context.Context) error {
 	d.saveCredentials()
 
 	accessToken, refreshToken := d.tokenSnapshot()
+	var authErr error
 	if accessToken != "" {
-		if err := d.validateToken(ctx); err == nil {
+		authErr = d.validateToken(ctx)
+		if authErr == nil {
 			return d.prepareRootFolder(ctx)
+		}
+		if !isRejectedCredential(authErr) {
+			return fmt.Errorf("guangyapan init: %w", authErr)
 		}
 		d.clearAccessToken(accessToken)
 	}
 	if refreshToken != "" {
-		if err := d.refresh(ctx); err == nil {
-			if err := d.validateToken(ctx); err == nil {
-				return d.prepareRootFolder(ctx)
+		authErr = d.refresh(ctx)
+		if authErr == nil {
+			if err := d.validateToken(ctx); err != nil {
+				return fmt.Errorf("guangyapan init after refresh: %w", err)
 			}
+			return d.prepareRootFolder(ctx)
+		}
+		if !isRejectedCredential(authErr) {
+			return fmt.Errorf("guangyapan init: %w", authErr)
 		}
 	}
 	if d.phoneNumber != "" && d.verifyCode != "" {
@@ -203,7 +215,10 @@ func (d *Driver) Init(ctx context.Context) error {
 		}
 		return errors.New("光鸭验证码已发送，请填写 verify_code 后再次保存")
 	}
-	return errors.New("guangyapan init: provide access_token / refresh_token, or use QR login in admin")
+	if authErr != nil {
+		return fmt.Errorf("guangyapan init: %w", authErr)
+	}
+	return &drives.ProviderError{Kind: drives.ProviderErrorAuth, Err: errors.New("guangyapan init: no credentials; provide access_token / refresh_token, or use QR login in admin")}
 }
 
 func (d *Driver) List(ctx context.Context, dirID string) ([]drives.Entry, error) {
@@ -522,19 +537,11 @@ func (d *Driver) validateToken(ctx context.Context) error {
 		return errors.New("guangyapan validate token: access token is empty")
 	}
 	var out userMeResp
-	resp, err := d.accountClient.R().
-		SetContext(ctx).
-		SetHeader("Authorization", "Bearer "+accessToken).
-		SetResult(&out).
-		Get("/v1/user/me")
-	if err != nil {
+	if err := d.requestAccount(ctx, "validate token", http.MethodGet, "/v1/user/me", accessToken, nil, &out); err != nil {
 		return err
 	}
-	if resp.IsError() {
-		return fmt.Errorf("guangyapan validate token: status=%d body=%s", resp.StatusCode(), resp.String())
-	}
 	if strings.TrimSpace(out.Sub) == "" {
-		return errors.New("guangyapan validate token: empty user sub")
+		return &drives.ProviderError{Kind: drives.ProviderErrorOther, Err: errors.New("guangyapan validate token: invalid response: empty user sub")}
 	}
 	return nil
 }
@@ -563,28 +570,16 @@ func (d *Driver) refresh(ctx context.Context, rejectedToken ...guangYaRejectedTo
 	if refreshToken == "" {
 		return errors.New("guangyapan refresh: refresh_token is empty")
 	}
-	const refreshPath = "account:/v1/auth/token"
-	if err := d.waitAPIRate(ctx, refreshPath); err != nil {
-		return err
-	}
 	var out tokenResp
-	resp, err := d.accountClient.R().
-		SetContext(ctx).
-		SetBody(map[string]any{
-			"client_id":     d.clientID,
-			"grant_type":    "refresh_token",
-			"refresh_token": refreshToken,
-		}).
-		SetResult(&out).
-		Post("/v1/auth/token")
-	if err != nil {
+	if err := d.requestAccount(ctx, "refresh", http.MethodPost, "/v1/auth/token", "", map[string]any{
+		"client_id":     d.clientID,
+		"grant_type":    "refresh_token",
+		"refresh_token": refreshToken,
+	}, &out); err != nil {
 		return err
 	}
-	if guangYaPanLooksRateLimited(resp.StatusCode(), out.ErrorCode, out.ErrorDesc) {
-		return d.guangYaPanRateLimitError(refreshPath, resp.Header().Get("Retry-After"), resp.StatusCode(), out.ErrorCode, accountErr(out.ErrorDesc, out.Error, resp))
-	}
-	if resp.IsError() || out.Error != "" || strings.TrimSpace(out.AccessToken) == "" {
-		return fmt.Errorf("guangyapan refresh: %s", accountErr(out.ErrorDesc, out.Error, resp))
+	if strings.TrimSpace(out.AccessToken) == "" {
+		return &drives.ProviderError{Kind: drives.ProviderErrorOther, Err: errors.New("guangyapan refresh: invalid response: empty access_token")}
 	}
 	newRefreshToken := strings.TrimSpace(out.RefreshToken)
 	if newRefreshToken == "" {

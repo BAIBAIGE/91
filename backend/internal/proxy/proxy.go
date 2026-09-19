@@ -568,6 +568,17 @@ func classifyStreamError(err error) (code, category string) {
 	if _, ok := drives.RateLimitRetryAfter(err); ok {
 		return "drive_rate_limited", "rate_limit"
 	}
+	var provider *drives.ProviderError
+	if errors.As(err, &provider) {
+		switch provider.Kind {
+		case drives.ProviderErrorAuth:
+			return "drive_auth_failed", "auth"
+		case drives.ProviderErrorUnavailable:
+			return "drive_upstream_unavailable", "unavailable"
+		default:
+			return "drive_stream_failed", "generic"
+		}
+	}
 	if errors.Is(err, os.ErrNotExist) || drives.ErrorMentionsHTTPStatus(err, http.StatusNotFound, http.StatusGone) {
 		return "drive_source_not_found", "not_found"
 	}
