@@ -4,10 +4,7 @@ import { parseTelegramUserIDs } from "../telegram/config";
 export const TELEGRAM_DEFAULTS = {
   telegramEnabled: false,
   telegramBotToken: "",
-  telegramApiId: 0,
-  telegramApiHash: "",
   telegramApiBaseUrl: "http://telegram-bot-api:7878",
-  telegramLocalFilesRoot: "/var/lib/telegram-bot-api",
   telegramAllowedUserIds: "",
   telegramSiteBaseUrl: "",
   telegramMaxFileSizeBytes: 4 * 1024 ** 3,
@@ -24,10 +21,7 @@ export type TelegramField = keyof TelegramDraft;
 export const TELEGRAM_YAML_KEYS: Record<TelegramField, string> = {
   telegramEnabled: "enabled",
   telegramBotToken: "bot_token",
-  telegramApiId: "api_id",
-  telegramApiHash: "api_hash",
   telegramApiBaseUrl: "api_base_url",
-  telegramLocalFilesRoot: "local_files_root",
   telegramAllowedUserIds: "allowed_user_ids",
   telegramSiteBaseUrl: "site_base_url",
   telegramMaxFileSizeBytes: "max_file_size_bytes",

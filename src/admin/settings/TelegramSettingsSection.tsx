@@ -70,31 +70,6 @@ export function TelegramSettingsSection({
                   placeholder="填写 BotFather 提供的 Token"
                 />
               </label>
-              <label>
-                API ID
-                <input
-                  type="number"
-                  min="1"
-                  max="2147483647"
-                  step="1"
-                  value={draft.telegramApiId || ""}
-                  onChange={(e) =>
-                    onChange("telegramApiId", Number(e.target.value))
-                  }
-                  placeholder="Telegram 应用 API ID"
-                />
-              </label>
-              <label>
-                API Hash
-                <input
-                  type="text"
-                  autoComplete="off"
-                  spellCheck={false}
-                  value={draft.telegramApiHash}
-                  onChange={(e) => onChange("telegramApiHash", e.target.value)}
-                  placeholder="填写 32 位 API Hash"
-                />
-              </label>
             </div>
           </section>
           <section
@@ -140,16 +115,6 @@ export function TelegramSettingsSection({
                   value={draft.telegramApiBaseUrl}
                   onChange={(e) =>
                     onChange("telegramApiBaseUrl", e.target.value)
-                  }
-                />
-              </label>
-              <label>
-                视频存放目录
-                <input
-                  required
-                  value={draft.telegramLocalFilesRoot}
-                  onChange={(e) =>
-                    onChange("telegramLocalFilesRoot", e.target.value)
                   }
                 />
               </label>

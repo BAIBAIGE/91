@@ -42,6 +42,29 @@ test("installer distinguishes readiness failures from process start failures", (
   assert.doesNotMatch(installSource, /die "service failed to start"/);
 });
 
+test("installer prepares Telegram deployment once and preserves edited mounts", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "91-telegram-deployment-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  writeFileSync(join(root, "config.example.yaml"), 'server:\n  listen: "0.0.0.0:9191"\n');
+  const example = readFileSync(new URL("../deploy/telegram/compose.native.yml", import.meta.url), "utf8");
+  writeFileSync(join(root, "telegram.example.yml"), example);
+  const installer = fileURLToPath(new URL("../install.sh", import.meta.url));
+  const prepare = () => {
+    const result = spawnSync("bash", ["-c", 'source "$1" help >/dev/null; prepare_config', "bash", installer], {
+      encoding: "utf8",
+      env: { ...process.env, INSTALL_PATH: root },
+    });
+    assert.equal(result.status, 0, result.stderr);
+  };
+  prepare();
+  const compose = join(root, "telegram.yml");
+  assert.equal(readFileSync(compose, "utf8"), example);
+  const customized = example.replace("/var/lib/telegram-bot-api:/var/lib/telegram-bot-api", "/nzb/tg:/var/lib/telegram-bot-api");
+  writeFileSync(compose, customized);
+  prepare();
+  assert.equal(readFileSync(compose, "utf8"), customized);
+});
+
 test("password reset delegates to the server without prompting for a password", () => {
   const start = installSource.indexOf("reset_password() {");
   const end = installSource.indexOf("\nshow_menu()", start);

@@ -75,20 +75,15 @@ remote_upload:
   idle_timeout_seconds: 120
 
 # Telegram：热更新，接入设置变更后重建接收器，下载任务会等待重连后重试。
-# 需部署配套 Bot API 服务；保存后请在 Telegram 页面确认连接状态。
+# 连接独立部署的 Local Bot API 服务；保存后请在 Telegram 页面确认连接状态。
 telegram:
-  # 启用需完整凭据；关闭会停止接收器和配套 Bot API 进程。
+  # 启用需填写 Bot Token；关闭只停止本站接收和导入，不控制 Bot API 进程。
   enabled: false
   # BotFather 提供的机器人 Token。
   bot_token: ""
-  # Telegram 应用凭据；修改后自动重启配套 Bot API 进程。
-  api_id: 0
-  api_hash: ""
+  # API ID/API Hash 由独立 Bot API 服务的部署配置管理。
   # 已部署的 Bot API 地址；原生后端通常使用 http://127.0.0.1:7878。
   api_base_url: "http://telegram-bot-api:7878"
-  # 共享视频目录；双方须以相同绝对路径读写同一文件系统。
-  # 视频在 library 子目录中直接入库，不复制到普通上传目录。
-  local_files_root: "/var/lib/telegram-bot-api"
   # 允许发送视频的用户 ID；留空时仅响应 /id 等引导消息。
   allowed_user_ids: []
   # 选填，用于生成机器人回复中的视频链接。

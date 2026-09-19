@@ -348,7 +348,7 @@ func (s *Service) invalidateMissingVideo(ctx context.Context, botID int64, uniqu
 		return err
 	}
 	if err == nil && v != nil && v.DriveID == telegramstorage.DriveID {
-		info, e := telegramstorage.New(s.cat).Stat(ctx, v.FileID)
+		info, e := telegramstorage.New(s.cat, func() string { return s.cfg.LocalFilesRoot }).Stat(ctx, v.FileID)
 		if e == nil && info.Size > 0 {
 			return nil
 		}

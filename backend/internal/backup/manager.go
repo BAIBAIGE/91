@@ -36,6 +36,8 @@ type Config struct {
 	RestartManaged bool
 	Now            func() time.Time
 	AvailableBytes func(path string) (int64, error)
+
+	TelegramFilesRoot func() string
 }
 
 type Manager struct {
@@ -55,6 +57,8 @@ type Manager struct {
 	restartManaged bool
 	now            func() time.Time
 	availableBytes func(string) (int64, error)
+
+	telegramFilesRoot func() string
 
 	mu              sync.Mutex
 	current         *TaskStatus
@@ -137,7 +141,11 @@ func NewManager(cfg Config) (*Manager, error) {
 		uploadProgress:  make(map[string]OperationProgress),
 		restart:         make(chan struct{}, 1),
 	}
+	m.telegramFilesRoot = cfg.TelegramFilesRoot
 	m.uploadRoot = filepath.Join(m.backupDir, ".uploads")
+	if m.telegramFilesRoot == nil {
+		m.telegramFilesRoot = func() string { return cfg.AppConfig.Telegram.LocalFilesRoot }
+	}
 	if m.availableBytes == nil {
 		m.availableBytes = availableDiskBytes
 	}

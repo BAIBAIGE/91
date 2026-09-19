@@ -27,7 +27,7 @@ func TestTelegramLibraryBackupRestoresPortableVideosAndPreservesLiveLibrary(t *t
 				t.Helper()
 				fileID := id + ".media"
 				writeTestFile(t, filepath.Join(root, fileID), []byte(body))
-				if _, err := env.cat.ReserveTelegramLocalFile(ctx, catalog.TelegramLocalFile{FileID: fileID, Root: root, JobID: id}); err != nil {
+				if _, err := env.cat.ReserveTelegramLocalFile(ctx, catalog.TelegramLocalFile{FileID: fileID, JobID: id}); err != nil {
 					t.Fatal(err)
 				}
 				if err := env.cat.UpsertVideo(ctx, &catalog.Video{ID: id, DriveID: catalog.TelegramLocalDriveID, FileID: fileID, FileName: id + ".mp4", Title: id, Size: int64(len(body)), Ext: "mp4"}); err != nil {
@@ -35,6 +35,12 @@ func TestTelegramLibraryBackupRestoresPortableVideosAndPreservesLiveLibrary(t *t
 				}
 			}
 			seed("source", "saved video")
+			relocated := filepath.Join(t.TempDir(), "relocated")
+			if err := os.Rename(filepath.Dir(root), relocated); err != nil {
+				t.Fatal(err)
+			}
+			root = filepath.Join(relocated, "library")
+			env.cfg.Telegram.LocalFilesRoot = relocated
 			writeTestFile(t, filepath.Join(filepath.Dir(root), "bot-session"), []byte("PRIVATE_BOT_SESSION"))
 			writeTestFile(t, filepath.Join(root, "unregistered.media"), []byte("unregistered file"))
 			record := createAndWaitForBackup(t, env.manager, selection)

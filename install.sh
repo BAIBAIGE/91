@@ -196,7 +196,7 @@ backup_install_files() {
   local backup="$1"
   mkdir -p "$backup"
   cp -a "$INSTALL_PATH/server" "$backup/server"
-  for item in dist config.example.yaml config.yaml .version; do
+  for item in dist config.example.yaml config.yaml telegram.example.yml telegram.yml .env.telegram.example .version; do
     if [[ -e "$INSTALL_PATH/$item" ]]; then
       cp -a "$INSTALL_PATH/$item" "$backup/$item"
     fi
@@ -207,7 +207,7 @@ restore_install_files() {
   local backup="$1"
   mkdir -p "$INSTALL_PATH"
   cp -a "$backup/server" "$INSTALL_PATH/server"
-  for item in dist config.example.yaml config.yaml .version; do
+  for item in dist config.example.yaml config.yaml telegram.example.yml telegram.yml .env.telegram.example .version; do
     rm -rf "${INSTALL_PATH:?}/$item"
     if [[ -e "$backup/$item" ]]; then
       cp -a "$backup/$item" "$INSTALL_PATH/$item"
@@ -220,6 +220,10 @@ prepare_config() {
   local cfg="$INSTALL_PATH/config.yaml"
   local example="$INSTALL_PATH/config.example.yaml"
   mkdir -p "$INSTALL_PATH/data"
+
+  if [[ ! -f "$INSTALL_PATH/telegram.yml" && -f "$INSTALL_PATH/telegram.example.yml" ]]; then
+    cp "$INSTALL_PATH/telegram.example.yml" "$INSTALL_PATH/telegram.yml"
+  fi
 
   if [[ ! -f "$cfg" ]]; then
     cp "$example" "$cfg"
@@ -603,7 +607,7 @@ restart_service_ready() {
 }
 
 fetch_and_unpack() {
-  local tmp archive url root
+  local tmp archive url root item
   tmp="$(mktemp -d)"
   archive="$tmp/$(asset_name)"
   url="$(download_base_url)/$(asset_name)"
@@ -631,6 +635,11 @@ fetch_and_unpack() {
   rm -rf "$INSTALL_PATH/dist"
   cp -R "$root/dist" "$INSTALL_PATH/dist"
   cp "$root/config.example.yaml" "$INSTALL_PATH/config.example.yaml"
+  for item in telegram.example.yml .env.telegram.example; do
+    if [[ -f "$root/$item" ]]; then
+      cp "$root/$item" "$INSTALL_PATH/$item"
+    fi
+  done
   chmod +x "$INSTALL_PATH/server"
   rm -rf "$tmp"
 }

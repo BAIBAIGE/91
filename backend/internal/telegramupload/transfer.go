@@ -29,12 +29,13 @@ type localSource interface {
 }
 
 type Config struct {
-	Catalog         *catalog.Catalog
-	Target          drives.Drive
-	LocalDirectory  string
-	TargetDirectory string
-	UploadProxy     string
-	OnMigrated      func(*catalog.Video)
+	Catalog           *catalog.Catalog
+	Target            drives.Drive
+	LocalDirectory    string
+	TelegramDirectory string
+	TargetDirectory   string
+	UploadProxy       string
+	OnMigrated        func(*catalog.Video)
 }
 
 // Run makes one cancellable sweep. Failed videos remain local and are retried
@@ -120,7 +121,7 @@ func transferOne(ctx context.Context, cfg Config, uploader drives.Uploader, pare
 	}
 	var storage localSource = localupload.New(cfg.LocalDirectory)
 	if v.DriveID == telegramstorage.DriveID {
-		storage = telegramstorage.New(cfg.Catalog)
+		storage = telegramstorage.New(cfg.Catalog, func() string { return cfg.TelegramDirectory })
 	}
 	localPath, err := storage.LocalPath(ctx, v.FileID)
 	if err != nil {

@@ -3,10 +3,7 @@ package config
 import (
 	"errors"
 	"net/url"
-	"os"
-	"path/filepath"
 	"regexp"
-	"runtime"
 	"strings"
 
 	"github.com/video-site/backend/internal/scopedproxy"
@@ -14,11 +11,8 @@ import (
 
 type Telegram struct {
 	BotToken            string  `yaml:"bot_token" json:"-"`
-	APIID               int64   `yaml:"api_id" json:"-"`
-	APIHash             string  `yaml:"api_hash" json:"-"`
 	Enabled             bool    `yaml:"enabled" json:"enabled"`
 	APIBaseURL          string  `yaml:"api_base_url" json:"apiBaseUrl"`
-	LocalFilesRoot      string  `yaml:"local_files_root" json:"localFilesRoot"`
 	AllowedUserIDs      []int64 `yaml:"allowed_user_ids" json:"allowedUserIds"`
 	SiteBaseURL         string  `yaml:"site_base_url" json:"siteBaseUrl"`
 	MaxFileSizeBytes    int64   `yaml:"max_file_size_bytes" json:"maxFileSizeBytes"`
@@ -27,25 +21,21 @@ type Telegram struct {
 	UploadDriveID       string  `yaml:"upload_drive_id" json:"uploadDriveId"`
 	UploadDirectory     string  `yaml:"upload_directory" json:"uploadDirectory"`
 	UploadProxy         string  `yaml:"upload_proxy" json:"-"`
+
+	// These runtime paths come exclusively from the deployment's Compose file.
+	APIFilesRoot   string `yaml:"-" json:"-"`
+	LocalFilesRoot string `yaml:"-" json:"-"`
 }
 
 var telegramTokenPattern = regexp.MustCompile(`^[0-9]+:[A-Za-z0-9_-]+$`)
-var telegramAPIHashPattern = regexp.MustCompile(`^[a-fA-F0-9]{32}$`)
 
 func (t *Telegram) Validate() error {
 	t.BotToken = strings.TrimSpace(t.BotToken)
-	t.APIHash = strings.TrimSpace(t.APIHash)
 	if t.BotToken != "" && !telegramTokenPattern.MatchString(t.BotToken) {
 		return errors.New("telegram.bot_token 格式无效")
 	}
-	if t.APIHash != "" && !telegramAPIHashPattern.MatchString(t.APIHash) {
-		return errors.New("telegram.api_hash 必须为 32 位十六进制字符")
-	}
-	if t.APIID < 0 || t.APIID > 2147483647 {
-		return errors.New("telegram.api_id 必须为有效的正整数")
-	}
-	if t.Enabled && (t.BotToken == "" || t.APIHash == "" || t.APIID == 0) {
-		return errors.New("启用 Telegram 前请填写 bot_token、api_id 和 api_hash")
+	if t.Enabled && t.BotToken == "" {
+		return errors.New("启用 Telegram 前请填写 bot_token")
 	}
 
 	if t.AllowedUserIDs == nil {
@@ -72,16 +62,6 @@ func (t *Telegram) Validate() error {
 	if t.APIBaseURL == "" {
 		t.APIBaseURL = "http://telegram-bot-api:7878"
 	}
-	if t.LocalFilesRoot == "" {
-		t.LocalFilesRoot = "/var/lib/telegram-bot-api"
-		if runtime.GOOS == "windows" {
-			base := os.Getenv("ProgramData")
-			if base == "" {
-				base = `C:\ProgramData`
-			}
-			t.LocalFilesRoot = filepath.Join(base, "telegram-bot-api")
-		}
-	}
 	if t.MaxFileSizeBytes == 0 {
 		t.MaxFileSizeBytes = 4 << 30
 	}
@@ -99,9 +79,6 @@ func (t *Telegram) Validate() error {
 	}
 	if t.FetchTimeoutSeconds < 30 || t.FetchTimeoutSeconds > 86400 {
 		return errors.New("telegram.fetch_timeout_seconds 必须在 30 到 86400 之间")
-	}
-	if !filepath.IsAbs(t.LocalFilesRoot) {
-		return errors.New("telegram.local_files_root 必须为绝对路径")
 	}
 	u, err := url.Parse(t.APIBaseURL)
 	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil || u.RawQuery != "" || u.Fragment != "" || strings.Trim(u.Path, "/") != "" {
@@ -134,6 +111,8 @@ func (m *Manager) TelegramSettings() Telegram {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	cfg := m.current.Telegram
+	cfg.APIFilesRoot = m.telegramStorage.apiRoot
+	cfg.LocalFilesRoot = m.telegramStorage.localRoot
 	cfg.AllowedUserIDs = append([]int64{}, cfg.AllowedUserIDs...)
 	return cfg
 }

@@ -262,7 +262,7 @@ func TestTransferReadsSharedLibraryAndReleasesOnlyAfterSuccess(t *testing.T) {
 			if err := os.Rename(old, path); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := cfg.Catalog.ReserveTelegramLocalFile(ctx, catalog.TelegramLocalFile{FileID: id, Root: root, JobID: "job"}); err != nil {
+			if _, err := cfg.Catalog.ReserveTelegramLocalFile(ctx, catalog.TelegramLocalFile{FileID: id, JobID: "job"}); err != nil {
 				t.Fatal(err)
 			}
 			v.DriveID = catalog.TelegramLocalDriveID
@@ -270,6 +270,12 @@ func TestTransferReadsSharedLibraryAndReleasesOnlyAfterSuccess(t *testing.T) {
 			if err := cfg.Catalog.MigrateVideoToDrive(ctx, v.ID, catalog.VideoDriveMigration{DriveID: v.DriveID, FileID: v.FileID, FileName: v.FileName}); err != nil {
 				t.Fatal(err)
 			}
+			relocated := filepath.Join(t.TempDir(), "relocated")
+			if err := os.Rename(filepath.Dir(root), relocated); err != nil {
+				t.Fatal(err)
+			}
+			cfg.TelegramDirectory = relocated
+			path = filepath.Join(relocated, "library", id)
 			cloud.failStat = fail
 			err := Run(ctx, cfg)
 			if (err != nil) != fail {

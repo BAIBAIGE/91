@@ -1,54 +1,117 @@
 # Telegram 部署
 
-本功能接收白名单用户私聊转发的视频和视频文件，自动保存到本地视频库。在 **配置面板 → Telegram** 管理接入设置，在 **Telegram** 管理网盘转存、查看连接状态和导入记录。消息链接、群组监听和历史消息抓取暂不支持。
+本功能接收白名单用户私聊转发的视频和视频文件，保存到本地视频库，并可定时转存网盘。接收设置位于 **配置面板 → Telegram**，任务和转存设置位于 **Telegram** 页面。消息链接、群组监听和历史消息抓取暂不支持。
 
-**Telegram** 入口仅在配置面板中启用 Telegram 并保存成功后显示。关闭并保存后隐藏入口，直接访问接入页会跳转到 Telegram 配置；连接异常不影响已启用入口的显示。
+项目通过标准 HTTP 接口连接独立部署的 Local Bot API Server，不管理其进程。默认部署使用第三方预构建镜像 `aiogram/telegram-bot-api:latest`，其中运行 Telegram 官方服务端程序。项目不再构建或发布 Bot API 镜像。[镜像说明](https://hub.docker.com/r/aiogram/telegram-bot-api)
 
-## 准备凭据
+## 配置归属
 
-需要准备两组凭据：
+| 配置 | 保存位置 | 生效方式 |
+| --- | --- | --- |
+| Bot Token、白名单、站点地址、任务限制 | 网站面板对应的 `config.yaml` | 保存后自动应用 |
+| Bot API 地址 | 网站面板对应的 `config.yaml` | 保存后自动应用 |
+| TG 数据目录 | Compose 文件中的共享数据挂载 | 重建 Bot API 并重启网站后读取 |
+| 网盘转存设置 | 网站面板对应的 `config.yaml` | 下一次转存任务使用新配置 |
+| API ID、API Hash | Bot API 部署环境；配套示例使用 `.env.telegram` | 重新创建 Bot API 容器 |
+| Local 模式、监听端口、持久化卷 | Docker Compose 或其他部署工具 | 重新创建 Bot API 服务 |
 
-- 在 Telegram 的 BotFather 创建机器人，取得 Bot Token。
-- 在 Telegram 的开发者管理页面申请自己的 `api_id` 和 `api_hash`，供自建 Bot API 服务使用。[官方申请说明](https://core.telegram.org/api/obtaining_api_id)
-
-三项凭据统一在后台 **配置面板 → Telegram** 填写，保存后会在输入框中显示原值，方便查看和修改。全部设置和凭据保存在 `config.yaml` 的 `telegram` 段，可视化分栏与源码编辑共用草稿、差异预览和保存流程。清空字段会保存为空；启用接入时必须填写完整凭据。状态和任务接口不返回凭据。
-
-机器人服务采用官方 `telegram-bot-api` 的 `--local` 模式，以支持大视频下载。配套容器包含启动管理程序：没有配置时等待，收到面板配置后自动启动 Bot API，API 凭据变化时先停止旧进程再启动新进程。
+Bot Token 从 BotFather 获取。API ID/API Hash 从 Telegram 开发者管理页面申请，供独立服务连接 Telegram 使用；它们不再通过网站面板保存或下发。[应用凭据说明](https://core.telegram.org/api/obtaining_api_id)
 
 ## Docker 部署
 
-在项目根目录执行，无需创建或编辑 `.env.telegram`：
+在项目根目录准备部署凭据文件：
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.telegram.yml up -d --pull always
+cp .env.telegram.example .env.telegram
+chmod 600 .env.telegram
 ```
 
-网站和配套服务都直接拉取 GHCR 预构建镜像，服务器无需编译或安装编译工具链。Bot API 镜像为 `ghcr.io/nianzhibai/telegram-bot-api-for-91:stable`，包含固定版本的官方 Bot API 和面板配置管理程序，支持 `linux/amd64` 与 `linux/arm64`。两个服务启动后，Bot API 容器等待面板配置；项目网站可正常使用。
+编辑 `.env.telegram`，填写实际值：
 
-配套文件设置了两个专用共享卷：
+```dotenv
+TELEGRAM_API_ID=你的应用ID
+TELEGRAM_API_HASH=你的应用Hash
+```
 
-- `telegram-cache`：双方都以读写方式挂载为 `/var/lib/telegram-bot-api`；Bot API 下载缓存、进程状态和项目管理的 `library/` 视频目录位于此处。`library/` 中的文件是正式视频，不能当作缓存清空。
-- `telegram-control`：项目写入派生的 API ID/API Hash 配置，Bot API 容器只读；不包含 Bot Token。配套容器以非 root 用户运行，附加组 0 用于读取项目生成的配置。
+然后启动：
 
-项目通过 `http://telegram-bot-api:7878` 访问 Bot API，不向宿主机发布 7878 端口。服务器网络需要能访问 Telegram。这里使用轮询，不要求配置公网 webhook。
+```bash
+docker compose --env-file .env.telegram -f docker-compose.yml -f docker-compose.telegram.yml up -d --pull always
+```
+
+Compose 使用 `TELEGRAM_LOCAL=1` 启用大文件和本地路径模式，使用 `TELEGRAM_HTTP_PORT=7878` 对齐项目默认地址。aiogram 镜像自身的默认端口是 8081；如果接入另外部署的服务，应填写该服务实际的地址和端口。
+
+网站通过 `http://telegram-bot-api:7878` 连接配套服务，端口仅在 Docker 网络内使用。Bot API 的 API 凭据只注入 Bot API 容器；Bot Token 在网站面板填写。`.env.telegram` 已被 Git 和 Docker 构建上下文忽略。
+
+网站容器只读挂载 `docker-compose.telegram.yml`，启动时从其中两个服务的挂载关系识别共享目录。两个容器都将 `telegram-cache` 卷读写挂载到 `/var/lib/telegram-bot-api`。其中包含 Bot API 数据和项目管理的 `library/` 正式视频目录，不能将整个卷当作临时缓存清空。
+
+需要选择其他已发布版本时，在 `.env.telegram` 中设置 `TELEGRAM_BOT_API_IMAGE`，例如固定镜像摘要。升级 Bot API 时重新执行启动命令。镜像覆盖适用于接受这些环境变量并使用配套数据目录约定的部署。
 
 ## 后台设置
 
-1. 打开 **配置面板 → Telegram**，填写 Bot Token、API ID 和 API Hash。
-2. 开启接入，填写允许的用户数字 ID。首次不知道 ID 时可以先留空白名单。
-3. 全 Docker 部署下，Bot API 地址和共享视频目录保留默认值。
+1. 打开 **配置面板 → Telegram**，填写 Bot Token。
+2. 填写 Bot API 地址；全 Docker 配套部署可以使用默认值。文件目录直接从 Compose 读取，不在 Web 中展示或编辑。
+3. 开启接入，填写允许的用户数字 ID。首次不知道 ID 时可以留空白名单。
 4. 可选填写站点地址，用于成功通知中的视频详情链接。
-5. 点击 **预览并保存配置** 并确认差异，然后进入 **Telegram** 查看连接状态。连接成功后显示机器人用户名；无需重启项目。
-6. 白名单为空时，私聊机器人发送 `/id`，将回复的数字 ID 填入 **配置面板 → Telegram**，再次保存。
-7. 转发一个较小的视频，确认后台记录变为“已保存”并能打开视频详情。
+5. 保存配置，进入 **Telegram** 查看连接状态。连接成功后显示机器人用户名。
+6. 白名单为空时，私聊机器人发送 `/id`，将回复的数字 ID 填入允许用户列表并再次保存。
+7. 转发一个较小的视频，确认后台记录变为“已保存”，并能打开视频详情；然后验证超过 20 MB 的视频。
 
-**Telegram** 页的“检查当前连接”使用已保存并应用的配置，不消费或发送消息。修改 Bot Token 或 API Hash 时填写新值；需要清空凭据时先关闭接入。修改 API ID/API Hash 会自动重启配套 Bot API 进程，其他接入设置只重建项目的接收器。正在下载的任务会中断并等待重新连接，已保存的视频不受影响。关闭接入也会停止配套 Bot API 进程，容器回到等待状态。
+关闭接入后隐藏 Telegram 页面入口，停止项目的接收、通知和正在进行的 TG 获取；待处理任务等待重新启用，已经入库的视频仍可访问。关闭接入不会停止独立 Bot API 服务。普通直链导入不受影响。
 
-若一直显示“等待 Bot API 服务”，检查配套容器是否运行、配置卷和视频共享卷是否按上述路径挂载，以及读取/写入权限。`docker compose -f docker-compose.yml -f docker-compose.telegram.yml logs telegram-bot-api` 会显示等待、运行和重试状态，不输出凭据。
+接收设置变化时，项目先取消并等待旧接收器退出，再建立新会话；活动下载会中断并等待重新连接。网盘转存设置变化不重建接收器。API ID/API Hash 变化时，需要更新 `.env.telegram` 并重新执行 Compose 启动命令。
 
-如果机器人此前使用过云端 Bot API，需要先停止原来的接收程序，并按官方迁移步骤调用云端 `logOut`，再启用这里的接入。已有 webhook 冲突时，使用面板“切换为轮询接收”；保留尚未处理的更新。[官方迁移说明](https://github.com/tdlib/telegram-bot-api#moving-a-bot-to-a-local-server)
+连接检查通过 `getMe`、`getWebhookInfo` 和共享目录可读性判断，不要求项目专用配置文件或心跳。检查使用已保存的配置，不启动轮询、不消费消息、不发送 TG 消息。检查成功不代表目录写入和大文件下载已经验证，实际导入才是完整验证。
 
-旧版本升级时需要拉取新镜像并重新创建配套容器，使用本文的启动命令即可，现有共享目录保留。网站对共享卷需要读写权限，升级时必须重新创建网站容器以应用挂载变更。此前已复制到普通上传目录的视频仍可播放和转存，不会自动移动或清理旧副本。旧数据库中的配置和凭据会在网站启动时自动迁入 YAML，成功写入后清除旧记录；已有 YAML 字段优先，避免覆盖手动配置。原环境变量中的凭据不自动导入，请在面板填写一次。现有 `.env.telegram` 不再被部署文件读取，可以自行删除。
+Bot API 暂时不可用时显示连接异常，项目自动等待并重试；服务恢复后继续接收。可通过下面的命令检查容器日志：
+
+```bash
+docker compose --env-file .env.telegram -f docker-compose.yml -f docker-compose.telegram.yml logs telegram-bot-api
+```
+
+如果机器人此前使用云端 Bot API，应先停止原来的接收程序，按官方步骤调用云端 `logOut`，再启用本地接入。已有 webhook 冲突时，使用面板“切换为轮询接收”，保留未处理更新。[官方迁移说明](https://github.com/tdlib/telegram-bot-api#moving-a-bot-to-a-local-server)
+
+## 原生后端、Bot API 使用 Docker
+
+原生网站默认读取 `config.yaml` 同目录的 `telegram.yml`。安装脚本会在文件不存在时准备它，并保留已有文件中的挂载配置。手动运行源码且尚无该文件时，在项目根目录执行一次：
+
+```bash
+cp deploy/telegram/compose.native.yml backend/telegram.yml
+```
+
+在项目根目录准备前述 `.env.telegram`，填写 API 凭据，然后启动：
+
+```bash
+sudo install -d -m 750 -o 101 -g 101 /var/lib/telegram-bot-api
+docker compose --env-file .env.telegram -f backend/telegram.yml up -d --pull always
+```
+
+通过 `install.sh` 安装后，安装目录提供 `telegram.yml` 和 `.env.telegram.example`，在该目录准备 `.env.telegram`，启动命令使用 `-f telegram.yml`。完成部署后重启网站，让它读取 Compose 文件。此示例对应当前以 root 运行的原生后端。Bot API 仅发布到宿主机的 `127.0.0.1:7878`，网站面板填写该地址。
+
+如需使用其他位置的 Compose 文件，在启动网站时通过 `VIDEO_TELEGRAM_COMPOSE` 指定一次文件路径；systemd 部署可在服务环境中设置。该路径属于启动配置，不放入网站 YAML 或 Web 表单。
+
+网站读取配套文件中 `telegram-bot-api` 服务挂载到 `/var/lib/telegram-bot-api` 的数据目录。原生部署使用宿主机目录挂载；支持短格式和 `type: bind` 长格式，相对源目录按 Compose 文件所在目录解析。挂载路径需填写具体值，不使用环境变量插值；API 凭据等其他部署环境变量不参与目录解析。
+
+网站在启动时读取一次挂载关系。文件缺失、挂载重复、只读、使用了原生网站无法访问的命名卷或两端未共享同一份数据时，Telegram 状态及连接检查会明确报错，不回退到其他目录。网站的其他功能仍可使用。
+
+## 更换 TG 数据目录
+
+以原生网站将宿主机数据目录从 `/var/lib/telegram-bot-api` 搬到 `/nzb/tg` 为例：
+
+1. 停止网站和 Bot API，完整复制数据到 `/nzb/tg/`，保留文件权限和所有者，包括 `library/`、Bot API 数据及会话。
+2. 将网站实际读取的 `telegram.yml` 中的数据挂载改为 `/nzb/tg:/var/lib/telegram-bot-api`。
+3. 重新执行 Compose 启动命令以重建 Bot API，然后启动网站。网站自动读取新挂载关系，无需修改网站配置。
+4. 确认已有视频可播放，再验证一次新的视频导入。
+
+已有视频、未完成任务、删除、转存和备份统一使用从 Compose 识别的共享目录下的 `library/`。修改挂载表示整库搬迁，程序不会自动移动文件，也不需要保留旧目录挂载或修改视频记录。
+
+全 Docker 部署迁移时，应从原 `telegram-cache` 卷复制数据，并在 `docker-compose.telegram.yml` 中同时修改网站和 Bot API 两个服务的数据挂载，再重建两个容器。网站自动匹配两个服务挂载的同一数据源，并使用网站容器内的路径。
+
+## 连接已有的 Local Bot API 服务
+
+可以连接其他 Compose 部署的 Local Bot API 服务。提供符合配套结构的 Compose 文件，在其中保留 `telegram-bot-api` 服务和默认容器数据目录挂载，启动网站时用 `VIDEO_TELEGRAM_COMPOSE` 指定实际文件。服务需启用 Local 模式，配置自己的 API ID/API Hash，并允许网站访问 HTTP 端点。
+
+`getFile` 返回服务端的绝对文件路径，网站根据 Compose 挂载关系转换为自己可访问的路径。两端必须访问同一份数据，且网站具有读取、移动文件的权限。仅填写另一台服务器的 API 地址不能满足文件导入要求；本方案不包含无共享存储的远程文件传输。网站读取单份配套文件中的挂载定义，不执行 Compose 的多文件覆盖或目录变量插值。
 
 ## 定时转存到网盘
 
@@ -75,55 +138,6 @@ telegram:
 
 首次验证请转发一个较小的视频，确认后台记录变为“已保存”、能打开站内详情，然后再验证超过 20 MB 的视频。再次转发同一文件应返回同一个视频。模拟服务测试不能替代你的真实网络、Telegram 凭据和大文件链路验收。
 
-## 项目原生运行、Bot API 使用 Docker
-
-项目根据 YAML 自动在数据库所在目录下生成 `telegram-control/config.json`，该文件仅供配套服务读取，不是另一份可编辑配置。配套文件 `deploy/telegram/compose.native.yml` 默认把 `backend/data/telegram-control` 挂载到容器；如果项目数据库位于其他目录，调整这个挂载的宿主机路径。
-
-此配置使用 `user: "0:0"`，与当前以 root 运行的后端服务一致。如果后端使用其他用户，直接修改 Compose 中的 `user` 为该用户的数字 UID:GID，并同步调整共享目录权限，无需额外环境变量文件。
-
-首次部署时，在项目根目录准备共享目录（以下对应 root 运行方式）：
-
-```bash
-sudo install -d -m 750 -o 0 -g 0 /var/lib/telegram-bot-api backend/data/telegram-control
-```
-
-日常部署或更新只需在项目根目录执行：
-
-```bash
-docker compose -f deploy/telegram/compose.native.yml up -d --pull always
-```
-
-面板中的 Bot API 地址填写 `http://127.0.0.1:7878`，共享视频目录填写 `/var/lib/telegram-bot-api`，三项凭据仍全部在面板填写。项目和容器不需要 Bot Token/API 凭据环境变量。
-
-Bot API 的容器端口和宿主机映射端口统一为 `7878`，宿主机仅绑定 `127.0.0.1`。网站原生部署默认使用 `9191`，本地开发的网站后端默认使用 `9192`，可与 Bot API 同机运行。
-
-## 镜像发布（维护者）
-
-`.github/workflows/docker-build.yml` 中的独立任务在 GitHub 托管 runner 上编译 Bot API、运行配置管理程序测试，并将双架构镜像发布到 GHCR。构建缓存与网站镜像分开保存，不使用部署服务器的计算资源，也不需要 Telegram 凭据。
-
-- 推送到 `main` 发布 `main` 和提交标签，供开发验证。
-- 推送 `v*` 版本标签发布对应版本，并更新 `stable`、`latest`，与网站镜像发布规则一致。
-- Pull Request 只测试和构建，不推送镜像。
-- 可以手动运行 Docker 工作流；选择 `v*` 版本标签时会发布 `stable`，所选提交必须包含此构建任务及 `deploy/telegram/` 源文件。
-
-首次发布后，在 GitHub Packages 中将 `telegram-bot-api-for-91` 的可见性设为 Public，服务器才能免登录拉取。首次成功发布 `stable` 且开放拉取之前，不要替换仍在运行的旧容器。镜像拉取失败时检查发布任务、包可见性及网络，不需要在服务器上编译。[GHCR 官方说明](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry)
-
-Fork 仓库会发布到 Fork 所属账号的 GHCR 命名空间；使用自行发布的镜像时，同步修改两份 Compose 配置的 `image` 地址。
-
-## 原生运行 Bot API（可选）
-
-也可以原生安装 Bot API 和 Python 3，通过管理程序启动：
-
-```bash
-python3 deploy/telegram/supervisor.py \
-  --config /实际数据库目录/telegram-control/config.json \
-  --directory /var/lib/telegram-bot-api \
-  --binary /usr/local/bin/telegram-bot-api \
-  --http-port 7878
-```
-
-网站中的 Bot API 地址填写 `http://127.0.0.1:7878`。由 systemd 等进程管理工具保持该程序运行。配置文件由项目生成，不要手工编辑；共享视频目录必须可被管理程序和项目读写，并在双方保持相同绝对路径。
-
 ## 任务、容量与恢复
 
 - 默认单文件上限为 4 GiB，可在后台修改；默认最多 100 个待处理 TG 任务。
@@ -142,8 +156,8 @@ python3 deploy/telegram/supervisor.py \
 
 `library/` 位于机器人各自的缓存目录之外，不参与 Bot API 的自动缓存清理或机器人退出登录时的目录删除。项目只管理已登记的文件：取消或最终校验失败时清理已接管文件；删除原视频或网盘转存成功后释放对应文件。仅从视频列表删除并保留原文件时，仍可从回收记录恢复。Bot API 数据库、会话和其他下载缓存不由项目清理；取消任务不保证 Bot API 内部下载停止，未接管的缓存仍由 Bot API 管理。
 
-下载前只检查共享文件系统可用空间，默认保留空间沿用 `remote_upload.disk_reserve_bytes`（1 GiB），不再要求普通上传目录预留两份视频空间。每个文件的存储位置独立记录，关闭接入或更换机器人不会影响已入库文件；修改共享目录配置只用于新任务，旧目录需要继续挂载才能读取此前的视频。
+下载前只检查共享文件系统可用空间，默认保留空间沿用 `remote_upload.disk_reserve_bytes`（1 GiB），不再要求普通上传目录预留两份视频空间。文件按相对位置登记，关闭接入或更换机器人不会影响已入库文件。修改 Compose 数据挂载并重启网站后，所有 TG 本地视频都会从新位置读取，需先停止两端服务并完成整库搬迁。
 
 只允许一个接收实例使用同一 Token。遇到冲突时先停止另一个实例，再重启当前项目。更换成其他机器人后，旧任务不能使用新机器人身份下载。
 
-站点备份不包含 `config.yaml`，因此不携带 Telegram 配置和凭据；原始消息、通知队列和接收游标也不导出。迁移服务器时需单独保留 `config.yaml`；包含本地上传资源时会同时备份已入库的 TG 视频及有效的文件去重映射；只收集登记的视频，不导出 Bot API 缓存、数据库或主机文件路径。恢复的 TG 视频放入普通本地视频库，保留 TG 来源记录，并可继续转存；不会写入目标 Bot API 的运行目录。恢复后暂停机器人接收并清空旧通知；目标实例没有凭据时先在面板重新配置，再点击“检查连接并恢复接收”后继续。Telegram 未消费更新最多保留 24 小时，因此长时间离线后应检查近期转发是否都有导入记录。[更新接收说明](https://core.telegram.org/bots/api#getting-updates)
+站点备份不包含 `config.yaml`，因此不携带 Telegram 配置和凭据；原始消息、通知队列和接收游标也不导出。迁移服务器时需单独保留 `config.yaml`、实际使用的 Compose 文件和 Bot API 的部署凭据文件 `.env.telegram`；包含本地上传资源时会同时备份已入库的 TG 视频及有效的文件去重映射；只收集登记的视频，不导出 Bot API 缓存、数据库或主机文件路径。恢复的 TG 视频放入普通本地视频库，保留 TG 来源记录，并可继续转存；不会写入目标 Bot API 的运行目录。恢复后暂停机器人接收并清空旧通知；目标实例没有凭据时先在面板重新配置，再点击“检查连接并恢复接收”后继续。Telegram 未消费更新最多保留 24 小时，因此长时间离线后应检查近期转发是否都有导入记录。[更新接收说明](https://core.telegram.org/bots/api#getting-updates)

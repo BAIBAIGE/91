@@ -4,25 +4,24 @@ import "context"
 
 const TelegramLocalDriveID = "telegram-local"
 
-// TelegramLocalFile is private storage metadata. FileID is an opaque basename;
-// Root is captured at acquisition so later configuration edits cannot redirect
-// existing videos. This table is never included in portable backups.
+// TelegramLocalFile identifies a file in the configured TG library. FileID is
+// an opaque basename, independent of the host's storage location. This table
+// is never included in portable backups.
 type TelegramLocalFile struct {
 	FileID string
-	Root   string
 	JobID  string
 }
 
 func (c *Catalog) TelegramLocalFile(ctx context.Context, fileID string) (TelegramLocalFile, error) {
 	var f TelegramLocalFile
-	err := c.db.QueryRowContext(ctx, `SELECT file_id,root,job_id FROM telegram_local_files WHERE file_id=?`, fileID).Scan(&f.FileID, &f.Root, &f.JobID)
+	err := c.db.QueryRowContext(ctx, `SELECT file_id,job_id FROM telegram_local_files WHERE file_id=?`, fileID).Scan(&f.FileID, &f.JobID)
 	return f, err
 }
 
 // ReserveTelegramLocalFile records the destination before moving the bytes.
-// A restart or a changed bot configuration reuses the original destination.
+// Restarts and directory relocations reuse the same relative file identity.
 func (c *Catalog) ReserveTelegramLocalFile(ctx context.Context, f TelegramLocalFile) (TelegramLocalFile, error) {
-	_, err := c.db.ExecContext(ctx, `INSERT INTO telegram_local_files(file_id,root,job_id) VALUES(?,?,?) ON CONFLICT(file_id) DO NOTHING`, f.FileID, f.Root, f.JobID)
+	_, err := c.db.ExecContext(ctx, `INSERT INTO telegram_local_files(file_id,job_id) VALUES(?,?) ON CONFLICT(file_id) DO NOTHING`, f.FileID, f.JobID)
 	if err != nil {
 		return TelegramLocalFile{}, err
 	}
@@ -34,8 +33,8 @@ func (c *Catalog) DeleteTelegramLocalFile(ctx context.Context, fileID string) er
 	return err
 }
 
-func (c *Catalog) AbandonedTelegramLocalFiles(ctx context.Context) ([]string, error) {
-	rows, err := c.db.QueryContext(ctx, `SELECT f.file_id FROM telegram_local_files f
+func (c *Catalog) AbandonedTelegramLocalFiles(ctx context.Context) ([]TelegramLocalFile, error) {
+	rows, err := c.db.QueryContext(ctx, `SELECT f.file_id,f.job_id FROM telegram_local_files f
  LEFT JOIN remote_upload_jobs j ON j.id=f.job_id
  WHERE (j.id IS NULL OR j.state IN ('failed','canceled'))
  AND NOT EXISTS (SELECT 1 FROM videos v WHERE v.drive_id='telegram-local' AND v.file_id=f.file_id)
@@ -44,15 +43,15 @@ func (c *Catalog) AbandonedTelegramLocalFiles(ctx context.Context) ([]string, er
 		return nil, err
 	}
 	defer rows.Close()
-	var ids []string
+	var files []TelegramLocalFile
 	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
+		var f TelegramLocalFile
+		if err := rows.Scan(&f.FileID, &f.JobID); err != nil {
 			return nil, err
 		}
-		ids = append(ids, id)
+		files = append(files, f)
 	}
-	return ids, rows.Err()
+	return files, rows.Err()
 }
 
 func (c *Catalog) TelegramLocalStorageSize(ctx context.Context) (int, int64, error) {

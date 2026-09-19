@@ -144,6 +144,11 @@ func main() {
 	if err != nil {
 		log.Fatalf("configure config manager: %v", err)
 	}
+	if composeFile := strings.TrimSpace(os.Getenv("VIDEO_TELEGRAM_COMPOSE")); composeFile != "" {
+		// Deployment paths are resolved once, separately from panel settings.
+		// A missing/invalid file is reported by the Telegram status and probe.
+		_ = configManager.LoadTelegramCompose(composeFile)
+	}
 	if err := migrateApplicationConfig(context.Background(), cat, configManager); err != nil {
 		log.Fatalf("migrate config.yaml: %v", err)
 	}
@@ -213,7 +218,7 @@ func main() {
 	}
 	go app.runFingerprintReconciler(ctx)
 
-	telegramService := telegram.NewIntegration(cat, configManager, app.localUploadDir(), cfg.RemoteUpload.DiskReserveBytes, filepath.Join(dataRoot, "telegram-control"))
+	telegramService := telegram.NewIntegration(cat, configManager, app.localUploadDir(), cfg.RemoteUpload.DiskReserveBytes)
 	defer func() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
@@ -255,12 +260,13 @@ func main() {
 		githubRepo = strings.TrimSpace(os.Getenv("GITHUB_REPO"))
 	}
 	backupManager, err := backup.NewManager(backup.Config{
-		Catalog:        cat,
-		AppConfig:      fileConfig,
-		RuntimeStorage: cfg.Storage,
-		ConfigPath:     cfgPath,
-		AppVersion:     appVersion,
-		RestartManaged: restartIsManaged(),
+		Catalog:           cat,
+		TelegramFilesRoot: func() string { return configManager.TelegramSettings().LocalFilesRoot },
+		AppConfig:         fileConfig,
+		RuntimeStorage:    cfg.Storage,
+		ConfigPath:        cfgPath,
+		AppVersion:        appVersion,
+		RestartManaged:    restartIsManaged(),
 	})
 	if err != nil {
 		log.Fatalf("configure backup service: %v", err)

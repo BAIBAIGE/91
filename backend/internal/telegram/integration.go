@@ -1,14 +1,10 @@
 package telegram
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
-	"os"
-	"path/filepath"
 	"sync"
 	"time"
 
@@ -21,25 +17,24 @@ import (
 )
 
 // Integration consumes the validated YAML snapshot and replaces receiver sessions.
-// The Bot API supervisor consumes only a derived API credential file; it never
-// receives the project's Bot Token or opens the project database.
+// The Bot API server is an independently managed HTTP service.
 type Integration struct {
-	cat                   *catalog.Catalog
-	configManager         *config.Manager
-	uploadDir, controlDir string
-	reserve               int64
-	mu                    sync.RWMutex
-	active                *Service
-	status                Status
-	version               string
-	wake                  func()
-	cancel                context.CancelFunc
-	done                  chan struct{}
+	cat           *catalog.Catalog
+	configManager *config.Manager
+	uploadDir     string
+	reserve       int64
+	mu            sync.RWMutex
+	active        *Service
+	status        Status
+	version       string
+	wake          func()
+	cancel        context.CancelFunc
+	done          chan struct{}
 }
 
-func NewIntegration(cat *catalog.Catalog, manager *config.Manager, uploadDir string, reserve int64, controlDir string) *Integration {
+func NewIntegration(cat *catalog.Catalog, manager *config.Manager, uploadDir string, reserve int64) *Integration {
 	cfg := manager.TelegramSettings()
-	return &Integration{cat: cat, configManager: manager, uploadDir: uploadDir, reserve: reserve, controlDir: controlDir,
+	return &Integration{cat: cat, configManager: manager, uploadDir: uploadDir, reserve: reserve,
 		status: Status{State: "disabled", Config: cfg}}
 }
 func (i *Integration) SetWake(wake func()) { i.mu.Lock(); i.wake = wake; i.mu.Unlock() }
@@ -106,19 +101,20 @@ func (i *Integration) Resume(ctx context.Context) error {
 	if s := i.session(); s != nil {
 		return s.Resume(ctx)
 	}
-	return errors.New("请先保存配置并等待 Bot API 服务启动")
+	return errors.New("请先启用 Telegram 并等待连接配置生效")
 }
 func (i *Integration) PreparePolling(ctx context.Context) error {
 	if s := i.session(); s != nil {
 		return s.PreparePolling(ctx)
 	}
-	return errors.New("请先保存配置并等待 Bot API 服务启动")
+	return errors.New("请先启用 Telegram 并等待连接配置生效")
 }
 func (i *Integration) Test(ctx context.Context) (string, error) {
-	if s := i.session(); s != nil {
-		return TestConnection(ctx, s.cfg, s.token)
+	if err := i.configManager.TelegramStorageError(); err != nil {
+		return "", err
 	}
-	return "", errors.New("请先保存配置并等待 Bot API 服务启动")
+	cfg := i.configManager.TelegramSettings()
+	return TestConnection(ctx, cfg, cfg.BotToken)
 }
 func (i *Integration) Fetch(ctx context.Context, j *catalog.RemoteUploadJob, progress func(string, int64, int64) error) (mediaimport.SourceFile, error) {
 	if s := i.session(); s != nil {
@@ -151,39 +147,24 @@ func (i *Integration) reconcile(ctx context.Context) {
 	// Cloud transfer settings do not affect polling or active TG downloads.
 	receiverCfg := cfg
 	receiverCfg.UploadDriveID, receiverCfg.UploadDirectory, receiverCfg.UploadProxy = "", "", ""
-	raw, _ := yaml.Marshal(receiverCfg)
+	raw, _ := yaml.Marshal(struct {
+		Settings           config.Telegram
+		APIRoot, LocalRoot string
+	}{receiverCfg, cfg.APIFilesRoot, cfg.LocalFilesRoot})
 	digest := sha256.Sum256(raw)
 	version := hex.EncodeToString(digest[:])
 	if version != i.version {
 		i.stop()
 		i.version = version
 	}
-	ready := cfg.Enabled && cfg.BotToken != "" && cfg.APIID > 0 && cfg.APIHash != ""
-	revision, err := i.publishBotAPI(cfg, ready)
-	if err != nil {
-		i.stop()
-		i.setStatus(cfg, "error", "无法写入 Bot API 配置，请检查共享配置目录权限")
-		return
-	}
 	if !cfg.Enabled {
 		i.stop()
 		i.setStatus(cfg, "disabled", "")
 		return
 	}
-	if !ready {
+	if err := i.configManager.TelegramStorageError(); err != nil {
 		i.stop()
-		i.setStatus(cfg, "waiting_config", "请在面板填写 Bot Token、API ID 和 API Hash")
-		return
-	}
-	var process struct {
-		Revision  string `json:"revision"`
-		State     string `json:"state"`
-		UpdatedAt int64  `json:"updatedAt"`
-	}
-	data, err := os.ReadFile(filepath.Join(cfg.LocalFilesRoot, "panel-status.json"))
-	if err != nil || json.Unmarshal(data, &process) != nil || process.Revision != revision || process.State != "running" || time.Since(time.Unix(process.UpdatedAt, 0)) > 10*time.Second {
-		i.stop()
-		i.setStatus(cfg, "waiting_service", "配置已保存，等待配套 Bot API 服务启动；请确认服务及共享目录已部署")
+		i.setStatus(cfg, "error", err.Error())
 		return
 	}
 	if i.session() == nil {
@@ -200,58 +181,6 @@ func (i *Integration) reconcile(ctx context.Context) {
 	}
 }
 
-// Publication is atomic, contains no Bot Token, and only changes when the
-// process's API credentials or enabled state change. Read permission for group
-// 0 lets the unprivileged companion container consume the dedicated mount.
-func (i *Integration) publishBotAPI(s config.Telegram, enabled bool) (string, error) {
-	payload := struct {
-		Enabled bool   `json:"enabled"`
-		APIID   int64  `json:"apiId"`
-		APIHash string `json:"apiHash"`
-	}{Enabled: enabled}
-	if enabled {
-		payload.APIID = s.APIID
-		payload.APIHash = s.APIHash
-	}
-	raw, _ := json.Marshal(payload)
-	digest := sha256.Sum256(raw)
-	revision := hex.EncodeToString(digest[:])
-	output := struct {
-		Revision string `json:"revision"`
-		Config   any    `json:"config"`
-	}{revision, payload}
-	data, _ := json.Marshal(output)
-	name := filepath.Join(i.controlDir, "config.json")
-	if existing, err := os.ReadFile(name); err == nil && bytes.Equal(existing, data) {
-		return revision, nil
-	}
-	if err := os.MkdirAll(i.controlDir, 0750); err != nil {
-		return "", err
-	}
-	f, err := os.CreateTemp(i.controlDir, ".config-*")
-	if err != nil {
-		return "", err
-	}
-	defer os.Remove(f.Name())
-	defer f.Close()
-	if err = f.Chmod(0640); err != nil {
-		return "", err
-	}
-	if _, err = f.Write(data); err != nil {
-		return "", err
-	}
-	if err = f.Sync(); err != nil {
-		return "", err
-	}
-	if err = f.Close(); err != nil {
-		return "", err
-	}
-	if err = os.Rename(f.Name(), name); err != nil {
-		return "", err
-	}
-	return revision, nil
-}
-
 func (i *Integration) Discard(ctx context.Context, j *catalog.RemoteUploadJob) error {
-	return telegramstorage.New(i.cat).Remove(ctx, j.ID+".media")
+	return telegramstorage.New(i.cat, func() string { return i.configManager.TelegramSettings().LocalFilesRoot }).Remove(ctx, j.ID+".media")
 }

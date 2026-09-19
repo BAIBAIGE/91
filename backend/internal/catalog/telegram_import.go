@@ -25,7 +25,7 @@ func (c *Catalog) migrateImports(ctx context.Context) error {
 	}
 	_, err := c.db.ExecContext(ctx, `
  CREATE TABLE IF NOT EXISTS telegram_local_files (
-  file_id TEXT PRIMARY KEY, root TEXT NOT NULL, job_id TEXT NOT NULL UNIQUE
+  file_id TEXT PRIMARY KEY, job_id TEXT NOT NULL UNIQUE
  );
  CREATE TABLE IF NOT EXISTS telegram_connections (
   bot_id INTEGER PRIMARY KEY, next_offset INTEGER NOT NULL DEFAULT 0,
@@ -48,7 +48,12 @@ func (c *Catalog) migrateImports(ctx context.Context) error {
  CREATE INDEX IF NOT EXISTS idx_telegram_receipt_jobs ON telegram_receipts(job_id);
  CREATE INDEX IF NOT EXISTS idx_telegram_file_jobs ON telegram_files(job_id);
  `)
-	return err
+	if err != nil {
+		return err
+	}
+	// File identities already name entries in library/. Physical placement now
+	// follows the configured storage root, including for existing acquisitions.
+	return c.dropColumnIfExists(ctx, "telegram_local_files", "root")
 }
 
 type TelegramSource struct {

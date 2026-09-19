@@ -22,10 +22,10 @@ func TestTelegramSettingsUseSharedYAMLAPI(t *testing.T) {
 		t.Fatal(err)
 	}
 	cat := openRemoteUploadAPICatalog(t)
-	integration := telegram.NewIntegration(cat, manager, t.TempDir(), 1, t.TempDir())
+	integration := telegram.NewIntegration(cat, manager, t.TempDir(), 1)
 	server := &AdminServer{Catalog: cat, ConfigManager: manager, Telegram: integration}
-	token, hash := "123:private_token", "0123456789abcdef0123456789abcdef"
-	body := "telegram:\n  enabled: true\n  bot_token: " + token + "\n  api_id: 1234\n  api_hash: '" + hash + "'\n"
+	token := "123:private_token"
+	body := "telegram:\n  enabled: true\n  bot_token: " + token + "\n"
 	response := httptest.NewRecorder()
 	server.handlePutConfigYAML(response, httptest.NewRequest("PUT", "/admin/api/config.yaml", strings.NewReader(body)))
 	if response.Code != 200 || strings.Contains(response.Body.String(), `"restartRequired":true`) {
@@ -48,8 +48,10 @@ func TestTelegramSettingsUseSharedYAMLAPI(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &status); err != nil || !status.Enabled {
 		t.Fatal("navigation must follow saved config even before the integration connects", err)
 	}
-	if strings.Contains(response.Body.String(), token) || strings.Contains(response.Body.String(), hash) {
-		t.Fatal("status exposes credentials")
+	for _, hidden := range []string{token, "apiFilesRoot", "localFilesRoot"} {
+		if strings.Contains(response.Body.String(), hidden) {
+			t.Fatal("status exposes credentials or storage paths")
+		}
 	}
 	response = httptest.NewRecorder()
 	server.handlePutConfigYAML(response, httptest.NewRequest("PUT", "/admin/api/config.yaml", strings.NewReader("telegram: { enabled: false }\n")))

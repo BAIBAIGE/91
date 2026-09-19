@@ -26,7 +26,7 @@ func TestLibraryPlaybackAndDeletionUseOpaqueIdentity(t *testing.T) {
 	if err := os.Mkdir(root, 0750); err != nil {
 		t.Fatal(err)
 	}
-	f, err := cat.ReserveTelegramLocalFile(ctx, catalog.TelegramLocalFile{FileID: "tg-opaque.media", Root: root, JobID: "job"})
+	f, err := cat.ReserveTelegramLocalFile(ctx, catalog.TelegramLocalFile{FileID: "tg-opaque.media", JobID: "job"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -34,7 +34,7 @@ func TestLibraryPlaybackAndDeletionUseOpaqueIdentity(t *testing.T) {
 	if err := os.WriteFile(path, []byte("0123456789"), 0640); err != nil {
 		t.Fatal(err)
 	}
-	drv := New(cat)
+	drv := New(cat, func() string { return filepath.Dir(root) })
 	reg := proxy.NewRegistry()
 	reg.Set(drv.ID(), drv)
 	p := proxy.New(reg)
@@ -49,6 +49,18 @@ func TestLibraryPlaybackAndDeletionUseOpaqueIdentity(t *testing.T) {
 		if _, err := drv.StreamURL(ctx, id); err == nil {
 			t.Fatalf("accepted unregistered path %s", id)
 		}
+	}
+	// The registered drive and file identity survive moving the complete store.
+	relocated := filepath.Join(t.TempDir(), "relocated")
+	if err := os.Rename(filepath.Dir(root), relocated); err != nil {
+		t.Fatal(err)
+	}
+	root = filepath.Join(relocated, "library")
+	path = filepath.Join(root, f.FileID)
+	rr = httptest.NewRecorder()
+	p.ServeStream(rr, req, drv.ID(), f.FileID)
+	if rr.Code != http.StatusPartialContent || rr.Body.String() != "2345" {
+		t.Fatalf("relocated range playback: %d %s", rr.Code, rr.Body.String())
 	}
 	if err := drv.Remove(ctx, f.FileID); err != nil {
 		t.Fatal(err)
@@ -77,12 +89,19 @@ func TestLibraryRejectsSymlinksAndTraversal(t *testing.T) {
 		t.Skip(err)
 	}
 	for _, id := range []string{"../PRIVATE_TOKEN", outside, "linked.media", ".", ".."} {
-		_, err := Path(catalog.TelegramLocalFile{Root: root, FileID: id})
+		_, err := Path(filepath.Dir(root), id)
 		if err == nil {
 			t.Fatalf("accepted %q", id)
 		}
 		if strings.Contains(err.Error(), "PRIVATE_TOKEN") {
 			t.Fatal("path leaked into error")
 		}
+	}
+	linkedRoot := t.TempDir()
+	if err := os.Symlink(root, filepath.Join(linkedRoot, "library")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Path(linkedRoot, "missing.media"); err == nil {
+		t.Fatal("library symlink accepted")
 	}
 }

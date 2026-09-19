@@ -1174,7 +1174,7 @@ func (a *App) attachLocalUpload(ctx context.Context) error {
 	a.registry.Set(drv.ID(), drv)
 
 	a.startDriveGenerationWorkers(ctx, drv.ID(), drv, true)
-	tg := telegramstorage.New(a.cat)
+	tg := telegramstorage.New(a.cat, func() string { return a.configManager.TelegramSettings().LocalFilesRoot })
 	a.registry.Set(tg.ID(), tg)
 	a.startDriveGenerationWorkers(ctx, tg.ID(), tg, true)
 	return nil

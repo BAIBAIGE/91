@@ -11,15 +11,15 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/video-site/backend/internal/catalog"
 	"github.com/video-site/backend/internal/config"
 	"github.com/video-site/backend/internal/mediaimport"
 	"gopkg.in/yaml.v3"
 )
-
-const testAPIHash = "0123456789abcdef0123456789abcdef"
 
 func integrationFixture(t *testing.T) (*Integration, config.Telegram) {
 	t.Helper()
@@ -28,13 +28,25 @@ func integrationFixture(t *testing.T) (*Integration, config.Telegram) {
 	if err := os.WriteFile(path, []byte("{}\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
+	compose, err := yaml.Marshal(map[string]any{"services": map[string]any{
+		"telegram-bot-api": map[string]any{"volumes": []any{map[string]any{
+			"type": "bind", "source": service.cfg.LocalFilesRoot, "target": "/var/lib/telegram-bot-api",
+		}}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(filepath.Dir(path), "telegram.yml"), compose, 0600); err != nil {
+		t.Fatal(err)
+	}
 	manager, err := config.NewManager(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	i := NewIntegration(cat, manager, service.uploadDir, 1, t.TempDir())
+	i := NewIntegration(cat, manager, service.uploadDir, 1)
 	cfg := service.cfg
-	cfg.APIID, cfg.APIHash, cfg.BotToken = 1234, testAPIHash, "123:private_token"
+	cfg.APIFilesRoot = manager.TelegramSettings().APIFilesRoot
+	cfg.BotToken = "123:private_token"
 	return i, cfg
 }
 
@@ -48,24 +60,7 @@ func saveTelegramYAML(t *testing.T, i *Integration, cfg config.Telegram) {
 		t.Fatalf("save live YAML: restart=%v error=%v", result.RestartRequired, err)
 	}
 }
-func acknowledgeSupervisor(t *testing.T, i *Integration, cfgRoot string) {
-	t.Helper()
-	data, err := os.ReadFile(filepath.Join(i.controlDir, "config.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var projection struct {
-		Revision string `json:"revision"`
-	}
-	if err = json.Unmarshal(data, &projection); err != nil {
-		t.Fatal(err)
-	}
-	status, _ := json.Marshal(map[string]any{"revision": projection.Revision, "state": "running", "updatedAt": time.Now().Unix()})
-	if err = os.WriteFile(filepath.Join(cfgRoot, "panel-status.json"), status, 0600); err != nil {
-		t.Fatal(err)
-	}
-}
-func TestIntegrationWaitsForSupervisorAndAppliesChanges(t *testing.T) {
+func TestIntegrationConnectsToStandardAPIAndAppliesChanges(t *testing.T) {
 	i, input := integrationFixture(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -89,15 +84,6 @@ func TestIntegrationWaitsForSupervisorAndAppliesChanges(t *testing.T) {
 	defer server.Close()
 	input.APIBaseURL = server.URL
 	saveTelegramYAML(t, i, input)
-	i.reconcile(ctx)
-	if i.Status().State != "waiting_service" || i.Available() {
-		t.Fatal("receiver started without supervisor acknowledgement")
-	}
-	projection, _ := os.ReadFile(filepath.Join(i.controlDir, "config.json"))
-	if strings.Contains(string(projection), input.BotToken) {
-		t.Fatal("Bot Token leaked to supervisor")
-	}
-	acknowledgeSupervisor(t, i, input.LocalFilesRoot)
 	i.reconcile(ctx)
 	old := i.session()
 	if old == nil {
@@ -142,25 +128,17 @@ func TestIntegrationWaitsForSupervisorAndAppliesChanges(t *testing.T) {
 	input.AllowedUserIDs = []int64{77}
 	saveTelegramYAML(t, i, input)
 	i.reconcile(ctx)
-	sameProjection, _ := os.ReadFile(filepath.Join(i.controlDir, "config.json"))
-	if string(sameProjection) != string(projection) {
-		t.Fatal("whitelist edit unnecessarily restarted Bot API")
-	}
 	if i.session() == old || old.runCtx.Err() == nil || !i.Allowed(77) || i.Allowed(42) {
 		t.Fatal("old receiver or whitelist survived configuration change")
-	}
-	input.APIHash = strings.Repeat("a", 32)
-	saveTelegramYAML(t, i, input)
-	i.reconcile(ctx)
-	if i.session() != nil || i.Status().State != "waiting_service" {
-		t.Fatal("accepted acknowledgement from previous API credentials")
 	}
 	input.Enabled = false
 	saveTelegramYAML(t, i, input)
 	i.reconcile(ctx)
-	data, _ := os.ReadFile(filepath.Join(i.controlDir, "config.json"))
-	if i.Status().State != "disabled" || !strings.Contains(string(data), `"enabled":false`) || strings.Contains(string(data), input.APIHash) {
-		t.Fatal("disable did not stop receiver and clear published credentials")
+	if i.Status().State != "disabled" || i.session() != nil {
+		t.Fatal("disable did not stop receiver")
+	}
+	if name, err := i.Test(ctx); err != nil || name != "panel_bot" {
+		t.Fatalf("disabled integration could not test the independent API: %s %v", name, err)
 	}
 }
 func TestConfigurationChangeRetriesActiveDownload(t *testing.T) {
@@ -221,24 +199,191 @@ func TestFreshSettingsHaveUsableDefaults(t *testing.T) {
 func TestIntegrationStartWithoutCredentialsAndShutdown(t *testing.T) {
 	i, _ := integrationFixture(t)
 	i.Start(context.Background())
-	defer i.Shutdown(context.Background())
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) {
-		if _, err := os.Stat(filepath.Join(i.controlDir, "config.json")); err == nil {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
+	shutdown, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := i.Shutdown(shutdown); err != nil {
+		t.Fatal(err)
 	}
 	if i.Status().State != "disabled" || i.session() != nil {
 		t.Fatal("unconfigured integration started receiving")
 	}
-	data, err := os.ReadFile(filepath.Join(i.controlDir, "config.json"))
-	if err != nil || !strings.Contains(string(data), `"enabled":false`) {
-		t.Fatal("startup did not clear stale supervisor credentials")
+}
+
+func TestIntegrationReportsMissingComposeWithoutStartingReceiver(t *testing.T) {
+	i, cfg := integrationFixture(t)
+	if err := i.configManager.LoadTelegramCompose(filepath.Join(t.TempDir(), "missing.yml")); err == nil {
+		t.Fatal("missing Compose accepted")
 	}
-	shutdown, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	if err = i.Shutdown(shutdown); err != nil {
+	saveTelegramYAML(t, i, cfg)
+	i.reconcile(context.Background())
+	defer i.stop()
+	if status := i.Status(); status.State != "error" || !strings.Contains(status.Error, "Compose") || i.session() != nil {
+		t.Fatalf("deployment error not reported: %+v", status)
+	}
+	if _, err := i.Test(context.Background()); err == nil || !strings.Contains(err.Error(), "Compose") {
+		t.Fatalf("probe ignored deployment error: %v", err)
+	}
+}
+
+func waitForIntegration(t *testing.T, i *Integration, state string) {
+	t.Helper()
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		if i.Status().State == state {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("expected %s, got %+v", state, i.Status())
+}
+
+func TestIntegrationRecoversFromExternalAPIOutage(t *testing.T) {
+	i, cfg := integrationFixture(t)
+	if err := i.cat.AcceptTelegramUpdate(context.Background(), catalog.TelegramReceipt{
+		BotID: 123, UpdateID: 100, ChatID: 42, MessageID: 100, Response: "__ignore__",
+	}, nil, "", "", 100); err != nil {
 		t.Fatal(err)
+	}
+	var offline atomic.Bool
+	offline.Store(true)
+	var polls atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/getUpdates") {
+			var input struct{ Offset int64 }
+			if err := json.NewDecoder(r.Body).Decode(&input); err != nil || input.Offset != 101 {
+				t.Errorf("lost persisted offset across outage: offset=%d error=%v", input.Offset, err)
+			}
+		} else {
+			_, _ = io.Copy(io.Discard, r.Body)
+		}
+		if offline.Load() {
+			io.WriteString(w, `{"ok":false,"error_code":503}`)
+			return
+		}
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/getMe"):
+			io.WriteString(w, `{"ok":true,"result":{"id":123,"username":"external_bot"}}`)
+		case strings.HasSuffix(r.URL.Path, "/getUpdates"):
+			polls.Add(1)
+			select {
+			case <-r.Context().Done():
+				return
+			case <-time.After(20 * time.Millisecond):
+			}
+			io.WriteString(w, `{"ok":true,"result":[]}`)
+		default:
+			io.WriteString(w, `{"ok":true,"result":{}}`)
+		}
+	}))
+	defer server.Close()
+	defer i.stop()
+	cfg.APIBaseURL = server.URL
+	saveTelegramYAML(t, i, cfg)
+	i.reconcile(context.Background())
+	session := i.session()
+	waitForIntegration(t, i, "error")
+	offline.Store(false)
+	waitForIntegration(t, i, "connected")
+	deadline := time.Now().Add(time.Second)
+	for polls.Load() == 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if polls.Load() == 0 {
+		t.Fatal("receiver did not resume polling")
+	}
+	offline.Store(true)
+	waitForIntegration(t, i, "error")
+	offline.Store(false)
+	waitForIntegration(t, i, "connected")
+	if i.session() != session {
+		t.Fatal("outage recovery required rebuilding the integration")
+	}
+}
+
+func TestIntegrationProbeUsesSavedConfigWithoutStartingReceiver(t *testing.T) {
+	i, cfg := integrationFixture(t)
+	var requests atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		switch r.URL.Path {
+		case "/bot123:private_token/getMe":
+			io.WriteString(w, `{"ok":true,"result":{"id":123,"username":"external_bot"}}`)
+		case "/bot123:private_token/getWebhookInfo":
+			io.WriteString(w, `{"ok":true,"result":{"url":""}}`)
+		default:
+			t.Errorf("connection probe invoked %s", r.URL.Path)
+			w.WriteHeader(http.StatusBadRequest)
+		}
+	}))
+	defer server.Close()
+	cfg.Enabled = false
+	cfg.APIBaseURL = server.URL
+	saveTelegramYAML(t, i, cfg)
+	name, err := i.Test(context.Background())
+	if err != nil || name != "external_bot" || i.session() != nil || requests.Load() != 2 {
+		t.Fatalf("probe unexpectedly requires or starts a receiver: name=%s error=%v requests=%d", name, err, requests.Load())
+	}
+}
+
+func TestIntegrationSwitchesEndpointAndBotAfterCancelingOldPolling(t *testing.T) {
+	i, cfg := integrationFixture(t)
+	started, canceled := make(chan struct{}), make(chan struct{})
+	var startOnce, cancelOnce sync.Once
+	oldServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/getMe"):
+			io.WriteString(w, `{"ok":true,"result":{"id":123,"username":"old_bot"}}`)
+		case strings.HasSuffix(r.URL.Path, "/getUpdates"):
+			startOnce.Do(func() { close(started) })
+			<-r.Context().Done()
+			cancelOnce.Do(func() { close(canceled) })
+		default:
+			io.WriteString(w, `{"ok":true,"result":{}}`)
+		}
+	}))
+	defer oldServer.Close()
+	newServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		if !strings.HasPrefix(r.URL.Path, "/bot456:new_token/") {
+			t.Errorf("new endpoint received old bot credentials: %s", r.URL.Path)
+		}
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/getMe"):
+			io.WriteString(w, `{"ok":true,"result":{"id":456,"username":"new_bot"}}`)
+		case strings.HasSuffix(r.URL.Path, "/getUpdates"):
+			<-r.Context().Done()
+		default:
+			io.WriteString(w, `{"ok":true,"result":{}}`)
+		}
+	}))
+	defer newServer.Close()
+	defer i.stop()
+	cfg.APIBaseURL = oldServer.URL
+	saveTelegramYAML(t, i, cfg)
+	i.reconcile(context.Background())
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("old receiver did not start")
+	}
+	old := i.session()
+	cfg.APIBaseURL, cfg.BotToken = newServer.URL, "456:new_token"
+	saveTelegramYAML(t, i, cfg)
+	if name, err := i.Test(context.Background()); err != nil || name != "new_bot" {
+		t.Fatalf("probe used the old session rather than saved settings: %s %v", name, err)
+	}
+	i.reconcile(context.Background())
+	if old.runCtx.Err() == nil || i.session() == old {
+		t.Fatal("old receiver survived endpoint change")
+	}
+	select {
+	case <-canceled:
+	case <-time.After(time.Second):
+		t.Fatal("old long poll was not canceled")
+	}
+	waitForIntegration(t, i, "connected")
+	if i.BotID() != 456 {
+		t.Fatal("new connection retained the old bot identity")
 	}
 }

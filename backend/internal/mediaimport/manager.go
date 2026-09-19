@@ -870,22 +870,24 @@ func (m *Manager) discardTelegram(ctx context.Context, job *catalog.RemoteUpload
 	return err
 }
 func (m *Manager) cleanupAbandonedTelegram(ctx context.Context) error {
+	if m.telegramSource == nil {
+		return nil
+	}
 	m.currentMu.Lock()
 	defer m.currentMu.Unlock()
 	if err := persistence.RLockContext(ctx); err != nil {
 		return err
 	}
 	defer persistence.RUnlock()
-	ids, err := m.catalog.AbandonedTelegramLocalFiles(ctx)
+	files, err := m.catalog.AbandonedTelegramLocalFiles(ctx)
 	if err != nil {
 		return err
 	}
-	storage := telegramstorage.New(m.catalog)
-	for _, id := range ids {
-		if id == m.currentID+".media" {
+	for _, file := range files {
+		if file.JobID == m.currentID {
 			continue
 		}
-		if err := storage.Remove(ctx, id); err != nil {
+		if err := m.telegramSource.Discard(ctx, &catalog.RemoteUploadJob{ID: file.JobID, SourceKind: "telegram"}); err != nil {
 			applog.Error(ctx, "TG 视频清理失败，将在后续维护中重试", err, applog.Fields{Component: "telegram", Stage: "cleanup"})
 		}
 	}

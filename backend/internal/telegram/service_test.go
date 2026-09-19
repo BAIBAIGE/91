@@ -26,7 +26,8 @@ func testService(t *testing.T) (*Service, *catalog.Catalog) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { cat.Close() })
-	cfg := config.Telegram{Enabled: true, BotToken: "123:test", APIID: 1234, APIHash: "0123456789abcdef0123456789abcdef", AllowedUserIDs: []int64{42}, LocalFilesRoot: t.TempDir()}
+	cfg := config.Telegram{Enabled: true, BotToken: "123:test", AllowedUserIDs: []int64{42}, LocalFilesRoot: t.TempDir()}
+	cfg.APIFilesRoot = cfg.LocalFilesRoot
 	if err = cfg.Validate(); err != nil {
 		t.Fatal(err)
 	}
@@ -146,6 +147,7 @@ func TestClientSanitizesCredentialsAndRejectsRedirect(t *testing.T) {
 }
 func TestFetchUsesBotScopedFileAndVerifiesBytes(t *testing.T) {
 	s, cat := testService(t)
+	s.cfg.APIFilesRoot = "/bot-api/data"
 	ctx := context.Background()
 	if err := s.accept(ctx, videoUpdate(1, 42)); err != nil {
 		t.Fatal(err)
@@ -161,7 +163,7 @@ func TestFetchUsesBotScopedFileAndVerifiesBytes(t *testing.T) {
 		if input["file_id"] != "file" {
 			t.Error("wrong file id")
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "result": map[string]any{"file_path": file, "file_size": 5}})
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "result": map[string]any{"file_path": "/bot-api/data/video.mp4", "file_size": 5}})
 	}))
 	defer server.Close()
 	s.client = &client{base: server.URL, token: "123:token", http: server.Client()}
@@ -184,11 +186,15 @@ func TestFetchUsesBotScopedFileAndVerifiesBytes(t *testing.T) {
 	if entries, e := os.ReadDir(s.uploadDir); e != nil || len(entries) != 0 {
 		t.Fatal("TG acquisition wrote into upload storage")
 	}
-	// Restart/configuration changes reuse the durable reservation and its root.
-	s.cfg.LocalFilesRoot = t.TempDir()
+	// Moving the complete directory preserves the acquisition identity.
+	relocated := filepath.Join(t.TempDir(), "relocated")
+	if err := os.Rename(s.cfg.LocalFilesRoot, relocated); err != nil {
+		t.Fatal(err)
+	}
+	s.cfg.LocalFilesRoot = relocated
 	s.client = nil
 	resumed, e := s.Fetch(ctx, jobs[0], func(string, int64, int64) error { return nil })
-	if e != nil || resumed.Path != result.Path {
+	if e != nil || resumed.Path != filepath.Join(relocated, "library", result.FileID) {
 		t.Fatalf("acquisition cannot resume: %+v %v", resumed, e)
 	}
 	s.cfg.AllowedUserIDs = nil
@@ -317,7 +323,7 @@ func TestTelegramImportEndToEndWithLocalBotAPI(t *testing.T) {
 	if v.DriveID != telegramstorage.DriveID {
 		t.Fatalf("wrong storage: %s", v.DriveID)
 	}
-	storedPath, err := telegramstorage.New(cat).LocalPath(ctx, v.FileID)
+	storedPath, err := telegramstorage.New(cat, func() string { return s.cfg.LocalFilesRoot }).LocalPath(ctx, v.FileID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -372,7 +378,7 @@ func TestInvalidAcquisitionIsDiscardedWithoutTouchingBotState(t *testing.T) {
 		t.Fatal(err)
 	}
 	id := jobs[0].ID + ".media"
-	if _, err := cat.ReserveTelegramLocalFile(ctx, catalog.TelegramLocalFile{FileID: id, Root: root, JobID: jobs[0].ID}); err != nil {
+	if _, err := cat.ReserveTelegramLocalFile(ctx, catalog.TelegramLocalFile{FileID: id, JobID: jobs[0].ID}); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(root, id), []byte("video"), 0600); err != nil {

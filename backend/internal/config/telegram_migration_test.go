@@ -19,12 +19,12 @@ func TestTelegramMigrationImportsMissingYAMLAndPreservesExplicitValues(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	legacy := Telegram{Enabled: true, BotToken: "123:private_token", APIID: 1234, APIHash: "0123456789abcdef0123456789abcdef", AllowedUserIDs: []int64{42}, UploadDirectory: "Legacy"}
+	legacy := Telegram{Enabled: true, BotToken: "123:private_token", AllowedUserIDs: []int64{42}, UploadDirectory: "Legacy"}
 	if err = m.MigrateTelegramSettings(legacy); err != nil {
 		t.Fatal(err)
 	}
 	cfg := m.TelegramSettings()
-	if cfg.Enabled || cfg.UploadDirectory != "Existing" || cfg.BotToken != legacy.BotToken || cfg.APIHash != legacy.APIHash || cfg.APIID != legacy.APIID || cfg.AllowedUserIDs[0] != 42 {
+	if cfg.Enabled || cfg.UploadDirectory != "Existing" || cfg.BotToken != legacy.BotToken || cfg.AllowedUserIDs[0] != 42 {
 		t.Fatal("migration lost settings or overwrote explicit YAML")
 	}
 	data, _, err := m.ReadYAML()
@@ -54,7 +54,7 @@ func TestTelegramYAMLHotReloadAndInvalidUpdate(t *testing.T) {
 		t.Fatal(err)
 	}
 	data, version, _ := m.ReadYAML()
-	valid := []byte("telegram:\n  enabled: true\n  bot_token: 123:private_token\n  api_id: 1234\n  api_hash: '0123456789abcdef0123456789abcdef'\n")
+	valid := []byte("telegram:\n  enabled: true\n  bot_token: 123:private_token\n")
 	result, err := m.ReplaceYAML(valid, version)
 	if err != nil || result.RestartRequired || !m.TelegramSettings().Enabled {
 		t.Fatal("YAML did not apply live", err)

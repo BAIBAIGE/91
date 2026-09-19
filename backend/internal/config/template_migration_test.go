@@ -19,6 +19,8 @@ telegram:
   bot_token: "123:private_token"
   api_id: 1234
   api_hash: "0123456789abcdef0123456789abcdef"
+  api_files_root: /old/bot-api
+  local_files_root: /old/site
   allowed_user_ids: [42, 43]
   upload_directory: 2026-09-16
   max_pending_jobs: 0
@@ -95,7 +97,7 @@ future_section:
 	if after.Telegram.UploadDirectory != "2026-09-16" {
 		t.Fatal("migration changed a string that resembles a date")
 	}
-	for _, removed := range []string{"outdated", "interval_seconds:", "max_depth:", "duration_seconds:", "segments:", "future_option:", "future_section:"} {
+	for _, removed := range []string{"outdated", "interval_seconds:", "max_depth:", "duration_seconds:", "segments:", "future_option:", "future_section:", "api_id:", "api_hash:", "api_files_root:", "local_files_root:"} {
 		if strings.Contains(string(written), removed) {
 			t.Errorf("retained %s", removed)
 		}

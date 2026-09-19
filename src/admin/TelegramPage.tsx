@@ -22,8 +22,6 @@ import "@/styles/telegram.css";
 const stateLabels: Record<string, string> = {
   disabled: "未启用",
   connecting: "连接中",
-  waiting_config: "等待配置凭据",
-  waiting_service: "等待 Bot API 服务",
   connected: "连接正常",
   error: "连接异常",
   conflict: "接收冲突",

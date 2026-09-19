@@ -9,6 +9,7 @@ dist
 # 后端数据目录（SQLite + teaser/封面）
 backend/data/
 backend/config.yaml
+backend/telegram.yml
 
 # 工具链
 tools/

@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/video-site/backend/internal/catalog"
 	"github.com/video-site/backend/internal/drives"
@@ -17,31 +16,50 @@ import (
 
 const DriveID = catalog.TelegramLocalDriveID
 
-type Driver struct{ cat *catalog.Catalog }
+type Driver struct {
+	cat  *catalog.Catalog
+	root func() string
+}
 
-func New(cat *catalog.Catalog) *Driver       { return &Driver{cat: cat} }
-func (d *Driver) Kind() string               { return DriveID }
-func (d *Driver) ID() string                 { return DriveID }
-func (d *Driver) RootID() string             { return "" }
-func (d *Driver) Init(context.Context) error { return nil }
+// root resolves the website's current shared directory even when receiving is
+// disabled. Individual operations use one snapshot of this location.
+func New(cat *catalog.Catalog, root func() string) *Driver { return &Driver{cat: cat, root: root} }
+func (d *Driver) Kind() string                             { return DriveID }
+func (d *Driver) ID() string                               { return DriveID }
+func (d *Driver) RootID() string                           { return "" }
+func (d *Driver) Init(context.Context) error               { return nil }
 func (d *Driver) List(context.Context, string) ([]drives.Entry, error) {
 	return nil, drives.ErrNotSupported
 }
 
-// Path rejects symlinks and returns only a reserved library file. Missing files
-// retain their valid path so deletion and interrupted acquisitions are idempotent.
-func Path(f catalog.TelegramLocalFile) (string, error) {
-	if !filepath.IsAbs(f.Root) || filepath.Base(f.Root) != "library" || f.FileID == "" || filepath.Base(f.FileID) != f.FileID || strings.ContainsAny(f.FileID, "/\\\x00") || f.FileID == "." || f.FileID == ".." {
+// RelativePath addresses only files within the library, never Bot API state.
+func RelativePath(fileID string) (string, error) {
+	if fileID == "" || filepath.Base(fileID) != fileID || strings.ContainsAny(fileID, "/\\\x00:") || fileID == "." || fileID == ".." {
 		return "", errors.New("TG 视频路径无效")
 	}
-	root, err := filepath.EvalSymlinks(f.Root)
+	return filepath.Join("library", fileID), nil
+}
+
+// Path resolves a library identity under the website's storage root. Missing files
+// retain their valid path so deletion and interrupted acquisitions are idempotent.
+func Path(root, fileID string) (string, error) {
+	relative, err := RelativePath(fileID)
+	if err != nil || !filepath.IsAbs(root) {
+		return "", errors.New("TG 视频路径无效")
+	}
+	base, err := filepath.EvalSymlinks(root)
 	if err != nil {
 		return "", errors.New("TG 视频存储目录不可用")
 	}
-	if filepath.Clean(root) != filepath.Clean(f.Root) {
+	library := filepath.Join(base, "library")
+	resolved, err := filepath.EvalSymlinks(library)
+	if err != nil {
+		return "", errors.New("TG 视频存储目录不可用")
+	}
+	if resolved != library {
 		return "", errors.New("TG 视频存储目录不能包含符号链接")
 	}
-	path := filepath.Join(root, f.FileID)
+	path := filepath.Join(base, relative)
 	info, err := os.Lstat(path)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return "", errors.New("无法检查 TG 视频文件")
@@ -56,7 +74,7 @@ func (d *Driver) LocalPath(ctx context.Context, id string) (string, error) {
 	if err != nil {
 		return "", os.ErrNotExist
 	}
-	return Path(f)
+	return Path(d.root(), f.FileID)
 }
 func (d *Driver) Stat(ctx context.Context, id string) (*drives.Entry, error) {
 	path, err := d.LocalPath(ctx, id)
@@ -78,7 +96,9 @@ func (d *Driver) StreamURL(ctx context.Context, id string) (*drives.StreamLink, 
 	if err != nil || info.Size() == 0 {
 		return nil, os.ErrNotExist
 	}
-	return &drives.StreamLink{URL: path, Expires: time.Now().Add(time.Hour)}, nil
+	// A local lookup is cheap and its root can change through configuration.
+	// Leave expiry unset so the playback proxy does not cache a physical path.
+	return &drives.StreamLink{URL: path}, nil
 }
 func (d *Driver) Remove(ctx context.Context, id string) error {
 	if err := ctx.Err(); err != nil {
@@ -91,7 +111,7 @@ func (d *Driver) Remove(ctx context.Context, id string) error {
 	if err != nil {
 		return errors.New("无法读取 TG 视频位置")
 	}
-	path, err := Path(f)
+	path, err := Path(d.root(), f.FileID)
 	if err != nil {
 		return err
 	}

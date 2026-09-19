@@ -15,7 +15,7 @@ import (
 func normalizeTelegramSnapshot(ctx context.Context, tx *sql.Tx, state *snapshotSelectionState) error {
 	state.TelegramUploadFiles = make(map[string]catalog.TelegramLocalFile)
 	if state.Selection.UploadStorage {
-		rows, err := tx.QueryContext(ctx, `SELECT v.id,v.file_id,COALESCE(f.root,''),COALESCE(f.job_id,'') FROM videos v LEFT JOIN telegram_local_files f ON f.file_id=v.file_id WHERE v.drive_id='telegram-local'`)
+		rows, err := tx.QueryContext(ctx, `SELECT v.id,v.file_id,COALESCE(f.job_id,'') FROM videos v LEFT JOIN telegram_local_files f ON f.file_id=v.file_id WHERE v.drive_id='telegram-local'`)
 		if err != nil {
 			return err
 		}
@@ -26,7 +26,7 @@ func normalizeTelegramSnapshot(ctx context.Context, tx *sql.Tx, state *snapshotS
 		var files []item
 		for rows.Next() {
 			var v item
-			if err := rows.Scan(&v.id, &v.file.FileID, &v.file.Root, &v.file.JobID); err != nil {
+			if err := rows.Scan(&v.id, &v.file.FileID, &v.file.JobID); err != nil {
 				rows.Close()
 				return err
 			}
@@ -38,7 +38,7 @@ func normalizeTelegramSnapshot(ctx context.Context, tx *sql.Tx, state *snapshotS
 		}
 		rows.Close()
 		for _, v := range files {
-			if _, err := telegramstorage.Path(v.file); err != nil {
+			if _, err := telegramstorage.RelativePath(v.file.FileID); err != nil || v.file.JobID == "" {
 				return fmt.Errorf("backup: TG video %s has unavailable storage", v.id)
 			}
 			// Generated TG IDs are opaque basenames, so this name cannot reveal tokens.

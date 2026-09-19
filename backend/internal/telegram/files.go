@@ -48,21 +48,18 @@ func (s *Service) Fetch(ctx context.Context, j *catalog.RemoteUploadJob, progres
 	}
 	local, localErr := s.cat.TelegramLocalFile(ctx, j.ID+".media")
 	if errors.Is(localErr, sql.ErrNoRows) {
-		root := filepath.Join(s.cfg.LocalFilesRoot, "library")
-		if err = os.MkdirAll(root, 0750); err == nil {
-			root, err = filepath.EvalSymlinks(root)
-			if err == nil {
-				local, err = s.cat.ReserveTelegramLocalFile(ctx, catalog.TelegramLocalFile{FileID: j.ID + ".media", JobID: j.ID, Root: root})
-			}
-		}
+		local, err = s.cat.ReserveTelegramLocalFile(ctx, catalog.TelegramLocalFile{FileID: j.ID + ".media", JobID: j.ID})
 	} else {
 		err = localErr
+	}
+	if err == nil {
+		err = os.MkdirAll(filepath.Join(s.cfg.LocalFilesRoot, "library"), 0750)
 	}
 	persistence.RUnlock()
 	if err != nil {
 		return out, &mediaimport.SourceError{Message: "无法准备 TG 视频存储目录", WaitForAvailability: true}
 	}
-	destination, err := telegramstorage.Path(local)
+	destination, err := telegramstorage.Path(s.cfg.LocalFilesRoot, local.FileID)
 	if err != nil {
 		return out, &mediaimport.SourceError{Message: "TG 视频存储目录不可用", WaitForAvailability: true}
 	}
@@ -70,7 +67,7 @@ func (s *Service) Fetch(ctx context.Context, j *catalog.RemoteUploadJob, progres
 		if info.Size() <= 0 || info.Size() > s.cfg.MaxFileSizeBytes || (source.Size > 0 && source.Size != info.Size()) {
 			return out, &mediaimport.SourceError{Message: "TG 视频大小无效"}
 		}
-		if err = syncLibrary(destination, local.Root); err != nil {
+		if err = syncLibrary(destination, filepath.Dir(destination)); err != nil {
 			return out, &mediaimport.SourceError{Message: "无法确认 TG 视频已落盘", WaitForAvailability: true}
 		}
 		return acquiredFile(source, local, destination, info.Size()), nil
@@ -111,7 +108,11 @@ func (s *Service) Fetch(ctx context.Context, j *catalog.RemoteUploadJob, progres
 		}
 		return out, &mediaimport.SourceError{Message: "TG 文件获取超时或响应无效", RetryAfter: 10 * time.Second}
 	}
-	f, info, err := openCachedFile(s.cfg.LocalFilesRoot, file.Path)
+	localPath, err := mapAPIFilePath(s.cfg.APIFilesRoot, s.cfg.LocalFilesRoot, file.Path)
+	if err != nil {
+		return out, &mediaimport.SourceError{Message: "TG 返回的文件路径不在 Bot API 文件目录内，请检查目录映射"}
+	}
+	f, info, err := openCachedFile(s.cfg.LocalFilesRoot, localPath)
 	if err != nil {
 		return out, &mediaimport.SourceError{Message: "TG 返回的文件路径不可用，请检查共享目录挂载"}
 	}
@@ -144,7 +145,7 @@ func (s *Service) Fetch(ctx context.Context, j *catalog.RemoteUploadJob, progres
 	if err = os.Rename(f.Name(), destination); err != nil {
 		return out, &mediaimport.SourceError{Message: "无法接管 TG 视频，请检查共享目录写入权限及 library 是否位于同一文件系统", WaitForAvailability: true}
 	}
-	if err = syncLibrary(destination, local.Root, filepath.Dir(f.Name())); err != nil {
+	if err = syncLibrary(destination, filepath.Dir(destination), filepath.Dir(f.Name())); err != nil {
 		return out, &mediaimport.SourceError{Message: "无法确认 TG 视频已落盘", WaitForAvailability: true}
 	}
 	if err = progress("telegram_download", info.Size(), info.Size()); err != nil {
@@ -192,5 +193,5 @@ func acquiredFile(source catalog.TelegramSource, local catalog.TelegramLocalFile
 	return mediaimport.SourceFile{Name: name, MIME: source.MIME, Size: size, Path: path, DriveID: telegramstorage.DriveID, FileID: local.FileID}
 }
 func (s *Service) Discard(ctx context.Context, j *catalog.RemoteUploadJob) error {
-	return telegramstorage.New(s.cat).Remove(ctx, j.ID+".media")
+	return telegramstorage.New(s.cat, func() string { return s.cfg.LocalFilesRoot }).Remove(ctx, j.ID+".media")
 }

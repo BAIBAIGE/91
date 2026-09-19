@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
@@ -62,6 +63,9 @@ type Manager struct {
 	// reports it once instead of logging the same rejected bytes every second.
 	observedVersion string
 	apply           func(LiveSettings) error
+
+	telegramStorage    telegramStoragePaths
+	telegramStorageErr error
 }
 
 func NewManager(path string) (*Manager, error) {
@@ -74,11 +78,15 @@ func NewManager(path string) (*Manager, error) {
 		return nil, err
 	}
 	version := configVersion(data)
-	return &Manager{
+	m := &Manager{
 		path:            path,
 		current:         parsed,
 		observedVersion: version,
-	}, nil
+	}
+	// Telegram is optional. Keep deployment errors for its status/probe rather
+	// than prevent an otherwise configured website from starting.
+	_ = m.LoadTelegramCompose(filepath.Join(filepath.Dir(path), "telegram.yml"))
+	return m, nil
 }
 
 func DefaultLiveSettings() LiveSettings {
@@ -165,6 +173,9 @@ func (m *Manager) ReplaceYAML(data []byte, expectedVersion string) (SaveResult, 
 		return SaveResult{}, errors.New("configuration manager is unavailable")
 	}
 	if err := validateAdminConfigRemoved(data); err != nil {
+		return SaveResult{}, err
+	}
+	if err := validateTelegramPathsRemoved(data); err != nil {
 		return SaveResult{}, err
 	}
 	candidate, err := Parse(data)

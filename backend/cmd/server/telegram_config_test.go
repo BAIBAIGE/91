@@ -58,7 +58,7 @@ func TestTelegramDatabaseMigrationClearsOnlyAfterSuccessfulYAMLWrite(t *testing.
 				t.Fatal("successful migration did not clear legacy settings", err)
 			}
 			cfg := manager.TelegramSettings()
-			if cfg.BotToken != token || cfg.APIID != 1234 || cfg.AllowedUserIDs[0] != 42 || cfg.UploadDriveID != "cloud" {
+			if cfg.BotToken != token || cfg.AllowedUserIDs[0] != 42 || cfg.UploadDriveID != "cloud" {
 				t.Fatal("migration lost settings")
 			}
 			if err = migrateTelegramConfig(ctx, cat, manager); err != nil {

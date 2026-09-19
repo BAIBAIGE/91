@@ -208,6 +208,7 @@ install_dependencies() {
 ensure_ownership() {
   local paths=()
   [[ -e "$REPO_DIR/backend/config.yaml" ]] && paths+=("$REPO_DIR/backend/config.yaml")
+  [[ -e "$REPO_DIR/backend/telegram.yml" ]] && paths+=("$REPO_DIR/backend/telegram.yml")
   [[ -d "$REPO_DIR/backend/data" ]] && paths+=("$REPO_DIR/backend/data")
   [[ -d "$REPO_DIR/dist" ]] && paths+=("$REPO_DIR/dist")
   [[ -d "$REPO_DIR/node_modules" ]] && paths+=("$REPO_DIR/node_modules")
@@ -221,6 +222,10 @@ prepare_config() {
   local cfg="$REPO_DIR/backend/config.yaml"
   local example="$REPO_DIR/backend/config.example.yaml"
   mkdir -p "$REPO_DIR/backend/data"
+
+  if [[ ! -f "$REPO_DIR/backend/telegram.yml" ]]; then
+    cp "$REPO_DIR/deploy/telegram/compose.native.yml" "$REPO_DIR/backend/telegram.yml"
+  fi
 
   if [[ ! -f "$cfg" ]]; then
     log "creating backend/config.yaml from example"

@@ -20,7 +20,7 @@ func migrateTelegramConfig(ctx context.Context, cat *catalog.Catalog, manager *c
 			return errors.New("无法解析待迁移的 Telegram 配置")
 		}
 	}
-	legacy.BotToken, legacy.APIID, legacy.APIHash = stored.BotToken, stored.APIID, stored.APIHash
+	legacy.BotToken = stored.BotToken
 	if err = manager.MigrateTelegramSettings(legacy); err != nil {
 		return err
 	}

@@ -231,6 +231,7 @@ func sortedSetValues(values map[string]struct{}) []string {
 }
 
 func (m *Manager) snapshotTelegramUploads(ctx context.Context, snapshotRoot string, state snapshotSelectionState) error {
+	root := m.telegramFilesRoot()
 	destination := filepath.Join(snapshotRoot, "payload", "uploads")
 	if err := os.MkdirAll(destination, 0700); err != nil {
 		return err
@@ -239,7 +240,7 @@ func (m *Manager) snapshotTelegramUploads(ctx context.Context, snapshotRoot stri
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		source, err := telegramstorage.Path(local)
+		source, err := telegramstorage.Path(root, local.FileID)
 		if err != nil {
 			return fmt.Errorf("backup: TG video %s is unavailable", fileName)
 		}

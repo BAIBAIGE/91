@@ -5,12 +5,15 @@ import { applyVisualFields, changedVisualFields, configDocument, parseConfig } f
 test("Telegram settings and credentials round-trip through the shared YAML draft", () => {
   for (const source of ["# keep\npreview: { enabled: true }\n", "{}\n", "telegram:\n", "telegram: null\n", "telegram: {}\n"]) {
     const before = parseConfig(source).draft;
-    const draft = { ...before, telegramEnabled: true, telegramBotToken: "123:test_token", telegramApiId: 1234,
-      telegramApiHash: "12345678901234567890123456789012", telegramAllowedUserIds: "123, 456",
+    const draft = { ...before, telegramEnabled: true, telegramBotToken: "123:test_token", telegramAllowedUserIds: "123, 456",
       telegramUploadDriveId: "cloud", telegramUploadDirectory: "Telegram/videos", telegramUploadProxy: "socks5h://user:pass@proxy:1080", telegramMaxPendingJobs: 25 };
     const output = applyVisualFields(source, draft, changedVisualFields(before, draft));
     assert.deepEqual(parseConfig(output).draft, draft);
-    assert.equal(configDocument(output).getIn(["telegram", "api_hash"]), draft.telegramApiHash);
+    assert.equal(configDocument(output).getIn(["telegram", "bot_token"]), draft.telegramBotToken);
+    assert.equal(configDocument(output).hasIn(["telegram", "api_id"]), false);
+    assert.equal(configDocument(output).hasIn(["telegram", "api_hash"]), false);
+    assert.equal(configDocument(output).hasIn(["telegram", "api_files_root"]), false);
+    assert.equal(configDocument(output).hasIn(["telegram", "local_files_root"]), false);
     if (source.startsWith("# keep")) assert.ok(output.startsWith("# keep\npreview: { enabled: true }\n"));
   }
 });
@@ -37,15 +40,15 @@ test("Telegram lists can be edited in block and flow YAML without damaging the n
   }
 });
 
-test("clearing Telegram credentials writes empty values instead of retaining old secrets", () => {
+test("clearing the Telegram Bot Token writes empty values instead of retaining old secrets", () => {
   const source = "telegram: { bot_token: '123:old', api_hash: '0123456789abcdef0123456789abcdef' }\n";
   const before = parseConfig(source).draft;
-  const draft = { ...before, telegramBotToken: "", telegramApiHash: "" };
+  const draft = { ...before, telegramBotToken: "" };
   assert.deepEqual(parseConfig(applyVisualFields(source, draft, changedVisualFields(before, draft))).draft, draft);
 });
 
 test("Telegram YAML rejects mismatched types and invalid user ID lists", () => {
-  for (const source of ["telegram: []", "telegram: { enabled: yes }", "telegram: { api_id: text }", "telegram: { api_hash: 12345678901234567890123456789012 }", "telegram: { allowed_user_ids: [-1] }", "telegram: { upload_proxy: 7890 }"]) {
+  for (const source of ["telegram: []", "telegram: { enabled: yes }", "telegram: { bot_token: 123 }", "telegram: { api_base_url: 123 }", "telegram: { allowed_user_ids: [-1] }", "telegram: { upload_proxy: 7890 }"]) {
     assert.throws(() => parseConfig(source), /telegram/);
   }
 });

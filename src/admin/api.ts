@@ -1453,7 +1453,6 @@ export function unbanIP(ip: string) {
 export type TelegramConfig = {
   enabled: boolean;
   apiBaseUrl: string;
-  localFilesRoot: string;
   allowedUserIds: number[];
   siteBaseUrl: string;
   maxFileSizeBytes: number;
