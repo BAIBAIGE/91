@@ -178,6 +178,9 @@ func TestListAppliesRequestTimeout(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "115 list request timed out after 20ms") {
 		t.Fatalf("list error = %v, want bounded request timeout", err)
 	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("list error = %v, want a recognizable request deadline", err)
+	}
 }
 
 func TestIsTransient115ListError(t *testing.T) {

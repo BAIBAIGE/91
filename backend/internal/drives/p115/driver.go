@@ -265,7 +265,8 @@ func (d *Driver) getFilesContext(ctx context.Context, dirID string, options ...s
 			return nil, ctxErr
 		}
 		if errors.Is(requestCtx.Err(), context.DeadlineExceeded) {
-			return nil, fmt.Errorf("115 list request timed out after %s: %v", d.listTimeout, err)
+			// Preserve the timeout cause for the scanner's bounded directory retries.
+			return nil, fmt.Errorf("115 list request timed out after %s: %w", d.listTimeout, err)
 		}
 		return nil, err
 	}
