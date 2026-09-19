@@ -88,8 +88,9 @@ telegram:
   allowed_user_ids: []
   # 选填，用于生成机器人回复中的视频链接。
   site_base_url: ""
-  # 单文件上限（字节）、待处理任务上限、文件获取超时（秒）。
+  # 单文件上限（字节）；消息未提供有效大小或已超限时，拒绝下载。
   max_file_size_bytes: 4294967296
+  # 待处理任务上限、文件获取超时（秒）。
   max_pending_jobs: 100
   fetch_timeout_seconds: 1800
   # 后续转存任务使用的网盘和相对目录；网盘留空时仅保存到本地。

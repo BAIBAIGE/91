@@ -304,8 +304,8 @@ func (s *Service) accept(ctx context.Context, u update) error {
 					r.Response = ""
 					if file.FileID == "" || file.UniqueID == "" {
 						r.Response = "视频文件信息不完整，请重新发送"
-					} else if file.Size < 0 || file.Size > s.cfg.MaxFileSizeBytes {
-						r.Response = "视频超过配置的单文件大小限制"
+					} else if err := validateVideoSize(file.Size, s.cfg.MaxFileSizeBytes); err != nil {
+						r.Response = err.Error()
 					} else {
 						source = &catalog.TelegramSource{BotID: botID, SenderID: m.From.ID, FileID: file.FileID, UniqueID: file.UniqueID, FileName: file.Name, Size: file.Size, MIME: file.MIME}
 						title = videoTitle(m.Caption, file.Name, m.ID)

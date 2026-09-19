@@ -15,6 +15,17 @@ import (
 	"github.com/video-site/backend/internal/persistence"
 )
 
+// Check both new messages and persisted jobs before getFile can start a download.
+func validateVideoSize(size, limit int64) error {
+	if size <= 0 {
+		return errors.New("无法确认视频大小，已拒绝下载，请重新发送视频")
+	}
+	if size > limit {
+		return errors.New("视频超过配置的单文件大小限制")
+	}
+	return nil
+}
+
 func (s *Service) Fetch(ctx context.Context, j *catalog.RemoteUploadJob, progress func(string, int64, int64) error) (mediaimport.SourceFile, error) {
 	// A configuration change cancels downloads using the old bot identity.
 	if s.runCtx != nil {
@@ -36,11 +47,8 @@ func (s *Service) Fetch(ctx context.Context, j *catalog.RemoteUploadJob, progres
 		return out, &mediaimport.SourceError{Message: "发送者已不在允许用户列表中"}
 	}
 	size := source.Size
-	if size <= 0 {
-		size = s.cfg.MaxFileSizeBytes
-	}
-	if size > s.cfg.MaxFileSizeBytes {
-		return out, &mediaimport.SourceError{Message: "文件超过当前大小限制"}
+	if err := validateVideoSize(size, s.cfg.MaxFileSizeBytes); err != nil {
+		return out, &mediaimport.SourceError{Message: err.Error()}
 	}
 	// Persist the destination before moving bytes, including across restarts.
 	if err = persistence.RLockContext(ctx); err != nil {
@@ -64,7 +72,7 @@ func (s *Service) Fetch(ctx context.Context, j *catalog.RemoteUploadJob, progres
 		return out, &mediaimport.SourceError{Message: "TG 视频存储目录不可用", WaitForAvailability: true}
 	}
 	if info, e := os.Stat(destination); e == nil {
-		if info.Size() <= 0 || info.Size() > s.cfg.MaxFileSizeBytes || (source.Size > 0 && source.Size != info.Size()) {
+		if info.Size() <= 0 || info.Size() > s.cfg.MaxFileSizeBytes || source.Size != info.Size() {
 			return out, &mediaimport.SourceError{Message: "TG 视频大小无效"}
 		}
 		if err = syncLibrary(destination, filepath.Dir(destination)); err != nil {
@@ -124,7 +132,7 @@ func (s *Service) Fetch(ctx context.Context, j *catalog.RemoteUploadJob, progres
 	if info.Size() <= 0 || info.Size() > s.cfg.MaxFileSizeBytes {
 		return out, &mediaimport.SourceError{Message: "视频为空或超过当前大小限制"}
 	}
-	if (source.Size > 0 && info.Size() != source.Size) || (file.Size > 0 && info.Size() != file.Size) {
+	if info.Size() != source.Size || (file.Size > 0 && info.Size() != file.Size) {
 		return out, &mediaimport.SourceError{Message: "TG 文件大小不一致，请重新获取", RetryAfter: 10 * time.Second}
 	}
 	if err = ctx.Err(); err != nil {
