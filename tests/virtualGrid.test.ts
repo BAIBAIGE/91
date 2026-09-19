@@ -1,11 +1,91 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { Virtualizer, type VirtualItem } from "@tanstack/react-virtual";
 import {
+  matchingVirtualGridSnapshot,
+  parseVirtualGridSnapshot,
   shouldLoadMore,
   virtualGridColumns,
   virtualRowCount,
   virtualRowRange,
 } from "../src/lib/virtualGrid.ts";
+import { parseListingScrollEntry } from "../src/lib/listingScrollRestore.ts";
+
+function measuredGrid(initialMeasurementsCache: VirtualItem[] = []) {
+  return new Virtualizer({
+    count: 80,
+    getScrollElement: () => null,
+    estimateSize: () => 260,
+    getItemKey: (index) => `video-${index * 4}`,
+    initialRect: { width: 1440, height: 900 },
+    initialOffset: 7000,
+    scrollMargin: 223,
+    initialMeasurementsCache,
+    scrollToFn: () => {},
+    observeElementRect: () => {},
+    observeElementOffset: () => {},
+  });
+}
+
+test("a cold return restores the same visible rows and offsets from measured geometry", () => {
+  const original = measuredGrid();
+  original.getVirtualItems();
+  for (let row = 0; row < 40; row += 1) {
+    original.resizeItem(row, row % 3 === 0 ? 235 : 260);
+  }
+  const entry = parseListingScrollEntry(JSON.stringify({
+    queryKey: "home:recommend",
+    feedToken: "feed-1",
+    requestedCount: 320,
+    scrollY: 7000,
+    grid: {
+      viewportWidth: 1440,
+      columns: 4,
+      compact: false,
+      scrollMargin: 223,
+      measurements: original.takeSnapshot(),
+    },
+  }));
+  assert.ok(entry?.grid);
+  const restored = measuredGrid(entry.grid.measurements);
+  const visibleRows = (grid: ReturnType<typeof measuredGrid>) =>
+    grid.getVirtualItems().filter(row => row.end > 7000 && row.start < 7900)
+      .map(row => ({ key: row.key, top: row.start - 7000 }));
+
+  assert.notDeepEqual(visibleRows(measuredGrid()), visibleRows(original),
+    "scrollY alone loses the visible video when measured heights differ from estimates");
+  assert.deepEqual(visibleRows(restored), visibleRows(original));
+});
+
+test("row measurements only apply to the viewport and grid layout that produced them", () => {
+  const snapshot = {
+    viewportWidth: 1440, columns: 4, compact: false, scrollMargin: 223,
+    measurements: [],
+  };
+  assert.equal(matchingVirtualGridSnapshot(snapshot, snapshot), snapshot);
+  for (const layout of [
+    { ...snapshot, viewportWidth: 1200 },
+    { ...snapshot, columns: 2 },
+    { ...snapshot, compact: true },
+  ]) {
+    assert.equal(matchingVirtualGridSnapshot(snapshot, layout), null);
+  }
+});
+
+test("malformed grid geometry cannot corrupt otherwise usable listing history", () => {
+  assert.equal(parseVirtualGridSnapshot(null), null);
+  assert.equal(parseVirtualGridSnapshot({}), null);
+  const grid = {
+    viewportWidth: 1440, columns: 4, compact: false, scrollMargin: 223,
+    measurements: [{ index: 0, key: "v1", start: 223, size: -20, end: 203, lane: 0 }],
+  };
+  assert.equal(parseVirtualGridSnapshot(grid), null);
+  const entry = parseListingScrollEntry(JSON.stringify({
+    queryKey: "home:recommend", feedToken: "feed-1", requestedCount: 40, scrollY: 1000, grid,
+  }));
+  assert.equal(entry?.scrollY, 1000);
+  assert.equal(entry?.grid, undefined);
+});
 
 test("the flat video list is folded into whole rows", () => {
   assert.equal(virtualRowCount(0, 4), 0);

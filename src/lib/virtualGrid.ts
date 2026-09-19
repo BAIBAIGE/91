@@ -1,3 +1,63 @@
+import type { VirtualItem } from "@tanstack/react-virtual";
+
+/** Measured row geometry must travel with the scroll offset on a cold return. */
+export type VirtualGridSnapshot = {
+  viewportWidth: number;
+  columns: number;
+  compact: boolean;
+  scrollMargin: number;
+  measurements: VirtualItem[];
+};
+
+export type VirtualGridHandle = {
+  takeSnapshot: () => VirtualGridSnapshot;
+};
+
+export function parseVirtualGridSnapshot(
+  value: unknown
+): VirtualGridSnapshot | null {
+  if (!value || typeof value !== "object") return null;
+  const snapshot = value as VirtualGridSnapshot;
+  if (
+    !Number.isFinite(snapshot.viewportWidth) ||
+    snapshot.viewportWidth <= 0 ||
+    !Number.isInteger(snapshot.columns) ||
+    snapshot.columns <= 0 ||
+    typeof snapshot.compact !== "boolean" ||
+    !Number.isFinite(snapshot.scrollMargin) ||
+    snapshot.scrollMargin < 0 ||
+    !Array.isArray(snapshot.measurements) ||
+    !snapshot.measurements.every(
+      (row) =>
+        row &&
+        Number.isInteger(row.index) && row.index >= 0 &&
+        (typeof row.key === "string" || typeof row.key === "number") &&
+        Number.isFinite(row.start) && row.start >= 0 &&
+        Number.isFinite(row.size) && row.size > 0 &&
+        Number.isFinite(row.end) && row.end >= row.start &&
+        row.lane === 0
+    )
+  ) {
+    return null;
+  }
+  return snapshot;
+}
+
+export function matchingVirtualGridSnapshot(
+  snapshot: VirtualGridSnapshot | null | undefined,
+  layout: { viewportWidth: number; columns: number; compact: boolean }
+): VirtualGridSnapshot | null {
+  if (
+    !snapshot ||
+    snapshot.viewportWidth !== layout.viewportWidth ||
+    snapshot.columns !== layout.columns ||
+    snapshot.compact !== layout.compact
+  ) {
+    return null;
+  }
+  return snapshot;
+}
+
 /**
  * 虚拟网格的纯计算层：把"一维的视频列表"折成"二维的行"，以及决定何时
  * 续下一批。窗口本身由 @tanstack/react-virtual 负责，这里只留可以在没有

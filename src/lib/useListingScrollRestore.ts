@@ -13,9 +13,9 @@ import {
   resolveRestoreFeedToken,
   resolveRestoreScrollY,
   writeListingScrollEntry,
-  type FeedSnapshotRestoreScope,
   type ListingScrollStorage,
 } from "@/lib/listingScrollRestore";
+import type { VirtualGridHandle, VirtualGridSnapshot } from "@/lib/virtualGrid";
 
 /**
  * 无限滚动列表的前进/后退现场恢复。历史条目的 key 是存储键，因此"后退"
@@ -27,13 +27,6 @@ import {
 
 // 内容还没渲染够时滚不到目标位置，按帧重试；超过上限就放弃，避免死循环。
 const RESTORE_MAX_FRAMES = 90;
-
-// 模块实例与当前 Document 同寿命：SPA 路由往返时保持不变，浏览器刷新后
-// 会生成新值，因此可以只让易变快照在当前 Document 内恢复。
-const LISTING_DOCUMENT_ID =
-  typeof globalThis.crypto?.randomUUID === "function"
-    ? globalThis.crypto.randomUUID()
-    : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 
 function sessionStorageOrNull(): ListingScrollStorage | null {
   try {
@@ -49,7 +42,7 @@ export type ListingRestoreTarget = {
   count: number;
   feedToken: string;
   scrollY: number;
-  feedSnapshotScope: FeedSnapshotRestoreScope;
+  grid?: VirtualGridSnapshot;
 };
 
 /**
@@ -60,15 +53,12 @@ export function useListingRestoreTarget(input: {
   historyKey: string;
   queryKey: string;
   pageSize: number;
-  feedSnapshotScope?: FeedSnapshotRestoreScope;
 }): ListingRestoreTarget {
   const targetRef = useRef<ListingRestoreTarget | null>(null);
-  const feedSnapshotScope = input.feedSnapshotScope ?? "session";
   if (
     !targetRef.current ||
     targetRef.current.historyKey !== input.historyKey ||
-    targetRef.current.queryKey !== input.queryKey ||
-    targetRef.current.feedSnapshotScope !== feedSnapshotScope
+    targetRef.current.queryKey !== input.queryKey
   ) {
     const entry = readListingScrollEntry(
       sessionStorageOrNull(),
@@ -81,18 +71,10 @@ export function useListingRestoreTarget(input: {
         entry,
         queryKey: input.queryKey,
         pageSize: input.pageSize,
-        documentID: LISTING_DOCUMENT_ID,
       }),
-      feedToken: resolveRestoreFeedToken(entry, input.queryKey, {
-        scope: feedSnapshotScope,
-        documentID: LISTING_DOCUMENT_ID,
-      }),
-      scrollY: resolveRestoreScrollY(
-        entry,
-        input.queryKey,
-        LISTING_DOCUMENT_ID
-      ),
-      feedSnapshotScope,
+      feedToken: resolveRestoreFeedToken(entry, input.queryKey),
+      scrollY: resolveRestoreScrollY(entry, input.queryKey),
+      grid: entry?.queryKey === input.queryKey ? entry.grid : undefined,
     };
   }
   return targetRef.current;
@@ -118,7 +100,6 @@ type ListingScrollSession = {
   pendingScrollY: number;
   lastScrollY: number;
   initialScrollPrepared: boolean;
-  lastPersistedSignature: string;
 };
 
 export function useListingScrollRestore({
@@ -129,6 +110,7 @@ export function useListingScrollRestore({
   itemCount,
   active = true,
 }: UseListingScrollRestoreInput) {
+  const gridRef = useRef<VirtualGridHandle | null>(null);
   const historyKey = target.historyKey;
   const restoreIdentity = `${historyKey}\u0000${queryKey}`;
   const sessionRef = useRef<ListingScrollSession | null>(null);
@@ -142,7 +124,6 @@ export function useListingScrollRestore({
       pendingScrollY: target.scrollY,
       lastScrollY: target.scrollY,
       initialScrollPrepared: false,
-      lastPersistedSignature: "",
     };
   } else {
     // 请求进度可以变化很多次；滚动监听器始终读取同一个会话对象的最新值。
@@ -157,22 +138,19 @@ export function useListingScrollRestore({
     // with the temporary position used while content is still being rebuilt.
     if (session.pendingScrollY > 0 || session.requestedCount <= 0) return;
     const scrollY = Math.max(0, Math.round(session.lastScrollY));
-    const signature = `${session.feedToken}\u0000${session.requestedCount}\u0000${scrollY}`;
-    if (signature === session.lastPersistedSignature) return;
     writeListingScrollEntry(sessionStorageOrNull(), session.historyKey, {
       queryKey: session.queryKey,
       feedToken: session.feedToken,
-      documentID: LISTING_DOCUMENT_ID,
       requestedCount: session.requestedCount,
       scrollY,
+      grid: gridRef.current?.takeSnapshot(),
     });
-    session.lastPersistedSignature = signature;
   }, [session]);
 
   useLayoutEffect(() => {
     if (!active) return;
     // 该 hook 已经按 history entry 恢复列表位置，挂载期间不再让浏览器进行
-    // 第二套自动恢复。新 Document 或新列表没有恢复目标时则明确从顶部开始。
+    // 第二套自动恢复。刷新当前列表或新列表没有恢复目标时则明确从顶部开始。
     const supportsManualRestoration =
       "scrollRestoration" in window.history;
     if (supportsManualRestoration) {
@@ -227,7 +205,7 @@ export function useListingScrollRestore({
       }
       frame += 1;
       if (frame >= RESTORE_MAX_FRAMES) {
-        // 保存的位置比恢复上限更深时，停在能到达的最远处而不是回到顶部。
+        // 视频删除或快照失效后内容可能变短，停在能到达的最远处。
         const reachable = resolveReachableScrollY({
           targetScrollY,
           documentHeight: document.documentElement.scrollHeight,
@@ -266,5 +244,9 @@ export function useListingScrollRestore({
     };
   }, [active, persist, restoreIdentity, session]);
 
-  return { restoring };
+  return {
+    restoring,
+    gridRef,
+    gridSnapshot: target.feedToken === feedToken ? target.grid : undefined,
+  };
 }

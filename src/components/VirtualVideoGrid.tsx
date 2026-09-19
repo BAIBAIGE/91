@@ -1,17 +1,22 @@
 import {
   useCallback,
   useEffect,
+  useImperativeHandle,
   useLayoutEffect,
   useRef,
   useState,
   type ReactNode,
+  type Ref,
 } from "react";
 import { useWindowVirtualizer } from "@tanstack/react-virtual";
 import {
+  matchingVirtualGridSnapshot,
   shouldLoadMore,
   virtualGridColumns,
   virtualRowCount,
   virtualRowRange,
+  type VirtualGridHandle,
+  type VirtualGridSnapshot,
 } from "@/lib/virtualGrid";
 import { useRouteActivity } from "@/lib/routeActivity";
 import type { VideoItem } from "@/types";
@@ -46,6 +51,8 @@ type Props = {
   prefetchRows?: number;
   tailContent?: ReactNode;
   onLoadMore?: () => void;
+  initialSnapshot?: VirtualGridSnapshot;
+  snapshotRef?: Ref<VirtualGridHandle>;
 };
 
 function readResponsiveGridColumns(): number {
@@ -88,14 +95,23 @@ export function VirtualVideoGrid({
   prefetchRows = 2,
   tailContent,
   onLoadMore,
+  initialSnapshot,
+  snapshotRef,
 }: Props) {
   const routeActive = useRouteActivity();
   const containerRef = useRef<HTMLDivElement | null>(null);
   const containerWidthRef = useRef(0);
   const responsiveColumns = useResponsiveGridColumns(routeActive);
   const columns = compact ? 1 : responsiveColumns;
+  const restoredSnapshot = matchingVirtualGridSnapshot(initialSnapshot, {
+    viewportWidth: typeof window === "undefined" ? 0 : window.innerWidth,
+    columns,
+    compact: !!compact,
+  });
   // 列表容器距文档顶部的距离：window virtualizer 用它把窗口滚动换算成列表内偏移。
-  const [scrollMargin, setScrollMargin] = useState(0);
+  const [scrollMargin, setScrollMargin] = useState(
+    () => restoredSnapshot?.scrollMargin ?? 0
+  );
   const loadedRowCount = virtualRowCount(videos.length, columns);
   // 未加载内容不提前撑高页面；只保留一个固定尾行承载加载反馈。
   const hasTailRow = hasMore;
@@ -129,9 +145,24 @@ export function VirtualVideoGrid({
     scrollMargin,
     getItemKey,
     getScrollElement,
+    initialMeasurementsCache: restoredSnapshot?.measurements,
     directDomUpdates: true,
     directDomUpdatesMode: "transform",
   });
+
+  useImperativeHandle(
+    snapshotRef,
+    () => ({
+      takeSnapshot: () => ({
+        viewportWidth: window.innerWidth,
+        columns,
+        compact: !!compact,
+        scrollMargin,
+        measurements: virtualizer.takeSnapshot(),
+      }),
+    }),
+    [columns, compact, scrollMargin, virtualizer]
+  );
 
   const updateScrollMargin = useCallback(() => {
     if (!routeActive) return;

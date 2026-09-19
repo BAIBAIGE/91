@@ -52,14 +52,13 @@ export default function ListingPage() {
     historyKey: location.key,
     queryKey,
     pageSize,
-    feedSnapshotScope: source.snapshotRestoreScope,
   });
   const listing = useInfiniteListing(source, {
     pausePagination: !routeActive,
     restoreCount: restoreTarget.count,
     restoreFeedToken: restoreTarget.feedToken,
   });
-  useListingScrollRestore({
+  const { gridRef, gridSnapshot } = useListingScrollRestore({
     target: restoreTarget,
     queryKey,
     requestedCount: listing.requestedCount,
@@ -165,6 +164,8 @@ export default function ListingPage() {
           <>
             <VirtualVideoGrid
               videos={items}
+              snapshotRef={gridRef}
+              initialSnapshot={gridSnapshot}
               key={`${queryKey}:${listing.feedToken}`}
               compact={view === "compact"}
               eagerCount={eagerCount}

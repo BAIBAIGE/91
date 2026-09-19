@@ -85,16 +85,13 @@ export default function HomePage() {
     historyKey: location.key,
     queryKey: activeFeedSource.key,
     pageSize: activeFeedSource.batchSize,
-    // Each source owns its freshness policy. Latest and random feeds preserve
-    // same-Document back navigation but start fresh after a browser reload.
-    feedSnapshotScope: activeFeedSource.snapshotRestoreScope,
   });
   const homeFeed = useInfiniteListing(activeFeedSource, {
     pausePagination: !routeActive,
     restoreCount: restoreTarget.count,
     restoreFeedToken: restoreTarget.feedToken,
   });
-  useListingScrollRestore({
+  const { gridRef, gridSnapshot } = useListingScrollRestore({
     target: restoreTarget,
     queryKey: activeFeedSource.key,
     requestedCount: homeFeed.requestedCount,
@@ -219,6 +216,8 @@ export default function HomePage() {
           <>
             <VirtualVideoGrid
               videos={feedItems}
+              snapshotRef={gridRef}
+              initialSnapshot={gridSnapshot}
               compact={hasActiveFilter && searchView === "compact"}
               eagerCount={eagerCount}
               highPriorityCount={1}

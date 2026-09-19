@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   HOME_RECOMMENDATION_BATCH_SIZE,
+  fetchInfiniteFeedRange,
   homeLatestFeedSource,
   homeRecommendationFeedSource,
   listingFeedSource,
@@ -43,6 +44,62 @@ function feedResponse(overrides: Record<string, unknown> = {}) {
   };
 }
 
+test("deep history restoration fetches the complete range in bounded sequential batches", async (t) => {
+  const requested = stubFetch(t, (path) => {
+    const query = new URL(path, "http://localhost").searchParams;
+    const cursor = Number(query.get("cursor"));
+    const count = Number(query.get("count"));
+    return feedResponse({
+      items: Array.from({ length: count }, (_, index) => ({ id: `v${cursor + index}` })),
+      total: 1000, nextCursor: cursor + count,
+    });
+  });
+  const result = await fetchInfiniteFeedRange(homeLatestFeedSource(20), {
+    cursor: { feedToken: "snapshot-token", position: 0 }, size: 620,
+  }, { signal: new AbortController().signal });
+
+  assert.equal(result.items.length, 620);
+  assert.equal(result.items[619].id, "v619");
+  assert.equal(result.cursor.position, 620);
+  assert.deepEqual(requested.map(({ path }) => {
+    const query = new URL(path, "http://localhost").searchParams;
+    return [query.get("feedToken"), query.get("cursor"), query.get("count")];
+  }), [
+    ["snapshot-token", "0", "240"],
+    ["snapshot-token", "240", "240"],
+    ["snapshot-token", "480", "140"],
+  ]);
+});
+
+test("range restoration stops when the snapshot ends and follows cursor progress across deleted items", async (t) => {
+  const requested = stubFetch(t, (path) => {
+    const cursor = Number(new URL(path, "http://localhost").searchParams.get("cursor"));
+    return feedResponse({
+      items: [{ id: `v${cursor}` }], total: 400,
+      nextCursor: cursor === 0 ? 300 : 400, exhausted: cursor > 0,
+    });
+  });
+  const result = await fetchInfiniteFeedRange(homeLatestFeedSource(20), {
+    cursor: { feedToken: "snapshot-token", position: 0 }, size: 620,
+  }, { signal: new AbortController().signal });
+  assert.deepEqual(result.items.map(item => item.id), ["v0", "v300"]);
+  assert.equal(result.exhausted, true);
+  assert.equal(result.cursor.position, 400);
+  assert.equal(requested.length, 2);
+});
+
+test("aborting a cold restore prevents further batch requests", async (t) => {
+  const controller = new AbortController();
+  const requested = stubFetch(t, () => {
+    controller.abort(new DOMException("navigation changed", "AbortError"));
+    return feedResponse({ total: 1000, nextCursor: 240 });
+  });
+  await assert.rejects(fetchInfiniteFeedRange(homeLatestFeedSource(20), {
+    cursor: { feedToken: "snapshot-token", position: 0 }, size: 620,
+  }, { signal: controller.signal }), { name: "AbortError" });
+  assert.equal(requested.length, 1);
+});
+
 test("the listing feed creates a filtered snapshot instead of translating offsets to pages", async (t) => {
   const requested = stubFetch(t, () => feedResponse());
   const source = listingFeedSource({
@@ -53,7 +110,6 @@ test("the listing feed creates a filtered snapshot instead of translating offset
   });
 
   assert.equal(source.batchSize, 20);
-  assert.equal(source.snapshotRestoreScope, "document");
   assert.equal(
     source.key,
     listingFeedSource({ q: "猫", tag: "剧情", sort: "latest", pageSize: 14 }).key,
@@ -88,7 +144,6 @@ test("later batches explicitly address the same token and cursor", async (t) => 
     feedResponse({ items: [{ id: "v3" }], nextCursor: 60 })
   );
   const source = listingFeedSource({ q: "", tag: "", sort: "hot", pageSize: 20 });
-  assert.equal(source.snapshotRestoreScope, "document");
 
   await source.fetchBatch(
     { cursor: { feedToken: "snapshot-token", position: 40 }, size: 20 },
@@ -99,11 +154,6 @@ test("later batches explicitly address the same token and cursor", async (t) => 
   assert.equal(query.get("feedToken"), "snapshot-token");
   assert.equal(query.get("cursor"), "40");
   assert.equal(query.get("count"), "20");
-  assert.equal(
-    listingFeedSource({ q: "", tag: "", sort: "recent", pageSize: 20 })
-      .snapshotRestoreScope,
-    "document"
-  );
 });
 
 test("shorts like and unlike use the shared counter endpoint", async (t) => {
@@ -174,7 +224,6 @@ test("the random recommendation feed is a restorable shuffled snapshot", async (
 
   assert.equal(source.key, "home:recommend");
   assert.equal(source.batchSize, HOME_RECOMMENDATION_BATCH_SIZE);
-  assert.equal(source.snapshotRestoreScope, "document");
   await source.fetchBatch(
     { cursor: { feedToken: "snapshot-token", position: 36 }, size: 12 },
     { signal: new AbortController().signal }
@@ -195,7 +244,6 @@ test("the home latest feed keeps its identity when its responsive batch changes"
   const source = homeLatestFeedSource(20);
 
   assert.equal(source.key, "home:latest");
-  assert.equal(source.snapshotRestoreScope, "document");
   assert.equal(source.key, homeLatestFeedSource(14).key);
   assert.notEqual(
     source.key,

@@ -8,15 +8,15 @@ import {
   nextListingRequest,
   type InfiniteListingState,
 } from "@/lib/infiniteListing";
-import type {
-  InfiniteFeedRequest,
-  InfiniteFeedSource,
+import {
+  fetchInfiniteFeedRange,
+  type InfiniteFeedRequest,
+  type InfiniteFeedSource,
 } from "@/lib/infiniteFeedSource";
 import type { VideoItem } from "@/types";
 
 const INFINITE_LISTING_CACHE_TTL_MS = 60_000;
 const INFINITE_LISTING_CACHE_MAX_ENTRIES = 8;
-const MAX_INITIAL_BATCH_SIZE = 240;
 
 const EMPTY_CURSOR: VideoFeedCursor = { feedToken: "", position: 0 };
 
@@ -81,12 +81,12 @@ function cacheIsFresh(entry: CachedInfiniteListing, now: number): boolean {
   return now - entry.receivedAt < INFINITE_LISTING_CACHE_TTL_MS;
 }
 
-function initialBatchSize(restoreCount: number, batchSize: number): number {
+function initialRequestSize(restoreCount: number, batchSize: number): number {
   const normalizedBatch = Math.max(1, Math.floor(batchSize));
   if (!Number.isInteger(restoreCount) || restoreCount <= normalizedBatch) {
     return normalizedBatch;
   }
-  return Math.min(MAX_INITIAL_BATCH_SIZE, restoreCount);
+  return restoreCount;
 }
 
 function errorValue(error: unknown): Error {
@@ -166,8 +166,7 @@ export function useInfiniteListing(
       controllerRef.current = controller;
       dispatch({ type: "load-start", requestID });
 
-      feed
-        .fetchBatch(request, { signal: controller.signal })
+      fetchInfiniteFeedRange(feed, request, { signal: controller.signal })
         .then((result) => {
           if (controller.signal.aborted) return;
           dispatch({
@@ -201,7 +200,7 @@ export function useInfiniteListing(
             });
             executeRequest(restartID, feed, {
               cursor: EMPTY_CURSOR,
-              size: initialBatchSize(restoreCount, feed.batchSize),
+              size: initialRequestSize(restoreCount, feed.batchSize),
             });
             return;
           }
@@ -264,7 +263,7 @@ export function useInfiniteListing(
     });
     sendRequest(requestID, sourceRef.current, {
       cursor: restoreCursor,
-      size: initialBatchSize(restoreCount, batchSize),
+      size: initialRequestSize(restoreCount, batchSize),
     });
 
     return () => {

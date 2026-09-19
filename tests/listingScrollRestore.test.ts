@@ -3,8 +3,8 @@ import test from "node:test";
 import {
   canRestoreScrollY,
   clearListingScrollEntry,
+  initializeListingScrollRestore,
   listingScrollStorageKey,
-  MAX_RESTORE_ITEMS,
   parseListingScrollEntry,
   readListingScrollEntry,
   resolveReachableScrollY,
@@ -17,7 +17,6 @@ import {
 
 const QUERY_KEY = 'listing:["","","hot"]';
 const FEED_TOKEN = "snapshot-token";
-const DOCUMENT_ID = "document-1";
 
 function memoryStorage(): ListingScrollStorage & { map: Map<string, string> } {
   const map = new Map<string, string>();
@@ -46,7 +45,6 @@ test("a saved entry round-trips through storage under its history key", () => {
   writeListingScrollEntry(storage, "history-1", {
     queryKey: QUERY_KEY,
     feedToken: FEED_TOKEN,
-    documentID: DOCUMENT_ID,
     requestedCount: 60,
     scrollY: 1_800,
   });
@@ -54,7 +52,6 @@ test("a saved entry round-trips through storage under its history key", () => {
   assert.deepEqual(readListingScrollEntry(storage, "history-1"), {
     queryKey: QUERY_KEY,
     feedToken: FEED_TOKEN,
-    documentID: DOCUMENT_ID,
     requestedCount: 60,
     scrollY: 1_800,
   });
@@ -136,11 +133,10 @@ test("malformed stored entries are rejected", () => {
   );
 });
 
-test("same-document restore keeps the exact cursor count and caps deep histories", () => {
+test("history restore keeps the complete cursor count even for deep histories", () => {
   const entry = {
     queryKey: QUERY_KEY,
     feedToken: FEED_TOKEN,
-    documentID: DOCUMENT_ID,
     requestedCount: 60,
     scrollY: 900,
   };
@@ -150,7 +146,6 @@ test("same-document restore keeps the exact cursor count and caps deep histories
       entry,
       queryKey: QUERY_KEY,
       pageSize: 20,
-      documentID: DOCUMENT_ID,
     }),
     60
   );
@@ -159,7 +154,6 @@ test("same-document restore keeps the exact cursor count and caps deep histories
       entry,
       queryKey: QUERY_KEY,
       pageSize: 14,
-      documentID: DOCUMENT_ID,
     }),
     60,
     "显式 cursor 不依赖响应式批次的页边界"
@@ -169,17 +163,15 @@ test("same-document restore keeps the exact cursor count and caps deep histories
       entry: { ...entry, requestedCount: 5_000 },
       queryKey: QUERY_KEY,
       pageSize: 20,
-      documentID: DOCUMENT_ID,
     }),
-    MAX_RESTORE_ITEMS,
-    "深滚之后的返回不能打出一个无上限的大请求"
+    5_000,
+    "分批恢复完整进度，不能截断深滚位置所需的数据"
   );
   assert.equal(
     resolveRestoreCount({
       entry: { ...entry, requestedCount: 20 },
       queryKey: QUERY_KEY,
       pageSize: 20,
-      documentID: DOCUMENT_ID,
     }),
     0,
     "只看了首屏就按普通首屏加载"
@@ -189,7 +181,6 @@ test("same-document restore keeps the exact cursor count and caps deep histories
       entry,
       queryKey: 'listing:["","","latest"]',
       pageSize: 20,
-      documentID: DOCUMENT_ID,
     }),
     0,
     "排序变了就是另一个列表，不能沿用旧进度"
@@ -199,7 +190,6 @@ test("same-document restore keeps the exact cursor count and caps deep histories
       entry: null,
       queryKey: QUERY_KEY,
       pageSize: 20,
-      documentID: DOCUMENT_ID,
     }),
     0
   );
@@ -208,7 +198,6 @@ test("same-document restore keeps the exact cursor count and caps deep histories
       entry,
       queryKey: QUERY_KEY,
       pageSize: 0,
-      documentID: DOCUMENT_ID,
     }),
     0
   );
@@ -218,103 +207,119 @@ test("the restore position only applies to the query it was saved for", () => {
   const entry = {
     queryKey: QUERY_KEY,
     feedToken: FEED_TOKEN,
-    documentID: DOCUMENT_ID,
     requestedCount: 60,
     scrollY: 1_200,
   };
-  assert.equal(resolveRestoreScrollY(entry, QUERY_KEY, DOCUMENT_ID), 1_200);
+  assert.equal(resolveRestoreScrollY(entry, QUERY_KEY), 1_200);
   assert.equal(resolveRestoreFeedToken(entry, QUERY_KEY), FEED_TOKEN);
   assert.equal(
     resolveRestoreScrollY(
       entry,
-      'listing:["","","latest"]',
-      DOCUMENT_ID
+      'listing:["","","latest"]'
     ),
     0
   );
   assert.equal(resolveRestoreFeedToken(entry, 'listing:["","","latest"]'), "");
-  assert.equal(resolveRestoreScrollY(null, QUERY_KEY, DOCUMENT_ID), 0);
+  assert.equal(resolveRestoreScrollY(null, QUERY_KEY), 0);
   assert.equal(resolveRestoreFeedToken(null, QUERY_KEY), "");
 });
 
-test("browser reload does not restore listing progress or scroll position", () => {
-  const entry = {
-    queryKey: QUERY_KEY,
-    feedToken: FEED_TOKEN,
-    documentID: DOCUMENT_ID,
-    requestedCount: 60,
-    scrollY: 1_200,
-  };
-  const reloadedDocumentID = "document-after-reload";
+function browserDocument(
+  storage: ListingScrollStorage,
+  historyKey: string | undefined,
+  navigationType: string = "reload"
+) {
+  return {
+    sessionStorage: storage,
+    history: { state: historyKey ? { key: historyKey } : null },
+    performance: { getEntriesByType: () => [{ type: navigationType }] },
+  } as unknown as Parameters<typeof initializeListingScrollRestore>[0];
+}
 
-  assert.equal(
-    resolveRestoreCount({
-      entry,
-      queryKey: QUERY_KEY,
-      pageSize: 20,
-      documentID: reloadedDocumentID,
-    }),
-    0,
-    "刷新后只请求普通首屏"
-  );
-  assert.equal(
-    resolveRestoreScrollY(entry, QUERY_KEY, reloadedDocumentID),
-    0,
-    "刷新后从页面顶部开始"
-  );
-  assert.equal(
-    resolveRestoreScrollY(
-      { ...entry, documentID: undefined },
-      QUERY_KEY,
-      DOCUMENT_ID
-    ),
-    0,
-    "旧版本中没有 Document 标识的记录不能恢复位置"
-  );
+const savedEntries = [
+  { historyKey: "default", queryKey: "home:recommend" },
+  { historyKey: "latest-history", queryKey: "home:latest" },
+  { historyKey: "filtered-home-history", queryKey: 'listing:["cat","","hot"]' },
+  { historyKey: "list-history", queryKey: QUERY_KEY },
+];
+
+function savedHistory() {
+  const storage = memoryStorage();
+  for (const { historyKey, queryKey } of savedEntries) {
+    writeListingScrollEntry(storage, historyKey, {
+      queryKey,
+      feedToken: `${historyKey}-snapshot`,
+      requestedCount: 60,
+      scrollY: 1_200,
+    });
+  }
+  return storage;
+}
+
+function assertHistoryRestores(storage: ListingScrollStorage, historyKey: string, queryKey: string) {
+  const entry = readListingScrollEntry(storage, historyKey);
+  assert.equal(resolveRestoreCount({ entry, queryKey, pageSize: 20 }), 60);
+  assert.equal(resolveRestoreFeedToken(entry, queryKey), `${historyKey}-snapshot`);
+  assert.equal(resolveRestoreScrollY(entry, queryKey), 1_200);
+}
+
+test("reloading a video preserves every previous listing's snapshot, progress and scroll", () => {
+  const storage = savedHistory();
+  initializeListingScrollRestore(browserDocument(storage, "video-history"));
+  // Repeated reloads and navigation to another video must preserve the same history.
+  initializeListingScrollRestore(browserDocument(storage, "video-history"));
+  initializeListingScrollRestore(browserDocument(storage, "next-video-history"));
+
+  for (const { historyKey, queryKey } of savedEntries) {
+    assertHistoryRestores(storage, historyKey, queryKey);
+  }
+  assert.equal(readListingScrollEntry(storage, "new-list-history"), null);
 });
 
-test("document-scoped snapshots survive SPA returns but not browser reloads", () => {
-  const entry = {
-    queryKey: "home:recommend",
-    feedToken: FEED_TOKEN,
-    documentID: DOCUMENT_ID,
-    requestedCount: 36,
-    scrollY: 1_200,
-  };
+test("reloading a listing starts fresh only for the entry being reloaded", () => {
+  for (const reloaded of savedEntries) {
+    const storage = savedHistory();
+    initializeListingScrollRestore(browserDocument(
+      storage,
+      reloaded.historyKey === "default" ? undefined : reloaded.historyKey
+    ));
 
-  assert.equal(
-    resolveRestoreFeedToken(entry, "home:recommend", {
-      scope: "document",
-      documentID: DOCUMENT_ID,
-    }),
-    FEED_TOKEN,
-    "同一个 Document 内从详情页后退时继续使用原随机快照"
-  );
-  assert.equal(
-    resolveRestoreFeedToken(entry, "home:recommend", {
-      scope: "document",
-      documentID: "document-after-reload",
-    }),
-    "",
-    "浏览器刷新创建新 Document 后必须生成新的随机快照"
-  );
-  assert.equal(
-    resolveRestoreFeedToken(
-      { ...entry, documentID: undefined },
-      "home:recommend",
-      { scope: "document", documentID: DOCUMENT_ID }
-    ),
-    "",
-    "旧版本中没有 Document 标识的记录不能复用随机快照"
-  );
-  assert.equal(
-    resolveRestoreFeedToken(entry, "home:recommend", {
-      scope: "session",
-      documentID: "document-after-reload",
-    }),
-    FEED_TOKEN,
-    "确定性列表仍可跨刷新恢复快照"
-  );
+    const entry = readListingScrollEntry(storage, reloaded.historyKey);
+    assert.equal(resolveRestoreCount({ entry, queryKey: reloaded.queryKey, pageSize: 20 }), 0);
+    assert.equal(resolveRestoreFeedToken(entry, reloaded.queryKey), "");
+    assert.equal(resolveRestoreScrollY(entry, reloaded.queryKey), 0);
+    for (const other of savedEntries) {
+      if (other.historyKey !== reloaded.historyKey) {
+        assertHistoryRestores(storage, other.historyKey, other.queryKey);
+      }
+    }
+  }
+});
+
+test("a browser back/forward document load restores its active listing too", () => {
+  const storage = savedHistory();
+  initializeListingScrollRestore(browserDocument(storage, "list-history", "back_forward"));
+  assertHistoryRestores(storage, "list-history", QUERY_KEY);
+});
+
+test("a new document navigation clears a copied current entry without clearing other history", () => {
+  const storage = savedHistory();
+  initializeListingScrollRestore(browserDocument(storage, "default", "navigate"));
+  assert.equal(readListingScrollEntry(storage, "default"), null);
+  assertHistoryRestores(storage, "list-history", QUERY_KEY);
+});
+
+test("initialization tolerates missing navigation timing and blocked storage", () => {
+  const storage = savedHistory();
+  const browser = browserDocument(storage, "list-history");
+  browser.performance.getEntriesByType = () => [];
+  initializeListingScrollRestore(browser);
+  assert.equal(readListingScrollEntry(storage, "list-history"), null);
+  assert.doesNotThrow(() => initializeListingScrollRestore(browserDocument(throwingStorage, "list-history")));
+  Object.defineProperty(browser, "sessionStorage", {
+    get() { throw new Error("storage access disabled"); },
+  });
+  assert.doesNotThrow(() => initializeListingScrollRestore(browser));
 });
 
 test("restoring waits until the document is tall enough to reach the position", () => {
@@ -344,7 +349,7 @@ test("restoring waits until the document is tall enough to reach the position", 
   );
 });
 
-test("a position deeper than the restore cap falls back to the furthest reachable point", () => {
+test("a position beyond a shortened list falls back to the furthest reachable point", () => {
   assert.equal(
     resolveReachableScrollY({
       targetScrollY: 9_000,

@@ -216,7 +216,7 @@ test("the infinite listing hook keeps one in-flight batch per query", () => {
   );
   assert.match(
     infiniteListingHookSource,
-    /size: initialBatchSize\(restoreCount, feed\.batchSize\),/
+    /size: initialRequestSize\(restoreCount, feed\.batchSize\),/
   );
   assert.match(
     infiniteListingHookSource,
@@ -240,22 +240,10 @@ test("browser history navigation restores both the loaded batches and the positi
   assert.match(scrollRestoreHookSource, /canRestoreScrollY\(\{/);
   assert.match(scrollRestoreHookSource, /window\.scrollTo\(0, targetScrollY\)/);
   assert.match(scrollRestoreHookSource, /if \(session\.pendingScrollY > 0 \|\| session\.requestedCount <= 0\) return;/);
-  assert.match(
-    scrollRestoreHookSource,
-    /resolveRestoreFeedToken\(entry, input\.queryKey, \{[\s\S]*?scope: feedSnapshotScope,[\s\S]*?documentID: LISTING_DOCUMENT_ID/
-  );
-  assert.match(
-    scrollRestoreHookSource,
-    /resolveRestoreCount\(\{[\s\S]*?documentID: LISTING_DOCUMENT_ID/
-  );
-  assert.match(
-    scrollRestoreHookSource,
-    /resolveRestoreScrollY\([\s\S]*?LISTING_DOCUMENT_ID[\s\S]*?\)/
-  );
-  assert.match(
-    scrollRestoreHookSource,
-    /writeListingScrollEntry\([\s\S]*?documentID: LISTING_DOCUMENT_ID/
-  );
+  assert.match(scrollRestoreHookSource, /resolveRestoreFeedToken\(entry, input\.queryKey\)/);
+  assert.match(scrollRestoreHookSource, /resolveRestoreScrollY\(entry, input\.queryKey\)/);
+  const mainSource = readFileSync(new URL("../src/main.tsx", import.meta.url), "utf8");
+  assert.match(mainSource, /initializeListingScrollRestore\(window\);[\s\S]*?ReactDOM\.createRoot/);
   assert.match(
     scrollRestoreHookSource,
     /window\.history\.scrollRestoration = "manual"/
