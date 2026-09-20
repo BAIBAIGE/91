@@ -223,10 +223,6 @@ prepare_config() {
   local example="$REPO_DIR/backend/config.example.yaml"
   mkdir -p "$REPO_DIR/backend/data"
 
-  if [[ ! -f "$REPO_DIR/backend/telegram.yml" ]]; then
-    cp "$REPO_DIR/deploy/telegram/compose.native.yml" "$REPO_DIR/backend/telegram.yml"
-  fi
-
   if [[ ! -f "$cfg" ]]; then
     log "creating backend/config.yaml from example"
     cp "$example" "$cfg"
@@ -365,6 +361,11 @@ install_or_update() {
   build_backend
   # Migrate the listen address only after both builds succeed. A failed build
   # must leave the currently running two-service installation restart-safe.
+  # Deployment credentials and mounts belong to the user, not the release.
+  if [[ ! -f "$REPO_DIR/backend/telegram.yml" ]]; then
+    cp "$REPO_DIR/telegram.example.yml" "$REPO_DIR/backend/telegram.yml"
+    chmod 600 "$REPO_DIR/backend/telegram.yml"
+  fi
   prepare_config
   write_systemd_units
   open_firewall_port

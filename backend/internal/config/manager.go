@@ -64,8 +64,8 @@ type Manager struct {
 	observedVersion string
 	apply           func(LiveSettings) error
 
-	telegramStorage    telegramStoragePaths
-	telegramStorageErr error
+	telegramDeployment    telegramDeployment
+	telegramDeploymentErr error
 }
 
 func NewManager(path string) (*Manager, error) {
@@ -175,7 +175,7 @@ func (m *Manager) ReplaceYAML(data []byte, expectedVersion string) (SaveResult, 
 	if err := validateAdminConfigRemoved(data); err != nil {
 		return SaveResult{}, err
 	}
-	if err := validateTelegramPathsRemoved(data); err != nil {
+	if err := validateTelegramDeploymentFieldsRemoved(data); err != nil {
 		return SaveResult{}, err
 	}
 	candidate, err := Parse(data)

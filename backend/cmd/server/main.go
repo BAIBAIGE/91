@@ -145,7 +145,7 @@ func main() {
 		log.Fatalf("configure config manager: %v", err)
 	}
 	if composeFile := strings.TrimSpace(os.Getenv("VIDEO_TELEGRAM_COMPOSE")); composeFile != "" {
-		// Deployment paths are resolved once, separately from panel settings.
+		// The deployment endpoint and paths are resolved once, separately from panel settings.
 		// A missing/invalid file is reported by the Telegram status and probe.
 		_ = configManager.LoadTelegramCompose(composeFile)
 	}

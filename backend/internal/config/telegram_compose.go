@@ -12,31 +12,37 @@ import (
 
 const telegramDataMount = "/var/lib/telegram-bot-api"
 
-type telegramStoragePaths struct {
+type telegramDeployment struct {
+	apiBaseURL         string
 	apiRoot, localRoot string
 }
 
 // LoadTelegramCompose reads the deployment once at startup. YAML hot reloads
-// cannot override its paths; relocating storage requires restarting both sides.
+// cannot override its endpoint or paths; deployment changes require a restart.
 func (m *Manager) LoadTelegramCompose(filename string) error {
-	storage, err := readTelegramCompose(filename)
+	deployment, err := readTelegramCompose(filename)
 	m.mu.Lock()
-	m.telegramStorage, m.telegramStorageErr = storage, err
+	m.telegramDeployment, m.telegramDeploymentErr = deployment, err
 	m.mu.Unlock()
 	return err
 }
 
-func (m *Manager) TelegramStorageError() error {
+func (m *Manager) TelegramDeploymentError() error {
 	if m == nil {
 		return errors.New("Telegram 部署配置不可用")
 	}
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	return m.telegramStorageErr
+	return m.telegramDeploymentErr
 }
 
 type composeService struct {
-	Volumes []yaml.Node `yaml:"volumes"`
+	Volumes     []yaml.Node `yaml:"volumes"`
+	Environment yaml.Node   `yaml:"environment"`
+	Ports       []yaml.Node `yaml:"ports"`
+	NetworkMode string      `yaml:"network_mode"`
+	Command     yaml.Node   `yaml:"command"`
+	Entrypoint  yaml.Node   `yaml:"entrypoint"`
 }
 
 type composeMount struct {
@@ -46,8 +52,8 @@ type composeMount struct {
 	ReadOnly bool   `yaml:"read_only"`
 }
 
-func readTelegramCompose(filename string) (telegramStoragePaths, error) {
-	var empty telegramStoragePaths
+func readTelegramCompose(filename string) (telegramDeployment, error) {
+	var empty telegramDeployment
 	filename, err := filepath.Abs(filename)
 	if err != nil {
 		return empty, errors.New("Telegram Compose 文件路径无效")
@@ -87,13 +93,20 @@ func readTelegramCompose(filename string) (telegramStoragePaths, error) {
 		return empty, errors.New("Telegram Compose 缺少配套 Bot API 的数据目录挂载")
 	}
 	website, inDocker := document.Services["video-site-91"]
+	if website.NetworkMode != "" {
+		return empty, errors.New("Telegram 自动连接需要使用 Compose 服务网络，请移除网站的 network_mode")
+	}
+	apiBaseURL, err := telegramComposeEndpoint(bot, inDocker)
+	if err != nil {
+		return empty, err
+	}
 	if !inDocker {
 		if storage.Type != "bind" {
 			return empty, errors.New("原生网站的 Telegram 数据目录必须使用宿主机目录挂载")
 		}
-		return telegramStoragePaths{apiRoot: storage.Target, localRoot: storage.Source}, nil
+		return telegramDeployment{apiBaseURL: apiBaseURL, apiRoot: storage.Target, localRoot: storage.Source}, nil
 	}
-	// The Compose overlay describes both container namespaces. Match the shared
+	// The Compose file describes both container namespaces. Match the shared
 	// source, then use the website container's target rather than a host path.
 	peers, err := readComposeMounts(website.Volumes, filepath.Dir(filename))
 	if err != nil {
@@ -117,7 +130,7 @@ func readTelegramCompose(filename string) (telegramStoragePaths, error) {
 			return empty, errors.New("网站的 Telegram 数据目录不能包含独立的子目录挂载")
 		}
 	}
-	return telegramStoragePaths{apiRoot: storage.Target, localRoot: filepath.FromSlash(local.Target)}, nil
+	return telegramDeployment{apiBaseURL: apiBaseURL, apiRoot: storage.Target, localRoot: filepath.FromSlash(local.Target)}, nil
 }
 
 func readComposeMounts(nodes []yaml.Node, directory string) ([]composeMount, error) {
@@ -172,16 +185,16 @@ func readComposeMounts(nodes []yaml.Node, directory string) ([]composeMount, err
 	return mounts, nil
 }
 
-func validateTelegramPathsRemoved(data []byte) error {
+func validateTelegramDeploymentFieldsRemoved(data []byte) error {
 	var document struct {
 		Telegram map[string]any `yaml:"telegram"`
 	}
 	if err := yaml.Unmarshal(data, &document); err != nil {
 		return err
 	}
-	for _, name := range []string{"api_files_root", "local_files_root"} {
+	for _, name := range []string{"api_base_url", "api_files_root", "local_files_root"} {
 		if _, exists := document.Telegram[name]; exists {
-			return errors.New("Telegram 文件目录由 Compose 挂载配置管理，请移除网站 YAML 中的目录参数")
+			return errors.New("Telegram 连接地址和文件目录由 Compose 自动配置，请移除网站 YAML 中的 " + name)
 		}
 	}
 	return nil

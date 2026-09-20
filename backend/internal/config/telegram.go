@@ -12,7 +12,6 @@ import (
 type Telegram struct {
 	BotToken            string  `yaml:"bot_token" json:"-"`
 	Enabled             bool    `yaml:"enabled" json:"enabled"`
-	APIBaseURL          string  `yaml:"api_base_url" json:"apiBaseUrl"`
 	AllowedUserIDs      []int64 `yaml:"allowed_user_ids" json:"allowedUserIds"`
 	SiteBaseURL         string  `yaml:"site_base_url" json:"siteBaseUrl"`
 	MaxFileSizeBytes    int64   `yaml:"max_file_size_bytes" json:"maxFileSizeBytes"`
@@ -22,7 +21,8 @@ type Telegram struct {
 	UploadDirectory     string  `yaml:"upload_directory" json:"uploadDirectory"`
 	UploadProxy         string  `yaml:"upload_proxy" json:"-"`
 
-	// These runtime paths come exclusively from the deployment's Compose file.
+	// The runtime endpoint and paths come exclusively from the deployment's Compose file.
+	APIBaseURL     string `yaml:"-" json:"apiBaseUrl"`
 	APIFilesRoot   string `yaml:"-" json:"-"`
 	LocalFilesRoot string `yaml:"-" json:"-"`
 }
@@ -59,9 +59,6 @@ func (t *Telegram) Validate() error {
 	if t.UploadDriveID == "local-upload" || t.UploadDriveID == "telegram-local" {
 		return errors.New("telegram.upload_drive_id 必须选择支持上传的网盘")
 	}
-	if t.APIBaseURL == "" {
-		t.APIBaseURL = "http://telegram-bot-api:7878"
-	}
 	if t.MaxFileSizeBytes == 0 {
 		t.MaxFileSizeBytes = 4 << 30
 	}
@@ -80,15 +77,8 @@ func (t *Telegram) Validate() error {
 	if t.FetchTimeoutSeconds < 30 || t.FetchTimeoutSeconds > 86400 {
 		return errors.New("telegram.fetch_timeout_seconds 必须在 30 到 86400 之间")
 	}
-	u, err := url.Parse(t.APIBaseURL)
-	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil || u.RawQuery != "" || u.Fragment != "" || strings.Trim(u.Path, "/") != "" {
-		return errors.New("telegram.api_base_url 必须为不带路径、凭据或查询参数的 HTTP(S) 地址")
-	}
-	if strings.EqualFold(u.Hostname(), "api.telegram.org") {
-		return errors.New("Telegram 视频导入需要自建 Local Bot API 地址")
-	}
 	if t.SiteBaseURL != "" {
-		u, err = url.Parse(t.SiteBaseURL)
+		u, err := url.Parse(t.SiteBaseURL)
 		if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
 			return errors.New("telegram.site_base_url 必须为有效的站点 HTTP(S) 地址")
 		}
@@ -111,8 +101,9 @@ func (m *Manager) TelegramSettings() Telegram {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	cfg := m.current.Telegram
-	cfg.APIFilesRoot = m.telegramStorage.apiRoot
-	cfg.LocalFilesRoot = m.telegramStorage.localRoot
+	cfg.APIBaseURL = m.telegramDeployment.apiBaseURL
+	cfg.APIFilesRoot = m.telegramDeployment.apiRoot
+	cfg.LocalFilesRoot = m.telegramDeployment.localRoot
 	cfg.AllowedUserIDs = append([]int64{}, cfg.AllowedUserIDs...)
 	return cfg
 }

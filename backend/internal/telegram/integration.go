@@ -110,7 +110,7 @@ func (i *Integration) PreparePolling(ctx context.Context) error {
 	return errors.New("请先启用 Telegram 并等待连接配置生效")
 }
 func (i *Integration) Test(ctx context.Context) (string, error) {
-	if err := i.configManager.TelegramStorageError(); err != nil {
+	if err := i.configManager.TelegramDeploymentError(); err != nil {
 		return "", err
 	}
 	cfg := i.configManager.TelegramSettings()
@@ -149,8 +149,9 @@ func (i *Integration) reconcile(ctx context.Context) {
 	receiverCfg.UploadDriveID, receiverCfg.UploadDirectory, receiverCfg.UploadProxy = "", "", ""
 	raw, _ := yaml.Marshal(struct {
 		Settings           config.Telegram
+		APIBaseURL         string
 		APIRoot, LocalRoot string
-	}{receiverCfg, cfg.APIFilesRoot, cfg.LocalFilesRoot})
+	}{receiverCfg, cfg.APIBaseURL, cfg.APIFilesRoot, cfg.LocalFilesRoot})
 	digest := sha256.Sum256(raw)
 	version := hex.EncodeToString(digest[:])
 	if version != i.version {
@@ -162,7 +163,7 @@ func (i *Integration) reconcile(ctx context.Context) {
 		i.setStatus(cfg, "disabled", "")
 		return
 	}
-	if err := i.configManager.TelegramStorageError(); err != nil {
+	if err := i.configManager.TelegramDeploymentError(); err != nil {
 		i.stop()
 		i.setStatus(cfg, "error", err.Error())
 		return

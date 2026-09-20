@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -28,26 +29,45 @@ func integrationFixture(t *testing.T) (*Integration, config.Telegram) {
 	if err := os.WriteFile(path, []byte("{}\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	compose, err := yaml.Marshal(map[string]any{"services": map[string]any{
-		"telegram-bot-api": map[string]any{"volumes": []any{map[string]any{
-			"type": "bind", "source": service.cfg.LocalFilesRoot, "target": "/var/lib/telegram-bot-api",
-		}}},
-	}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(filepath.Dir(path), "telegram.yml"), compose, 0600); err != nil {
-		t.Fatal(err)
-	}
 	manager, err := config.NewManager(path)
 	if err != nil {
 		t.Fatal(err)
 	}
+	loadIntegrationDeployment(t, manager, service.cfg.LocalFilesRoot, "http://127.0.0.1:7878")
 	i := NewIntegration(cat, manager, service.uploadDir, 1)
 	cfg := service.cfg
 	cfg.APIFilesRoot = manager.TelegramSettings().APIFilesRoot
 	cfg.BotToken = "123:private_token"
 	return i, cfg
+}
+
+func loadIntegrationDeployment(t *testing.T, manager *config.Manager, storage, endpoint string) {
+	t.Helper()
+	address, err := url.Parse(endpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	compose, err := yaml.Marshal(map[string]any{"services": map[string]any{
+		"telegram-bot-api": map[string]any{
+			"environment": map[string]string{"TELEGRAM_HTTP_PORT": "7878"},
+			"ports": []any{map[string]any{
+				"host_ip": address.Hostname(), "published": address.Port(), "target": 7878,
+			}},
+			"volumes": []any{map[string]any{
+				"type": "bind", "source": storage, "target": "/var/lib/telegram-bot-api",
+			}},
+		},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	filename := filepath.Join(t.TempDir(), "telegram.yml")
+	if err := os.WriteFile(filename, compose, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.LoadTelegramCompose(filename); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func saveTelegramYAML(t *testing.T, i *Integration, cfg config.Telegram) {
@@ -82,7 +102,7 @@ func TestIntegrationConnectsToStandardAPIAndAppliesChanges(t *testing.T) {
 		io.WriteString(w, `{"ok":true,"result":{}}`)
 	}))
 	defer server.Close()
-	input.APIBaseURL = server.URL
+	loadIntegrationDeployment(t, i.configManager, input.LocalFilesRoot, server.URL)
 	saveTelegramYAML(t, i, input)
 	i.reconcile(ctx)
 	old := i.session()
@@ -277,7 +297,7 @@ func TestIntegrationRecoversFromExternalAPIOutage(t *testing.T) {
 	}))
 	defer server.Close()
 	defer i.stop()
-	cfg.APIBaseURL = server.URL
+	loadIntegrationDeployment(t, i.configManager, cfg.LocalFilesRoot, server.URL)
 	saveTelegramYAML(t, i, cfg)
 	i.reconcile(context.Background())
 	session := i.session()
@@ -317,7 +337,7 @@ func TestIntegrationProbeUsesSavedConfigWithoutStartingReceiver(t *testing.T) {
 	}))
 	defer server.Close()
 	cfg.Enabled = false
-	cfg.APIBaseURL = server.URL
+	loadIntegrationDeployment(t, i.configManager, cfg.LocalFilesRoot, server.URL)
 	saveTelegramYAML(t, i, cfg)
 	name, err := i.Test(context.Background())
 	if err != nil || name != "external_bot" || i.session() != nil || requests.Load() != 2 {
@@ -359,7 +379,7 @@ func TestIntegrationSwitchesEndpointAndBotAfterCancelingOldPolling(t *testing.T)
 	}))
 	defer newServer.Close()
 	defer i.stop()
-	cfg.APIBaseURL = oldServer.URL
+	loadIntegrationDeployment(t, i.configManager, cfg.LocalFilesRoot, oldServer.URL)
 	saveTelegramYAML(t, i, cfg)
 	i.reconcile(context.Background())
 	select {
@@ -368,7 +388,8 @@ func TestIntegrationSwitchesEndpointAndBotAfterCancelingOldPolling(t *testing.T)
 		t.Fatal("old receiver did not start")
 	}
 	old := i.session()
-	cfg.APIBaseURL, cfg.BotToken = newServer.URL, "456:new_token"
+	loadIntegrationDeployment(t, i.configManager, cfg.LocalFilesRoot, newServer.URL)
+	cfg.BotToken = "456:new_token"
 	saveTelegramYAML(t, i, cfg)
 	if name, err := i.Test(context.Background()); err != nil || name != "new_bot" {
 		t.Fatalf("probe used the old session rather than saved settings: %s %v", name, err)

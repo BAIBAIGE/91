@@ -11,8 +11,6 @@ func TestTelegramConfigValidation(t *testing.T) {
 		"telegram:\n  bot_token: secret\n",
 		"telegram:\n  enabled: true\n",
 		"telegram:\n  max_pending_jobs: -1\n",
-		"telegram:\n  api_base_url: https://api.telegram.org\n",
-		"telegram:\n  api_base_url: http://user:secret@localhost\n",
 		"telegram:\n  allowed_user_ids: [-1]\n",
 		"telegram:\n  fetch_timeout_seconds: 1\n",
 		"telegram:\n  upload_directory: ../outside\n",

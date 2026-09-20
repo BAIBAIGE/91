@@ -13,7 +13,7 @@ import (
 func writeTelegramCompose(t *testing.T, directory, mounts string, website string) string {
 	t.Helper()
 	filename := filepath.Join(directory, "telegram.yml")
-	body := "services:\n  telegram-bot-api:\n    environment:\n      TELEGRAM_API_HASH: '${TELEGRAM_API_HASH:?required}'\n    volumes:\n" + mounts + website
+	body := "services:\n  telegram-bot-api:\n    environment:\n      TELEGRAM_API_HASH: '0123456789abcdef0123456789abcdef'\n      TELEGRAM_HTTP_PORT: '7878'\n    ports:\n      - '127.0.0.1:7878:7878'\n    volumes:\n" + mounts + website
 	if err := os.WriteFile(filename, []byte(body), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -46,9 +46,12 @@ func TestTelegramComposeResolvesNativeAndContainerStorage(t *testing.T) {
 }
 
 func TestTelegramComposeAcceptsShippedDeploymentFiles(t *testing.T) {
-	for _, name := range []string{"docker-compose.telegram.yml", "deploy/telegram/compose.native.yml"} {
+	for name, endpoint := range map[string]string{
+		"tg-docker-compose.yml": "http://telegram-bot-api:7878",
+		"telegram.example.yml":  "http://127.0.0.1:7878",
+	} {
 		got, err := readTelegramCompose(filepath.Join("..", "..", "..", filepath.FromSlash(name)))
-		if err != nil || got.apiRoot != telegramDataMount || got.localRoot != telegramDataMount {
+		if err != nil || got.apiBaseURL != endpoint || got.apiRoot != telegramDataMount || got.localRoot != telegramDataMount {
 			t.Fatalf("%s: storage=%+v error=%v", name, got, err)
 		}
 	}
@@ -72,7 +75,7 @@ func TestTelegramComposeRejectsMissingAmbiguousAndUnsupportedMounts(t *testing.T
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			filename := writeTelegramCompose(t, t.TempDir(), tc.mounts, tc.website)
-			if got, err := readTelegramCompose(filename); err == nil || got != (telegramStoragePaths{}) {
+			if got, err := readTelegramCompose(filename); err == nil || got != (telegramDeployment{}) {
 				t.Fatalf("accepted invalid deployment: %+v %v", got, err)
 			}
 		})
@@ -88,25 +91,39 @@ func TestTelegramComposeRejectsMissingAmbiguousAndUnsupportedMounts(t *testing.T
 	}
 }
 
-func TestTelegramStorageFollowsComposeAfterRestartAndStaysOutOfPanelSettings(t *testing.T) {
+func TestTelegramDeploymentFollowsComposeAfterRestartAndStaysOutOfPanelSettings(t *testing.T) {
 	directory := t.TempDir()
 	compose := writeTelegramCompose(t, directory, "      - /old/tg:/var/lib/telegram-bot-api\n", "")
 	configPath := filepath.Join(directory, "config.yaml")
-	if err := os.WriteFile(configPath, []byte("telegram: {bot_token: '123:test'}\n"), 0600); err != nil {
+	if err := os.WriteFile(configPath, []byte("telegram: {bot_token: '123:test', api_base_url: 'http://old-api:9999'}\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	m, err := NewManager(configPath)
-	if err != nil || m.TelegramStorageError() != nil {
+	if err != nil || m.TelegramDeploymentError() != nil {
 		t.Fatalf("initial deployment: %v", err)
 	}
-	if got := m.TelegramSettings().LocalFilesRoot; got != "/old/tg" {
-		t.Fatalf("initial root = %q", got)
+	initial := m.TelegramSettings()
+	if initial.LocalFilesRoot != "/old/tg" || initial.APIBaseURL != "http://127.0.0.1:7878" {
+		t.Fatalf("initial deployment = %+v", initial)
+	}
+	if changed, err := m.SyncTemplate(); err != nil || !changed {
+		t.Fatalf("migrate old endpoint: changed=%v err=%v", changed, err)
+	}
+	if data, _, err := m.ReadYAML(); err != nil || strings.Contains(string(data), "api_base_url") {
+		t.Fatalf("old endpoint remains in panel YAML: %v", err)
 	}
 	writeTelegramCompose(t, directory, "      - /nzb/tg:/var/lib/telegram-bot-api\n", "")
+	data, err := os.ReadFile(compose)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(compose, []byte(strings.ReplaceAll(string(data), "127.0.0.1:7878:7878", "127.0.0.1:8888:7878")), 0600); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := m.ReplaceYAML([]byte("telegram: {bot_token: '123:new'}\n"), ""); err != nil {
 		t.Fatal(err)
 	}
-	if got := m.TelegramSettings().LocalFilesRoot; got != "/old/tg" {
+	if got := m.TelegramSettings(); got.LocalFilesRoot != initial.LocalFilesRoot || got.APIBaseURL != initial.APIBaseURL {
 		t.Fatal("panel edit reloaded deployment while services were running")
 	}
 	restarted, err := NewManager(configPath)
@@ -114,7 +131,7 @@ func TestTelegramStorageFollowsComposeAfterRestartAndStaysOutOfPanelSettings(t *
 		t.Fatal(err)
 	}
 	cfg := restarted.TelegramSettings()
-	if cfg.APIFilesRoot != telegramDataMount || cfg.LocalFilesRoot != "/nzb/tg" || cfg.BotToken != "123:new" {
+	if cfg.APIFilesRoot != telegramDataMount || cfg.LocalFilesRoot != "/nzb/tg" || cfg.APIBaseURL != "http://127.0.0.1:8888" || cfg.BotToken != "123:new" {
 		t.Fatalf("restarted settings = %+v", cfg)
 	}
 	for _, encode := range []func(any) ([]byte, error){json.Marshal, yaml.Marshal} {
@@ -123,7 +140,10 @@ func TestTelegramStorageFollowsComposeAfterRestartAndStaysOutOfPanelSettings(t *
 			t.Fatalf("runtime storage exposed: %s %v", data, err)
 		}
 	}
-	for _, key := range []string{"api_files_root", "local_files_root"} {
+	if data, err := yaml.Marshal(cfg); err != nil || strings.Contains(string(data), cfg.APIBaseURL) {
+		t.Fatalf("runtime endpoint exposed in YAML: %s %v", data, err)
+	}
+	for _, key := range []string{"api_base_url", "api_files_root", "local_files_root"} {
 		if _, err := restarted.ReplaceYAML([]byte("telegram: {"+key+": /override}"), ""); err == nil {
 			t.Fatalf("accepted panel override %s", key)
 		}
@@ -132,7 +152,7 @@ func TestTelegramStorageFollowsComposeAfterRestartAndStaysOutOfPanelSettings(t *
 		t.Fatal(err)
 	}
 	missing, err := NewManager(configPath)
-	if err != nil || missing.TelegramStorageError() == nil || missing.TelegramSettings().LocalFilesRoot != "" {
+	if err != nil || missing.TelegramDeploymentError() == nil || missing.TelegramSettings().LocalFilesRoot != "" || missing.TelegramSettings().APIBaseURL != "" {
 		t.Fatalf("missing deployment silently fell back: %v", err)
 	}
 }

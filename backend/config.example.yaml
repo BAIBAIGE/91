@@ -76,14 +76,13 @@ remote_upload:
 
 # Telegram：热更新，接入设置变更后重建接收器，下载任务会等待重连后重试。
 # 连接独立部署的 Local Bot API 服务；保存后请在 Telegram 页面确认连接状态。
+# 连接地址和数据目录由 Compose 自动确定，修改部署配置后需重启相关服务。
+# API ID/API Hash 由独立 Bot API 服务的部署配置管理。
 telegram:
   # 启用需填写 Bot Token；关闭只停止本站接收和导入，不控制 Bot API 进程。
   enabled: false
   # BotFather 提供的机器人 Token。
   bot_token: ""
-  # API ID/API Hash 由独立 Bot API 服务的部署配置管理。
-  # 已部署的 Bot API 地址；原生后端通常使用 http://127.0.0.1:7878。
-  api_base_url: "http://telegram-bot-api:7878"
   # 允许发送视频的用户 ID；留空时仅响应 /id 等引导消息。
   allowed_user_ids: []
   # 选填，用于生成机器人回复中的视频链接。

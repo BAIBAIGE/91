@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -42,11 +42,11 @@ test("installer distinguishes readiness failures from process start failures", (
   assert.doesNotMatch(installSource, /die "service failed to start"/);
 });
 
-test("installer prepares Telegram deployment once and preserves edited mounts", (t) => {
+test("installer creates Telegram deployment once and preserves user configuration across upgrades", (t) => {
   const root = mkdtempSync(join(tmpdir(), "91-telegram-deployment-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   writeFileSync(join(root, "config.example.yaml"), 'server:\n  listen: "0.0.0.0:9191"\n');
-  const example = readFileSync(new URL("../deploy/telegram/compose.native.yml", import.meta.url), "utf8");
+  const example = readFileSync(new URL("../telegram.example.yml", import.meta.url), "utf8");
   writeFileSync(join(root, "telegram.example.yml"), example);
   const installer = fileURLToPath(new URL("../install.sh", import.meta.url));
   const prepare = () => {
@@ -59,8 +59,14 @@ test("installer prepares Telegram deployment once and preserves edited mounts", 
   prepare();
   const compose = join(root, "telegram.yml");
   assert.equal(readFileSync(compose, "utf8"), example);
-  const customized = example.replace("/var/lib/telegram-bot-api:/var/lib/telegram-bot-api", "/nzb/tg:/var/lib/telegram-bot-api");
+  assert.equal(statSync(compose).mode & 0o777, 0o600);
+  const customized = example
+    .replace('TELEGRAM_API_ID: ""', 'TELEGRAM_API_ID: "12345"')
+    .replace('TELEGRAM_API_HASH: ""', 'TELEGRAM_API_HASH: "0123456789abcdef0123456789abcdef"')
+    .replace("aiogram/telegram-bot-api:latest", "aiogram/telegram-bot-api:pinned")
+    .replace("/var/lib/telegram-bot-api:/var/lib/telegram-bot-api", "/nzb/tg:/var/lib/telegram-bot-api");
   writeFileSync(compose, customized);
+  writeFileSync(join(root, "telegram.example.yml"), `# Updated release template\n${example}`);
   prepare();
   assert.equal(readFileSync(compose, "utf8"), customized);
 });

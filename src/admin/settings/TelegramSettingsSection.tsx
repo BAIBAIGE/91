@@ -103,22 +103,9 @@ export function TelegramSettingsSection({
           </section>
           <section
             className="tg-setting-group"
-            aria-labelledby="tg-deployment-title"
+            aria-labelledby="tg-download-title"
           >
-            <h3 id="tg-deployment-title">部署与下载设置</h3>
-            <div className="tg-fields tg-fields--thirds">
-              <label>
-                Local Bot API 地址
-                <input
-                  type="url"
-                  required
-                  value={draft.telegramApiBaseUrl}
-                  onChange={(e) =>
-                    onChange("telegramApiBaseUrl", e.target.value)
-                  }
-                />
-              </label>
-            </div>
+            <h3 id="tg-download-title">下载设置</h3>
             <div className="tg-fields tg-fields--thirds">
               <label>
                 文件上限（GiB）

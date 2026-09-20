@@ -9,6 +9,7 @@ release
 data
 backend/data
 backend/config.yaml
+backend/telegram.yml
 config.yaml
 
 *.db

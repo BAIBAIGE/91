@@ -10,6 +10,7 @@ test("Telegram settings and credentials round-trip through the shared YAML draft
     const output = applyVisualFields(source, draft, changedVisualFields(before, draft));
     assert.deepEqual(parseConfig(output).draft, draft);
     assert.equal(configDocument(output).getIn(["telegram", "bot_token"]), draft.telegramBotToken);
+    assert.equal(configDocument(output).hasIn(["telegram", "api_base_url"]), false);
     assert.equal(configDocument(output).hasIn(["telegram", "api_id"]), false);
     assert.equal(configDocument(output).hasIn(["telegram", "api_hash"]), false);
     assert.equal(configDocument(output).hasIn(["telegram", "api_files_root"]), false);
@@ -48,7 +49,7 @@ test("clearing the Telegram Bot Token writes empty values instead of retaining o
 });
 
 test("Telegram YAML rejects mismatched types and invalid user ID lists", () => {
-  for (const source of ["telegram: []", "telegram: { enabled: yes }", "telegram: { bot_token: 123 }", "telegram: { api_base_url: 123 }", "telegram: { allowed_user_ids: [-1] }", "telegram: { upload_proxy: 7890 }"]) {
+  for (const source of ["telegram: []", "telegram: { enabled: yes }", "telegram: { bot_token: 123 }", "telegram: { allowed_user_ids: [-1] }", "telegram: { upload_proxy: 7890 }"]) {
     assert.throws(() => parseConfig(source), /telegram/);
   }
 });
