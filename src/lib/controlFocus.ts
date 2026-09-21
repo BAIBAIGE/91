@@ -1,8 +1,8 @@
 /**
  * Release focus after pointer activation of discrete controls throughout the
  * app. Native selects can match :focus-visible even when opened with a mouse.
- * Keyboard navigation, text editing, and controls that move focus elsewhere
- * retain their normal focus behavior.
+ * Keyboard navigation, text editing, and controls that cancel activation or
+ * move focus elsewhere retain their normal focus behavior.
  */
 export function initializeControlFocus(document: Document): () => void {
   const browser = document.defaultView;
@@ -27,14 +27,21 @@ export function initializeControlFocus(document: Document): () => void {
     pointerControl = findControl(event.target);
   }
 
-  function releaseAfterActivation(control: HTMLElement) {
+  function releaseAfterActivation(control: HTMLElement, event: Event) {
     if (pointerControl !== control) return;
     cancelRelease();
     // Let React handlers, native activation, and dialog focus management run
-    // first. Never blur a different element focused by the control's action.
+    // first. Check cancellation here: component handlers run after document
+    // capture and may prevent navigation to keep a card's preview active.
     pendingFrame = browser!.requestAnimationFrame(() => {
       pendingFrame = undefined;
-      if (document.activeElement === control && control.isConnected) control.blur();
+      if (
+        !event.defaultPrevented &&
+        document.activeElement === control &&
+        control.isConnected
+      ) {
+        control.blur();
+      }
       pointerControl = null;
     });
   }
@@ -43,13 +50,13 @@ export function initializeControlFocus(document: Document): () => void {
     const control = findControl(event.target);
     // Blurring on the opening click would close a native dropdown immediately.
     if (control && !(control instanceof HTMLSelectElement)) {
-      releaseAfterActivation(control);
+      releaseAfterActivation(control, event);
     }
   }
 
   function onChange(event: Event) {
     const control = findControl(event.target);
-    if (control) releaseAfterActivation(control);
+    if (control) releaseAfterActivation(control, event);
   }
 
   document.addEventListener("pointerdown", onPointerDown, true);
