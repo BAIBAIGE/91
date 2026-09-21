@@ -16,6 +16,7 @@ import (
 )
 
 func TestSDKOperationsKeepConcurrentRequestsIndependent(t *testing.T) {
+	type operationContextKey struct{}
 	const operationCount = 5
 	arrived := make(chan struct{}, operationCount)
 	release := make(chan struct{})
@@ -39,21 +40,37 @@ func TestSDKOperationsKeepConcurrentRequestsIndependent(t *testing.T) {
 		switch endpoint {
 		case sdk.ApiFileInfo:
 			id := r.URL.Query().Get("file_id")
+			if r.Context().Value(operationContextKey{}) != id {
+				t.Errorf("file request inherited another operation's context")
+			}
 			if id == "" || r.Method != http.MethodGet || len(r.PostForm) != 0 {
 				t.Errorf("invalid file request: %s %s %v", r.Method, r.URL, r.PostForm)
 			}
-			// No pick code: the generation path stops before fetching HLS.
-			body = fmt.Sprintf(`{"state":true,"data":[{"fid":%q,"n":%q}]}`, id, id+".mp4")
+			// Only stream requests need a pick code; generation stops before HLS.
+			pickCode := ""
+			if strings.HasPrefix(id, "stream-") {
+				pickCode = "pick-" + id
+			}
+			body = fmt.Sprintf(`{"state":true,"data":[{"fid":%q,"n":%q,"pc":%q}]}`, id, id+".mp4", pickCode)
 		case sdk.ApiFileRename:
 			id := r.PostForm.Get("fid")
+			if r.Context().Value(operationContextKey{}) != id {
+				t.Errorf("rename request inherited another operation's context")
+			}
 			if !strings.HasPrefix(id, "rename-") || r.PostForm.Get("file_name") != id+".mp4" || r.Method != http.MethodPost {
 				t.Errorf("invalid rename request: %s %v", r.Method, r.PostForm)
 			}
 		case sdk.ApiFileDelete:
+			if r.Context().Value(operationContextKey{}) != r.PostForm.Get("fid[0]") {
+				t.Errorf("remove request inherited another operation's context")
+			}
 			if !strings.HasPrefix(r.PostForm.Get("fid[0]"), "remove-") || r.Method != http.MethodPost {
 				t.Errorf("invalid remove request: %s %v", r.Method, r.PostForm)
 			}
 		case sdk.ApiDownloadGetUrl:
+			if r.Context().Value(operationContextKey{}) != r.UserAgent() {
+				t.Errorf("download request inherited another operation's context")
+			}
 			if !strings.HasPrefix(r.UserAgent(), "stream-") || r.PostForm.Get("data") == "" || r.Method != http.MethodPost {
 				t.Errorf("invalid download request: method=%s ua=%q", r.Method, r.UserAgent())
 			}
@@ -77,25 +94,25 @@ func TestSDKOperationsKeepConcurrentRequestsIndependent(t *testing.T) {
 	ctx := context.Background()
 	operations := []struct {
 		name string
-		run  func(string) error
+		run  func(context.Context, string) error
 	}{
-		{"stat", func(id string) error {
+		{"stat", func(ctx context.Context, id string) error {
 			entry, err := d.Stat(ctx, id)
 			if err == nil && (entry.ID != id || entry.Name != id+".mp4") {
 				return fmt.Errorf("wrong file result: %+v", entry)
 			}
 			return err
 		}},
-		{"rename", func(id string) error { return d.Rename(ctx, id, id+".mp4") }},
-		{"remove", func(id string) error { return d.Remove(ctx, id) }},
-		{"stream", func(id string) error {
+		{"rename", func(ctx context.Context, id string) error { return d.Rename(ctx, id, id+".mp4") }},
+		{"remove", func(ctx context.Context, id string) error { return d.Remove(ctx, id) }},
+		{"stream", func(ctx context.Context, id string) error {
 			_, err := d.StreamURLWithHeader(ctx, id, http.Header{"User-Agent": {id}})
 			if err == nil || !strings.Contains(err.Error(), "rejected-"+id) {
 				return fmt.Errorf("wrong download error: %v", err)
 			}
 			return nil
 		}},
-		{"generation", func(id string) error {
+		{"generation", func(ctx context.Context, id string) error {
 			_, err := d.GenerationStreamURL(ctx, id, false)
 			if !errors.Is(err, drives.ErrGenerationStreamUnavailable) {
 				return fmt.Errorf("wrong generation error: %v", err)
@@ -109,7 +126,8 @@ func TestSDKOperationsKeepConcurrentRequestsIndependent(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for i := 0; i < 40; i++ {
-				if err := operation.run(fmt.Sprintf("%s-%d", operation.name, i)); err != nil {
+				id := fmt.Sprintf("%s-%d", operation.name, i)
+				if err := operation.run(context.WithValue(ctx, operationContextKey{}, id), id); err != nil {
 					t.Errorf("%s: %v", operation.name, err)
 					return
 				}

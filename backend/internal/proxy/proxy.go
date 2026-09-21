@@ -232,7 +232,7 @@ func (p *Proxy) getLink(ctx context.Context, d drives.Drive, driveID, fileID str
 		p.finishLinkCall(key, call, link, err)
 	}()
 
-	// 部分 driver（115 SDK）不会把 ctx 继续传到底层 HTTP 请求。单独的看门狗
+	// 为未遵守 ctx 的 driver 保留兜底。单独的看门狗
 	// 保证即使 provider 一直不返回，超时也会结束 call、移除 inflight 并唤醒
 	// 所有等待者；迟到的 provider 结果由 linkCall.once 丢弃。
 	go func() {
