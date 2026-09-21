@@ -1480,6 +1480,7 @@ export const getTelegramStatus = (signal?: AbortSignal) => request<TelegramStatu
 export const testTelegram = () => request<{username: string}>("/telegram/test", {method: "POST"});
 export const prepareTelegramPolling = () => request<void>("/telegram/prepare-polling", {method:"POST"});
 export const resumeTelegram = () => request<void>("/telegram/resume", {method:"POST"});
-export const listTelegramImports = (state = "", before = "") => request<ImportJob[]>(`/import-jobs?${new URLSearchParams({source: "telegram", state, before})}`);
+// The Telegram page filters and paginates within this recent record window.
+export const listTelegramImports = (limit: number) => request<ImportJob[]>(`/import-jobs?${new URLSearchParams({source: "telegram", limit: String(limit)})}`);
 export const cancelImport = (id: string) => request<ImportJob>(`/import-jobs/${encodeURIComponent(id)}/cancel`, {method:"POST"});
 export const retryImport = (id: string) => request<void>(`/import-jobs/${encodeURIComponent(id)}/retry`, {method:"POST"});

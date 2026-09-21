@@ -11,6 +11,7 @@ import {
   Radio,
 } from "lucide-react";
 import * as api from "./api";
+import { AdminPagination } from "./AdminPagination";
 import { useAdminRouteActive } from "./AdminRouteCache";
 import { useToast } from "./ToastContext";
 import { formatBytes } from "./storageFormat";
@@ -18,6 +19,15 @@ import { importStageLabel } from "./telegram/config";
 import { useTelegramAvailability } from "./telegram/useTelegramAvailability";
 import { TelegramUploadSettings } from "./telegram/TelegramUploadSettings";
 import "@/styles/telegram.css";
+
+const RECENT_IMPORT_LIMIT = 50;
+const IMPORT_PAGE_SIZE = 10;
+const activeImportStates = new Set([
+  "queued",
+  "downloading",
+  "validating",
+  "saving",
+]);
 
 const stateLabels: Record<string, string> = {
   disabled: "未启用",
@@ -60,8 +70,7 @@ function TelegramWorkspace() {
   const [status, setStatus] = useState<api.TelegramStatus>();
   const [jobs, setJobs] = useState<api.ImportJob[]>([]);
   const [filter, setFilter] = useState("");
-  const [cursor, setCursor] = useState("");
-  const [history, setHistory] = useState<string[]>([]);
+  const [page, setPage] = useState(1);
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
   const [refresh, setRefresh] = useState(0);
@@ -76,11 +85,11 @@ function TelegramWorkspace() {
       try {
         const [connection, tasks] = await Promise.all([
           api.getTelegramStatus(),
-          api.listTelegramImports(filter, cursor),
+          api.listTelegramImports(RECENT_IMPORT_LIMIT),
         ]);
         if (!disposed) {
           setStatus(connection);
-          setJobs(tasks);
+          setJobs(tasks.slice(0, RECENT_IMPORT_LIMIT));
           setError("");
         }
       } catch (err) {
@@ -97,7 +106,23 @@ function TelegramWorkspace() {
       disposed = true;
       clearTimeout(timer);
     };
-  }, [active, filter, cursor, refresh]);
+  }, [active, refresh]);
+
+  const filteredJobs = jobs.filter(
+    (job) =>
+      !filter ||
+      (filter === "active"
+        ? activeImportStates.has(job.state)
+        : job.state === filter),
+  );
+  const totalPages = Math.max(1, Math.ceil(filteredJobs.length / IMPORT_PAGE_SIZE));
+  const currentPage = Math.min(page, totalPages);
+  const pageStart = (currentPage - 1) * IMPORT_PAGE_SIZE;
+  const pagedJobs = filteredJobs.slice(pageStart, pageStart + IMPORT_PAGE_SIZE);
+
+  useEffect(() => {
+    setPage((current) => Math.min(current, totalPages));
+  }, [totalPages]);
 
   async function run(name: string, action: () => Promise<void>) {
     setBusy(name);
@@ -234,15 +259,14 @@ function TelegramWorkspace() {
       <section className="tg-panel" aria-labelledby="tg-jobs">
         <div className="tg-heading">
           <h3 id="tg-jobs">
-            <History size={16} aria-hidden="true" />导入记录
+            <History size={16} aria-hidden="true" />最近导入
           </h3>
           <select
             aria-label="任务状态"
             value={filter}
             onChange={(e) => {
               setFilter(e.target.value);
-              setCursor("");
-              setHistory([]);
+              setPage(1);
             }}
           >
             <option value="">全部状态</option>
@@ -262,10 +286,10 @@ function TelegramWorkspace() {
             正在加载记录…
           </p>
         ) : (
-          !jobs.length &&
+          !filteredJobs.length &&
           !error && (
             <div className="tg-empty">
-              <p>{filter ? "暂无此状态的记录" : "暂无导入记录"}</p>
+              <p>{filter ? "暂无记录" : "暂无导入记录"}</p>
               {!filter && (
                 <span>连接机器人后，发送或转发一个视频即可开始。</span>
               )}
@@ -273,7 +297,7 @@ function TelegramWorkspace() {
           )
         )}
         <div className="tg-jobs" hidden={loading}>
-          {jobs.map((job) => (
+          {pagedJobs.map((job) => (
             <article key={job.id} className="tg-job">
               <div className="tg-job-icon" aria-hidden="true">
                 <FileVideo size={20} />
@@ -335,31 +359,17 @@ function TelegramWorkspace() {
             </article>
           ))}
         </div>
-        {(history.length > 0 || jobs.length >= 30) && (
-          <nav className="tg-actions tg-pagination" aria-label="导入记录分页">
-            <button
-              className="admin-btn"
-              disabled={loading || !history.length}
-              onClick={() => {
-                setCursor(history[history.length - 1]);
-                setHistory((h) => h.slice(0, -1));
-              }}
-            >
-              上一页
-            </button>
-            <button
-              className="admin-btn"
-              disabled={loading || jobs.length < 30}
-              onClick={() => {
-                setHistory((h) => [...h, cursor]);
-                setCursor(jobs[jobs.length - 1].sequence);
-              }}
-            >
-              下一页
-            </button>
-          </nav>
-        )}
       </section>
+      {totalPages > 1 && (
+        <AdminPagination
+          page={currentPage}
+          totalPages={totalPages}
+          total={filteredJobs.length}
+          itemLabel="记录"
+          pending={loading}
+          onPage={setPage}
+        />
+      )}
     </div>
   );
 }

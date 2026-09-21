@@ -97,6 +97,15 @@ func (a *AdminServer) handleImportList(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, r, 400, errors.New("无效的任务状态"))
 		return
 	}
+	limit := 30
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		var err error
+		limit, err = strconv.Atoi(raw)
+		if err != nil || limit < 1 || limit > 100 {
+			writeErr(w, r, 400, errors.New("limit 必须为 1 到 100 的整数"))
+			return
+		}
+	}
 	var before int64
 	if raw := r.URL.Query().Get("before"); raw != "" {
 		var err error
@@ -106,7 +115,7 @@ func (a *AdminServer) handleImportList(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	jobs, err := a.Catalog.ListImportJobs(r.Context(), source, state, before, 30)
+	jobs, err := a.Catalog.ListImportJobs(r.Context(), source, state, before, limit)
 	if err != nil {
 		writeErr(w, r, 500, errors.New("无法读取导入任务"))
 		return

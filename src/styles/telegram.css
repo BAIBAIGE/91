@@ -176,6 +176,12 @@
 .tg-heading select {
   width: auto;
   font-size: 12px;
+  text-align: center;
+  text-align-last: center;
+}
+.tg-heading select option {
+  text-align: left;
+  text-align-last: left;
 }
 .tg-fields small {
   color: var(--text-muted);
@@ -344,11 +350,6 @@
 }
 .tg-empty span {
   font-size: 12px;
-}
-.tg-pagination {
-  justify-content: flex-end;
-  border-top: 1px solid var(--border-default);
-  padding-top: 16px;
 }
 .tg-spin {
   animation: tg-spin 1s linear infinite;

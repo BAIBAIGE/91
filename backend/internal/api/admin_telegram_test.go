@@ -253,3 +253,57 @@ func TestImportAPIStateFiltersBeforePagination(t *testing.T) {
 		t.Fatalf("unknown state accepted: %d", rr.Code)
 	}
 }
+
+func TestImportAPIHonorsRecentRecordLimit(t *testing.T) {
+	ctx := context.Background()
+	c := openRemoteUploadAPICatalog(t)
+	if _, _, err := c.TelegramOffset(ctx, 123); err != nil {
+		t.Fatal(err)
+	}
+	for i := int64(1); i <= 55; i++ {
+		id := fmt.Sprintf("tg-%d", i)
+		receipt := catalog.TelegramReceipt{BotID: 123, UpdateID: i, MessageID: i, ChatID: 42, SenderID: 42}
+		source := &catalog.TelegramSource{BotID: 123, SenderID: 42, FileID: id, UniqueID: id, Size: 5}
+		if err := c.AcceptTelegramUpdate(ctx, receipt, source, id, id, 100); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := c.CreateRemoteUploadJob(ctx, "http", "https://example.com/video.mp4", "example", "HTTP video", nil); err != nil {
+		t.Fatal(err)
+	}
+	server := &AdminServer{Catalog: c}
+	for _, tc := range []struct {
+		limit string
+		count int
+	}{
+		{"", 30}, {"1", 1}, {"50", 50}, {"100", 55},
+	} {
+		t.Run("limit="+tc.limit, func(t *testing.T) {
+			query := url.Values{"source": {"telegram"}, "limit": {tc.limit}}
+			rr := httptest.NewRecorder()
+			server.handleImportList(rr, httptest.NewRequest("GET", "/admin/api/import-jobs?"+query.Encode(), nil))
+			if rr.Code != http.StatusOK {
+				t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+			}
+			var jobs []ImportJobDTO
+			if err := json.Unmarshal(rr.Body.Bytes(), &jobs); err != nil {
+				t.Fatal(err)
+			}
+			if len(jobs) != tc.count {
+				t.Fatalf("got %d records, want %d", len(jobs), tc.count)
+			}
+			for i, job := range jobs {
+				if want := fmt.Sprintf("tg-%d", 55-i); job.ID != want {
+					t.Fatalf("record %d: got %s, want %s", i, job.ID, want)
+				}
+			}
+		})
+	}
+	for _, limit := range []string{"0", "-1", "101", "invalid", "1.5"} {
+		rr := httptest.NewRecorder()
+		server.handleImportList(rr, httptest.NewRequest("GET", "/admin/api/import-jobs?source=telegram&limit="+limit, nil))
+		if rr.Code != http.StatusBadRequest {
+			t.Errorf("limit=%q: status=%d, want 400", limit, rr.Code)
+		}
+	}
+}
