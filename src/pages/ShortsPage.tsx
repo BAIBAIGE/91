@@ -2527,10 +2527,14 @@ function ShortsSlideImpl({
   }
 
   // Safari 的有声播放权限按 media element 授予。自动播放被拒后，用户的
-  // 首次点击必须在原始 click 回调内直接 play()；分发时序见 useShortsSlideGestures。
+  // 首次点击必须在原始抬手回调内直接 play()；分发时序见 useShortsSlideGestures。
+  // 用户主动暂停时已经取得播放权限，等待双击判定，避免双击点赞顺带恢复播放。
   function shouldResumeImmediatelyOnClick() {
     const video = getVideoElement();
-    return Boolean(video?.paused && !isBuffering && !playbackFailure);
+    return Boolean(
+      video?.paused && !isBuffering && !playbackFailure &&
+      !isVideoPausedByUser(index)
+    );
   }
 
   function handleImmediateResume() {
@@ -2592,14 +2596,14 @@ function ShortsSlideImpl({
 
   // 手势输入：长按倍速、横滑快进、单/双击分发、进度条拖动
   const {
-    handleSlideClick,
     handleProgressPointerDown,
     handleProgressPointerMove,
     handleProgressPointerEnd,
   } = useShortsSlideGestures({
     getVideoElement,
     shouldMount,
-    disabled: isMarkedHidden || playbackFailure !== null,
+    surfaceRef: slideRef,
+    disabled: !isActive || !shouldLoad || isMarkedHidden || playbackFailure !== null,
     scrubbingRef,
     setScrubbing,
     setFastActive,
@@ -2760,7 +2764,6 @@ function ShortsSlideImpl({
       data-index={index}
       data-feed-key={itemKey}
       data-active={isActive}
-      onClick={handleSlideClick}
     >
       {/* 服务端预模糊的小图：避免横屏视频两边出现刺眼黑边，也不创建大面积 GPU blur layer。 */}
       <div

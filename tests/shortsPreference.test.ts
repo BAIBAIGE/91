@@ -140,62 +140,11 @@ test("low-height landscape shorts keep actions below the header", () => {
   );
 });
 
-test("shorts horizontal video swipe seeks relative to the current playback time", () => {
-  assert.match(slideGesturesSource, /const SHORTS_SEEK_ACTIVATION_PX = 12;/);
-  assert.match(slideGesturesSource, /const SHORTS_SEEK_DIRECTION_LOCK_RATIO = 1\.2;/);
-  assert.match(slideGesturesSource, /type ShortsTouchSeekState = \{/);
-  assert.match(slideGesturesSource, /startTime: video\.currentTime \|\| 0/);
-  assert.match(
-    slideGesturesSource,
-    /const passiveTouchMove = shouldUsePassiveShortsTouchMove\(\);/
-  );
-  assert.match(
-    slideGesturesSource,
-    /video\.addEventListener\("touchmove", handleTouchMove, \{\s*passive: passiveTouchMove,\s*\}\);/
-  );
-  assert.match(
-    slideGesturesSource,
-    /if \(!passiveTouchMove\) event\.preventDefault\(\);/
-  );
-  assert.match(
-    slideGesturesSource,
-    /videoWidth: Math\.max\(1, video\.getBoundingClientRect\(\)\.width\)/
-  );
-  assert.match(
-    slideGesturesSource,
-    /export const SHORTS_MEDIA_SEEK_INTERVAL_MS = 80;/
-  );
+test("shorts media seek is throttled and commits the final position", () => {
+  assert.match(slideGesturesSource, /export const SHORTS_MEDIA_SEEK_INTERVAL_MS = 80;/);
   assert.match(slideGesturesSource, /video\.fastSeek\(time\);/);
-  assert.match(
-    slideGesturesSource,
-    /flushMediaSeek\(video, targetTime\);/
-  );
-  // 相对快进的换算与方向锁的行为用例见 shortsGestures.test.ts
-  assert.match(
-    slideGesturesSource,
-    /input\.startTime \+ \(input\.dx \/ Math\.max\(1, input\.width\)\) \* input\.duration/
-  );
-  assert.match(slideGesturesSource, /suppressNextClickRef\.current = true;/);
-  assert.match(slideGesturesSource, /if \(suppressNextClickRef\.current\) \{/);
-  assert.doesNotMatch(
-    shortsPageSource + slideGesturesSource,
-    /touch\.clientX - rect\.left\) \/ Math\.max\(1,\s*rect\.width\)/
-  );
-});
-
-test("shorts long-press release does not become a click that pauses playback", () => {
-  assert.match(
-    slideGesturesSource,
-    /const handleTouchEnd = \(event: TouchEvent\) => \{[\s\S]*?const wasFastPress = active;[\s\S]*?if \(wasSeeking \|\| wasFastPress\) \{\s*suppressNextSyntheticClick\(\);/
-  );
-  assert.match(
-    slideGesturesSource,
-    /function suppressNextSyntheticClick\(\) \{[\s\S]*?suppressNextClickRef\.current = true;[\s\S]*?SHORTS_SYNTHETIC_CLICK_RESET_MS/
-  );
-  assert.match(
-    slideGesturesSource,
-    /if \(suppressNextClickRef\.current\) \{\s*suppressNextClickRef\.current = false;\s*clearSuppressNextClickResetTimer\(\);[\s\S]*?return;/
-  );
+  assert.match(slideGesturesSource, /flushMediaSeek\(video, time\);/);
+  // 手势序列（单/双击、长按、拖动）的行为覆盖见 shortsSurfaceGestures.test.ts。
 });
 
 test("shorts progress listeners rebind when deferred videos mount", () => {
@@ -279,7 +228,7 @@ test("shorts retries interrupted active playback and exposes rejected autoplay",
   // \u81ea\u52a8\u64ad\u653e\u88ab\u62d2\u540e\u7684\u9996\u6b21\u70b9\u51fb\uff1a\u5224\u5b9a\u4e0e\u6062\u590d\u5728 slide\uff0c\u5206\u53d1\u65f6\u5e8f\u5728\u624b\u52bf hook
   assert.match(
     shortsPageSource,
-    /function shouldResumeImmediatelyOnClick\(\) \{[\s\S]*?video\?\.paused && !isBuffering/
+    /function shouldResumeImmediatelyOnClick\(\) \{[\s\S]*?video\?\.paused && !isBuffering && !playbackFailure &&\s*!isVideoPausedByUser\(index\)/
   );
   assert.match(
     shortsPageSource,
@@ -287,7 +236,7 @@ test("shorts retries interrupted active playback and exposes rejected autoplay",
   );
   assert.match(
     slideGesturesSource,
-    /if \(options\.shouldResumeImmediately\(\)\) \{[\s\S]*?options\.onImmediateResume\(\);[\s\S]*?return;[\s\S]*?\/\/ \u5355\u51fb\u6302\u8d77/
+    /onImmediateResume: \(\) => optionsRef\.current\.onImmediateResume\(\)/
   );
 });
 
@@ -346,11 +295,11 @@ test("shorts exposes media failures separately from pause and retries in place",
   assert.match(retryBlock, /\.play\(\)/);
   assert.match(
     shortsPageSource,
-    /disabled: isMarkedHidden \|\| playbackFailure !== null/
+    /disabled: !isActive \|\| !shouldLoad \|\| isMarkedHidden \|\| playbackFailure !== null/
   );
   assert.match(
     slideGesturesSource,
-    /const start = \(\) => \{\s*if \(optionsRef\.current\.disabled\) return;/
+    /if \(options\.disabled\) return;/
   );
   assert.match(
     shortsCssSource,

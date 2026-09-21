@@ -3,10 +3,9 @@ import test from "node:test";
 import {
   classifyTouchSeekIntent,
   computeTouchSeekTime,
-} from "../src/shorts/useShortsSlideGestures";
+} from "../src/shorts/slideGestures";
 import {
   isLegacyShortsVideoTransitionEnabled,
-  shouldUsePassiveShortsTouchMove,
 } from "../src/shorts/platform";
 
 function withWindowSearch<T>(search: string, run: () => T): T {
@@ -26,15 +25,6 @@ function withWindowSearch<T>(search: string, run: () => T): T {
     }
   }
 }
-
-test("touchmove stays passive by default with an explicit legacy fallback", () => {
-  withWindowSearch("", () => {
-    assert.equal(shouldUsePassiveShortsTouchMove(), true);
-  });
-  withWindowSearch("?shortsPassiveTouch=0", () => {
-    assert.equal(shouldUsePassiveShortsTouchMove(), false);
-  });
-});
 
 test("playing video transition is disabled by default with an A/B fallback", () => {
   withWindowSearch("", () => {
