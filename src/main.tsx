@@ -6,6 +6,7 @@ import { ToastProvider } from "./admin/ToastContext";
 import { AuthProvider } from "./admin/AuthContext";
 import { syncThemeFromServer } from "./lib/theme";
 import { initializeListingScrollRestore } from "./lib/listingScrollRestore";
+import { initializeControlFocus } from "./lib/controlFocus";
 
 import "./styles/tokens.css";
 import "./styles/base.css";
@@ -21,6 +22,7 @@ import "./styles/shared-state.css";
 syncThemeFromServer();
 
 initializeListingScrollRestore(window);
+initializeControlFocus(document);
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
