@@ -173,7 +173,7 @@ test("detail player always exposes subtitle selector with default off and no off
 });
 
 test("detail player limits ArtPlayer automatic reconnect attempts", () => {
-  assert.match(playerSource, /const ARTPLAYER_RECONNECT_TIME_MAX = 3;/);
+  assert.match(playerSource, /const ARTPLAYER_RECONNECT_TIME_MAX = 2;/);
   assert.match(
     playerSource,
     /Artplayer\.RECONNECT_TIME_MAX = ARTPLAYER_RECONNECT_TIME_MAX;/

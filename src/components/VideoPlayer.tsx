@@ -124,7 +124,7 @@ const FAST_RATE = 2;
 /** 默认倍速。 */
 const NORMAL_RATE = 1;
 /** ArtPlayer 内部播放失败自动重连次数。 */
-const ARTPLAYER_RECONNECT_TIME_MAX = 3;
+const ARTPLAYER_RECONNECT_TIME_MAX = 2;
 /** 播放状态下控制栏无操作后自动隐藏的时间。 */
 const ARTPLAYER_CONTROL_HIDE_TIME_MS = 2_000;
 /** 键盘左右键单次快进/快退秒数。 */
