@@ -36,6 +36,9 @@ func TestTelegramBackupSanitizesRuntimeStateAndPreservesFileIdentity(t *testing.
 			if err = c.AcceptTelegramUpdate(ctx, catalog.TelegramReceipt{BotID: 123, UpdateID: 1, ChatID: 42, MessageID: 1, SenderID: 42}, &catalog.TelegramSource{BotID: 123, SenderID: 42, FileID: "PRIVATE_ID", UniqueID: "stable"}, "tg-job", "video", 100); err != nil {
 				t.Fatal(err)
 			}
+			if err = c.StageTelegramMediaGroupUpdate(ctx, catalog.TelegramMediaGroupUpdate{BotID: 123, ChatID: 42, MessageID: 2, UpdateID: 2, MediaGroupID: "album", Payload: `{"caption":"PRIVATE_ALBUM_CAPTION"}`}); err != nil {
+				t.Fatal(err)
+			}
 			if err = c.UpsertVideo(ctx, &catalog.Video{ID: "local-upload-video", DriveID: "local-upload", FileID: "video.mp4", Title: "video"}); err != nil {
 				t.Fatal(err)
 			}
@@ -63,7 +66,7 @@ func TestTelegramBackupSanitizesRuntimeStateAndPreservesFileIdentity(t *testing.
 				t.Fatal(err)
 			}
 			defer archive.Close()
-			for _, table := range []string{"telegram_settings", "telegram_connections", "telegram_receipts"} {
+			for _, table := range []string{"telegram_settings", "telegram_connections", "telegram_receipts", "telegram_media_group_updates"} {
 				var count int
 				if err = archive.QueryRow(`SELECT COUNT(*) FROM ` + table).Scan(&count); err != nil || count != 0 {
 					t.Fatalf("%s not empty: %d %v", table, count, err)
@@ -89,7 +92,7 @@ func TestTelegramBackupSanitizesRuntimeStateAndPreservesFileIdentity(t *testing.
 				}
 			}
 			raw, err := os.ReadFile(snapshot)
-			if err != nil || bytes.Contains(raw, []byte("PRIVATE_TOKEN")) || bytes.Contains(raw, []byte("PRIVATE_API_HASH")) {
+			if err != nil || bytes.Contains(raw, []byte("PRIVATE_TOKEN")) || bytes.Contains(raw, []byte("PRIVATE_API_HASH")) || bytes.Contains(raw, []byte("PRIVATE_ALBUM_CAPTION")) {
 				t.Fatal("credentials survived snapshot sanitization")
 			}
 			private, err := c.GetTelegramSettings(ctx)
@@ -99,6 +102,9 @@ func TestTelegramBackupSanitizesRuntimeStateAndPreservesFileIdentity(t *testing.
 			var live int
 			if err = db.QueryRow(`SELECT COUNT(*) FROM telegram_receipts`).Scan(&live); err != nil || live != 1 {
 				t.Fatal("archive sanitization changed live DB", err)
+			}
+			if err = db.QueryRow(`SELECT COUNT(*) FROM telegram_media_group_updates`).Scan(&live); err != nil || live != 1 {
+				t.Fatal("archive sanitization changed live media group", err)
 			}
 		})
 	}

@@ -170,6 +170,7 @@ func mergeSelectiveRestoreDatabase(
 	for _, statement := range []string{
 		`DELETE FROM main.admin_sessions`,
 		`DELETE FROM main.telegram_receipts`,
+		`DELETE FROM main.telegram_media_group_updates`,
 		`UPDATE main.telegram_connections SET needs_reconnect=1`,
 		`INSERT INTO main.telegram_connections(bot_id,needs_reconnect) VALUES(0,1) ON CONFLICT(bot_id) DO UPDATE SET needs_reconnect=1`,
 		`DELETE FROM main.video_shares`,

@@ -47,6 +47,14 @@ func (c *Catalog) migrateImports(ctx context.Context) error {
  );
  CREATE INDEX IF NOT EXISTS idx_telegram_receipt_jobs ON telegram_receipts(job_id);
  CREATE INDEX IF NOT EXISTS idx_telegram_file_jobs ON telegram_files(job_id);
+ CREATE TABLE IF NOT EXISTS telegram_media_group_updates (
+  bot_id INTEGER NOT NULL, chat_id INTEGER NOT NULL, media_group_id TEXT NOT NULL,
+  message_id INTEGER NOT NULL, update_id INTEGER NOT NULL,
+  payload TEXT NOT NULL, received_at INTEGER NOT NULL,
+  PRIMARY KEY(bot_id,update_id), UNIQUE(bot_id,chat_id,message_id)
+ );
+ CREATE INDEX IF NOT EXISTS idx_telegram_media_groups
+  ON telegram_media_group_updates(bot_id,chat_id,media_group_id);
  `)
 	if err != nil {
 		return err
@@ -103,8 +111,23 @@ func (c *Catalog) AcceptTelegramUpdate(ctx context.Context, receipt TelegramRece
 		return err
 	}
 	defer tx.Rollback()
+	if err := acceptTelegramUpdate(ctx, tx, receipt, source, id, title, limit); err != nil {
+		return err
+	}
+	if err := advanceTelegramOffset(ctx, tx, receipt.BotID, receipt.UpdateID); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func advanceTelegramOffset(ctx context.Context, tx *sql.Tx, botID, updateID int64) error {
+	_, err := tx.ExecContext(ctx, `UPDATE telegram_connections SET next_offset=? WHERE bot_id=?`, updateID+1, botID)
+	return err
+}
+
+func acceptTelegramUpdate(ctx context.Context, tx *sql.Tx, receipt TelegramReceipt, source *TelegramSource, id, title string, limit int) error {
 	var exists int
-	err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM telegram_receipts WHERE bot_id=? AND (update_id=? OR (chat_id=? AND message_id=?))`, receipt.BotID, receipt.UpdateID, receipt.ChatID, receipt.MessageID).Scan(&exists)
+	err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM telegram_receipts WHERE bot_id=? AND (update_id=? OR (chat_id=? AND message_id=?))`, receipt.BotID, receipt.UpdateID, receipt.ChatID, receipt.MessageID).Scan(&exists)
 	if err != nil {
 		return err
 	}
@@ -164,11 +187,7 @@ func (c *Catalog) AcceptTelegramUpdate(ctx context.Context, receipt TelegramRece
 			return err
 		}
 	}
-	_, err = tx.ExecContext(ctx, `UPDATE telegram_connections SET next_offset=? WHERE bot_id=?`, receipt.UpdateID+1, receipt.BotID)
-	if err != nil {
-		return err
-	}
-	return tx.Commit()
+	return nil
 }
 
 func (c *Catalog) LatestTelegramFileID(ctx context.Context, s TelegramSource) (string, error) {

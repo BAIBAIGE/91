@@ -267,6 +267,7 @@ DELETE FROM videos
 		`DELETE FROM telegram_settings`,
 		`DELETE FROM telegram_connections`,
 		`DELETE FROM telegram_receipts`,
+		`DELETE FROM telegram_media_group_updates`,
 		`DELETE FROM telegram_files WHERE video_id='' OR video_id NOT IN (SELECT id FROM videos)`,
 		`UPDATE telegram_files SET file_id=''`,
 		`UPDATE remote_upload_jobs SET source_payload='' WHERE source_kind='telegram'`,

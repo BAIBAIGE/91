@@ -40,7 +40,7 @@ func testService(t *testing.T) (*Service, *catalog.Catalog) {
 	return s, cat
 }
 func videoUpdate(id, userID int64) update {
-	m := &message{ID: id, From: user{ID: userID}, Caption: "海边日落", Video: &media{FileID: "file", UniqueID: "unique", Name: "sunset.mp4", Size: 5, MIME: "video/mp4"}}
+	m := &message{ID: id, Date: 1789975384, From: user{ID: userID}, Caption: "海边日落", Video: &media{FileID: "file", UniqueID: "unique", Name: "sunset.mp4", Size: 5, MIME: "video/mp4"}}
 	m.Chat.Type = "private"
 	m.Chat.ID = userID
 	return update{ID: id, Message: m}
@@ -227,6 +227,11 @@ func TestNotificationFailureDoesNotChangeTask(t *testing.T) {
 	}
 }
 func TestTelegramImportEndToEndWithLocalBotAPI(t *testing.T) {
+	t.Run("single video", func(t *testing.T) { testTelegramImportEndToEnd(t, false) })
+	t.Run("photo caption across album polls", func(t *testing.T) { testTelegramImportEndToEnd(t, true) })
+}
+
+func testTelegramImportEndToEnd(t *testing.T, album bool) {
 	if _, err := exec.LookPath("ffmpeg"); err != nil {
 		t.Skip("ffmpeg not installed")
 	}
@@ -243,9 +248,15 @@ func TestTelegramImportEndToEndWithLocalBotAPI(t *testing.T) {
 	info, _ := os.Stat(fixture)
 	u := videoUpdate(10, 42)
 	u.Message.Video.Size = info.Size()
+	if album {
+		u.Message.MediaGroupID = "album"
+		u.Message.Caption = ""
+		u.Message.Video.Name = ""
+	}
 	var mu sync.Mutex
 	sent := []string{}
 	delivered := false
+	photoDelivered := false
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		method := filepath.Base(r.URL.Path)
@@ -260,6 +271,9 @@ func TestTelegramImportEndToEndWithLocalBotAPI(t *testing.T) {
 			if !delivered {
 				result = []update{u}
 				delivered = true
+			} else if album && !photoDelivered {
+				result = []update{albumPhoto(11, "媒体组的共同标题")}
+				photoDelivered = true
 			} else {
 				result = []update{}
 			}
@@ -313,6 +327,9 @@ func TestTelegramImportEndToEndWithLocalBotAPI(t *testing.T) {
 	case v = <-saved:
 	case <-time.After(10 * time.Second):
 		t.Fatal("video was not imported")
+	}
+	if album && (v.Title != "媒体组的共同标题" || v.FileName != "媒体组的共同标题.mp4") {
+		t.Fatalf("album caption did not reach saved video: %+v", v)
 	}
 	if len(v.Tags) != 1 || v.Tags[0] != "TG" {
 		t.Fatalf("Telegram source tag missing or duplicated: %v", v.Tags)

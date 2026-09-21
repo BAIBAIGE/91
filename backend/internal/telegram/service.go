@@ -6,7 +6,6 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -35,20 +34,22 @@ type Status struct {
 	Config               config.Telegram `json:"config"`
 }
 type Service struct {
-	wakeImports func()
-	cfg         config.Telegram
-	token       string
-	runCtx      context.Context
-	cat         *catalog.Catalog
-	uploadDir   string
-	reserve     int64
-	mu          sync.RWMutex
-	control     sync.Mutex
-	status      Status
-	client      *client
-	botID       int64
-	wg          sync.WaitGroup
-	cancel      context.CancelFunc
+	wakeImports      func()
+	cfg              config.Telegram
+	token            string
+	runCtx           context.Context
+	cat              *catalog.Catalog
+	uploadDir        string
+	reserve          int64
+	mu               sync.RWMutex
+	control          sync.Mutex
+	mediaGroupMu     sync.Mutex
+	mediaGroupsReady bool
+	status           Status
+	client           *client
+	botID            int64
+	wg               sync.WaitGroup
+	cancel           context.CancelFunc
 }
 
 func New(cfg config.Telegram, token string, cat *catalog.Catalog, uploadDir string, reserve int64) *Service {
@@ -62,9 +63,10 @@ func (s *Service) Start(ctx context.Context) {
 	}
 	ctx, s.cancel = context.WithCancel(ctx)
 	s.runCtx = ctx
-	s.wg.Add(2)
+	s.wg.Add(3)
 	go func() { defer s.wg.Done(); s.receive(ctx) }()
 	go func() { defer s.wg.Done(); s.notify(ctx) }()
+	go func() { defer s.wg.Done(); s.processMediaGroups(ctx) }()
 }
 func (s *Service) Shutdown(ctx context.Context) error {
 	if s.cancel != nil {
@@ -103,6 +105,7 @@ func (s *Service) setState(state string, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.status.State = state
+	s.mediaGroupsReady = false
 	s.status.Error = ""
 	if err != nil {
 		s.status.Error = err.Error()
@@ -262,6 +265,10 @@ func (s *Service) receive(ctx context.Context) {
 			s.mu.Lock()
 			s.status.LastPoll = time.Now()
 			s.mu.Unlock()
+			// Admit a complete polling batch before the album worker can flush.
+			// On reconnect, first drain a successful poll so buffered messages do
+			// not publish before captions still waiting at the Bot API arrive.
+			s.mediaGroupMu.Lock()
 			for _, u := range updates {
 				if err = s.accept(ctx, u); err != nil {
 					s.setState("error", errors.New("保存 TG 消息失败，稍后重试"))
@@ -272,6 +279,10 @@ func (s *Service) receive(ctx context.Context) {
 				s.status.LastMessage = time.Now()
 				s.mu.Unlock()
 			}
+			s.mu.Lock()
+			s.mediaGroupsReady = err == nil
+			s.mu.Unlock()
+			s.mediaGroupMu.Unlock()
 			if err != nil {
 				if !wait(ctx, 5*time.Second) {
 					return
@@ -282,6 +293,26 @@ func (s *Service) receive(ctx context.Context) {
 	}
 }
 func (s *Service) accept(ctx context.Context, u update) error {
+	// Keep the fallback timestamp in the buffered message too, so collecting an
+	// album or restarting the receiver does not change an untitled video's name.
+	if m := u.Message; m != nil && m.Date <= 0 {
+		m.Date = time.Now().Unix()
+	}
+	if m := u.Message; m != nil && m.MediaGroupID != "" && m.Chat.Type == "private" && s.Allowed(m.From.ID) {
+		return s.stageMediaGroup(ctx, u)
+	}
+	input, err := s.prepareImport(ctx, u)
+	if err != nil {
+		return err
+	}
+	err = s.cat.AcceptTelegramUpdate(ctx, input.Receipt, input.Source, input.ID, input.Title, s.cfg.MaxPendingJobs)
+	if err == nil {
+		s.wakeImportWorker()
+	}
+	return err
+}
+
+func (s *Service) prepareImport(ctx context.Context, u update) (catalog.TelegramImport, error) {
 	botID := s.BotID()
 	r := catalog.TelegramReceipt{BotID: botID, UpdateID: u.ID, MessageID: -u.ID - 1, Response: "__ignore__"}
 	var source *catalog.TelegramSource
@@ -296,10 +327,7 @@ func (s *Service) accept(ctx context.Context, u update) error {
 				r.Response = "你的 Telegram 用户 ID：" + strconv.FormatInt(m.From.ID, 10)
 			} else if s.Allowed(m.From.ID) {
 				r.Response = "请转发视频或发送视频文件；消息链接、图片和动画暂不支持。"
-				file := m.Video
-				if file == nil && m.Document != nil && isVideoDocument(*m.Document) {
-					file = m.Document
-				}
+				file := videoMedia(m)
 				if file != nil {
 					r.Response = ""
 					if file.FileID == "" || file.UniqueID == "" {
@@ -308,9 +336,9 @@ func (s *Service) accept(ctx context.Context, u update) error {
 						r.Response = err.Error()
 					} else {
 						source = &catalog.TelegramSource{BotID: botID, SenderID: m.From.ID, FileID: file.FileID, UniqueID: file.UniqueID, FileName: file.Name, Size: file.Size, MIME: file.MIME}
-						title = videoTitle(m.Caption, file.Name, m.ID)
+						title = videoTitle(m.Caption, file.Name, m.Date)
 						if err := s.invalidateMissingVideo(ctx, botID, file.UniqueID); err != nil {
-							return err
+							return catalog.TelegramImport{}, err
 						}
 					}
 				}
@@ -319,18 +347,18 @@ func (s *Service) accept(ctx context.Context, u update) error {
 	}
 	var random [12]byte
 	if _, err := rand.Read(random[:]); err != nil {
-		return err
+		return catalog.TelegramImport{}, err
 	}
-	err := s.cat.AcceptTelegramUpdate(ctx, r, source, "tg-"+hex.EncodeToString(random[:]), title, s.cfg.MaxPendingJobs)
-	if err == nil {
-		s.mu.RLock()
-		wake := s.wakeImports
-		s.mu.RUnlock()
-		if wake != nil {
-			wake()
-		}
+	return catalog.TelegramImport{Receipt: r, Source: source, ID: "tg-" + hex.EncodeToString(random[:]), Title: title}, nil
+}
+
+func (s *Service) wakeImportWorker() {
+	s.mu.RLock()
+	wake := s.wakeImports
+	s.mu.RUnlock()
+	if wake != nil {
+		wake()
 	}
-	return err
 }
 func (s *Service) invalidateMissingVideo(ctx context.Context, botID int64, unique string) error {
 	id, err := s.cat.TelegramVideoID(ctx, botID, unique)
@@ -375,7 +403,20 @@ func isVideoDocument(m media) bool {
 	}
 	return false
 }
-func videoTitle(caption, name string, id int64) string {
+func videoMedia(m *message) *media {
+	if m.Video != nil {
+		return m.Video
+	}
+	if m.Document != nil && isVideoDocument(*m.Document) {
+		return m.Document
+	}
+	return nil
+}
+func videoTitle(caption, name string, timestamp int64) string {
+	return videoTitleWithSuffix(caption, name, timestamp, "")
+}
+
+func videoTitleWithSuffix(caption, name string, timestamp int64, suffix string) string {
 	title := ""
 	for _, line := range strings.Split(caption, "\n") {
 		if strings.TrimSpace(line) != "" {
@@ -393,15 +434,16 @@ func videoTitle(caption, name string, id int64) string {
 		return r
 	}, title)
 	title = strings.Trim(strings.Join(strings.Fields(title), " "), ". ")
-	for len(title) > 120 {
+	for len(title)+len(suffix) > 120 {
 		rs := []rune(title)
 		title = string(rs[:len(rs)-1])
 	}
 	if title == "" || title == "." {
-		title = fmt.Sprintf("TG 视频 %d", id)
+		title = strconv.FormatInt(timestamp, 10)
 	}
+	title = strings.TrimSpace(title) + suffix
 	if videoname.ValidateUploadTitle(title, ".webm") != nil {
-		title = fmt.Sprintf("TG 视频 %d", id)
+		title = strconv.FormatInt(timestamp, 10) + suffix
 	}
 	return title
 }

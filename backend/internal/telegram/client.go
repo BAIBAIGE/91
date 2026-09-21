@@ -95,15 +95,18 @@ type media struct {
 }
 type message struct {
 	ID   int64 `json:"message_id"`
+	Date int64 `json:"date"`
 	From user  `json:"from"`
 	Chat struct {
 		ID   int64  `json:"id"`
 		Type string `json:"type"`
 	} `json:"chat"`
-	Text     string `json:"text"`
-	Caption  string `json:"caption"`
-	Video    *media `json:"video"`
-	Document *media `json:"document"`
+	Text         string  `json:"text"`
+	Caption      string  `json:"caption"`
+	MediaGroupID string  `json:"media_group_id"`
+	Photo        []media `json:"photo,omitempty"`
+	Video        *media  `json:"video"`
+	Document     *media  `json:"document"`
 }
 type update struct {
 	ID      int64    `json:"update_id"`

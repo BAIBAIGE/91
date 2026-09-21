@@ -778,6 +778,7 @@ SELECT id, COALESCE(restore_payload, '') FROM deleted_videos WHERE COALESCE(rest
 	for _, statement := range []string{
 		`DELETE FROM video_shares`,
 		`DELETE FROM telegram_receipts`,
+		`DELETE FROM telegram_media_group_updates`,
 		`DELETE FROM telegram_connections`,
 		`INSERT INTO telegram_connections(bot_id,needs_reconnect) VALUES(0,1)`,
 		`DELETE FROM shorts_feed_sessions`,
