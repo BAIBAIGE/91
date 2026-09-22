@@ -1,9 +1,3 @@
-# Copy beside the native website's config.yaml as telegram.yml, fill in
-# TELEGRAM_API_ID / TELEGRAM_API_HASH below, then run:
-# docker compose -f telegram.yml up -d --pull always
-# The website reads the Bot API address and shared data directory at startup.
-# Keep TELEGRAM_HTTP_PORT and the container port in ports aligned when changing
-# ports; restart both services after changing ports or relocating storage.
 name: video-site-telegram
 services:
   telegram-bot-api:

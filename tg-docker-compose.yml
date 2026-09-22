@@ -1,8 +1,3 @@
-# 部署时将本文件保存为 docker-compose.yml，替代原来的基础配置。
-# 保留原有的自定义端口和数据路径，并填写下方的 API ID / API Hash。
-# 启动和更新：docker compose pull && docker compose up -d
-# 网站启动时从本文件自动读取 Bot API 连接地址和共享数据目录。
-# Bot Token 和允许的用户 ID 在网站配置面板填写，并启用 Telegram。
 services:
   video-site-91:
     image: ghcr.io/nianzhibai/91:stable
