@@ -64,6 +64,7 @@ func TestBackupDownloadSupportsRangeAndSecurityHeaders(t *testing.T) {
 	root := t.TempDir()
 	cfg := &config.Config{
 		Storage: config.Storage{
+			DataDir:         root,
 			DBPath:          filepath.Join(root, "video-site.db"),
 			LocalPreviewDir: filepath.Join(root, "previews"),
 		},
@@ -127,6 +128,7 @@ func TestCreateBackupRejectsInvalidSelection(t *testing.T) {
 	root := t.TempDir()
 	cfg := &config.Config{
 		Storage: config.Storage{
+			DataDir:         root,
 			DBPath:          filepath.Join(root, "video-site.db"),
 			LocalPreviewDir: filepath.Join(root, "previews"),
 		},
@@ -174,6 +176,7 @@ func TestBackupRestoreRequiresConfirmationWithoutPassword(t *testing.T) {
 	root := t.TempDir()
 	cfg := &config.Config{
 		Storage: config.Storage{
+			DataDir:         root,
 			DBPath:          filepath.Join(root, "video-site.db"),
 			LocalPreviewDir: filepath.Join(root, "previews"),
 		},

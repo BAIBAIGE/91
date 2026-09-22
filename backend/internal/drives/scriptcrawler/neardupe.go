@@ -8,6 +8,7 @@ import (
 
 	"github.com/video-site/backend/internal/catalog"
 	"github.com/video-site/backend/internal/dedupe"
+	"github.com/video-site/backend/internal/localpath"
 	"github.com/video-site/backend/internal/mediaasset"
 	"github.com/video-site/backend/internal/mediasim"
 	"github.com/video-site/backend/internal/preview"
@@ -119,8 +120,8 @@ func (c *Crawler) findContentDuplicate(ctx context.Context, source *catalog.Vide
 		if candidate.DurationSeconds < mediasim.ContentDuplicateMinDurationSeconds {
 			continue
 		}
-		teaserPath := strings.TrimSpace(candidate.PreviewLocal)
-		if strings.TrimSpace(candidate.PreviewStatus) != "ready" || teaserPath == "" {
+		teaserPath, validPath := localpath.Managed(c.cfg.LocalPreviewDir, candidate.PreviewLocal)
+		if strings.TrimSpace(candidate.PreviewStatus) != "ready" || !validPath {
 			continue
 		}
 		if info, err := os.Stat(teaserPath); err != nil || !info.Mode().IsRegular() {

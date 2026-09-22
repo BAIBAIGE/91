@@ -34,7 +34,7 @@ type resetPasswordFixture struct {
 func newResetPasswordFixture(t *testing.T) resetPasswordFixture {
 	t.Helper()
 	root := t.TempDir()
-	dbPath := filepath.Join(root, "custom-accounts.db")
+	dbPath := filepath.Join(root, "video-site.db")
 	cat, err := catalog.Open(dbPath)
 	if err != nil {
 		t.Fatal(err)
@@ -67,7 +67,7 @@ func newResetPasswordFixture(t *testing.T) resetPasswordFixture {
 	configPath := filepath.Join(root, "custom-config.yaml")
 	data, err := yaml.Marshal(map[string]any{
 		"server":  map[string]any{"listen": "127.0.0.1:0"},
-		"storage": map[string]any{"db_path": dbPath, "local_preview_dir": filepath.Join(root, "previews-must-not-be-created")},
+		"storage": map[string]any{"data_dir": root},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -174,7 +174,7 @@ func TestResetPasswordCommandWorksOnlineAndPreservesProtection(t *testing.T) {
 			if err != nil || !bytes.Equal(before, after) {
 				t.Fatal("reset rewrote configuration")
 			}
-			if _, err := os.Stat(filepath.Join(f.root, "previews-must-not-be-created")); !os.IsNotExist(err) {
+			if _, err := os.Stat(filepath.Join(f.root, "previews")); !os.IsNotExist(err) {
 				t.Fatal("reset ran server startup")
 			}
 			a := &auth.Authenticator{Catalog: f.cat}
@@ -231,8 +231,8 @@ func TestResetPasswordCommandDoesNotCreateConfigOrDatabase(t *testing.T) {
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Fatal("created missing config")
 	}
-	dbPath := filepath.Join(root, "missing.db")
-	data, err := yaml.Marshal(map[string]any{"storage": map[string]string{"db_path": dbPath}})
+	dbPath := filepath.Join(root, "video-site.db")
+	data, err := yaml.Marshal(map[string]any{"storage": map[string]string{"data_dir": root}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -279,8 +279,18 @@ func (r *resetSelectionReader) Read(p []byte) (int, error) {
 
 func TestResetPasswordCommandRechecksPendingRestoreAfterSelection(t *testing.T) {
 	f := newResetPasswordFixture(t)
+	// Put the media/backup root away from the already open database. Both
+	// password reset and its pending-restore guard must use their own roots.
+	dataDir := t.TempDir()
+	data, err := yaml.Marshal(map[string]any{"storage": map[string]string{"data_dir": dataDir, "db_dir": filepath.Dir(f.dbPath)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(f.configPath, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	input := &resetSelectionReader{reader: strings.NewReader(fmt.Sprintf("%d\n", f.id)), beforeRead: func() {
-		marker := backup.PendingMarkerPath(filepath.Dir(f.dbPath))
+		marker := backup.PendingMarkerPath(dataDir)
 		if err := os.MkdirAll(filepath.Dir(marker), 0o700); err != nil {
 			t.Fatal(err)
 		}
@@ -289,7 +299,7 @@ func TestResetPasswordCommandRechecksPendingRestoreAfterSelection(t *testing.T) 
 		}
 	}}
 	var output bytes.Buffer
-	err := runResetPasswordCommand([]string{"--config", f.configPath}, input, &output, io.Discard)
+	err = runResetPasswordCommand([]string{"--config", f.configPath}, input, &output, io.Discard)
 	if err == nil || !strings.Contains(err.Error(), "restore is pending") {
 		t.Fatalf("error=%v", err)
 	}
@@ -423,7 +433,7 @@ func TestResetPasswordSubprocessDoesNotStartServer(t *testing.T) {
 	if banned, err := f.cat.IsLoginIPBanned(context.Background(), "203.0.113.90"); err != nil || !banned {
 		t.Fatal("subprocess cleared login protection")
 	}
-	if _, err := os.Stat(filepath.Join(f.root, "previews-must-not-be-created")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(f.root, "previews")); !os.IsNotExist(err) {
 		t.Fatal("subprocess ran startup side effects")
 	}
 }
@@ -450,7 +460,7 @@ func TestResetPasswordDocker(t *testing.T) {
 	if result, err := exec.CommandContext(ctx, "docker", "build", "-q", "-t", image, buildRoot).CombinedOutput(); err != nil {
 		t.Fatalf("build Docker test image: %v\n%s", err, result)
 	}
-	configData, err := yaml.Marshal(map[string]any{"storage": map[string]string{"db_path": "/data/custom-accounts.db"}})
+	configData, err := yaml.Marshal(map[string]any{"storage": map[string]string{"data_dir": "/data"}})
 	if err != nil {
 		t.Fatal(err)
 	}

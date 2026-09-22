@@ -1322,7 +1322,11 @@ func (a *App) attachScriptCrawler(d *catalog.Drive, drv *scriptcrawler.Driver) {
 	if pythonPath == "" {
 		pythonPath = "python3"
 	}
-	scriptPath := strings.TrimSpace(d.Credentials["script_path"])
+	scriptPath, err := scriptcrawler.ScriptPath(d.Credentials, filepath.Join(filepath.Dir(a.cfg.Storage.LocalPreviewDir), "crawler-scripts"))
+	if err != nil {
+		log.Printf("[scriptcrawler] drive=%s invalid script reference: %v", d.ID, err)
+		return
+	}
 	proxyURL := strings.TrimSpace(d.Credentials["proxy"])
 	configJSON := strings.TrimSpace(d.Credentials["config_json"])
 	workDir := ""

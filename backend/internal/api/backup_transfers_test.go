@@ -83,6 +83,7 @@ func newTransferTestBackupEnv(t *testing.T) *transferTestBackupEnv {
 			Listen: "127.0.0.1:9192",
 		},
 		Storage: config.Storage{
+			DataDir:         root,
 			DBPath:          filepath.Join(root, "video-site.db"),
 			LocalPreviewDir: filepath.Join(root, "previews"),
 		},

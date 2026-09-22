@@ -369,7 +369,7 @@ func (s *Server) servePreviewVideo(w http.ResponseWriter, r *http.Request, v *ca
 		return
 	}
 	if v.PreviewLocal != "" {
-		localPreview, ok := localpath.Within(s.LocalDir, v.PreviewLocal)
+		localPreview, ok := localpath.Managed(s.LocalDir, v.PreviewLocal)
 		if !ok {
 			http.Error(w, "invalid local path", http.StatusForbidden)
 			return

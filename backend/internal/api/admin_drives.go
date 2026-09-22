@@ -203,6 +203,10 @@ func (a *AdminServer) handleUpsertDrive(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		body.Credentials = credentials
+		if err := a.normalizeCrawlerScriptReference(body.Credentials); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 	} else if body.Kind == "googledrive" {
 		if patchCredentials {
 			body.Credentials = googleDriveCredentialPatch(body.Credentials)

@@ -122,7 +122,8 @@ func (a *AdminServer) crawlerDTOForDrive(d *catalog.Drive, assets catalog.Crawle
 			lastCrawlAt = v
 		}
 	}
-	meta := crawlerMetadataForDrive(d)
+	meta := a.crawlerMetadataForDrive(d)
+	scriptPath, _ := a.crawlerScriptPath(d.Credentials)
 	return crawlerDTO{
 		ID:                          d.ID,
 		Name:                        meta.Name,
@@ -130,7 +131,7 @@ func (a *AdminServer) crawlerDTOForDrive(d *catalog.Drive, assets catalog.Crawle
 		Kind:                        d.Kind,
 		Status:                      d.Status,
 		LastError:                   d.LastError,
-		ScriptPath:                  strings.TrimSpace(d.Credentials["script_path"]),
+		ScriptPath:                  scriptPath,
 		ScriptSourceURL:             strings.TrimSpace(d.Credentials["script_source_url"]),
 		Proxy:                       strings.TrimSpace(d.Credentials["proxy"]),
 		UploadProxy:                 strings.TrimSpace(d.Credentials["upload_proxy"]),
@@ -179,17 +180,15 @@ func crawlerVideoIDPrefixes(d *catalog.Drive) []string {
 	}
 }
 
-func crawlerNameForDrive(d *catalog.Drive) string {
-	return crawlerMetadataForDrive(d).Name
-}
-
-func crawlerMetadataForDrive(d *catalog.Drive) scriptcrawler.Metadata {
+func (a *AdminServer) crawlerMetadataForDrive(d *catalog.Drive) scriptcrawler.Metadata {
 	if d == nil {
 		return scriptcrawler.Metadata{Protocol: scriptcrawler.ProtocolV1}
 	}
 	if d.Credentials != nil {
-		if meta, err := scriptcrawler.ReadMetadata(strings.TrimSpace(d.Credentials["script_path"])); err == nil {
-			return meta
+		if path, err := a.crawlerScriptPath(d.Credentials); err == nil {
+			if meta, err := scriptcrawler.ReadMetadata(path); err == nil {
+				return meta
+			}
 		}
 	}
 	return scriptcrawler.Metadata{Name: strings.TrimSpace(d.Name), Protocol: scriptcrawler.ProtocolV1}
@@ -255,6 +254,10 @@ func (a *AdminServer) handleUpsertCrawler(w http.ResponseWriter, r *http.Request
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	if err := a.normalizeCrawlerScriptReference(merged); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	// Existing crawler saves patch only user-owned configuration keys. Runtime
 	// state such as last_crawl_at may be updated by the still-running old task
 	// after this request loaded its snapshot and must never be replaced wholesale.
@@ -262,6 +265,7 @@ func (a *AdminServer) handleUpsertCrawler(w http.ResponseWriter, r *http.Request
 	if existing != nil {
 		persistedCredentials = map[string]string{
 			"script_path":       merged["script_path"],
+			"script_file":       merged["script_file"],
 			"script_source_url": merged["script_source_url"],
 			"proxy":             merged["proxy"],
 			"target_new":        merged["target_new"],
@@ -271,7 +275,12 @@ func (a *AdminServer) handleUpsertCrawler(w http.ResponseWriter, r *http.Request
 			persistedCredentials["upload_proxy"] = merged["upload_proxy"]
 		}
 	}
-	meta, err := scriptcrawler.ReadMetadata(merged["script_path"])
+	resolvedScript, err := a.crawlerScriptPath(merged)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	meta, err := scriptcrawler.ReadMetadata(resolvedScript)
 	if err != nil {
 		http.Error(w, "脚本元信息无效："+err.Error(), http.StatusBadRequest)
 		return
@@ -648,6 +657,26 @@ func (a *AdminServer) crawlerScriptImportDir() (string, error) {
 	}
 	root := filepath.Join(filepath.Dir(base), "crawler-scripts")
 	return filepath.Abs(root)
+}
+
+func (a *AdminServer) crawlerScriptPath(credentials map[string]string) (string, error) {
+	root, err := a.crawlerScriptImportDir()
+	if err != nil {
+		return "", err
+	}
+	return scriptcrawler.ScriptPath(credentials, root)
+}
+
+func (a *AdminServer) normalizeCrawlerScriptReference(credentials map[string]string) error {
+	root, err := a.crawlerScriptImportDir()
+	if err != nil {
+		return err
+	}
+	path, err := scriptcrawler.ScriptPath(credentials, root)
+	if err != nil {
+		return err
+	}
+	return scriptcrawler.SetScriptPath(credentials, root, path)
 }
 
 func safeCrawlerScriptFileName(raw string) (string, error) {

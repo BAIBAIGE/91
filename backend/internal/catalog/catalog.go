@@ -164,7 +164,7 @@ type Video struct {
 	ThumbnailURL       string    `json:"thumbnailUrl"`
 	ThumbnailUpdatedAt time.Time `json:"thumbnailUpdatedAt"`
 	PreviewFileID      string    `json:"previewFileId"`
-	PreviewLocal       string    `json:"previewLocal"`
+	PreviewLocal       string    `json:"previewLocal"` // relative to <storage.data_dir>/previews
 	PreviewUpdatedAt   time.Time `json:"previewUpdatedAt"`
 	PreviewStatus      string    `json:"previewStatus"`
 	Views              int       `json:"views"`

@@ -44,3 +44,20 @@ func TestRemoveGeneratedVideoAssetsRemovesOwnedFilesOnly(t *testing.T) {
 		t.Fatalf("outside file changed: %v", err)
 	}
 }
+
+func TestRemoveGeneratedVideoAssetsResolvesStoredRelativePreview(t *testing.T) {
+	root := t.TempDir()
+	stored := filepath.Join(root, "nested", "custom-preview.mp4")
+	if err := os.MkdirAll(filepath.Dir(stored), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(stored, []byte("preview"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := RemoveGeneratedVideoAssets(root, "video", "nested/custom-preview.mp4"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(stored); !os.IsNotExist(err) {
+		t.Fatalf("relative preview was not removed: %v", err)
+	}
+}

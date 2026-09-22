@@ -24,7 +24,10 @@ func RemoveGeneratedVideoAssets(localDir, videoID, previewLocal string) error {
 	if localDir == "" {
 		return ErrGeneratedAssetRootRequired
 	}
-	candidates := []string{previewLocal}
+	var candidates []string
+	if path, ok := localpath.Managed(localDir, previewLocal); ok {
+		candidates = append(candidates, path)
+	}
 	candidates = append(candidates, PreviewPathCandidates(localDir, videoID)...)
 	candidates = append(candidates, ThumbnailAssetPathCandidates(localDir, videoID)...)
 	candidates = append(candidates, FrameSignaturePath(localDir, videoID))

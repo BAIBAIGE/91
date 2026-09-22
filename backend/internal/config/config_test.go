@@ -59,8 +59,7 @@ func TestExampleConfigOmitsDatabaseManagedDriveDefinitions(t *testing.T) {
 func TestResolveStoragePathsUsesStartupDirectoryWithoutMutatingConfig(t *testing.T) {
 	baseDir := t.TempDir()
 	storage := Storage{
-		DBPath:          "./data/video-site.db",
-		LocalPreviewDir: "./data/previews",
+		DataDir: "./data",
 	}
 
 	resolved, err := ResolveStoragePaths(storage, baseDir)
@@ -73,8 +72,7 @@ func TestResolveStoragePathsUsesStartupDirectoryWithoutMutatingConfig(t *testing
 	if resolved.LocalPreviewDir != filepath.Join(baseDir, "data", "previews") {
 		t.Fatalf("resolved preview path = %q", resolved.LocalPreviewDir)
 	}
-	if storage.DBPath != "./data/video-site.db" ||
-		storage.LocalPreviewDir != "./data/previews" {
+	if storage.DataDir != "./data" || storage.DBPath != "" || storage.LocalPreviewDir != "" {
 		t.Fatalf("source storage config was mutated: %+v", storage)
 	}
 }
@@ -84,7 +82,7 @@ func TestLoggingDefaultsAndCanBeDisabled(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !defaults.Logging.IsFileEnabled() || defaults.Logging.Directory != "./data/logs" ||
+	if !defaults.Logging.IsFileEnabled() || defaults.Logging.Directory != filepath.Join("data", "logs") ||
 		defaults.Logging.MaxFileSizeMB != 5 || defaults.Logging.MaxTotalSizeMB != 30 {
 		t.Fatalf("logging defaults = %+v", defaults.Logging)
 	}

@@ -32,7 +32,7 @@ func TestComputeCountsLocalThumbnailAssetsAndTeasersByDrive(t *testing.T) {
 	writeSizedFile(t, outside, 99)
 
 	got, err := Compute(localDir, []VideoAssetRef{
-		{ID: "video-a", DriveID: "drive-a", PreviewLocal: teaserA},
+		{ID: "video-a", DriveID: "drive-a", PreviewLocal: filepath.Base(teaserA)},
 		{ID: "video-a-copy", DriveID: "drive-a", PreviewLocal: teaserA},
 		{ID: "video-b", DriveID: "drive-b", PreviewLocal: teaserB},
 		{ID: longID, DriveID: "drive-b"},

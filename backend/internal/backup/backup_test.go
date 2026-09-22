@@ -42,6 +42,7 @@ func newTestBackupEnv(t *testing.T) *testBackupEnv {
 			AllowedOrigins: []string{"https://source.example"},
 		},
 		Storage: config.Storage{
+			DataDir:         root,
 			DBPath:          filepath.Join(root, "video-site.db"),
 			LocalPreviewDir: filepath.Join(root, "previews"),
 		},
@@ -956,7 +957,7 @@ func TestSelectiveLocalStorageBackupCopiesOnlyReferencedVideos(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if restoredSourceOnly.PreviewLocal != mediaasset.PreviewPath(env.cfg.Storage.LocalPreviewDir, restoredSourceOnlyID) ||
+	if restoredSourceOnly.PreviewLocal != mediaasset.PreviewFilename(restoredSourceOnlyID) ||
 		restoredSourceOnly.PreviewStatus != "ready" ||
 		restoredSourceOnly.ThumbnailURL != "/p/thumb/"+restoredSourceOnlyID {
 		t.Fatalf("restored local preview metadata = %+v", restoredSourceOnly)
@@ -2247,7 +2248,7 @@ func TestRestoreSwitchesAllDataPreservesTargetRuntimeConfigAndClearsSessions(t *
 	loggingEnabled := true
 	env.cfg.Logging = config.Logging{
 		FileEnabled:    &loggingEnabled,
-		Directory:      "./target-data/logs",
+		Directory:      filepath.Join(env.root, "logs"),
 		MaxFileSizeMB:  25,
 		MaxTotalSizeMB: 300,
 	}
@@ -2308,7 +2309,7 @@ func TestRestoreSwitchesAllDataPreservesTargetRuntimeConfigAndClearsSessions(t *
 	if err != nil {
 		t.Fatal(err)
 	}
-	if video.PreviewStatus != "ready" || video.PreviewLocal != previewPath ||
+	if video.PreviewStatus != "ready" || video.PreviewLocal != filepath.Base(previewPath) ||
 		video.ThumbnailURL != "/p/thumb/video-1" {
 		t.Fatalf("restored video asset state = %+v", video)
 	}
@@ -2387,7 +2388,7 @@ func TestRestoreSwitchesAllDataPreservesTargetRuntimeConfigAndClearsSessions(t *
 		t.Fatalf("target executable paths were not preserved: %+v", restoredConfig.Preview)
 	}
 	if !restoredConfig.Logging.IsFileEnabled() ||
-		restoredConfig.Logging.Directory != "./target-data/logs" ||
+		restoredConfig.Logging.Directory != filepath.Join(env.root, "logs") ||
 		restoredConfig.Logging.MaxFileSizeMB != 25 ||
 		restoredConfig.Logging.MaxTotalSizeMB != 300 {
 		t.Fatalf("target logging config was not preserved: %+v", restoredConfig.Logging)

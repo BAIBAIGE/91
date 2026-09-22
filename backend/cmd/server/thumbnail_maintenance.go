@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/video-site/backend/internal/catalog"
+	"github.com/video-site/backend/internal/localpath"
 	"github.com/video-site/backend/internal/mediaasset"
 )
 
@@ -213,7 +214,7 @@ func (a *App) reconcileMissingLocalPreviewFiles(ctx context.Context) (localAsset
 }
 
 func localPreviewFileExists(localDir, previewLocal string) (bool, error) {
-	clean, ok := localPathWithin(localDir, previewLocal)
+	clean, ok := localpath.Managed(localDir, previewLocal)
 	if !ok {
 		return false, nil
 	}

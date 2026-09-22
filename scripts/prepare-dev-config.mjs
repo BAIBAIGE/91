@@ -15,9 +15,7 @@ if (document.errors.length > 0) {
 // The launcher owns the development listener. Keep all other edits on restarts.
 document.setIn(["server", "listen"], `127.0.0.1:${port}`);
 if (creating) {
-  document.setIn(["storage", "db_path"], "./data-dev/video-site.db");
-  document.setIn(["storage", "local_preview_dir"], "./data-dev/previews");
-  document.setIn(["logging", "directory"], "./data-dev/logs");
+  document.setIn(["storage", "data_dir"], "./data-dev");
 }
 
 const temporaryPath = `${configPath}.${process.pid}.tmp`;

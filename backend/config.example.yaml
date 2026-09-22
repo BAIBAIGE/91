@@ -10,16 +10,15 @@ server:
 
 # 存储：重启生效
 storage:
-  # SQLite 数据库文件
-  db_path: "./data/video-site.db"
-  # 封面和预览目录；其父目录同时用于存放上传文件、临时文件和爬虫数据
-  local_preview_dir: "./data/previews"
+  # 总数据目录，包含媒体、爬虫脚本、日志、备份、临时文件及默认情况下的数据库
+  data_dir: "./data"
+  # 可选数据库目录；留空时跟随 data_dir
+  db_dir: ""
 
 # 日志：重启生效
 logging:
   # 是否将运行日志写入文件
   file_enabled: true
-  directory: "./data/logs"
   # 单文件上限和总量上限（MiB）；超限后轮转或清理最旧日志
   max_file_size_mb: 5
   max_total_size_mb: 30

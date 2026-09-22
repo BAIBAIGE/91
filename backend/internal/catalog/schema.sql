@@ -22,7 +22,7 @@ CREATE TABLE IF NOT EXISTS videos (
     thumbnail_status TEXT DEFAULT 'pending',    -- pending / ready / failed / skipped
     thumbnail_failures INTEGER DEFAULT 0,        -- consecutive transient thumbnail generation failures
     preview_file_id  TEXT,                      -- deprecated: 旧版回写网盘后的预览视频 file id
-    preview_local    TEXT,                      -- 本地预览视频路径（兜底）
+    preview_local    TEXT,                      -- 相对于配置的预览目录的文件路径
     preview_updated_at INTEGER DEFAULT 0,       -- preview-only revision; unrelated metadata must not invalidate teaser caches
     preview_status   TEXT DEFAULT 'pending',    -- pending / ready / failed / disabled
     views            INTEGER DEFAULT 0,

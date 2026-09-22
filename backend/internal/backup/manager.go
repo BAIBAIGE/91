@@ -21,7 +21,6 @@ import (
 	"github.com/video-site/backend/internal/atomicfile"
 	"github.com/video-site/backend/internal/catalog"
 	"github.com/video-site/backend/internal/config"
-	"github.com/video-site/backend/internal/localpath"
 	"github.com/video-site/backend/internal/persistence"
 )
 
@@ -95,29 +94,23 @@ func NewManager(cfg Config) (*Manager, error) {
 		return nil, errors.New("backup: application config is required")
 	}
 	runtimeStorage := cfg.RuntimeStorage
-	if strings.TrimSpace(runtimeStorage.DBPath) == "" {
-		runtimeStorage.DBPath = cfg.AppConfig.Storage.DBPath
-	}
-	if strings.TrimSpace(runtimeStorage.LocalPreviewDir) == "" {
-		runtimeStorage.LocalPreviewDir = cfg.AppConfig.Storage.LocalPreviewDir
+	if strings.TrimSpace(runtimeStorage.DataDir) == "" {
+		runtimeStorage = cfg.AppConfig.Storage
 	}
 	workingDir, err := os.Getwd()
 	if err != nil {
 		return nil, fmt.Errorf("backup: resolve working directory: %w", err)
 	}
-	dbPath, err := localpath.Resolve(workingDir, runtimeStorage.DBPath)
+	runtimeStorage, err = config.ResolveStoragePaths(runtimeStorage, workingDir)
 	if err != nil {
-		return nil, errors.New("backup: database path is invalid")
+		return nil, fmt.Errorf("backup: resolve data directory: %w", err)
 	}
-	previewPath, err := localpath.Resolve(workingDir, runtimeStorage.LocalPreviewDir)
-	if err != nil {
-		return nil, errors.New("backup: preview path is invalid")
-	}
+	dbPath, previewPath := runtimeStorage.DBPath, runtimeStorage.LocalPreviewDir
 	configPath, err := filepath.Abs(strings.TrimSpace(cfg.ConfigPath))
 	if err != nil || strings.TrimSpace(cfg.ConfigPath) == "" {
 		return nil, errors.New("backup: config path is invalid")
 	}
-	dataRoot := filepath.Dir(dbPath)
+	dataRoot := runtimeStorage.DataDir
 	assetRoot := filepath.Dir(previewPath)
 	m := &Manager{
 		catalog:         cfg.Catalog,

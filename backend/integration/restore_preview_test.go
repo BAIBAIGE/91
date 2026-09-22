@@ -18,19 +18,37 @@ import (
 	"github.com/video-site/backend/internal/backup"
 	"github.com/video-site/backend/internal/catalog"
 	"github.com/video-site/backend/internal/config"
+	"github.com/video-site/backend/internal/drives/scriptcrawler"
 	"github.com/video-site/backend/internal/mediaasset"
 	"github.com/video-site/backend/internal/proxy"
 )
 
 func TestRestoredPreviewServesWithRelativeTargetStorageConfig(t *testing.T) {
+	for _, scenario := range []struct{ name, sourceDBDir, targetDBDir string }{
+		{"default-to-default", "", ""},
+		{"default-to-separate", "", "./fast-db"},
+		{"separate-to-default", "./source-db", ""},
+		{"separate-to-separate", "./source-db", "./fast-db"},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			testRestoredPreviewWithDatabaseDirectories(t, scenario.sourceDBDir, scenario.targetDBDir)
+		})
+	}
+}
+
+func testRestoredPreviewWithDatabaseDirectories(t *testing.T, sourceDBDir, targetDBDir string) {
+	t.Helper()
 	ctx := context.Background()
 	root := t.TempDir()
 
 	sourceRoot := filepath.Join(root, "source")
-	sourceFileConfig := relativeStorageConfig()
+	sourceFileConfig := relativeStorageConfig(sourceDBDir)
 	sourceRuntimeStorage := mustResolveStorage(t, sourceFileConfig.Storage, sourceRoot)
 	mustWriteConfig(t, filepath.Join(sourceRoot, "config.yaml"), sourceFileConfig)
 	if err := os.MkdirAll(sourceRuntimeStorage.LocalPreviewDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(sourceRuntimeStorage.DBDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	sourceCatalog, err := catalog.Open(sourceRuntimeStorage.DBPath)
@@ -50,7 +68,11 @@ func TestRestoredPreviewServesWithRelativeTargetStorageConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	previewPath := mediaasset.PreviewPath(sourceRuntimeStorage.LocalPreviewDir, "video-1")
+	previewReference := "nested/" + mediaasset.PreviewFilename("video-1")
+	previewPath := filepath.Join(sourceRuntimeStorage.LocalPreviewDir, previewReference)
+	if err := os.MkdirAll(filepath.Dir(previewPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(previewPath, []byte("restored-preview"), 0o644); err != nil {
 		sourceManager.Close()
 		_ = sourceCatalog.Close()
@@ -62,7 +84,7 @@ func TestRestoredPreviewServesWithRelativeTargetStorageConfig(t *testing.T) {
 		DriveID:       "drive-1",
 		FileID:        "file-1",
 		Title:         "Restored video",
-		PreviewLocal:  previewPath,
+		PreviewLocal:  previewReference,
 		PreviewStatus: "ready",
 		PublishedAt:   now,
 		CreatedAt:     now,
@@ -70,6 +92,16 @@ func TestRestoredPreviewServesWithRelativeTargetStorageConfig(t *testing.T) {
 	}); err != nil {
 		sourceManager.Close()
 		_ = sourceCatalog.Close()
+		t.Fatal(err)
+	}
+	scriptPath := filepath.Join(filepath.Dir(sourceRuntimeStorage.LocalPreviewDir), "crawler-scripts", "demo.py")
+	if err := os.MkdirAll(filepath.Dir(scriptPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(scriptPath, []byte("CRAWLER_NAME = 'Restored crawler'\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := sourceCatalog.UpsertDrive(ctx, &catalog.Drive{ID: "crawler", Kind: "scriptcrawler", Name: "Restored crawler", Credentials: map[string]string{"script_file": "demo.py"}}); err != nil {
 		t.Fatal(err)
 	}
 	record := createBackup(t, sourceManager)
@@ -81,7 +113,7 @@ func TestRestoredPreviewServesWithRelativeTargetStorageConfig(t *testing.T) {
 	}
 
 	targetRoot := filepath.Join(root, "target")
-	targetFileConfig := relativeStorageConfig()
+	targetFileConfig := relativeStorageConfig(targetDBDir)
 	targetRuntimeStorage := mustResolveStorage(t, targetFileConfig.Storage, targetRoot)
 	targetConfigPath := filepath.Join(targetRoot, "config.yaml")
 	mustWriteConfig(t, targetConfigPath, targetFileConfig)
@@ -89,6 +121,9 @@ func TestRestoredPreviewServesWithRelativeTargetStorageConfig(t *testing.T) {
 		_ = archive.Close()
 		sourceManager.Close()
 		_ = sourceCatalog.Close()
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(targetRuntimeStorage.DBDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	targetCatalog, err := catalog.Open(targetRuntimeStorage.DBPath)
@@ -114,7 +149,7 @@ func TestRestoredPreviewServesWithRelativeTargetStorageConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	targetArchivePath := filepath.Join(
-		filepath.Dir(targetRuntimeStorage.DBPath),
+		targetRuntimeStorage.DataDir,
 		"backups",
 		archiveName,
 	)
@@ -144,7 +179,7 @@ func TestRestoredPreviewServesWithRelativeTargetStorageConfig(t *testing.T) {
 	if err := targetCatalog.Close(); err != nil {
 		t.Fatal(err)
 	}
-	applied, err := backup.ApplyPendingRestore(filepath.Dir(targetRuntimeStorage.DBPath))
+	applied, err := backup.ApplyPendingRestore(targetRuntimeStorage.DataDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,9 +200,23 @@ func TestRestoredPreviewServesWithRelativeTargetStorageConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantPreviewPath := mediaasset.PreviewPath(targetRuntimeStorage.LocalPreviewDir, "video-1")
+	wantPreviewPath := previewReference
 	if restoredVideo.PreviewLocal != wantPreviewPath {
 		t.Fatalf("restored preview path = %q, want %q", restoredVideo.PreviewLocal, wantPreviewPath)
+	}
+	if changed, err := restoredCatalog.MigrateManagedPaths(ctx, targetRuntimeStorage.LocalPreviewDir); err != nil || changed != 0 {
+		t.Fatalf("restored portable references changed at startup: changed=%d err=%v", changed, err)
+	}
+	crawler, err := restoredCatalog.GetDrive(ctx, "crawler")
+	if err != nil || crawler.Credentials["script_file"] != "demo.py" || crawler.Credentials["script_path"] != "" {
+		t.Fatalf("restored crawler reference = %+v, err=%v", crawler, err)
+	}
+	resolvedScript, err := scriptcrawler.ScriptPath(crawler.Credentials, filepath.Join(filepath.Dir(targetRuntimeStorage.LocalPreviewDir), "crawler-scripts"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if metadata, err := scriptcrawler.ReadMetadata(resolvedScript); err != nil || metadata.Name != "Restored crawler" {
+		t.Fatalf("restored script metadata = %+v, err=%v", metadata, err)
 	}
 	restoredFileConfig, err := config.Load(targetConfigPath)
 	if err != nil {
@@ -205,16 +254,32 @@ func TestRestoredPreviewServesWithRelativeTargetStorageConfig(t *testing.T) {
 	if response.Body.String() != "restored-preview" {
 		t.Fatalf("preview body = %q", response.Body.String())
 	}
+	if targetDBDir != "" {
+		for _, name := range []string{"backups", ".backup-snapshots", ".restore-staging", "previews"} {
+			if _, err := os.Stat(filepath.Join(targetRuntimeStorage.DBDir, name)); !os.IsNotExist(err) {
+				t.Fatalf("restore placed non-database data in db_dir: %s, err=%v", name, err)
+			}
+		}
+		if _, err := os.Stat(filepath.Join(targetRuntimeStorage.DataDir, "video-site.db")); !os.IsNotExist(err) {
+			t.Fatalf("restore created database outside db_dir: %v", err)
+		}
+	}
 }
 
-func relativeStorageConfig() *config.Config {
+func relativeStorageConfig(dbDir string) *config.Config {
+	dbRoot := dbDir
+	if dbRoot == "" {
+		dbRoot = "./data"
+	}
 	return &config.Config{
 		Server: config.Server{
 			Listen: "127.0.0.1:9192",
 		},
 		Storage: config.Storage{
-			DBPath:          "./data/video-site.db",
-			LocalPreviewDir: "./data/previews",
+			DataDir:         "./data",
+			DBDir:           dbDir,
+			DBPath:          filepath.Join(dbRoot, "video-site.db"),
+			LocalPreviewDir: filepath.Join("data", "previews"),
 		},
 	}
 }

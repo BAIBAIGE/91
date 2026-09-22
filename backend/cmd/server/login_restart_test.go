@@ -33,7 +33,8 @@ func TestServerRestartClearsLoginProtection(t *testing.T) {
 	cfg := config.Config{
 		Server: config.Server{Listen: "127.0.0.1:0"},
 		Storage: config.Storage{
-			DBPath:          filepath.Join(root, "data", "catalog.db"),
+			DataDir:         filepath.Join(root, "data"),
+			DBPath:          filepath.Join(root, "data", "video-site.db"),
 			LocalPreviewDir: filepath.Join(root, "data", "previews"),
 		},
 		Logging: config.Logging{FileEnabled: &fileLogging},

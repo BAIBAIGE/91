@@ -85,7 +85,7 @@ func Compute(
 			}
 		}
 
-		if previewPath, ok := pathWithin(localDir, ref.PreviewLocal); ok {
+		if previewPath, ok := localpath.Managed(localDir, ref.PreviewLocal); ok {
 			if size, exists, err := regularFileSize(previewPath); err != nil {
 				return Usage{}, err
 			} else if exists {

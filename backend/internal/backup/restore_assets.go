@@ -87,7 +87,9 @@ func collectPreviewAssetPaths(
 		candidates = append(candidates, mediaasset.ThumbnailAssetPathCandidates(previewRoot, videoID)...)
 		candidates = append(candidates, mediaasset.FrameSignaturePath(previewRoot, videoID))
 		if strings.TrimSpace(previewLocal) != "" {
-			candidates = append(candidates, previewLocal)
+			if absolute, ok := localpath.Managed(previewRoot, previewLocal); ok {
+				candidates = append(candidates, absolute)
+			}
 		}
 		for _, candidate := range candidates {
 			relative, ok := localpath.RelativeWithin(previewRoot, candidate)

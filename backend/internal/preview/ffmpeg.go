@@ -22,6 +22,7 @@ import (
 	"github.com/video-site/backend/internal/applog"
 	"github.com/video-site/backend/internal/catalog"
 	"github.com/video-site/backend/internal/drives"
+	"github.com/video-site/backend/internal/localpath"
 	"github.com/video-site/backend/internal/mediaasset"
 	"github.com/video-site/backend/internal/persistence"
 	"github.com/video-site/backend/internal/streamhttp"
@@ -2080,15 +2081,18 @@ func (w *Worker) process(ctx context.Context, v *catalog.Video) bool {
 		return false
 	}
 
-	removePreviousLocalTeaser(v.PreviewLocal, local)
-	if err := w.Catalog.UpdatePreview(ctx, v.ID, local, "ready"); err != nil {
+	if previous, ok := localpath.Managed(filepath.Dir(local), v.PreviewLocal); ok {
+		removePreviousLocalTeaser(previous, local)
+	}
+	reference := filepath.Base(local)
+	if err := w.Catalog.UpdatePreview(ctx, v.ID, reference, "ready"); err != nil {
 		removePreviousLocalTeaser(local, "")
 		applog.Error(ctx, "Save preview metadata failed: "+v.Title, err, applog.Fields{Component: "preview", DriveID: generationDriveID(w.Drive), VideoID: v.ID, Stage: "save"})
 		return false
 	}
 	if w.OnPreviewReady != nil && v.ThumbnailURL == "" {
 		ready := *v
-		ready.PreviewLocal = local
+		ready.PreviewLocal = reference
 		ready.PreviewStatus = "ready"
 		w.OnPreviewReady(&ready)
 	}

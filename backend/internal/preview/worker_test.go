@@ -220,8 +220,8 @@ func TestPreviewWorkerGeneratesTeaserWithoutReplacingExistingThumbnail(t *testin
 	if got.PreviewStatus != "ready" {
 		t.Fatalf("preview status = %q, want ready", got.PreviewStatus)
 	}
-	if got.PreviewLocal != "/tmp/"+video.ID+".mp4" {
-		t.Fatalf("preview local = %q, want moved teaser path", got.PreviewLocal)
+	if got.PreviewLocal != video.ID+".mp4" {
+		t.Fatalf("preview local = %q, want portable teaser filename", got.PreviewLocal)
 	}
 }
 
@@ -520,14 +520,14 @@ func TestPreviewWorkerRemovesPreviousLocalTeaserAfterNewTeaserIsReady(t *testing
 	if err := os.WriteFile(oldPath, []byte("old teaser"), 0o644); err != nil {
 		t.Fatalf("write old teaser: %v", err)
 	}
-	video.PreviewLocal = oldPath
+	video.PreviewLocal = filepath.Base(oldPath)
 	video.PreviewStatus = "ready"
 	if err := cat.UpsertVideo(ctx, video); err != nil {
 		t.Fatalf("update video: %v", err)
 	}
 
 	gen := &fakeTeaserGenerator{
-		localPath: filepath.Join(t.TempDir(), "new-teaser.mp4"),
+		localPath: filepath.Join(filepath.Dir(oldPath), "new-teaser.mp4"),
 	}
 	drv := &previewFakeDrive{}
 	worker := NewWorker(gen, cat, drv)
@@ -541,8 +541,8 @@ func TestPreviewWorkerRemovesPreviousLocalTeaserAfterNewTeaserIsReady(t *testing
 	if err != nil {
 		t.Fatalf("get video: %v", err)
 	}
-	if got.PreviewLocal != gen.localPath {
-		t.Fatalf("preview local = %q, want %q", got.PreviewLocal, gen.localPath)
+	if got.PreviewLocal != filepath.Base(gen.localPath) {
+		t.Fatalf("preview local = %q, want %q", got.PreviewLocal, filepath.Base(gen.localPath))
 	}
 }
 
@@ -563,8 +563,8 @@ func TestPreviewWorkerNeverCallsDriveUploadOrEnsureDir(t *testing.T) {
 	if got.PreviewStatus != "ready" {
 		t.Fatalf("preview status = %q, want ready", got.PreviewStatus)
 	}
-	if got.PreviewLocal != localPath {
-		t.Fatalf("preview local = %q, want %q", got.PreviewLocal, localPath)
+	if got.PreviewLocal != filepath.Base(localPath) {
+		t.Fatalf("preview local = %q, want %q", got.PreviewLocal, filepath.Base(localPath))
 	}
 	if got.PreviewFileID != "" {
 		t.Fatalf("preview file id = %q, want empty for local-only teaser", got.PreviewFileID)

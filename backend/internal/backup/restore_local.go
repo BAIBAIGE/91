@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/video-site/backend/internal/localpath"
 	"github.com/video-site/backend/internal/mediaasset"
 	"github.com/video-site/backend/internal/videoid"
 )
@@ -412,9 +413,9 @@ func remapLocalPreviewPath(
 	targetPreviewRoot string,
 ) string {
 	for _, root := range []string{sourcePreviewRoot, targetPreviewRoot} {
-		relative, ok := relativeWithin(root, original)
+		relative, ok := localpath.ManagedRelative(root, original)
 		if !ok && root == targetPreviewRoot {
-			relative, ok = relativeWithin(root, rewritten)
+			relative, ok = localpath.ManagedRelative(root, rewritten)
 		}
 		if !ok {
 			continue

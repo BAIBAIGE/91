@@ -29,7 +29,9 @@ func (m *Manager) snapshotSelectedPreviews(
 		candidates = append(candidates, mediaasset.ThumbnailAssetPathCandidates(m.previewPath, videoID)...)
 		candidates = append(candidates, mediaasset.FrameSignaturePath(m.previewPath, videoID))
 		if previewPath := strings.TrimSpace(state.SelectedPreviewPaths[videoID]); previewPath != "" {
-			candidates = append(candidates, previewPath)
+			if absolute, ok := localpath.Managed(m.previewPath, previewPath); ok {
+				candidates = append(candidates, absolute)
+			}
 		}
 		for _, candidate := range candidates {
 			relative, ok := localpath.RelativeWithin(m.previewPath, candidate)

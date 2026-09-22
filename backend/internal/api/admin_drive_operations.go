@@ -9,7 +9,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -48,11 +47,10 @@ func (a *AdminServer) removeImportedCrawlerScript(d *catalog.Drive) (bool, error
 	if d == nil || d.Credentials == nil {
 		return false, nil
 	}
-	scriptPath := strings.TrimSpace(d.Credentials["script_path"])
-	if scriptPath == "" {
+	if !scriptcrawler.IsConfigured(d.Credentials) {
 		return false, nil
 	}
-	scriptAbs, err := filepath.Abs(scriptPath)
+	scriptAbs, err := a.crawlerScriptPath(d.Credentials)
 	if err != nil {
 		return false, err
 	}
@@ -197,6 +195,9 @@ func mergeScriptCrawlerCredentials(existing *catalog.Drive, incoming map[string]
 				merged[key] = value
 			}
 		}
+	}
+	if strings.TrimSpace(incoming["script_path"]) != "" {
+		delete(merged, "script_file")
 	}
 	if !scriptcrawler.IsConfigured(merged) {
 		return nil, fmt.Errorf("脚本爬虫必须填写 script_path")

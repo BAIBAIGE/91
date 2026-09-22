@@ -124,6 +124,8 @@ func (m *Manager) PrepareRestore(ctx context.Context, id string) (ValidationRepo
 	targetConfig := *m.appConfig
 	targetRuntimeConfig := targetConfig
 	targetRuntimeConfig.Storage = config.Storage{
+		DataDir:         m.dataRoot,
+		DBDir:           filepath.Dir(m.dbPath),
 		DBPath:          m.dbPath,
 		LocalPreviewDir: m.previewPath,
 	}
@@ -611,9 +613,9 @@ SELECT id, COALESCE(preview_local, ''), COALESCE(preview_status, ''),
 			if video.previewLocal == "" {
 				previewMissing = true
 			} else {
-				relative, ok := relativeWithin(targetPreviewRoot, rewrittenPreview)
+				relative, ok := localpath.ManagedRelative(targetPreviewRoot, rewrittenPreview)
 				if !ok {
-					relative, ok = relativeWithin(sourcePreviewRoot, video.previewLocal)
+					relative, ok = localpath.ManagedRelative(sourcePreviewRoot, video.previewLocal)
 				}
 				if !ok {
 					previewMissing = true
@@ -640,6 +642,9 @@ SELECT id, COALESCE(preview_local, ''), COALESCE(preview_status, ''),
 			video.thumbnailStatus = "pending"
 			missingCount++
 			report.MissingAssets = appendLimited(report.MissingAssets, fmt.Sprintf("视频 %s 的封面在源备份中不存在，已标记待生成", video.id))
+		}
+		if relative, ok := localpath.ManagedRelative(targetPreviewRoot, rewrittenPreview); ok {
+			rewrittenPreview = relative
 		}
 		if _, err := tx.ExecContext(ctx, `
 UPDATE videos
@@ -808,7 +813,9 @@ type pathRewrite struct{ from, to string }
 
 func rewriteRestoredPath(value string, rewrites []pathRewrite) string {
 	value = strings.TrimSpace(value)
-	if value == "" {
+	if value == "" || !filepath.IsAbs(value) {
+		// Portable file references and other relative strings have no host
+		// directory to rewrite. In particular, never resolve them against CWD.
 		return value
 	}
 	clean := filepath.Clean(value)

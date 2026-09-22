@@ -23,6 +23,7 @@ func newReceiverTestBackupManager(
 	root := t.TempDir()
 	cfg := &config.Config{
 		Storage: config.Storage{
+			DataDir:         root,
 			DBPath:          filepath.Join(root, "video-site.db"),
 			LocalPreviewDir: filepath.Join(root, "previews"),
 		},

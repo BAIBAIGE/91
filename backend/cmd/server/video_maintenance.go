@@ -123,7 +123,7 @@ func localGeneratedPreviewPath(localDir string, v *catalog.Video) (string, bool)
 	if strings.TrimSpace(localDir) == "" {
 		return "", false
 	}
-	clean, ok := localPathWithin(localDir, v.PreviewLocal)
+	clean, ok := localpath.Managed(localDir, v.PreviewLocal)
 	if !ok {
 		return "", false
 	}

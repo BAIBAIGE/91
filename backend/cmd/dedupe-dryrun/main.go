@@ -33,7 +33,7 @@ const durationToleranceSeconds = mediasim.NearDuplicateDurationToleranceSeconds
 
 func main() {
 	dbPath := flag.String("db", "data/video-site.db", "sqlite path")
-	localDir := flag.String("local-dir", "data/previews", "本地预览目录(config storage.local_preview_dir)")
+	localDir := flag.String("local-dir", "data/previews", "本地预览目录(storage.data_dir 下的 previews)")
 	ffmpegPath := flag.String("ffmpeg", "ffmpeg", "ffmpeg 路径")
 	workers := flag.Int("workers", 8, "签名提取并发数")
 	apply := flag.Bool("apply", false, "真正执行：删除重复项（默认只读预演）")
@@ -290,7 +290,7 @@ func deleteDuplicateWithAssets(ctx context.Context, cat *catalog.Catalog, localD
 }
 
 func existingPreviewPath(localDir, path string) (string, bool) {
-	clean, ok := localpath.Within(localDir, path)
+	clean, ok := localpath.Managed(localDir, path)
 	if !ok {
 		return "", false
 	}

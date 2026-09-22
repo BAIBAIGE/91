@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -95,7 +94,7 @@ func runResetPasswordCommand(args []string, in io.Reader, out, errorOut io.Write
 		return fmt.Errorf("locate existing database: %w", err)
 	}
 	check := func() error {
-		if _, err := os.Lstat(backup.PendingMarkerPath(filepath.Dir(storage.DBPath))); err == nil {
+		if _, err := os.Lstat(backup.PendingMarkerPath(storage.DataDir)); err == nil {
 			return errors.New("backup restore is pending; retry after it has completed")
 		} else if !os.IsNotExist(err) {
 			return fmt.Errorf("check pending restore: %w", err)

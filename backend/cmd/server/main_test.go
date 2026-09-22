@@ -47,10 +47,7 @@ func TestLoadApplicationConfigSeparatesFileAndRuntimeStoragePaths(t *testing.T) 
 	configPath := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(configPath, []byte(`
 storage:
-  db_path: "./data/video-site.db"
-  local_preview_dir: "./data/previews"
-logging:
-  directory: "./data/logs"
+  data_dir: "./data"
 `), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -60,11 +57,12 @@ logging:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if fileConfig.Storage.DBPath != "./data/video-site.db" ||
-		fileConfig.Storage.LocalPreviewDir != "./data/previews" {
+	if fileConfig.Storage.DataDir != "./data" ||
+		fileConfig.Storage.DBPath != filepath.Join("data", "video-site.db") ||
+		fileConfig.Storage.LocalPreviewDir != filepath.Join("data", "previews") {
 		t.Fatalf("file storage paths changed: %+v", fileConfig.Storage)
 	}
-	if fileConfig.Logging.Directory != "./data/logs" {
+	if fileConfig.Logging.Directory != filepath.Join("data", "logs") {
 		t.Fatalf("file logging path changed: %+v", fileConfig.Logging)
 	}
 	if runtimeConfig.Storage.DBPath != filepath.Join(workingDir, "data", "video-site.db") ||
@@ -390,7 +388,7 @@ func TestRegisterPreviewWorkerBackfillsPendingWhenGlobalPreviewEnabled(t *testin
 			t.Fatalf("get video: %v", err)
 		}
 		if got.PreviewStatus == "ready" {
-			if got.PreviewLocal != "/tmp/video-1.mp4" {
+			if got.PreviewLocal != "video-1.mp4" {
 				t.Fatalf("preview local = %q, want generated local teaser path", got.PreviewLocal)
 			}
 			return
@@ -2095,7 +2093,7 @@ func TestRegenFailedPreviewsQueuesOnlyFailedVideosForDrive(t *testing.T) {
 			t.Fatalf("get target failed: %v", err)
 		}
 		if got.PreviewStatus == "ready" {
-			if got.PreviewLocal != "/tmp/target-failed.mp4" {
+			if got.PreviewLocal != "target-failed.mp4" {
 				t.Fatalf("target preview local = %q, want regenerated local teaser path", got.PreviewLocal)
 			}
 			break
@@ -2179,7 +2177,7 @@ func TestEnqueueUploadedVideoQueuesLocalGenerationByDefault(t *testing.T) {
 			t.Fatalf("get video: %v", err)
 		}
 		if got.PreviewStatus == "ready" && got.ThumbnailURL != "" {
-			if got.PreviewLocal != "/tmp/local-upload-video.mp4" {
+			if got.PreviewLocal != "local-upload-video.mp4" {
 				t.Fatalf("preview local = %q, want generated local teaser path", got.PreviewLocal)
 			}
 			if got.ThumbnailURL != "/p/thumb/local-upload-video" {

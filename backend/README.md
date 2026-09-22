@@ -139,7 +139,7 @@ vendor/                     依赖已 vendored，可离线构建
 ```
 config.yaml                 首次启动从 config.example.yaml 复制
 data/video-site.db          SQLite 主库
-data/previews/              预览视频及本地媒体资产根目录（storage.local_preview_dir）
+data/previews/              预览视频及本地媒体资产目录（storage.data_dir 下的 previews）
 data/previews/thumbs/       普通封面
 data/previews/thumbs-shorts-bg/
                             Shorts 按需生成的 96px 预模糊背景封面

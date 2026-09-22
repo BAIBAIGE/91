@@ -72,7 +72,7 @@ func main() {
 	// uses same-directory renames; opening and migrating the restored catalog
 	// below is the commit check. If that check fails, every switched path is
 	// returned to its pre-restore value.
-	dataRoot := filepath.Dir(cfg.Storage.DBPath)
+	dataRoot := cfg.Storage.DataDir
 	_, pendingRestoreStatErr := os.Stat(backup.PendingMarkerPath(dataRoot))
 	pendingRestoreAtStartup := pendingRestoreStatErr == nil
 	appliedRestore, err := backup.ApplyPendingRestore(dataRoot)
@@ -119,7 +119,7 @@ func main() {
 		}
 	}()
 
-	cat, err := catalog.Open(cfg.Storage.DBPath)
+	cat, err := openApplicationCatalog(cfg.Storage)
 	if err != nil {
 		if appliedRestore != nil {
 			if rollbackErr := backup.RollbackAppliedRestore(appliedRestore, err); rollbackErr != nil {
@@ -275,7 +275,7 @@ func main() {
 	defer backupManager.Close()
 	backupTransferManager, err := backuptransfer.New(backuptransfer.Config{
 		Backups: backupManager,
-		RootDir: filepath.Join(filepath.Dir(cfg.Storage.DBPath), "backups", ".peer-transfer"),
+		RootDir: filepath.Join(cfg.Storage.DataDir, "backups", ".peer-transfer"),
 	})
 	if err != nil {
 		log.Fatalf("configure backup transfer service: %v", err)
@@ -545,6 +545,24 @@ func loadApplicationConfig(path, workingDir string) (*config.Config, *config.Con
 	}
 	runtimeConfig.Logging = runtimeLogging
 	return fileConfig, &runtimeConfig, nil
+}
+
+// Convert legacy file references before workers, asset maintenance or HTTP
+// handlers can observe paths tied to the previous deployment directory.
+func openApplicationCatalog(storage config.Storage) (*catalog.Catalog, error) {
+	cat, err := catalog.Open(storage.DBPath)
+	if err != nil {
+		return nil, err
+	}
+	changed, err := cat.MigrateManagedPaths(context.Background(), storage.LocalPreviewDir)
+	if err != nil {
+		_ = cat.Close()
+		return nil, fmt.Errorf("convert managed file references: %w", err)
+	}
+	if changed > 0 {
+		log.Printf("[storage] converted %d catalog records to portable file references", changed)
+	}
+	return cat, nil
 }
 
 func readVersionFile(path string) string {

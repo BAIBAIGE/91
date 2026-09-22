@@ -28,21 +28,22 @@ test("development configuration isolates defaults and preserves edits when the p
   };
   const first = prepareConfig("9192");
   assert.equal(first.server.listen, "127.0.0.1:9192");
-  assert.equal(first.storage.db_path, "./data-dev/video-site.db");
-  assert.equal(first.storage.local_preview_dir, "./data-dev/previews");
-  assert.equal(first.logging.directory, "./data-dev/logs");
+  assert.deepEqual(first.storage, { data_dir: "./data-dev", db_dir: "" });
+  assert.equal(first.logging.directory, undefined);
   assert.equal(first.telegram.enabled, false);
   assert.equal(statSync(path).mode & 0o777, 0o600);
 
   const edited = parseDocument(readFileSync(path, "utf8"));
   edited.commentBefore = " Keep development preferences";
   edited.setIn(["preview", "enabled"], false);
-  edited.setIn(["storage", "db_path"], "./custom-dev/library.db");
+  edited.setIn(["storage", "data_dir"], "./custom-dev");
+  edited.setIn(["storage", "db_dir"], "./fast-dev-db");
   writeFileSync(path, edited.toString());
   const second = prepareConfig("19292");
   assert.equal(second.server.listen, "127.0.0.1:19292");
   assert.equal(second.preview.enabled, false);
-  assert.equal(second.storage.db_path, "./custom-dev/library.db");
+  assert.equal(second.storage.data_dir, "./custom-dev");
+  assert.equal(second.storage.db_dir, "./fast-dev-db");
   assert.match(readFileSync(path, "utf8"), /Keep development preferences/);
   assert.equal(readFileSync(productionPath, "utf8"), production);
 });

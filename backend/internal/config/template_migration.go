@@ -28,7 +28,8 @@ func (m *Manager) SyncTemplate() (bool, error) {
 	if err := validateAdminConfigRemoved(data); err != nil {
 		return false, err
 	}
-	if _, err := Parse(data); err != nil {
+	parsed, err := Parse(data)
+	if err != nil {
 		return false, err
 	}
 	// Decode aliases and merge keys before copying values; the new document has
@@ -44,6 +45,9 @@ func (m *Manager) SyncTemplate() (bool, error) {
 	if err := copyConfigValues(template.Content[0], values); err != nil {
 		return false, fmt.Errorf("copy config values: %w", err)
 	}
+	// Old layouts are validated and converted by Parse before their retired
+	// fields are removed. Preserve that root instead of taking the default.
+	setScalarValue(ensureMappingValue(template.Content[0], "storage"), "data_dir", parsed.Storage.DataDir)
 	var out bytes.Buffer
 	encoder := yaml.NewEncoder(&out)
 	encoder.SetIndent(2)
