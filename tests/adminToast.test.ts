@@ -1,13 +1,12 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { Toast, type ToastKind } from "../src/admin/Toast.tsx";
 
 const toastSource = readFileSync(
   new URL("../src/admin/ToastContext.tsx", import.meta.url),
-  "utf8"
-);
-const clipboardSource = readFileSync(
-  new URL("../src/lib/clipboard.ts", import.meta.url),
   "utf8"
 );
 const sharedStateCss = readFileSync(
@@ -29,40 +28,35 @@ function mobileCss(): string {
   return sharedStateCss.slice(start);
 }
 
-test("admin toasts auto-dismiss and copy their text when clicked", () => {
-  assert.match(toastSource, /const TOAST_DISMISS_MS = 2500/);
-  assert.match(toastSource, /const TOAST_MAX_VISIBLE = 2/);
-  assert.match(toastSource, /const TOAST_COPY_SUCCESS_TEXT = "已复制到剪贴板"/);
-  assert.match(toastSource, /const TOAST_COPY_ERROR_TEXT = "复制失败，请手动复制"/);
-  assert.match(toastSource, /copyTextToClipboard\(text\)/);
-  assert.match(clipboardSource, /navigator\.clipboard\?\.writeText/);
-  assert.match(clipboardSource, /return fallbackCopyText\(text\)/);
-  assert.match(clipboardSource, /document\.execCommand\("copy"\)/);
-  assert.match(toastSource, /addToast\(TOAST_COPY_SUCCESS_TEXT,\s*"success",\s*false\)/);
-  assert.match(toastSource, /addToast\(TOAST_COPY_ERROR_TEXT,\s*"error",\s*false\)/);
-  assert.match(toastSource, /t\.copyable\s*\?\s*" is-copyable"\s*:\s*""/);
-  assert.match(toastSource, /onClick=\{t\.copyable \? \(\) => copyToastText\(t\.text\) : undefined\}/);
-  assert.match(toastSource, /aria-label=\{t\.copyable \? `复制提示：\$\{t\.text\}` : undefined\}/);
-  assert.match(toastSource, /event\.key !== "Enter" && event\.key !== " "/);
-  assert.doesNotMatch(toastSource, /onClick=\{\(\) => scheduleDismiss/);
-  assert.doesNotMatch(toastSource, /pinnedToastIDs/);
-  assert.doesNotMatch(toastSource, /isDismissPaused/);
-  assert.doesNotMatch(toastSource, /pinDismiss/);
-  assert.doesNotMatch(toastSource, /className="admin-toast__close"/);
-  assert.doesNotMatch(toastSource, /aria-label="关闭提示"/);
-  assert.doesNotMatch(toastSource, /<X size=/);
-  assert.doesNotMatch(toastSource, /event\.stopPropagation\(\)/);
-  assert.doesNotMatch(toastSource, /onPointerEnter/);
-  assert.doesNotMatch(toastSource, /onPointerLeave/);
+test("toast copy and close actions are separate native buttons", () => {
+  const html = renderToStaticMarkup(createElement(Toast, {
+    toast: { id: 1, kind: "info", text: "任务已提交" },
+    onDismiss: () => assert.fail("Rendering must not dismiss a toast"),
+  }));
+  const buttons = html.match(/<button\b[^>]*>[\s\S]*?<\/button>/g) ?? [];
+  assert.equal(buttons.length, 2);
+  assert.match(buttons[0], /type="button"/);
+  assert.match(buttons[0], /aria-label="复制提示：任务已提交"/);
+  assert.match(buttons[0], /任务已提交<\/span>/);
+  assert.match(buttons[1], /type="button"/);
+  assert.match(buttons[1], /aria-label="关闭提示"/);
+  assert.doesNotMatch(html, /role="button"/);
+  assert.doesNotMatch(html, /tabindex=/);
 });
 
-test("admin toasts keep the newest two visible", () => {
-  assert.match(toastSource, /const visible = withNewToast\.slice\(-TOAST_MAX_VISIBLE\)/);
-  assert.match(toastSource, /const evicted = withNewToast\.slice\(/);
-  assert.match(toastSource, /for \(const item of evicted\) \{\s*forgetToast\(item\);/);
-  assert.match(toastSource, /setToastItems\(visible\)/);
-  assert.match(toastSource, /repeated text is refreshed and moved last/);
-  assert.doesNotMatch(toastSource, /setItems\(\(list\) => \[\.\.\.list,/);
+test("toast messages are escaped and errors have an alert announcement", () => {
+  for (const kind of ["info", "success", "error"] as ToastKind[]) {
+    const html = renderToStaticMarkup(createElement(Toast, {
+      toast: { id: 1, kind, text: '<script>alert("message")</script>' },
+      onDismiss: () => undefined,
+    }));
+    assert.doesNotMatch(html, /<script>/);
+    assert.match(html, /&lt;script&gt;/);
+    assert.equal(html.includes('role="alert"'), kind === "error");
+    assert.match(html, /role="status" aria-live="polite"/);
+    assert.equal((html.match(/<svg\b/g) ?? []).length, 2);
+    assert.equal((html.match(/aria-hidden="true"/g) ?? []).length, 2);
+  }
 });
 
 test("toast item updates keep the context value stable", () => {
@@ -71,25 +65,27 @@ test("toast item updates keep the context value stable", () => {
   assert.doesNotMatch(toastSource, /<ToastCtx\.Provider value=\{\{ show \}\}>/);
 });
 
+test("toast cards use an opaque theme surface for every status", () => {
+  const baseToast = ruleBody(sharedStateCss, ".admin-toast");
+  assert.match(baseToast, /background\s*:\s*var\(--bg-elevated\)/);
+  assert.match(baseToast, /color\s*:\s*var\(--text-strong\)/);
+  for (const kind of ["success", "error"]) {
+    const variant = ruleBody(sharedStateCss, `.admin-toast.is-${kind}`);
+    assert.doesNotMatch(variant, /(?:background|color)\s*:/);
+  }
+});
+
 test("admin toasts show long messages without internal scrolling", () => {
   const baseToast = ruleBody(sharedStateCss, ".admin-toast");
   const baseText = ruleBody(sharedStateCss, ".admin-toast__text");
-  const mobileToast = ruleBody(mobileCss(), ".admin-toast");
+  const content = ruleBody(sharedStateCss, ".admin-toast__content");
+  const mobileStack = ruleBody(mobileCss(), ".admin-toast-stack");
 
-  assert.match(baseToast, /max-width\s*:\s*min\(520px,\s*calc\(100vw - 48px\)\)/);
-  assert.match(baseToast, /padding\s*:\s*14px\s+18px/);
-  assert.match(baseToast, /position\s*:\s*relative/);
-  assert.match(baseToast, /overflow-wrap\s*:\s*anywhere/);
-  assert.match(baseToast, /touch-action\s*:\s*manipulation/);
-  assert.doesNotMatch(baseToast, /cursor\s*:\s*pointer/);
-  assert.match(ruleBody(sharedStateCss, ".admin-toast.is-copyable"), /cursor\s*:\s*pointer/);
-  assert.match(baseText, /display\s*:\s*block/);
-  assert.doesNotMatch(sharedStateCss, /\.admin-toast__close/);
-  assert.match(mobileToast, /max-width\s*:\s*100%/);
-  assert.match(mobileToast, /text-align\s*:\s*left/);
+  assert.match(baseText, /overflow-wrap\s*:\s*anywhere/);
+  assert.match(baseText, /white-space\s*:\s*pre-wrap/);
+  assert.match(content, /min-width\s*:\s*0/);
+  assert.match(mobileStack, /width\s*:\s*auto/);
   assert.doesNotMatch(baseToast, /max-height/);
   assert.doesNotMatch(baseText, /max-height/);
   assert.doesNotMatch(baseText, /overflow-y\s*:\s*auto/);
-  assert.doesNotMatch(mobileToast, /max-height/);
-  assert.doesNotMatch(mobileCss(), /\.admin-toast__text\s*\{/);
 });
