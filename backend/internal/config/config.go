@@ -314,7 +314,7 @@ func Parse(data []byte) (*Config, error) {
 
 func (c *Config) applyDefaults() error {
 	if c.Server.Listen == "" {
-		c.Server.Listen = ":8080"
+		c.Server.Listen = "0.0.0.0:9191"
 	}
 	if c.Storage.DBPath == "" {
 		c.Storage.DBPath = "./data/video-site.db"

@@ -9,7 +9,7 @@ import {
   gzipSync,
 } from "node:zlib";
 
-const backendTarget = "http://127.0.0.1:9192";
+const backendTarget = `http://127.0.0.1:${process.env.BACKEND_PORT || "9192"}`;
 const backendProxy: Record<string, ProxyOptions> = {
   "/api": { target: backendTarget, xfwd: true },
   "/admin/api": { target: backendTarget, xfwd: true },
@@ -87,11 +87,13 @@ export default defineConfig({
   server: {
     host: "0.0.0.0",
     port: 9191,
+    strictPort: true,
     proxy: backendProxy,
   },
   preview: {
     host: "0.0.0.0",
     port: 9191,
+    strictPort: true,
     proxy: backendProxy,
   },
 });

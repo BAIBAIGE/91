@@ -6,7 +6,27 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/video-site/backend"
 )
+
+func TestServerListenDefaultsMatchDeploymentTemplate(t *testing.T) {
+	for _, data := range [][]byte{[]byte("{}"), []byte("server: {listen: ''}"), backend.ConfigTemplate()} {
+		cfg, err := Parse(data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.Server.Listen != "0.0.0.0:9191" {
+			t.Fatalf("default listener = %q", cfg.Server.Listen)
+		}
+	}
+	for _, address := range []string{"127.0.0.1:9192", "0.0.0.0:9999", ":8080"} {
+		cfg, err := Parse([]byte("server: {listen: '" + address + "'}"))
+		if err != nil || cfg.Server.Listen != address {
+			t.Fatalf("explicit listener %q was not preserved: %+v %v", address, cfg, err)
+		}
+	}
+}
 
 func TestLoadDefaultScannerVideoExtensionsIncludeSTRM(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")

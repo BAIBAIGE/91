@@ -5,8 +5,8 @@
 
 # 服务：重启生效。
 server:
-  # 监听地址；本地开发需与 Vite 代理端口一致。
-  listen: "127.0.0.1:9192"
+  # 网站和 API 的监听地址，默认对外提供 9191 端口；start.sh 使用独立开发配置。
+  listen: "0.0.0.0:9191"
   # CORS 白名单；同源部署留空，跨源部署填写完整 Origin，如 https://video.example.com。
   allowed_origins: []
 
