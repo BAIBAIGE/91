@@ -1,101 +1,95 @@
-# 首次启动时用于创建 config.yaml；升级启动时按当前模板重建，保留同名配置项的已有值。
-# 字段、顺序和注释以当前模板为准；调整设置请修改实际配置或使用配置面板。
-# 热更新：保存后自动应用。重启生效：保存后需重启网站服务。
-# 更换路径或地址时，需自行迁移数据、调整挂载和端口映射。
+# 首次启动时用于创建 config.yaml；升级启动时按当前模板重建，保留同名配置项的已有值
+# 热更新：保存后自动应用；重启生效：保存后需重启网站服务
 
-# 服务：重启生效。
+# 服务：重启生效
 server:
-  # 网站和 API 的监听地址，默认对外提供 9191 端口；start.sh 使用独立开发配置。
+  # 网站和 API 的监听地址，默认对外提供 9191 端口；start.sh 使用独立开发配置
   listen: "0.0.0.0:9191"
-  # CORS 白名单；同源部署留空，跨源部署填写完整 Origin，如 https://video.example.com。
+  # CORS 白名单；同源部署留空，跨源部署填写完整 Origin，如 https://video.example.com
   allowed_origins: []
 
-# 存储：重启生效；更换目录前需停服迁移数据。
+# 存储：重启生效
 storage:
-  # SQLite 数据库文件。
+  # SQLite 数据库文件
   db_path: "./data/video-site.db"
-  # 封面和预览目录；其父目录同时用于存放上传文件、临时文件和爬虫数据。
+  # 封面和预览目录；其父目录同时用于存放上传文件、临时文件和爬虫数据
   local_preview_dir: "./data/previews"
 
-# 日志：重启生效。
+# 日志：重启生效
 logging:
-  # 是否将运行日志写入文件。
+  # 是否将运行日志写入文件
   file_enabled: true
   directory: "./data/logs"
-  # 单文件上限和总量上限（MiB）；超限后轮转或清理最旧日志。
+  # 单文件上限和总量上限（MiB）；超限后轮转或清理最旧日志
   max_file_size_mb: 5
   max_total_size_mb: 30
 
-# 扫描：重启生效；定时扫描由 nightly 调度，递归不限深度。
+# 扫描：重启生效；定时扫描由 nightly 调度，递归不限深度
 scanner:
-  # 扫描的文件扩展名。
+  # 扫描的文件扩展名
   video_extensions: [".mp4", ".mkv", ".mov", ".webm", ".avi", ".strm"]
 
-# 定时任务：热更新，影响后续调度，不中断正在执行的任务。
+# 定时任务：热更新，影响后续调度，不中断正在执行的任务
 nightly:
-  # 停用自动调度；手动执行不受影响。
+  # 停用自动调度；手动执行不受影响
   disabled: false
-  # 每日启动时间（HH:mm）和任务时区（IANA 名称）。
+  # 每日启动时间（HH:mm）和任务时区（IANA 名称）
   start_time: "01:00"
   timezone: "Asia/Shanghai"
 
-# 标签：热更新。
+# 标签：热更新
 tags:
-  # 启用内置标签包。
+  # 启用内置标签包
   builtin_pack_enabled: true
 
-# 媒体生成：热更新；各类并发数独立，所有来源共享，范围 1–5。
+# 媒体生成：热更新；各类并发数独立，所有来源共享，范围 1–5
 generation:
   thumbnail_concurrency: 1
   preview_concurrency: 1
   fingerprint_concurrency: 1
 
-# 预览：enabled 热更新，其余字段重启后用于后续生成。
+# 预览：enabled 热更新，其余字段重启后用于后续生成
 preview:
-  # 控制预览生成和卡片预览；封面不受影响。
+  # 控制预览生成和卡片预览；封面不受影响
   enabled: true
-  # 已安装的 ffmpeg / ffprobe 命令名或绝对路径。
+  # 已安装的 ffmpeg / ffprobe 命令名或绝对路径
   ffmpeg_path: "ffmpeg"
   ffprobe_path: "ffprobe"
-  # 单个 ffmpeg 进程的线程数，范围 1–16。
+  # 单个 ffmpeg 进程的线程数，范围 1–16
   ffmpeg_threads: 1
   # 预览宽度（像素）；已有预览不会自动重新生成。
   width: 480
 
-# 视频中转：重启生效。
+# 视频中转：重启生效
 proxy:
-  # 允许播放器强制请求服务端中转；关闭后，支持直链的网盘仍使用跳转。
+  # 允许播放器强制请求服务端中转；关闭后，支持直链的网盘仍使用跳转
   allow_forced_relay: true
 
-# 下载：重启生效。
+# 下载：重启生效
 remote_upload:
-  # 直链和 Telegram 导入保留的磁盘空间（字节），默认 1 GiB。
+  # 直链和 Telegram 导入保留的磁盘空间（字节），默认 1 GiB
   disk_reserve_bytes: 1073741824
-  # 直链下载正文连续无数据的超时时间（秒）。
+  # 直链下载正文连续无数据的超时时间（秒）
   idle_timeout_seconds: 120
 
-# Telegram：热更新，接入设置变更后重建接收器，下载任务会等待重连后重试。
-# 连接独立部署的 Local Bot API 服务；保存后请在 Telegram 页面确认连接状态。
-# 连接地址和数据目录由 Compose 自动确定，修改部署配置后需重启相关服务。
-# API ID/API Hash 由独立 Bot API 服务的部署配置管理。
+# Telegram：热更新
 telegram:
-  # 启用需填写 Bot Token；关闭只停止本站接收和导入，不控制 Bot API 进程。
+  # 启用需填写 Bot Token；关闭只停止本站接收和导入，不控制 Bot API 进程
   enabled: false
-  # BotFather 提供的机器人 Token。
+  # BotFather 提供的机器人 Token
   bot_token: ""
-  # 允许发送视频的用户 ID；留空时仅响应 /id 等引导消息。
+  # 允许发送视频的用户 ID；留空时仅响应 /id 等引导消息
   allowed_user_ids: []
-  # 选填，用于生成机器人回复中的视频链接。
+  # 选填，用于生成机器人回复中的视频链接
   site_base_url: ""
-  # 单文件上限（字节）；消息未提供有效大小或已超限时，拒绝下载。
+  # 单文件上限（字节）；消息未提供有效大小或已超限时，拒绝下载
   max_file_size_bytes: 4294967296
-  # 待处理任务上限、文件获取超时（秒）。
+  # 待处理任务上限、文件获取超时（秒）
   max_pending_jobs: 100
   fetch_timeout_seconds: 1800
-  # 后续转存任务使用的网盘和相对目录；网盘留空时仅保存到本地。
-  # 转存沿用 nightly 调度，保存不会立即执行转存。
+  # 后续转存任务使用的网盘和相对目录；网盘留空时仅保存到本地
+  # 转存沿用 nightly 调度，保存不会立即执行转存
   upload_drive_id: ""
   upload_directory: "Telegram"
-  # 仅用于 TG 网盘转存，支持 HTTP、HTTPS、SOCKS5、SOCKS5H，可含用户名和密码。
-  # 留空使用默认网络连接（包括环境代理）；修改后从下一次转存任务生效。
+  # 仅用于 TG 网盘转存，支持 HTTP、HTTPS、SOCKS5、SOCKS5H
   upload_proxy: ""
