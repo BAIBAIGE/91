@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { parse } from "yaml";
 
 const packageJson = JSON.parse(
   readFileSync(new URL("../package.json", import.meta.url), "utf8")
@@ -49,8 +50,8 @@ test("container and release builds use supported Node and run checks", () => {
   assert.match(dockerfile, /^COPY package\.json package-lock\.json \.npmrc \.\/$/m);
   assert.match(dockerWorkflow, /node-version: "24"/);
   assert.match(releaseWorkflow, /node-version: "24"/);
-  assert.match(
-    dockerWorkflow,
-    /run: npm run check[\s\S]*?uses: docker\/build-push-action@v7/
-  );
+  const jobs = parse(dockerWorkflow).jobs;
+  assert.ok(jobs.prepare.steps.some((step: { run?: string }) => step.run === "npm run check"));
+  assert.equal(jobs.build.needs, "prepare", "Image builds must wait for frontend checks");
+  assert.deepEqual(jobs.publish.needs, ["prepare", "build"], "Publishing must wait for both architectures");
 });
