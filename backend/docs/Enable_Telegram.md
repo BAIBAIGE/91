@@ -1,5 +1,19 @@
 # `Telegram` - `TG Bot API` - `91` 的关系
 
+```mermaid
+flowchart LR
+    TG["Telegram<br/>用户向机器人发送视频"]
+    subgraph SERVER["你的服务器"]
+        API["TG Bot API"]
+        FILES[("共享视频目录")]
+        SITE["91<br/>导入、管理、播放"]
+    end
+    TG -->|消息与视频| API
+    SITE -->|获取消息、请求下载| API
+    API -->|下载视频| FILES
+    FILES -->|读取视频| SITE
+```
+
 接入 `Telegram` 需要部署一个 `TG Bot API` 服务，因为 `Telegram` 公共 Bot API 下载文件最多支持 20 MB
 
 # 接入流程
