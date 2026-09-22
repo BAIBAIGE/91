@@ -42,6 +42,15 @@ type Props = {
   collection: VideoCollectionSummary;
 };
 
+// TypeScript's DOM declarations do not yet include this browser API.
+type SheetCloseWatcher = EventTarget & { destroy(): void };
+type SheetCloseWatcherConstructor = new () => SheetCloseWatcher;
+
+function getCloseWatcher(): SheetCloseWatcherConstructor | undefined {
+  return (window as Window & { CloseWatcher?: SheetCloseWatcherConstructor })
+    .CloseWatcher;
+}
+
 type SheetDragState = {
   active: boolean;
   pointerId: number;
@@ -95,7 +104,9 @@ export function MobileVideoCollection({ videoId, collection }: Props) {
   const navigate = useNavigate();
   const location = useLocation();
   const locationState = asRouterState(location.state);
-  const open = collectionSheetVideoId(locationState) === videoId;
+  const historyOpen = collectionSheetVideoId(locationState) === videoId;
+  const [nativeOpenKey, setNativeOpenKey] = useState<string | null>(null);
+  const open = historyOpen || nativeOpenKey === location.key;
   const { data, loading, error, retry } = useLazyVideoCollection(
     videoId,
     open,
@@ -109,7 +120,7 @@ export function MobileVideoCollection({ videoId, collection }: Props) {
   const listRef = useRef<HTMLUListElement | null>(null);
   const currentItemRef = useRef<HTMLLIElement | null>(null);
   const dismissTimerRef = useRef<number | null>(null);
-  const historyClosePendingRef = useRef(false);
+  const closePendingRef = useRef(false);
   const dragRef = useRef<SheetDragState>({
     active: false,
     pointerId: -1,
@@ -143,12 +154,12 @@ export function MobileVideoCollection({ videoId, collection }: Props) {
     };
   }, []);
 
-  // A browser/system back action changes the history-backed open state without
-  // calling closeSheet. Cancel any pending gesture dismissal so its old timer
-  // cannot navigate back a second time after the sheet has already closed.
+  // Navigation can close the sheet without calling closeSheet. Cancel any
+  // pending dismissal so its old timer cannot navigate back a second time.
   useEffect(() => {
-    historyClosePendingRef.current = false;
+    closePendingRef.current = false;
     if (open) return;
+    setNativeOpenKey(null);
     if (dismissTimerRef.current !== null) {
       window.clearTimeout(dismissTimerRef.current);
       dismissTimerRef.current = null;
@@ -165,6 +176,18 @@ export function MobileVideoCollection({ videoId, collection }: Props) {
     if (!open) return;
 
     const focusTimer = window.setTimeout(() => closeRef.current?.focus(), 0);
+    // A native close request consumes Android back before Chrome starts a
+    // history-navigation animation. Do not add a history entry in this mode.
+    const CloseWatcher = getCloseWatcher();
+    if (!historyOpen && CloseWatcher) {
+      const watcher = new CloseWatcher();
+      watcher.addEventListener("close", () => closeSheet());
+      return () => {
+        window.clearTimeout(focusTimer);
+        watcher.destroy();
+      };
+    }
+
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       event.preventDefault();
@@ -175,14 +198,14 @@ export function MobileVideoCollection({ videoId, collection }: Props) {
       window.clearTimeout(focusTimer);
       document.removeEventListener("keydown", handleKeyDown);
     };
-  }, [open]);
+  }, [historyOpen, open]);
 
   // CSS hides the feature above the mobile breakpoint. Also close an already
   // open sheet after rotation/resizing so its document scroll lock is released.
   useEffect(() => {
     const media = window.matchMedia("(max-width: 768px)");
     const handleChange = () => {
-      if (!media.matches && open) closeSheet(false);
+      if (!media.matches && open) closeSheet(false, false);
     };
     media.addEventListener("change", handleChange);
     return () => media.removeEventListener("change", handleChange);
@@ -327,6 +350,10 @@ export function MobileVideoCollection({ videoId, collection }: Props) {
 
   function openSheet() {
     if (open) return;
+    if (getCloseWatcher()) {
+      setNativeOpenKey(location.key);
+      return;
+    }
     navigate(routeToPath(location), {
       state: {
         ...locationState,
@@ -353,18 +380,40 @@ export function MobileVideoCollection({ videoId, collection }: Props) {
     }
   }
 
-  function closeSheet(restoreFocus = true) {
-    if (!open || historyClosePendingRef.current) return;
-    historyClosePendingRef.current = true;
+  function closeSheet(restoreFocus = true, animate = true) {
+    if (!open || closePendingRef.current) return;
+    closePendingRef.current = true;
     if (dismissTimerRef.current !== null) {
       window.clearTimeout(dismissTimerRef.current);
       dismissTimerRef.current = null;
     }
     releaseDragCapture();
-    navigate(-1);
-    if (restoreFocus) {
-      window.setTimeout(() => triggerRef.current?.focus(), 0);
+    const finishClose = () => {
+      dismissTimerRef.current = null;
+      if (historyOpen) navigate(-1);
+      else setNativeOpenKey(null);
+      if (restoreFocus) {
+        window.setTimeout(() => triggerRef.current?.focus(), 0);
+      }
+    };
+    const sheet = sheetRef.current;
+    if (!animate || !sheet) {
+      finishClose();
+      return;
     }
+
+    sheet.classList.remove("is-entering", "is-dragging");
+    // Commit the current position before animating, including a released drag.
+    void sheet.offsetHeight;
+    sheet.classList.add("is-dismissing");
+    sheet.style.setProperty(
+      "--vd-collection-sheet-drag-y",
+      `${sheet.offsetHeight + 24}px`
+    );
+    dismissTimerRef.current = window.setTimeout(
+      finishClose,
+      SHEET_DISMISS_ANIMATION_MS
+    );
   }
 
   function beginSheetDragAt(
@@ -373,7 +422,7 @@ export function MobileVideoCollection({ videoId, collection }: Props) {
     surface: HTMLDivElement | null
   ) {
     const sheet = sheetRef.current;
-    if (!sheet || dragRef.current.active) return;
+    if (!sheet || dragRef.current.active || closePendingRef.current) return;
     dragRef.current = {
       active: true,
       pointerId,
@@ -433,15 +482,7 @@ export function MobileVideoCollection({ videoId, collection }: Props) {
       return;
     }
 
-    sheet.classList.add("is-dismissing");
-    sheet.style.setProperty(
-      "--vd-collection-sheet-drag-y",
-      `${sheetHeight + 24}px`
-    );
-    dismissTimerRef.current = window.setTimeout(() => {
-      dismissTimerRef.current = null;
-      closeSheet();
-    }, SHEET_DISMISS_ANIMATION_MS);
+    closeSheet();
   }
 
   function beginSheetDrag(event: ReactPointerEvent<HTMLDivElement>) {
@@ -563,6 +604,7 @@ export function MobileVideoCollection({ videoId, collection }: Props) {
                       video={video}
                       current={current}
                       navigationState={detailNavigationState}
+                      replaceHistory={historyOpen}
                       onSelect={(event) => {
                         if (!current) return;
                         event.preventDefault();
@@ -610,12 +652,13 @@ type CollectionItemProps = {
   video: VideoCollectionItem;
   current: boolean;
   navigationState: VideoDetailNavigationState;
+  replaceHistory: boolean;
   onSelect: (event: React.MouseEvent<HTMLAnchorElement>) => void;
 };
 
 const CollectionItem = forwardRef<HTMLLIElement, CollectionItemProps>(
   function CollectionItem(
-    { video, current, navigationState, onSelect },
+    { video, current, navigationState, replaceHistory, onSelect },
     forwardedRef
   ) {
     const [previewState, setPreviewState] = useState<PreviewState>("idle");
@@ -750,7 +793,7 @@ const CollectionItem = forwardRef<HTMLLIElement, CollectionItemProps>(
       >
         <Link
           to={video.href}
-          replace
+          replace={replaceHistory}
           state={navigationState}
           className="vd-collection-item__link"
           aria-current={current ? "page" : undefined}

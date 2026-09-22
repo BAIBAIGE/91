@@ -410,11 +410,23 @@ test("mobile collection uses an accessible scroll-locked bottom sheet", () => {
   assert.match(componentSource, /aria-current=\{current \? "page" : undefined\}/);
 });
 
-test("mobile collection sheet is one browser-history layer", () => {
+test("mobile collection uses native close requests with a history fallback", () => {
   assert.match(componentSource, /useNavigate\(\)/);
   assert.match(
     componentSource,
-    /const open = collectionSheetVideoId\(locationState\) === videoId/
+    /const historyOpen = collectionSheetVideoId\(locationState\) === videoId/
+  );
+  assert.match(
+    componentSource,
+    /const open = historyOpen \|\| nativeOpenKey === location\.key/
+  );
+  assert.match(
+    componentSource,
+    /if \(getCloseWatcher\(\)\) \{\s*setNativeOpenKey\(location\.key\);\s*return;/
+  );
+  assert.match(
+    componentSource,
+    /if \(!historyOpen && CloseWatcher\) \{[\s\S]*?new CloseWatcher\(\)[\s\S]*?watcher\.addEventListener\("close", \(\) => closeSheet\(\)\)[\s\S]*?watcher\.destroy\(\)/
   );
   assert.match(
     componentSource,
@@ -422,7 +434,7 @@ test("mobile collection sheet is one browser-history layer", () => {
   );
   assert.match(
     componentSource,
-    /function closeSheet\([\s\S]*?navigate\(-1\)/
+    /function closeSheet\([\s\S]*?if \(historyOpen\) navigate\(-1\);\s*else setNativeOpenKey\(null\)/
   );
   assert.match(
     componentSource,
@@ -430,12 +442,15 @@ test("mobile collection sheet is one browser-history layer", () => {
   );
   assert.match(
     componentSource,
-    /<Link\s+to=\{video\.href\}\s+replace\s+state=\{navigationState\}/
+    /replaceHistory=\{historyOpen\}/
   );
-  assert.doesNotMatch(componentSource, /setOpen\(/);
+  assert.match(
+    componentSource,
+    /<Link\s+to=\{video\.href\}\s+replace=\{replaceHistory\}\s+state=\{navigationState\}/
+  );
 });
 
-test("browser back closes the collection layer before leaving the video", async () => {
+test("history fallback closes the collection layer before leaving the video", async () => {
   const router = createMemoryRouter([{ path: "*", element: null }], {
     initialEntries: [
       "/list",
@@ -463,7 +478,7 @@ test("browser back closes the collection layer before leaving the video", async 
   }
 });
 
-test("selecting another collection item replaces the open sheet layer", async () => {
+test("selecting another collection item replaces the fallback history layer", async () => {
   const router = createMemoryRouter([{ path: "*", element: null }], {
     initialEntries: [
       "/list",
