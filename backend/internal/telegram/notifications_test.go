@@ -35,6 +35,17 @@ func TestProgressNotificationEditsOriginalAndSkipsUnchangedContent(t *testing.T)
 		if err := json.NewDecoder(req.Body).Decode(&input); err != nil {
 			t.Error(err)
 		}
+		if input["parse_mode"] != "HTML" {
+			t.Errorf("missing HTML parse mode: %+v", input)
+		}
+		if filepath.Base(req.URL.Path) == "sendMessage" {
+			reply, ok := input["reply_parameters"].(map[string]any)
+			if !ok || reply["message_id"] != float64(r.MessageID) || reply["allow_sending_without_reply"] != true {
+				t.Errorf("notification is not linked to the original video: %+v", input)
+			}
+		} else if _, ok := input["reply_parameters"]; ok {
+			t.Errorf("edit request contains send-only reply parameters: %+v", input)
+		}
 		id, _ := input["message_id"].(float64)
 		sent <- sentMessage{filepath.Base(req.URL.Path), input["text"].(string), id}
 		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "result": map[string]int{"message_id": 51}})
@@ -90,6 +101,71 @@ func TestProgressNotificationEditsOriginalAndSkipsUnchangedContent(t *testing.T)
 	final := <-sent
 	if final.method != "editMessageText" || final.id != 51 || !strings.Contains(final.text, "保存失败") {
 		t.Fatalf("final notification=%+v", final)
+	}
+}
+
+func TestDeletedNotificationIsResentWithFormattingAndReplyContext(t *testing.T) {
+	s, cat := testService(t)
+	ctx := context.Background()
+	if err := s.accept(ctx, videoUpdate(1, 42)); err != nil {
+		t.Fatal(err)
+	}
+	receipts, err := cat.PendingTelegramReceipts(ctx, s.BotID())
+	if err != nil || len(receipts) != 1 {
+		t.Fatalf("receipts=%v err=%v", receipts, err)
+	}
+	r := receipts[0]
+	r.ReplyID = 51
+	if err := cat.FailRemoteUploadJob(ctx, r.JobID, "读取 <video> 失败"); err != nil {
+		t.Fatal(err)
+	}
+	type request struct {
+		method string
+		body   map[string]any
+	}
+	sent := make(chan request, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		var input map[string]any
+		if err := json.NewDecoder(req.Body).Decode(&input); err != nil {
+			t.Error(err)
+		}
+		method := filepath.Base(req.URL.Path)
+		sent <- request{method, input}
+		if method == "editMessageText" {
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": false, "error_code": 400})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "result": map[string]int{"message_id": 52}})
+	}))
+	defer server.Close()
+	s.notifyOne(ctx, &client{base: server.URL, token: "123:token", http: server.Client()}, r)
+	if len(sent) != 2 {
+		t.Fatalf("expected an edit followed by a resend, got %d requests", len(sent))
+	}
+	edit, resend := <-sent, <-sent
+	if edit.method != "editMessageText" || edit.body["message_id"] != float64(51) || resend.method != "sendMessage" {
+		t.Fatalf("unexpected delivery sequence: %+v %+v", edit, resend)
+	}
+	if _, exists := resend.body["message_id"]; exists {
+		t.Fatal("resend retained the deleted message ID")
+	}
+	reply, ok := resend.body["reply_parameters"].(map[string]any)
+	if !ok || reply["message_id"] != float64(r.MessageID) || reply["allow_sending_without_reply"] != true {
+		t.Fatalf("resend lost the original video context: %+v", resend.body)
+	}
+	if resend.body["parse_mode"] != "HTML" || resend.body["text"] != edit.body["text"] {
+		t.Fatalf("resend lost formatting: %+v", resend.body)
+	}
+	if plain := assertValidMessage(t, resend.body["text"].(string)); !strings.Contains(plain, "读取 <video> 失败") {
+		t.Fatalf("error text changed: %s", plain)
+	}
+	pending, err := cat.PendingTelegramReceipts(ctx, s.BotID())
+	if err != nil || len(pending) != 0 {
+		t.Fatalf("successful resend remains pending: %v %v", pending, err)
+	}
+	job, err := cat.GetRemoteUploadJob(ctx, r.JobID)
+	if err != nil || job.State != catalog.RemoteUploadFailed {
+		t.Fatalf("resend changed the import outcome: %+v %v", job, err)
 	}
 }
 

@@ -5,8 +5,6 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
-	"net/url"
-	"strings"
 	"time"
 
 	"github.com/video-site/backend/internal/catalog"
@@ -38,36 +36,18 @@ func (s *Service) notify(ctx context.Context) {
 	}
 }
 func (s *Service) notifyOne(ctx context.Context, c *client, r catalog.TelegramReceipt) {
-	body, state := r.Response, "replied"
-	href := ""
+	message, state := renderReceiptMessage(r), "replied"
 	if r.JobID != "" {
 		j, err := s.cat.GetRemoteUploadJob(ctx, r.JobID)
 		if err != nil {
 			return
 		}
-		title := j.ResolvedTitle
-		if title == "" {
-			title = j.RequestedTitle
-		}
+		message = renderImportMessage(j, s.cfg.SiteBaseURL)
 		state = j.State
-		switch j.State {
-		case catalog.RemoteUploadCompleted:
-			body = "已保存 · " + title + "\n封面和预览将在后台生成。"
-			if j.CompletedVideoID != "" && s.cfg.SiteBaseURL != "" {
-				href = strings.TrimRight(s.cfg.SiteBaseURL, "/") + "/video/" + url.PathEscape(j.CompletedVideoID)
-			}
-		case catalog.RemoteUploadFailed:
-			body = "保存失败：" + j.ErrorMessage + "\n可在后台重试。"
-		case catalog.RemoteUploadCanceled:
-			body = "保存任务已取消。"
-		default:
-			body = importProgressText(j) + " · " + title
-		}
-		body += "\n任务 " + j.ID
 		if !j.Terminal() {
 			// Persist the rendered content identity so restarts and unchanged
 			// progress do not cause duplicate edits.
-			state = fmt.Sprintf("progress:%x", sha256.Sum256([]byte(body)))
+			state = fmt.Sprintf("progress:%x", sha256.Sum256([]byte(message.text)))
 		}
 	}
 	if r.Delivered == state {
@@ -75,14 +55,17 @@ func (s *Service) notifyOne(ctx context.Context, c *client, r catalog.TelegramRe
 		_ = s.cat.SaveTelegramNotification(ctx, r, r.ReplyID, state, 0)
 		return
 	}
-	request := map[string]any{"chat_id": r.ChatID, "text": body, "link_preview_options": map[string]bool{"is_disabled": true}}
-	if href != "" {
-		request["reply_markup"] = map[string]any{"inline_keyboard": [][]map[string]string{{{"text": "打开视频", "url": href}}}}
+	request := map[string]any{"chat_id": r.ChatID, "text": message.text, "parse_mode": "HTML", "link_preview_options": map[string]bool{"is_disabled": true}}
+	if message.videoURL != "" {
+		request["reply_markup"] = map[string]any{"inline_keyboard": [][]map[string]string{{{"text": "打开视频", "url": message.videoURL}}}}
 	}
+	replyParameters := map[string]any{"message_id": r.MessageID, "allow_sending_without_reply": true}
 	method := "sendMessage"
 	if r.ReplyID != 0 {
 		method = "editMessageText"
 		request["message_id"] = r.ReplyID
+	} else if r.MessageID > 0 {
+		request["reply_parameters"] = replyParameters
 	}
 	sendCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
@@ -95,6 +78,9 @@ func (s *Service) notifyOne(ctx context.Context, c *client, r catalog.TelegramRe
 	var apiErr *APIError
 	if err != nil && r.ReplyID != 0 && errors.As(err, &apiErr) && apiErr.Code == 400 {
 		delete(request, "message_id")
+		if r.MessageID > 0 {
+			request["reply_parameters"] = replyParameters
+		}
 		err = c.call(sendCtx, "sendMessage", request, &response)
 	}
 	if err != nil {
@@ -109,23 +95,4 @@ func (s *Service) notifyOne(ctx context.Context, c *client, r catalog.TelegramRe
 		response.ID = r.ReplyID
 	}
 	_ = s.cat.SaveTelegramNotification(ctx, r, response.ID, state, 0)
-}
-
-func importProgressText(j *catalog.RemoteUploadJob) string {
-	if j.CancelRequested {
-		return "正在取消保存"
-	}
-	switch j.State {
-	case catalog.RemoteUploadDownloading:
-		return "正在从 TG 获取视频，请稍候…"
-	case catalog.RemoteUploadValidating:
-		return "正在校验视频…"
-	case catalog.RemoteUploadSaving:
-		return "正在入库…"
-	case catalog.RemoteUploadQueued:
-		if j.Stage == "retry_wait" {
-			return "等待重试保存…"
-		}
-	}
-	return "已加入队列"
 }

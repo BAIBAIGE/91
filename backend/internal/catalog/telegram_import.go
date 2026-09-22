@@ -87,6 +87,9 @@ type TelegramReceipt struct {
 	Attempts  int
 }
 
+// TelegramResponseQueueFull is rendered by the Telegram presentation layer.
+const TelegramResponseQueueFull = "queue_full"
+
 func (c *Catalog) TelegramOffset(ctx context.Context, botID int64) (int64, bool, error) {
 	_, err := c.db.ExecContext(ctx, `INSERT OR IGNORE INTO telegram_connections(bot_id,needs_reconnect) VALUES(?,COALESCE((SELECT needs_reconnect FROM telegram_connections WHERE bot_id=0),0))`, botID)
 	if err != nil {
@@ -159,7 +162,7 @@ func acceptTelegramUpdate(ctx context.Context, tx *sql.Tx, receipt TelegramRecei
 					return err
 				}
 				if pending >= limit {
-					receipt.Response = "队列已满，请稍后重新发送视频"
+					receipt.Response = TelegramResponseQueueFull
 				} else {
 					payload, err := json.Marshal(source)
 					if err != nil {

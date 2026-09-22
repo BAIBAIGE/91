@@ -233,7 +233,7 @@ func TestMediaGroupPhotoOnlyRepliesOnceAndStandalonePhotoStillReplies(t *testing
 		t.Fatalf("receipts=%v err=%v", receipts, err)
 	}
 	for _, r := range receipts {
-		if !strings.Contains(r.Response, "请转发视频") || r.MessageID == 2 {
+		if !strings.Contains(renderReceiptMessage(r).text, "请转发视频") || r.MessageID == 2 {
 			t.Fatalf("unexpected photo reply: %+v", r)
 		}
 	}
@@ -290,7 +290,7 @@ func TestMediaGroupPreservesQueueAndFileSizeRejections(t *testing.T) {
 				t.Fatal("valid video was rejected")
 			}
 		case 3:
-			if !strings.Contains(r.Response, "队列已满") {
+			if !strings.Contains(renderReceiptMessage(r).text, "队列已满") {
 				t.Fatalf("queue rejection lost: %+v", r)
 			}
 		case 4:

@@ -322,11 +322,19 @@ func (s *Service) prepareImport(ctx context.Context, u update) (catalog.Telegram
 		r.MessageID = m.ID
 		r.SenderID = m.From.ID
 		if m.Chat.Type == "private" {
-			command := strings.Fields(m.Text)
-			if len(command) > 0 && strings.Split(command[0], "@")[0] == "/id" {
-				r.Response = "你的 Telegram 用户 ID：" + strconv.FormatInt(m.From.ID, 10)
+			command := ""
+			if fields := strings.Fields(m.Text); len(fields) > 0 {
+				command = strings.Split(fields[0], "@")[0]
+			}
+			if command == "/id" {
+				r.Response = responseUserID
+			} else if command == "/start" || command == "/help" {
+				r.Response = responseNeedsAccess
+				if s.Allowed(m.From.ID) {
+					r.Response = responseHelp
+				}
 			} else if s.Allowed(m.From.ID) {
-				r.Response = "请转发视频或发送视频文件；消息链接、图片和动画暂不支持。"
+				r.Response = responseUnsupported
 				file := videoMedia(m)
 				if file != nil {
 					r.Response = ""

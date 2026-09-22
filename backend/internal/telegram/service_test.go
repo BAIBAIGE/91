@@ -98,7 +98,7 @@ func TestQueueLimitsAndBootstrapID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(receipts) != 3 || !strings.Contains(receipts[1].Response, "队列已满") || !strings.Contains(receipts[2].Response, "99") {
+	if len(receipts) != 3 || !strings.Contains(renderReceiptMessage(receipts[1]).text, "队列已满") || !strings.Contains(renderReceiptMessage(receipts[2]).text, "<code>99</code>") {
 		t.Fatalf("receipts=%+v", receipts)
 	}
 }
@@ -239,6 +239,7 @@ func testTelegramImportEndToEnd(t *testing.T, album bool) {
 		t.Skip("ffprobe not installed")
 	}
 	s, cat := testService(t)
+	s.cfg.SiteBaseURL = "https://example.com"
 	// The fixed source tag must not require configuration or pre-creation.
 	fixture := filepath.Join(s.cfg.LocalFilesRoot, "fixture.mp4")
 	command := exec.Command("ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "color=c=blue:s=32x32:d=0.2", "-c:v", "mpeg4", "-y", fixture)
@@ -290,6 +291,23 @@ func testTelegramImportEndToEnd(t *testing.T, album bool) {
 		case "sendMessage", "editMessageText":
 			var input map[string]any
 			_ = json.NewDecoder(r.Body).Decode(&input)
+			if input["parse_mode"] != "HTML" {
+				t.Error("notification omitted HTML parse mode")
+			}
+			if strings.Contains(input["text"].(string), "<b>已保存</b>") {
+				var markup struct {
+					Rows [][]struct {
+						Text string `json:"text"`
+						URL  string `json:"url"`
+					} `json:"inline_keyboard"`
+				}
+				data, _ := json.Marshal(input["reply_markup"])
+				if err := json.Unmarshal(data, &markup); err != nil || len(markup.Rows) != 1 || len(markup.Rows[0]) != 1 {
+					t.Errorf("completion notification has no video button: %s", data)
+				} else if button := markup.Rows[0][0]; button.Text != "打开视频" || !strings.HasPrefix(button.URL, "https://example.com/video/") {
+					t.Errorf("invalid video button: %+v", button)
+				}
+			}
 			mu.Lock()
 			sent = append(sent, input["text"].(string))
 			mu.Unlock()
