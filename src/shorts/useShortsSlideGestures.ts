@@ -24,6 +24,7 @@ export type ShortsSlideGesturesOptions = {
   /** 自动播放被拒后的首次点击必须在原始抬手回调内直接恢复播放 */
   shouldResumeImmediately: () => boolean;
   onImmediateResume: () => void;
+  onClearScreenChange: (clear: boolean) => void;
 };
 
 /**
@@ -32,6 +33,7 @@ export type ShortsSlideGesturesOptions = {
  * - 横向滑动按当前播放点相对快进 / 快退，纵向滑动仍用于切换上下视频
  * - 单击切换播放 / 暂停，双击点赞；浏览器补发的 click 不重复执行手势
  * - 底部进度条按 pointer capture 拖动
+ * - 双指扩张清屏、捏合恢复，画面跟手缩放后回弹
  */
 export function useShortsSlideGestures(options: ShortsSlideGesturesOptions) {
   // 拖动开始时是否在播：用于拖完后判断要不要 resume
@@ -135,6 +137,13 @@ export function useShortsSlideGestures(options: ShortsSlideGesturesOptions) {
     const surface = options.surfaceRef.current;
     const video = options.getVideoElement();
     if (!surface || !video) return;
+    let pinchReturnTimer: number | null = null;
+    const clearPinchFeedback = () => {
+      if (pinchReturnTimer !== null) window.clearTimeout(pinchReturnTimer);
+      pinchReturnTimer = null;
+      surface.removeAttribute("data-pinch");
+      surface.style.removeProperty("--shorts-pinch-scale");
+    };
     const destroy = createShortsSurfaceGestures({
       surface,
       video,
@@ -143,6 +152,15 @@ export function useShortsSlideGestures(options: ShortsSlideGesturesOptions) {
       onDoubleTap: (x, y) => optionsRef.current.onDoubleTap(x, y),
       shouldResumeImmediately: () => optionsRef.current.shouldResumeImmediately(),
       onImmediateResume: () => optionsRef.current.onImmediateResume(),
+      onClearScreenChange: (clear) => optionsRef.current.onClearScreenChange(clear),
+      onPinchScale: (scale) => {
+        if (pinchReturnTimer !== null) window.clearTimeout(pinchReturnTimer);
+        pinchReturnTimer = null;
+        surface.dataset.pinch = scale === null ? "returning" : "tracking";
+        surface.style.setProperty("--shorts-pinch-scale", String(scale ?? 1));
+        // 动画结束后移除 transform；iOS 共享 video 换屏时也不会带走缩放。
+        if (scale === null) pinchReturnTimer = window.setTimeout(clearPinchFeedback, 220);
+      },
       onFastChange: (fast) => optionsRef.current.setFastActive(fast),
       getSeekDuration: () => optionsRef.current.getSeekDuration(video),
       onSeekStart: () => {
@@ -165,6 +183,7 @@ export function useShortsSlideGestures(options: ShortsSlideGesturesOptions) {
     });
     return () => {
       destroy();
+      clearPinchFeedback();
       cancelScheduledSeeks();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps

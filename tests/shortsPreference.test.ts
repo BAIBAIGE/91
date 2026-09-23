@@ -111,7 +111,7 @@ test("the shorts drive badge is the only video detail link", () => {
   );
   assert.match(
     shortsPageSource,
-    /<Link\s+to=\{detailPath\}\s+className="shorts-drive-badge"[\s\S]*?aria-label=\{`查看视频详情，来源：\$\{item\.sourceLabel \|\| "本地"\}`\}[\s\S]*?onClick=\{\(event\) => onRouteClick\(event, detailPath\)\}/
+    /<Link\s+to=\{detailPath\}\s+className="shorts-drive-badge"[\s\S]*?aria-label=\{`查看视频详情，来源：\$\{item\.sourceLabel \|\| "本地"\}`\}/
   );
   assert.doesNotMatch(shortsPageSource, /shorts-slide__detail|<Info\b|>查看详情</);
   assert.doesNotMatch(shortsCssSource, /\.shorts-slide__detail/);
@@ -692,7 +692,7 @@ test("shorts empty library reuses the homepage empty visual", () => {
   );
   assert.match(
     shortsPageSource,
-    /className="shorts-header__actions">\s*\{items\.length > 0 && \(/
+    /\{items\.length > 0 && \(\s*<button[\s\S]*?aria-label=\{muted \? "取消静音" : "静音"\}/
   );
   assert.doesNotMatch(shortsPageSource, /当前没有可播放的视频/);
   assert.match(
@@ -1434,41 +1434,28 @@ test("shorts keeps per-swipe work off the queue length", () => {
   );
 });
 
-test("shorts links exit document fullscreen before leaving the immersive page", () => {
-  assert.match(shortsPageSource, /import \{ Link, useNavigate \} from "react-router";/);
-  assert.match(shortsPageSource, /const navigate = useNavigate\(\);/);
-  assert.match(
-    shortsPageSource,
-    /const handleShortsRouteClick = useCallback\([\s\S]*?const exitRequest = exitDocumentFullscreen\(\);[\s\S]*?if \(!exitRequest\) return;[\s\S]*?event\.preventDefault\(\);[\s\S]*?const completeNavigation = \(\) => navigate\(destination\);[\s\S]*?exitRequest\.then\(completeNavigation, completeNavigation\)/
-  );
-  assert.match(
-    shortsPageSource,
-    /function exitDocumentFullscreen\(\): Promise<void> \| null \{[\s\S]*?fullscreenDocument\.fullscreenElement \?\?[\s\S]*?fullscreenDocument\.webkitFullscreenElement[\s\S]*?fullscreenDocument\.exitFullscreen\?\.bind[\s\S]*?fullscreenDocument\.webkitExitFullscreen\?\.bind[\s\S]*?Promise\.resolve\(exitFullscreen\(\)\)/
-  );
+test("shorts navigation requests native fullscreen and exits it before explicit route changes", () => {
+  const mainNavSource = readFileSync(new URL("../src/components/MainNav.tsx", import.meta.url), "utf8");
+  assert.match(mainNavSource, /requestShortsFullscreen\(\)/);
   assert.match(
     shortsPageSource,
     /<Link\s*to="\/"[\s\S]*?className="shorts-header__back"[\s\S]*?onClick=\{handleBackToHomeClick\}/
   );
-  assert.match(
-    shortsPageSource,
-    /onRouteClick=\{handleShortsRouteClick\}/
-  );
   assert.doesNotMatch(shortsPageSource, /shorts-slide__title-link/);
   assert.match(
     shortsPageSource,
-    /className="shorts-drive-badge"[\s\S]*?onClick=\{\(event\) => onRouteClick\(event, detailPath\)\}/
+    /<Link\s+to=\{detailPath\}\s+className="shorts-drive-badge"/
   );
 });
 
-test("shorts page defaults to immersive playback without fullscreen controls", () => {
+test("shorts page offers native fullscreen only when the browser supports it", () => {
   assert.match(shortsPageSource, /const activeIndexRef = useRef\(0\)/);
   assert.match(shortsCssSource, /\.shorts-page \{[\s\S]*height:\s*100svh/);
   assert.match(shortsPageSource, /html\.style\.overflow = "hidden"/);
   assert.match(shortsPageSource, /body\.style\.overflow = "hidden"/);
   assert.match(shortsPageSource, /body\.style\.background = "#000"/);
-  assert.doesNotMatch(shortsPageSource, /Maximize/);
   assert.doesNotMatch(shortsPageSource, /Minimize/);
-  assert.doesNotMatch(shortsPageSource, /aria-label=\{isFullscreen \? "退出全屏" : "进入全屏"\}/);
+  assert.match(shortsPageSource, /fullscreenSupported && !isFullscreen && \(/);
+  assert.match(shortsPageSource, /aria-label="进入全屏"/);
   assert.doesNotMatch(shortsPageSource, /e\.key === "f"/);
-  assert.doesNotMatch(shortsPageSource, /requestFullscreen/);
 });

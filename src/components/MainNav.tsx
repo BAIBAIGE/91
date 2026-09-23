@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { NavLink } from "react-router";
+import { NavLink, useLocation } from "react-router";
 import {
   LogOut,
   X,
@@ -7,6 +7,7 @@ import {
 import { useAuth } from "@/admin/AuthContext";
 import { UploadIcon } from "@/components/icons/UploadIcon";
 import { VideoIcon } from "@/components/icons/VideoIcon";
+import { requestShortsFullscreen } from "@/shorts/fullscreen";
 
 // Font Awesome Free 7.3.1 by Fonticons, Inc. — https://fontawesome.com/license/free
 function ShortVideoIcon({ size = 16 }: { size?: number }) {
@@ -74,6 +75,7 @@ const uploadNavItem = { to: "/upload", label: "上传", icon: UploadIcon };
 const adminNavItem = { to: "/admin", label: "后台", icon: AdminIcon };
 
 export function MainNav() {
+  const location = useLocation();
   const [open, setOpen] = useState(false);
   const menuRef = useRef<HTMLUListElement | null>(null);
   const toggleRef = useRef<HTMLButtonElement | null>(null);
@@ -121,26 +123,17 @@ export function MainNav() {
             <li key={to} role="none">
               <NavLink
                 to={to}
+                // 短视频页会准备首页作为返回落点，避免从首页进入时留下两个首页。
+                replace={to === "/shorts" && location.pathname === "/"}
                 role="menuitem"
                 className={({ isActive }) =>
                   `main-nav__link ${isActive ? "is-active" : ""}`
                 }
-                onClick={() => {
+                onClick={(event) => {
                   setOpen(false);
-                  if (to === "/shorts") {
-                    const el = document.documentElement;
-                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                    const fn = el.requestFullscreen?.bind(el) || (el as any).webkitRequestFullscreen?.bind(el);
-                    if (fn) {
-                      try {
-                        const ret = fn();
-                        if (ret && typeof ret.then === "function") {
-                          ret.catch(() => {});
-                        }
-                      } catch {
-                        // ignore
-                      }
-                    }
+                  if (to === "/shorts" && event.button === 0 &&
+                    !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey) {
+                    void requestShortsFullscreen();
                   }
                 }}
               >

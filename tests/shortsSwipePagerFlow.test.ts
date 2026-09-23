@@ -198,10 +198,12 @@ function createHarness(options?: HarnessOptions) {
   define("performance", { now: () => clock });
 
   let anchorIndex = 0;
+  let gestureActive = false;
   const destroyPager = createShortsSwipePager({
     root: root as unknown as HTMLElement,
     track: track as unknown as HTMLElement,
     usesDocumentScroll,
+    onGestureActiveChange: active => { gestureActive = active; },
     getAnchorSlide: () =>
       (slides[anchorIndex] ?? null) as unknown as HTMLElement | null,
   });
@@ -230,6 +232,7 @@ function createHarness(options?: HarnessOptions) {
     track,
     slides,
     prevented,
+    get gestureActive() { return gestureActive; },
     get clock() {
       return clock;
     },
@@ -765,11 +768,13 @@ test("a second finger hands the gesture back and snaps to the nearest video", ()
     h.tick(16);
     h.pointerMove(200, 200);
     assert.equal(h.translate, -580);
+    assert.equal(h.gestureActive, true);
 
     h.secondFingerDownAt([
       { clientX: 200, clientY: 200 },
       { clientX: 260, clientY: 400 },
     ]);
+    assert.equal(h.gestureActive, false);
     h.endTransition();
     // 等效位置 580 更靠近下一屏（900）而不是当前屏（0）
     assert.equal(h.root.scrollTop, SLIDE_HEIGHT);

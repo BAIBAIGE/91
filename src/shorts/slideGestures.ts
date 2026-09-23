@@ -35,6 +35,8 @@ export function computeTouchSeekTime(input: {
 export const SHORTS_DOUBLE_TAP_MS = 240;
 const SHORTS_DOUBLE_TAP_DISTANCE_PX = 32;
 const SHORTS_LONG_PRESS_MS = 400;
+const SHORTS_PINCH_ACTIVATION_PX = 24;
+const SHORTS_PINCH_ACTIVATION_RATIO = 0.12;
 const INTERACTIVE_SELECTOR =
   'button, a, input, select, textarea, [role="button"], [contenteditable], [data-shorts-no-swipe], .shorts-slide__actions';
 
@@ -51,11 +53,17 @@ type SurfaceGestureHost = {
   onSeekStart: () => void;
   onSeekPreview: (time: number) => void;
   onSeekEnd: (time: number) => void;
+  onClearScreenChange: (clear: boolean) => void;
+  /** null 表示手势结束，画面应回弹到原尺寸。 */
+  onPinchScale: (scale: number | null) => void;
 };
 
-/** 一次 pointer 序列只能成为轻点、长按、横滑或竖滑中的一种。 */
+/** 双指接管时结束单指操作，直到所有手指抬起都不再识别轻点或横滑。 */
 export function createShortsSurfaceGestures(host: SurfaceGestureHost) {
   const { surface, video } = host;
+  const touches = new Map<number, { x: number; y: number; eligible: boolean }>();
+  let multiTouch = false;
+  let pinch: { startDistance: number; committed: boolean } | null = null;
   let press: {
     id: number;
     pointerType: string;
@@ -113,6 +121,38 @@ export function createShortsSurfaceGestures(host: SurfaceGestureHost) {
   function cancel() {
     cancelTap();
     endPress();
+    endPinch();
+  }
+
+  function endPinch() {
+    if (!pinch) return;
+    pinch = null;
+    host.onPinchScale(null);
+  }
+
+  function touchDistance() {
+    const [first, second] = [...touches.values()];
+    return Math.hypot(second.x - first.x, second.y - first.y);
+  }
+
+  function updatePinch() {
+    if (!pinch) return;
+    const distance = touchDistance();
+    const delta = distance - pinch.startDistance;
+    const ratio = delta / Math.max(1, pinch.startDistance);
+    // 阻尼和幅度上限让它只是短暂反馈，不把清屏变成持续裁切的视频缩放。
+    host.onPinchScale(clamp(1 + ratio * 0.35, 0.88, 1.12));
+    if (!pinch.committed && Math.abs(delta) >= SHORTS_PINCH_ACTIVATION_PX &&
+      Math.abs(ratio) >= SHORTS_PINCH_ACTIVATION_RATIO) {
+      pinch.committed = true;
+      host.onClearScreenChange(delta > 0);
+    }
+  }
+
+  function reset() {
+    cancel();
+    touches.clear();
+    multiTouch = false;
   }
 
   function isSurfaceTarget(target: EventTarget | null) {
@@ -122,13 +162,31 @@ export function createShortsSurfaceGestures(host: SurfaceGestureHost) {
 
   // 另一根手指、进度条或按钮接管输入时，挂起的单击不能随后改变播放状态。
   function handleGlobalDown(event: PointerEvent) {
+    if (event.pointerType === "touch" && host.isEnabled()) {
+      touches.set(event.pointerId, {
+        x: event.clientX,
+        y: event.clientY,
+        eligible: isSurfaceTarget(event.target),
+      });
+      if (touches.size > 1) {
+        const canPinch = !multiTouch && touches.size === 2 &&
+          [...touches.values()].every(touch => touch.eligible);
+        multiTouch = true;
+        cancel();
+        if (canPinch) {
+          pinch = { startDistance: touchDistance(), committed: false };
+          host.onPinchScale(1);
+        }
+        return;
+      }
+    }
     if (!isSurfaceTarget(event.target) || !event.isPrimary || (press && press.id !== event.pointerId)) {
       cancel();
     }
   }
 
   function handleDown(event: PointerEvent) {
-    if (!host.isEnabled() || !event.isPrimary || event.button !== 0 || !isSurfaceTarget(event.target)) return;
+    if (!host.isEnabled() || multiTouch || !event.isPrimary || event.button !== 0 || !isSurfaceTarget(event.target)) return;
     endPress();
     const now = performance.now();
     const secondTap = Boolean(
@@ -166,6 +224,19 @@ export function createShortsSurfaceGestures(host: SurfaceGestureHost) {
   }
 
   function handleMove(event: PointerEvent) {
+    const touch = touches.get(event.pointerId);
+    if (touch) {
+      touch.x = event.clientX;
+      touch.y = event.clientY;
+    }
+    if (multiTouch) {
+      if (!host.isEnabled()) return cancel();
+      if (pinch && touch) {
+        if (event.cancelable) event.preventDefault();
+        updatePinch();
+      }
+      return;
+    }
     if (!press || event.pointerId !== press.id) return;
     if (!host.isEnabled()) return cancel();
     const dx = event.clientX - press.x;
@@ -198,6 +269,14 @@ export function createShortsSurfaceGestures(host: SurfaceGestureHost) {
   }
 
   function handleUp(event: PointerEvent) {
+    if (multiTouch) {
+      handleMove(event);
+      touches.delete(event.pointerId);
+      endPinch();
+      if (touches.size === 0) multiTouch = false;
+      return;
+    }
+    touches.delete(event.pointerId);
     if (!press || event.pointerId !== press.id) return;
     // 最终坐标也参与判定，避免漏发最后一次 move 时把拖动算成轻点。
     handleMove(event);
@@ -224,6 +303,12 @@ export function createShortsSurfaceGestures(host: SurfaceGestureHost) {
   }
 
   function handleCancel(event: PointerEvent) {
+    touches.delete(event.pointerId);
+    if (multiTouch) {
+      cancel();
+      if (touches.size === 0) multiTouch = false;
+      return;
+    }
     if (press?.id === event.pointerId) cancel();
   }
 
@@ -243,21 +328,22 @@ export function createShortsSurfaceGestures(host: SurfaceGestureHost) {
   surface.addEventListener("pointerdown", handleDown);
   surface.addEventListener("click", handleClick);
   window.addEventListener("pointerdown", handleGlobalDown, true);
-  window.addEventListener("pointermove", handleMove, { passive: false });
-  window.addEventListener("pointerup", handleUp);
-  window.addEventListener("pointercancel", handleCancel);
-  window.addEventListener("blur", cancel);
+  // 进度条等控件会停止冒泡；捕获阶段仍须收到抬手，避免留下幽灵触点。
+  window.addEventListener("pointermove", handleMove, { passive: false, capture: true });
+  window.addEventListener("pointerup", handleUp, true);
+  window.addEventListener("pointercancel", handleCancel, true);
+  window.addEventListener("blur", reset);
   video.addEventListener("pause", handlePause);
   video.addEventListener("ended", handlePause);
   return () => {
-    cancel();
+    reset();
     surface.removeEventListener("pointerdown", handleDown);
     surface.removeEventListener("click", handleClick);
     window.removeEventListener("pointerdown", handleGlobalDown, true);
-    window.removeEventListener("pointermove", handleMove);
-    window.removeEventListener("pointerup", handleUp);
-    window.removeEventListener("pointercancel", handleCancel);
-    window.removeEventListener("blur", cancel);
+    window.removeEventListener("pointermove", handleMove, true);
+    window.removeEventListener("pointerup", handleUp, true);
+    window.removeEventListener("pointercancel", handleCancel, true);
+    window.removeEventListener("blur", reset);
     video.removeEventListener("pause", handlePause);
     video.removeEventListener("ended", handlePause);
   };

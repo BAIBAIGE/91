@@ -305,6 +305,49 @@ html.shorts-document-scroll.is-pager-driven body {
   z-index: 2;
 }
 
+/* 只缩放当前画面，不变换 slide 或 track，保持翻页几何和 iOS 插槽不变。
+   松手回弹 200ms，随后手势层移除 data-pinch，恢复无 transform 的播放层。 */
+.shorts-page .shorts-slide[data-pinch] :is(.shorts-slide__video, .shorts-slide__poster) {
+  transform: scale(var(--shorts-pinch-scale, 1));
+  transform-origin: center;
+  transition: none;
+}
+
+.shorts-page .shorts-slide[data-pinch="returning"] :is(.shorts-slide__video, .shorts-slide__poster) {
+  transition: transform 200ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* 清屏保留进度条、拖动时间提示和双击点赞动画，视频节点和播放状态不随界面显隐重新创建。
+   visibility 同时让隐藏的按钮退出键盘焦点和辅助技术导航。 */
+.shorts-page :is(.shorts-header, .shorts-slide__overlay, .shorts-slide__actions) {
+  transition: opacity 180ms ease, visibility 180ms;
+}
+
+.shorts-page[data-clear-screen="true"] :is(
+  .shorts-header,
+  .shorts-slide__overlay,
+  .shorts-slide__actions,
+  .shorts-slide__rate-hint,
+  .shorts-slide__paused,
+  .shorts-hud-toast,
+  .shorts-keyboard-seek-time
+) {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.shorts-page[data-clear-screen="true"] .shorts-header * {
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .shorts-page .shorts-slide[data-pinch="returning"] :is(.shorts-slide__video, .shorts-slide__poster),
+  .shorts-page :is(.shorts-header, .shorts-slide__overlay, .shorts-slide__actions) {
+    transition: none;
+  }
+}
+
 /* 阴影只给静态海报，绝不给 <video>：WebKit 一旦要对视频元素应用 CSS
    filter，就没法把视频层直接交给合成器，每一帧都要多走一遍滤镜。海报是
    静态图，滤镜只算一次。视频背后本来就是它自己海报的模糊 + 压暗版本，

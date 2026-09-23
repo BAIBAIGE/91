@@ -6,7 +6,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { Link, useNavigate } from "react-router";
+import { Link } from "react-router";
 import {
   ChevronLeft,
   Heart,
@@ -16,6 +16,7 @@ import {
   EyeOff,
   AlertCircle,
   Share2,
+  Maximize,
 } from "lucide-react";
 import { hideVideo, setVideoLike, type ShortsItem } from "@/data/videos";
 import {
@@ -54,6 +55,7 @@ import {
   type ShortsKeyboardSeekPreview,
 } from "@/shorts/useShortsKeyboard";
 import { useShortsSlideGestures } from "@/shorts/useShortsSlideGestures";
+import { useShortsNavigation } from "@/shorts/useShortsNavigation";
 import { ShortsSlideVisibility } from "@/shorts/slideVisibility";
 import {
   measureOffsetWithinSlide,
@@ -90,8 +92,21 @@ const IOS_LOOP_RELOAD_TIMEOUT_MS = 6000;
 const SHORTS_BUFFERING_INDICATOR_DELAY_MS = 180;
 
 export default function ShortsPage() {
+  const { ready, ...navigation } = useShortsNavigation();
+  if (!ready) return <div className="shorts-page" aria-busy="true" />;
+  return <ShortsPlayback {...navigation} />;
+}
+
+function ShortsPlayback({
+  clearScreen,
+  setClearScreen,
+  handleBackToHomeClick,
+  handleRouteClick,
+  isFullscreen,
+  fullscreenSupported,
+  requestFullscreen,
+}: Omit<ReturnType<typeof useShortsNavigation>, "ready">) {
   const { isAdmin } = useAuth();
-  const navigate = useNavigate();
   // 当前在视口里的视频索引
   const [activeIndex, setActiveIndex] = useState(0);
   // 队列因空库被丢弃时回到第一屏
@@ -215,7 +230,7 @@ export default function ShortsPage() {
      */
     offsetWithinAnchor: number;
   } | null>(null);
-  // Windows 退出浏览器全屏时视口高度会改变。调整滚动位置期间锁住当前
+  // 退出浏览器全屏时视口高度会改变。调整滚动位置期间锁住当前
   // slide，避免 IntersectionObserver 把新的像素位置误判成后续视频。
   const viewportResizeAnchorIndexRef = useRef<number | null>(null);
   // 手指正在拖动期间冻结活跃屏判定：IO 看的是视觉位置，跟手时轨道位移一直
@@ -244,35 +259,15 @@ export default function ShortsPage() {
     isLegacyShortsVideoTransitionEnabled
   );
   // iPhone 浏览器里改用页面滚动，让 Safari 工具栏能随刷动收起。
-  const useDocumentScroll = shouldUseDocumentScrollForShorts();
+  // 原生全屏会改变 display-mode 媒体查询。滚动宿主在本页生命周期内固定，
+  // 否则退出全屏时会从容器切到文档，丢失当前视频的位置。
+  const [useDocumentScroll] = useState(shouldUseDocumentScrollForShorts);
   // 全部滚动输入都由页面自己接管：手指、鼠标拖拽、滚轮共用同一条落点动画。
   // 凡是留给浏览器的输入通道，"原生吸附手感不可控"这个问题就原样留在那里。
   const usePagerGestures = shouldUseShortsSwipePager();
   // Windows 短视频页只保留静音图标；不挂载桌面 hover 音量条，避免点击
   // 图标时因鼠标仍停留在按钮上而展开滑杆。
   const isWindowsShortsPlatform = isWindowsPlatform();
-  const handleShortsRouteClick = useCallback(
-    (event: React.MouseEvent<HTMLAnchorElement>, destination: string) => {
-      // 主导航点击 documentElement 后进入的是“文档全屏”，SPA 路由切换
-      // 不会自动退出。所有离开短视频页的站内链接都先等待 Fullscreen API
-      // 完成，再渲染目标页，避免目标页继承全屏状态或先以全屏闪现。
-      const exitRequest = exitDocumentFullscreen();
-      if (!exitRequest) return;
-
-      event.preventDefault();
-      const completeNavigation = () => navigate(destination);
-      void exitRequest.then(completeNavigation, completeNavigation);
-    },
-    [navigate]
-  );
-
-  const handleBackToHomeClick = useCallback(
-    (event: React.MouseEvent<HTMLAnchorElement>) => {
-      handleShortsRouteClick(event, "/");
-    },
-    [handleShortsRouteClick]
-  );
-
   function getVideoAtIndex(index: number) {
     if (useIOSSharedVideo && index === activeIndexRef.current) {
       return iosSharedVideoRef.current ?? undefined;
@@ -530,12 +525,10 @@ export default function ShortsPage() {
     queueTrimInProgressRef.current = false;
   }, [activeIndex, items, useDocumentScroll]);
 
-  // 全屏与窗口模式的可用高度不同。Chrome/Edge 退出全屏后会保留原来的
-  // scrollTop 像素值，而每条 slide 的 100svh 已经变矮；索引越靠后，误差
-  // 累积越大，最终会露出下一条并触发切源。视口 resize 期间始终用当前索引
-  // 的新 offsetTop 重新对齐，待尺寸稳定后再交还给正常的滑动观察器。
+  // 全屏退出会改变视口高度，也可能恢复进入全屏前的文档滚动位置。
+  // 在所有平台锁住当前索引，按新的 slide 位置对齐真正的滚动宿主，
+  // 待尺寸稳定后再交还观察器，避免一次显示模式切换被误判成翻页。
   useEffect(() => {
-    if (!isWindowsShortsPlatform) return;
     const root = containerRef.current;
     if (!root) return;
 
@@ -549,7 +542,13 @@ export default function ShortsPage() {
         `[data-shorts-slide][data-index="${anchorIndex}"]`
       );
       if (!activeSlide) return;
-      root.scrollTop = activeSlide.offsetTop;
+      if (useDocumentScroll) {
+        const track = trackRef.current;
+        const top = track ? readShortsSlideTopWithinTrack(activeSlide, track) : activeSlide.offsetTop;
+        window.scrollTo({ top, behavior: "auto" });
+      } else {
+        root.scrollTop = activeSlide.offsetTop;
+      }
     };
 
     const handleViewportResize = () => {
@@ -578,16 +577,18 @@ export default function ShortsPage() {
 
     window.addEventListener("resize", handleViewportResize);
     document.addEventListener("fullscreenchange", handleViewportResize);
+    document.addEventListener("webkitfullscreenchange", handleViewportResize);
     return () => {
       window.removeEventListener("resize", handleViewportResize);
       document.removeEventListener("fullscreenchange", handleViewportResize);
+      document.removeEventListener("webkitfullscreenchange", handleViewportResize);
       if (alignmentFrame !== null) {
         window.cancelAnimationFrame(alignmentFrame);
       }
       if (settleTimer !== null) window.clearTimeout(settleTimer);
       viewportResizeAnchorIndexRef.current = null;
     };
-  }, [isWindowsShortsPlatform]);
+  }, [useDocumentScroll]);
 
   const handleSlideIntersections = useCallback(
     (entries: IntersectionObserverEntry[]) => {
@@ -944,6 +945,10 @@ export default function ShortsPage() {
     const prevHtmlOverflow = html.style.overflow;
     const prevBodyOverflow = body.style.overflow;
     const prevBodyBg = body.style.background;
+    const prevScrollRestoration = window.history.scrollRestoration;
+    // 清屏只改变路由 state。由翻页器管理位置，避免同页后退时浏览器
+    // 恢复旧的文档滚动位置，把 iPhone 上正在看的视频跳回第一条。
+    window.history.scrollRestoration = "manual";
     if (useDocumentScroll) {
       html.classList.add("shorts-document-scroll");
       body.classList.add("shorts-document-scroll");
@@ -981,6 +986,7 @@ export default function ShortsPage() {
       html.style.overflow = prevHtmlOverflow;
       body.style.overflow = prevBodyOverflow;
       body.style.background = prevBodyBg;
+      window.history.scrollRestoration = prevScrollRestoration;
       if (themeMeta) {
         if (createdMeta) {
           themeMeta.remove();
@@ -1021,6 +1027,7 @@ export default function ShortsPage() {
       className={`shorts-page${useDocumentScroll ? " is-document-scroll" : ""}${
         usePagerGestures ? " is-pager-driven" : ""
       }${legacyVideoTransitionEnabled ? " has-video-transition" : ""}`}
+      data-clear-screen={clearScreen}
     >
       <header className="shorts-header">
         <Link
@@ -1032,6 +1039,19 @@ export default function ShortsPage() {
           <ChevronLeft size={22} />
         </Link>
         <div className="shorts-header__actions">
+          {fullscreenSupported && !isFullscreen && (
+            <button
+              type="button"
+              className="shorts-header__icon-btn"
+              aria-label="进入全屏"
+              onClick={(event) => {
+                event.stopPropagation();
+                void requestFullscreen();
+              }}
+            >
+              <Maximize size={20} />
+            </button>
+          )}
           {items.length > 0 && (
             <button
               type="button"
@@ -1196,6 +1216,7 @@ export default function ShortsPage() {
                     : undefined
                 }
                 muted={muted}
+                onClearScreenChange={setClearScreen}
                 videoRef={setVideoRef(index)}
                 onLikeToggle={handleLikeToggle}
                 hasLiked={hasLiked}
@@ -1207,7 +1228,7 @@ export default function ShortsPage() {
                 onSourceCached={handleSourceCached}
                 onUserPausedChange={setUserPausedForIndex}
                 isVideoPausedByUser={isVideoPausedByUser}
-                onRouteClick={handleShortsRouteClick}
+                onRouteClick={handleRouteClick}
                 showHud={showHud}
                 loopDebugProbeRef={
                   debugHudEnabled ? loopDebugProbeRef : undefined
@@ -1316,6 +1337,7 @@ type SlideProps = {
   /** 持久 video 当前应移动到的 slide 插槽 */
   sharedVideoSlotRef?: (el: HTMLDivElement | null) => void;
   muted: boolean;
+  onClearScreenChange: (clear: boolean) => void;
   videoRef: (el: HTMLVideoElement | null) => void;
   /**
    * 切换点赞。第二参数 true 表示点赞，false 表示取消。
@@ -1337,11 +1359,7 @@ type SlideProps = {
   onSourceCached: (videoId: string) => void;
   onUserPausedChange: (index: number, isPaused: boolean) => void;
   isVideoPausedByUser: (index: number) => boolean;
-  /** 离开沉浸式短视频页前统一退出文档全屏。 */
-  onRouteClick: (
-    event: React.MouseEvent<HTMLAnchorElement>,
-    destination: string
-  ) => void;
+  onRouteClick: (event: React.MouseEvent<HTMLAnchorElement>, destination: string) => void;
   showHud: (text: string, icon?: React.ReactNode) => void;
   /** ?debug=1 时活跃 slide 在这里挂一个循环重启状态读取器，供面板轮询。 */
   loopDebugProbeRef?: React.MutableRefObject<ShortsLoopDebugProbe | null>;
@@ -1374,6 +1392,7 @@ function ShortsSlideImpl({
   sharedVideoRef,
   sharedVideoSlotRef,
   muted,
+  onClearScreenChange,
   videoRef,
   onLikeToggle,
   hasLiked,
@@ -1599,11 +1618,13 @@ function ShortsSlideImpl({
       setScrubbing(false);
       setFastActive(false);
       setPlaybackFailure(failure);
+      // 故障会禁用媒体手势，退出清屏以保留返回和其他控制入口。
+      if (isActiveRef.current) onClearScreenChange(false);
       setPaused(true);
       setIsBuffering(false);
       onActiveNeedsPriority(index);
     },
-    [index, onActiveNeedsPriority, setIsBuffering]
+    [index, onActiveNeedsPriority, onClearScreenChange, setIsBuffering]
   );
 
   const confirmPresentedPlayback = useCallback(
@@ -2613,6 +2634,7 @@ function ShortsSlideImpl({
     onDoubleTap: handleDoubleClickLike,
     shouldResumeImmediately: shouldResumeImmediatelyOnClick,
     onImmediateResume: handleImmediateResume,
+    onClearScreenChange,
   });
 
   function handleDoubleClickLike(x: number, y: number) {
@@ -3127,29 +3149,6 @@ function stabilizeVideoAfterAudioToggle(
   stabilize();
   for (const delay of [80, 240, 600]) {
     window.setTimeout(stabilize, delay);
-  }
-}
-
-type WebkitFullscreenDocument = Document & {
-  webkitFullscreenElement?: Element | null;
-  webkitExitFullscreen?: () => Promise<void> | void;
-};
-
-function exitDocumentFullscreen(): Promise<void> | null {
-  if (typeof document === "undefined") return null;
-  const fullscreenDocument = document as WebkitFullscreenDocument;
-  const fullscreenElement =
-    fullscreenDocument.fullscreenElement ??
-    fullscreenDocument.webkitFullscreenElement;
-  const exitFullscreen =
-    fullscreenDocument.exitFullscreen?.bind(fullscreenDocument) ??
-    fullscreenDocument.webkitExitFullscreen?.bind(fullscreenDocument);
-  if (!fullscreenElement || !exitFullscreen) return null;
-
-  try {
-    return Promise.resolve(exitFullscreen());
-  } catch (error) {
-    return Promise.reject(error);
   }
 }
 

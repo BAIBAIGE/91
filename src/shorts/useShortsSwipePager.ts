@@ -696,6 +696,7 @@ export function createShortsSwipePager(host: ShortsSwipePagerHost) {
     const interrupted = cancelSettle() || Boolean(previous?.committed);
 
     const bail = () => {
+      setGestureActive(false);
       if (interrupted) settleToNearest();
     };
 

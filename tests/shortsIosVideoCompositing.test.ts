@@ -34,12 +34,12 @@ test("shorts page wrapper is not position:fixed (breaks iOS <video> compositing)
   assert.match(pageRule[0], /height:\s*100svh/);
 });
 
-test("iPhone browser uses document scrolling without manual fullscreen controls", () => {
+test("iPhone browser preserves document scrolling with capability-gated native fullscreen", () => {
   assert.match(shortsPlatformSource, /function shouldUseDocumentScrollForShorts\(\)/);
   assert.match(shortsPlatformSource, /function isIPhoneBrowserShell\(\)/);
   assert.match(shortsPageSource, /root:\s*null/);
   assert.doesNotMatch(shortsPageSource, /supportsElementFullscreenAPI/);
-  assert.doesNotMatch(shortsPageSource, /requestFullscreen/);
+  assert.match(shortsPageSource, /fullscreenSupported && !isFullscreen && \(/);
   assert.doesNotMatch(shortsPageSource, /aria-label=\{isFullscreen \? "退出全屏" : "进入全屏"\}/);
   assert.doesNotMatch(shortsPageSource, /function handleFullscreenButtonPointerDown/);
   assert.doesNotMatch(shortsPageSource, /onPointerDown=\{handleFullscreenButtonPointerDown\}/);
