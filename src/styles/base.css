@@ -71,8 +71,10 @@ a {
   transition: color var(--transition-fast);
 }
 
-a:hover {
-  color: var(--accent);
+@media (hover: hover) and (pointer: fine) {
+  a:hover {
+    color: var(--accent);
+  }
 }
 
 button {

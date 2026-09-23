@@ -121,11 +121,14 @@ body.shorts-document-scroll::before {
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
 }
 
-.shorts-header__back:hover,
-.shorts-header__icon-btn:hover {
-  background: rgba(255, 255, 255, 0.16);
-  border-color: rgba(255, 255, 255, 0.3);
-  transform: scale(1.05);
+/* 触屏可能把 :hover 留到下一次点击；悬停样式只交给鼠标等精确指针。 */
+@media (hover: hover) and (pointer: fine) {
+  .shorts-header__back:hover,
+  .shorts-header__icon-btn:hover {
+    background: rgba(255, 255, 255, 0.16);
+    border-color: rgba(255, 255, 255, 0.3);
+    transform: scale(1.05);
+  }
 }
 
 .shorts-header__back:active,
@@ -477,8 +480,10 @@ html.shorts-document-scroll.is-pager-driven body {
   transition: background-color 0.18s ease, transform 0.18s ease;
 }
 
-.shorts-slide__playback-retry:hover {
-  background: rgba(255, 255, 255, 0.22);
+@media (hover: hover) and (pointer: fine) {
+  .shorts-slide__playback-retry:hover {
+    background: rgba(255, 255, 255, 0.22);
+  }
 }
 
 .shorts-slide__playback-retry:active {
@@ -642,10 +647,12 @@ html.shorts-document-scroll.is-pager-driven body {
     border-color 0.18s ease;
 }
 
-.shorts-drive-badge:hover {
-  background: rgba(255, 255, 255, 0.14);
-  border-color: rgba(255, 255, 255, 0.38);
-  color: #fff;
+@media (hover: hover) and (pointer: fine) {
+  .shorts-drive-badge:hover {
+    background: rgba(255, 255, 255, 0.14);
+    border-color: rgba(255, 255, 255, 0.38);
+    color: #fff;
+  }
 }
 
 .shorts-drive-badge:active {
@@ -703,11 +710,12 @@ html.shorts-document-scroll.is-pager-driven body {
   cursor: wait;
 }
 
-.shorts-slide__action:hover {
-  background: rgba(255, 255, 255, 0.15);
-  border-color: rgba(255, 255, 255, 0.35);
-  /* 炫酷的悬停外发光，突出按键焦点 */
-  box-shadow: 0 0 12px rgba(255, 255, 255, 0.2), 0 4px 12px rgba(0, 0, 0, 0.35);
+@media (hover: hover) and (pointer: fine) {
+  .shorts-slide__action:hover {
+    background: rgba(255, 255, 255, 0.15);
+    border-color: rgba(255, 255, 255, 0.35);
+    box-shadow: 0 0 12px rgba(255, 255, 255, 0.2), 0 4px 12px rgba(0, 0, 0, 0.35);
+  }
 }
 
 /* 低高度横屏不能沿用竖屏的 bottom 锚点：操作项总高度会向上侵入 header。
@@ -820,15 +828,24 @@ html.shorts-document-scroll.is-pager-driven body {
 }
 
 /* 悬停或拖动状态下，轨道变粗，白色手柄浮现 */
-.shorts-slide__progress:hover .shorts-slide__progress-track,
 .shorts-slide__progress.is-scrubbing .shorts-slide__progress-track {
   height: 6px;
   background: rgba(255, 255, 255, 0.35);
 }
 
-.shorts-slide__progress:hover .shorts-slide__progress-track::after,
 .shorts-slide__progress.is-scrubbing .shorts-slide__progress-track::after {
   transform: translateY(-50%) scale(1);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .shorts-slide__progress:hover .shorts-slide__progress-track {
+    height: 6px;
+    background: rgba(255, 255, 255, 0.35);
+  }
+
+  .shorts-slide__progress:hover .shorts-slide__progress-track::after {
+    transform: translateY(-50%) scale(1);
+  }
 }
 
 .shorts-slide__progress-fill {
@@ -1007,6 +1024,8 @@ html.shorts-document-scroll.is-pager-driven body {
   transition: all 0.2s;
 }
 
-.shorts-empty__link:hover {
-  background: rgba(255, 255, 255, 0.25);
+@media (hover: hover) and (pointer: fine) {
+  .shorts-empty__link:hover {
+    background: rgba(255, 255, 255, 0.25);
+  }
 }
