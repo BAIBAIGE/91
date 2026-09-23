@@ -170,6 +170,9 @@ func (i *Integration) reconcile(ctx context.Context) {
 	}
 	if i.session() == nil {
 		s := New(cfg, cfg.BotToken, i.cat, i.uploadDir, i.reserve)
+		// Read the live calendar timezone without restarting the receiver when
+		// scheduling settings change.
+		s.statusTimezone = func() string { return i.configManager.LiveSettings().NightlyTimezone }
 		i.mu.RLock()
 		wake := i.wake
 		i.mu.RUnlock()

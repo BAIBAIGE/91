@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/video-site/backend/internal/applog"
 	"github.com/video-site/backend/internal/catalog"
 )
 
@@ -48,6 +49,19 @@ func (s *Service) notifyOne(ctx context.Context, c *client, r catalog.TelegramRe
 			// Persist the rendered content identity so restarts and unchanged
 			// progress do not cause duplicate edits.
 			state = fmt.Sprintf("progress:%x", sha256.Sum256([]byte(message.text)))
+		}
+	} else if r.Response == responseStatus {
+		message = renderReceiptMessage(catalog.TelegramReceipt{Response: responseNeedsAccess, SenderID: r.SenderID})
+		if s.Allowed(r.SenderID) {
+			var err error
+			message, err = s.statusMessage(ctx, time.Now())
+			if err != nil {
+				if ctx.Err() != nil {
+					return
+				}
+				applog.Warn(ctx, "读取 TG 转存统计失败", err, applog.Fields{Component: "telegram", Stage: "status"})
+				message = botMessage{text: "⚠️ 暂时无法读取转存统计，请稍后重试 /status。"}
+			}
 		}
 	}
 	if r.Delivered == state {

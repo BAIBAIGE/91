@@ -35,6 +35,7 @@ type Status struct {
 }
 type Service struct {
 	wakeImports      func()
+	statusTimezone   func() string // Optional live timezone provider, assigned before Start.
 	cfg              config.Telegram
 	token            string
 	runCtx           context.Context
@@ -63,10 +64,11 @@ func (s *Service) Start(ctx context.Context) {
 	}
 	ctx, s.cancel = context.WithCancel(ctx)
 	s.runCtx = ctx
-	s.wg.Add(3)
+	s.wg.Add(4)
 	go func() { defer s.wg.Done(); s.receive(ctx) }()
 	go func() { defer s.wg.Done(); s.notify(ctx) }()
 	go func() { defer s.wg.Done(); s.processMediaGroups(ctx) }()
+	go func() { defer s.wg.Done(); s.syncCommandMenu(ctx) }()
 }
 func (s *Service) Shutdown(ctx context.Context) error {
 	if s.cancel != nil {
@@ -326,12 +328,17 @@ func (s *Service) prepareImport(ctx context.Context, u update) (catalog.Telegram
 			if fields := strings.Fields(m.Text); len(fields) > 0 {
 				command = strings.Split(fields[0], "@")[0]
 			}
-			if command == "/id" {
+			if command == "/"+commandID {
 				r.Response = responseUserID
-			} else if command == "/start" || command == "/help" {
+			} else if command == "/"+commandStart || command == "/"+commandHelp {
 				r.Response = responseNeedsAccess
 				if s.Allowed(m.From.ID) {
 					r.Response = responseHelp
+				}
+			} else if command == "/"+commandStatus {
+				r.Response = responseNeedsAccess
+				if s.Allowed(m.From.ID) {
+					r.Response = responseStatus
 				}
 			} else if s.Allowed(m.From.ID) {
 				r.Response = responseUnsupported

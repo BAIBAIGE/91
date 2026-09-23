@@ -130,19 +130,21 @@ func TestCommandsAndMediaHintsRespectAccess(t *testing.T) {
 		userID                  int64
 		want                    string
 	}{
-		{"start", "/start", "private", 42, "保存视频到媒体库"},
-		{"help", "/help", "private", 42, "说明的第一行"},
-		{"addressed help", "/help@test_bot", "private", 42, "保存视频到媒体库"},
-		{"start argument", "/start welcome", "private", 42, "保存视频到媒体库"},
+		{"start", "/start", "private", 42, "保存视频到91"},
+		{"help", "/help", "private", 42, "视频附带的第一行文字"},
+		{"addressed help", "/help@test_bot", "private", 42, "保存视频到91"},
+		{"start argument", "/start welcome", "private", 42, "保存视频到91"},
 		{"id", "/id", "private", 42, "<code>42</code>"},
 		{"bootstrap id", "/id@test_bot", "private", 99, "<code>99</code>"},
 		{"unauthorized start", "/start", "private", 99, "需要开通权限"},
 		{"unauthorized help", "/help", "private", 99, "需要开通权限"},
-		{"unsupported", "https://t.me/example/1", "private", 42, "请转发视频"},
-		{"unknown command", "/unknown", "private", 42, "/help"},
+		{"unauthorized status", "/status", "private", 99, "需要开通权限"},
+		{"unsupported", "https://t.me/example/1", "private", 42, "请发送视频"},
+		{"unknown command", "/unknown", "private", 42, "请发送视频"},
 		{"unauthorized media", "", "private", 99, ""},
 		{"group id", "/id", "group", 42, ""},
 		{"group help", "/help", "group", 42, ""},
+		{"group status", "/status", "group", 42, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			u := videoUpdate(1, tc.userID)

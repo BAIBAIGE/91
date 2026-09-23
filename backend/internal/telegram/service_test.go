@@ -267,6 +267,8 @@ func testTelegramImportEndToEnd(t *testing.T, album bool) {
 			result = map[string]any{"id": 123, "username": "test_bot"}
 		case "getWebhookInfo":
 			result = map[string]any{"url": ""}
+		case "setMyCommands", "setChatMenuButton":
+			result = true
 		case "getUpdates":
 			mu.Lock()
 			if !delivered {

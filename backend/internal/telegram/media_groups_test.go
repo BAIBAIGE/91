@@ -233,7 +233,7 @@ func TestMediaGroupPhotoOnlyRepliesOnceAndStandalonePhotoStillReplies(t *testing
 		t.Fatalf("receipts=%v err=%v", receipts, err)
 	}
 	for _, r := range receipts {
-		if !strings.Contains(renderReceiptMessage(r).text, "请转发视频") || r.MessageID == 2 {
+		if !strings.Contains(renderReceiptMessage(r).text, "请发送视频") || r.MessageID == 2 {
 			t.Fatalf("unexpected photo reply: %+v", r)
 		}
 	}
