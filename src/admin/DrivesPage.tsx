@@ -13,7 +13,7 @@ import {
 } from "lucide-react";
 import * as api from "./api";
 import { AdminPageActions } from "./AdminPageActions";
-import { useToast } from "./ToastContext";
+import { useToast } from "@/components/ToastContext";
 import { Modal } from "./Modal";
 import { ConfirmModal } from "./ConfirmModal";
 import { formatBytes } from "./storageFormat";

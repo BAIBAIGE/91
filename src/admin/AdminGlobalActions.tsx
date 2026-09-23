@@ -4,7 +4,7 @@ import { Check, Home, Loader2, LogOut, Palette, RefreshCw } from "lucide-react";
 import { applyTheme, getCurrentTheme } from "@/lib/theme";
 import * as api from "./api";
 import type { Theme } from "./api";
-import { useToast } from "./ToastContext";
+import { useToast } from "@/components/ToastContext";
 
 type ThemeOption = {
   id: Theme;

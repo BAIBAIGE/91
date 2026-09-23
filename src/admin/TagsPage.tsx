@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
 import { Film, Plus, RefreshCw } from "lucide-react";
 import { SearchPanel } from "@/components/SearchPanel";
 import * as api from "./api";
-import { useToast } from "./ToastContext";
+import { useToast } from "@/components/ToastContext";
 import { ConfirmModal } from "./ConfirmModal";
 import { Modal } from "./Modal";
 import { AdminEmptyVisual } from "./AdminEmptyVisual";

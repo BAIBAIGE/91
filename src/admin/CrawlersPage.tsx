@@ -19,7 +19,7 @@ import {
 import * as api from "./api";
 import { Modal } from "./Modal";
 import { ConfirmModal } from "./ConfirmModal";
-import { useToast } from "./ToastContext";
+import { useToast } from "@/components/ToastContext";
 import { generationStateClass, generationStateLabel } from "./drive/constants";
 import { CrawlerUploadTargetField } from "./drive/CrawlerUploadTargetField";
 import { SpiderIcon } from "./icons/SpiderIcon";

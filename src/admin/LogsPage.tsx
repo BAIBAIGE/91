@@ -24,7 +24,7 @@ import {
 } from "lucide-react";
 import * as api from "./api";
 import { ConfirmModal } from "./ConfirmModal";
-import { useToast } from "./ToastContext";
+import { useToast } from "@/components/ToastContext";
 import { useLogScroller } from "./useLogScroller";
 import { useRuntimeLogs } from "./useRuntimeLogs";
 import {

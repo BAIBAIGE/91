@@ -3,10 +3,10 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { Toast, type ToastKind } from "../src/admin/Toast.tsx";
+import { Toast, type ToastKind } from "../src/components/Toast.tsx";
 
 const toastSource = readFileSync(
-  new URL("../src/admin/ToastContext.tsx", import.meta.url),
+  new URL("../src/components/ToastContext.tsx", import.meta.url),
   "utf8"
 );
 const sharedStateCss = readFileSync(
@@ -66,20 +66,20 @@ test("toast item updates keep the context value stable", () => {
 });
 
 test("toast cards use an opaque theme surface for every status", () => {
-  const baseToast = ruleBody(sharedStateCss, ".admin-toast");
+  const baseToast = ruleBody(sharedStateCss, ".toast");
   assert.match(baseToast, /background\s*:\s*var\(--bg-elevated\)/);
   assert.match(baseToast, /color\s*:\s*var\(--text-strong\)/);
   for (const kind of ["success", "error"]) {
-    const variant = ruleBody(sharedStateCss, `.admin-toast.is-${kind}`);
+    const variant = ruleBody(sharedStateCss, `.toast.is-${kind}`);
     assert.doesNotMatch(variant, /(?:background|color)\s*:/);
   }
 });
 
-test("admin toasts show long messages without internal scrolling", () => {
-  const baseToast = ruleBody(sharedStateCss, ".admin-toast");
-  const baseText = ruleBody(sharedStateCss, ".admin-toast__text");
-  const content = ruleBody(sharedStateCss, ".admin-toast__content");
-  const mobileStack = ruleBody(mobileCss(), ".admin-toast-stack");
+test("toasts show long messages without internal scrolling", () => {
+  const baseToast = ruleBody(sharedStateCss, ".toast");
+  const baseText = ruleBody(sharedStateCss, ".toast__text");
+  const content = ruleBody(sharedStateCss, ".toast__content");
+  const mobileStack = ruleBody(mobileCss(), ".toast-stack");
 
   assert.match(baseText, /overflow-wrap\s*:\s*anywhere/);
   assert.match(baseText, /white-space\s*:\s*pre-wrap/);

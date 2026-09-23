@@ -2,7 +2,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import { BrowserRouter } from "react-router";
 import App from "./App";
-import { ToastProvider } from "./admin/ToastContext";
+import { ToastProvider } from "@/components/ToastContext";
 import { AuthProvider } from "./admin/AuthContext";
 import { syncThemeFromServer } from "./lib/theme";
 import { initializeListingScrollRestore } from "./lib/listingScrollRestore";

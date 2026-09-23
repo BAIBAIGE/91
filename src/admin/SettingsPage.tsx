@@ -22,7 +22,7 @@ import { useSearchParams } from "react-router";
 import { TelegramSettingsSection } from "./settings/TelegramSettingsSection";
 import { invalidateTagsCache } from "@/data/videos";
 import * as api from "./api";
-import { useToast } from "./ToastContext";
+import { useToast } from "@/components/ToastContext";
 import {
   ConfigSourceWorkspace,
   preloadConfigSourceEditor,

@@ -4,7 +4,7 @@ import "@/styles/admin-controls.css";
 import "@/styles/login.css";
 import { useAuth } from "./AuthContext";
 import { AuthUnavailable } from "./AuthUnavailable";
-import { useToast } from "./ToastContext";
+import { useToast } from "@/components/ToastContext";
 import * as api from "./api";
 import { PasswordInput } from "./PasswordInput";
 

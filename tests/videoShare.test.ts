@@ -143,28 +143,25 @@ test("share creation copies a newly generated one-time URL", () => {
   assert.match(actionsSource, /scheduleShareStateReset\(1500\)/);
 });
 
-test("successful mobile share shows a bottom-right confirmation toast", () => {
+test("share feedback uses the shared toast provider on desktop and mobile", () => {
   assert.match(
     actionsSource,
-    /shareState === "copied" \|\| shareState === "copy-ready"[\s\S]*createPortal\(/
+    /import \{ useToast \} from "\.\/ToastContext"/
   );
   assert.match(
     actionsSource,
-    /shareState === "copied"[\s\S]*?"已复制一次性分享链接"[\s\S]*?"请再次点击分享按钮"/
+    /show\("已复制一次性分享链接", "success"\)/
   );
-  assert.doesNotMatch(
+  assert.match(
     actionsSource,
-    /className="vd-share-toast"[\s\S]*?<Check[\s\S]*?<\/div>/
-  );
-  assert.match(actionsSource, /className="vd-share-toast"[\s\S]*role="status"/);
-  assert.match(
-    shareStylesSource,
-    /\.vd-share-toast\s*\{\s*display:\s*none;/s
+    /show\("请再次点击分享按钮", "info"\)/
   );
   assert.match(
-    shareStylesSource,
-    /@media \(max-width:\s*768px\)\s*\{[\s\S]*?\.vd-share-toast\s*\{[^}]*position:\s*fixed[^}]*right:\s*calc\(16px \+ env\(safe-area-inset-right, 0px\)\)[^}]*bottom:\s*calc\(16px \+ env\(safe-area-inset-bottom, 0px\)\)[^}]*z-index:\s*var\(--z-toast\)[^}]*display:\s*block/s
+    actionsSource,
+    /show\(pendingShareURL\.current \? "复制失败，请重试" : "分享失败，请重试", "error"\)/
   );
+  assert.doesNotMatch(actionsSource, /vd-share-toast|createPortal|matchMedia/);
+  assert.doesNotMatch(shareStylesSource, /vd-share-toast/);
 });
 
 test("iOS starts deferred clipboard writing before awaiting share creation", () => {

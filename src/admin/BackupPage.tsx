@@ -23,7 +23,7 @@ import * as api from "./api";
 import { useAuth } from "./AuthContext";
 import { ConfirmModal } from "./ConfirmModal";
 import { Modal } from "./Modal";
-import { useToast } from "./ToastContext";
+import { useToast } from "@/components/ToastContext";
 import { useAdminRouteActive } from "./AdminRouteCache";
 import { useAdminFloatingActionSpace } from "./useAdminFloatingActionSpace";
 

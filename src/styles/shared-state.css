@@ -60,7 +60,7 @@
   font-size: 16px;
 }
 
-.admin-toast-stack {
+.toast-stack {
   position: fixed;
   right: 24px;
   bottom: 24px;
@@ -72,7 +72,7 @@
   pointer-events: none;
 }
 
-.admin-toast {
+.toast {
   --toast-tone: var(--info);
   position: relative;
   display: flex;
@@ -92,7 +92,7 @@
   pointer-events: auto;
 }
 
-.admin-toast::before {
+.toast::before {
   position: absolute;
   top: 8px;
   bottom: 8px;
@@ -103,18 +103,18 @@
   content: "";
 }
 
-.admin-toast__icon {
+.toast__icon {
   flex: none;
   margin-top: 2px;
   color: var(--toast-tone);
 }
 
-.admin-toast__content {
+.toast__content {
   flex: 1;
   min-width: 0;
 }
 
-.admin-toast__copy {
+.toast__copy {
   display: block;
   width: 100%;
   border-radius: var(--radius-xs);
@@ -124,33 +124,33 @@
   cursor: pointer;
 }
 
-.admin-toast__text {
+.toast__text {
   display: block;
   min-width: 0;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
 }
 
-.admin-toast__feedback {
+.toast__feedback {
   display: block;
   font-size: var(--font-sm);
   font-weight: var(--weight-regular);
   overflow-wrap: anywhere;
 }
 
-.admin-toast__feedback:not(:empty) {
+.toast__feedback:not(:empty) {
   margin-top: 6px;
 }
 
-.admin-toast__feedback.is-success {
+.toast__feedback.is-success {
   color: var(--success);
 }
 
-.admin-toast__feedback.is-error {
+.toast__feedback.is-error {
   color: var(--danger);
 }
 
-.admin-toast__close {
+.toast__close {
   display: grid;
   flex: none;
   width: 24px;
@@ -161,12 +161,12 @@
   color: var(--text-muted);
 }
 
-.admin-toast__close:hover {
+.toast__close:hover {
   background: var(--bg-surface);
   color: var(--text-strong);
 }
 
-.admin-toast.is-leaving {
+.toast.is-leaving {
   animation: toast-out 180ms var(--ease-out) forwards;
   pointer-events: none;
 }
@@ -176,11 +176,11 @@
   to { opacity: 1; transform: none; }
 }
 
-.admin-toast.is-success {
+.toast.is-success {
   --toast-tone: var(--success);
 }
 
-.admin-toast.is-error {
+.toast.is-error {
   --toast-tone: var(--danger);
 }
 
@@ -189,8 +189,8 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .admin-toast,
-  .admin-toast.is-leaving {
+  .toast,
+  .toast.is-leaving {
     animation: none;
   }
 }
@@ -201,7 +201,7 @@
     height: 136px;
   }
 
-  .admin-toast-stack {
+  .toast-stack {
     right: 16px;
     bottom: calc(16px + env(safe-area-inset-bottom, 0px));
     left: 16px;

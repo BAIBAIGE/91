@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState, type CSSProperties } from "re
 import { ChevronRight, Eye, EyeOff, Folder, FolderOpen } from "lucide-react";
 import * as api from "../api";
 import { SkipDirsIcon } from "../icons/SkipDirsIcon";
-import { useToast } from "../ToastContext";
+import { useToast } from "@/components/ToastContext";
 import { SkipDirsLoadingIndicator } from "./SkipDirsLoadingIndicator";
 
 const AUTO_SAVE_DELAY_MS = 300;

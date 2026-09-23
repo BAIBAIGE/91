@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { QrCode } from "lucide-react";
 import * as api from "../api";
-import { useToast } from "../ToastContext";
+import { useToast } from "@/components/ToastContext";
 
 export function GuangYaPanQRCodeLogin({
   onCredentials,

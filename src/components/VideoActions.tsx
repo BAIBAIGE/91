@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { createPortal } from "react-dom";
 import { Check, Share2, ThumbsDown, ThumbsUp, Trash2 } from "lucide-react";
+import { useToast } from "./ToastContext";
 import type { VideoDetail } from "@/types";
 import { setVideoVisitReaction } from "@/data/videos";
 import { formatCount } from "@/lib/format";
@@ -39,6 +39,7 @@ export function VideoActions({
   canDelete = true,
   onReactionCountsChange,
 }: Props) {
+  const { show } = useToast();
   const [likes, setLikes] = useState(video.likes ?? 0);
   const [dislikes, setDislikes] = useState(video.dislikes ?? 0);
   const [bursting, setBursting] = useState(false);
@@ -179,24 +180,34 @@ export function VideoActions({
 
   async function handleShare() {
     if (shareState === "creating") return;
+    if (shareResetTimer.current !== null) {
+      window.clearTimeout(shareResetTimer.current);
+      shareResetTimer.current = null;
+    }
     setShareState("creating");
     try {
       if (pendingShareURL.current) {
         await copyExistingVideoShareURL(pendingShareURL.current);
       } else {
         const result = await createAndCopyVideoShare(video.id);
+        if (!mountedRef.current) return;
         if (!result.copied) {
           pendingShareURL.current = result.url;
           setShareState("copy-ready");
+          show("请再次点击分享按钮", "info");
           scheduleShareStateReset(2500);
           return;
         }
       }
+      if (!mountedRef.current) return;
       pendingShareURL.current = "";
       setShareState("copied");
+      show("已复制一次性分享链接", "success");
       scheduleShareStateReset(1500);
     } catch {
+      if (!mountedRef.current) return;
       setShareState("error");
+      show(pendingShareURL.current ? "复制失败，请重试" : "分享失败，请重试", "error");
     }
   }
 
@@ -211,106 +222,88 @@ export function VideoActions({
   }
 
   return (
-    <>
-      <div className="vd-actions" role="toolbar" aria-label="视频操作">
-        <div
-          className="vd-actions__group"
-          role="group"
-          aria-label="点赞和点踩"
-          aria-busy={reactionPending}
-        >
-          <button
-            type="button"
-            className={`vd-actions__pill vd-actions__like${
-              reaction === "like" ? " is-active" : ""
-            }${bursting ? " is-bursting" : ""}`}
-            onClick={() => handleReaction("like")}
-            disabled={reactionPending}
-            aria-pressed={reaction === "like"}
-            aria-label={reaction === "like" ? "取消点赞" : "点赞"}
-          >
-            <ThumbsUp
-              size={18}
-              fill={reaction === "like" ? "currentColor" : "none"}
-            />
-            <span className="vd-actions__count">{formatCount(likes)}</span>
-          </button>
-          <button
-            type="button"
-            className={`vd-actions__pill vd-actions__dislike${
-              reaction === "dislike" ? " is-active" : ""
-            }`}
-            onClick={() => handleReaction("dislike")}
-            disabled={reactionPending}
-            aria-pressed={reaction === "dislike"}
-            aria-label={reaction === "dislike" ? "取消点踩" : "点踩"}
-          >
-            <ThumbsDown
-              size={18}
-              fill={reaction === "dislike" ? "currentColor" : "none"}
-            />
-            <span className="vd-actions__count">{formatCount(dislikes)}</span>
-          </button>
-        </div>
-
+    <div className="vd-actions" role="toolbar" aria-label="视频操作">
+      <div
+        className="vd-actions__group"
+        role="group"
+        aria-label="点赞和点踩"
+        aria-busy={reactionPending}
+      >
         <button
           type="button"
-          className={`vd-actions__btn vd-actions__share${
-            shareState === "copied" ? " is-success" : ""
-          }`}
-          onClick={handleShare}
-          disabled={shareState === "creating"}
-          aria-label={
-            pendingShareURL.current
-              ? "复制已生成的一次性分享链接"
-              : "生成并复制一次性分享链接"
-          }
+          className={`vd-actions__pill vd-actions__like${
+            reaction === "like" ? " is-active" : ""
+          }${bursting ? " is-bursting" : ""}`}
+          onClick={() => handleReaction("like")}
+          disabled={reactionPending}
+          aria-pressed={reaction === "like"}
+          aria-label={reaction === "like" ? "取消点赞" : "点赞"}
         >
-          {shareState === "copied" ? <Check size={16} /> : <Share2 size={16} />}
-          <span>
-            {shareState === "creating"
-              ? "生成中"
-              : shareState === "copied"
-                ? "链接已复制"
-                : shareState === "copy-ready"
-                  ? "再次点击复制"
-                  : shareState === "error"
-                    ? pendingShareURL.current
-                      ? "复制失败，重试"
-                      : "分享失败，重试"
-                    : "分享"}
-          </span>
+          <ThumbsUp
+            size={18}
+            fill={reaction === "like" ? "currentColor" : "none"}
+          />
+          <span className="vd-actions__count">{formatCount(likes)}</span>
         </button>
-
-        {canDelete && (
-          <button
-            type="button"
-            className="vd-actions__btn vd-actions__delete"
-            onClick={onDeleteVideo}
-            disabled={deleteSaving}
-            aria-label="删除这个视频"
-          >
-            <Trash2 size={16} />
-            <span>{deleteSaving ? "删除中" : "删除"}</span>
-          </button>
-        )}
+        <button
+          type="button"
+          className={`vd-actions__pill vd-actions__dislike${
+            reaction === "dislike" ? " is-active" : ""
+          }`}
+          onClick={() => handleReaction("dislike")}
+          disabled={reactionPending}
+          aria-pressed={reaction === "dislike"}
+          aria-label={reaction === "dislike" ? "取消点踩" : "点踩"}
+        >
+          <ThumbsDown
+            size={18}
+            fill={reaction === "dislike" ? "currentColor" : "none"}
+          />
+          <span className="vd-actions__count">{formatCount(dislikes)}</span>
+        </button>
       </div>
 
-      {(shareState === "copied" || shareState === "copy-ready") &&
-        createPortal(
-          <div
-            className="vd-share-toast"
-            role="status"
-            aria-live="polite"
-          >
-            <span>
-              {shareState === "copied"
-                ? "已复制一次性分享链接"
-                : "请再次点击分享按钮"}
-            </span>
-          </div>,
-          document.body
-        )}
-    </>
+      <button
+        type="button"
+        className={`vd-actions__btn vd-actions__share${
+          shareState === "copied" ? " is-success" : ""
+        }`}
+        onClick={handleShare}
+        disabled={shareState === "creating"}
+        aria-label={
+          pendingShareURL.current
+            ? "复制已生成的一次性分享链接"
+            : "生成并复制一次性分享链接"
+        }
+      >
+        {shareState === "copied" ? <Check size={16} /> : <Share2 size={16} />}
+        <span>
+          {shareState === "creating"
+            ? "生成中"
+            : shareState === "copied"
+              ? "链接已复制"
+              : shareState === "copy-ready"
+                ? "再次点击复制"
+                : shareState === "error"
+                  ? pendingShareURL.current
+                    ? "复制失败，重试"
+                    : "分享失败，重试"
+                  : "分享"}
+        </span>
+      </button>
+
+      {canDelete && (
+        <button
+          type="button"
+          className="vd-actions__btn vd-actions__delete"
+          onClick={onDeleteVideo}
+          disabled={deleteSaving}
+          aria-label="删除这个视频"
+        >
+          <Trash2 size={16} />
+          <span>{deleteSaving ? "删除中" : "删除"}</span>
+        </button>
+      )}
+    </div>
   );
 }

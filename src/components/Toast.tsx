@@ -61,25 +61,25 @@ export function Toast({
 
   return (
     <div
-      className={`admin-toast is-${toast.kind}${isLeaving ? " is-leaving" : ""}`}
+      className={`toast is-${toast.kind}${isLeaving ? " is-leaving" : ""}`}
       aria-hidden={isLeaving || undefined}
     >
-      <Icon className="admin-toast__icon" size={18} aria-hidden="true" />
-      <div className="admin-toast__content">
+      <Icon className="toast__icon" size={18} aria-hidden="true" />
+      <div className="toast__content">
         <button
           type="button"
-          className="admin-toast__copy"
+          className="toast__copy"
           aria-label={`复制提示：${toast.text}`}
           title="点击复制提示"
           disabled={isLeaving}
           onClick={() => void copyText()}
         >
-          <span className="admin-toast__text" role={toast.kind === "error" ? "alert" : undefined}>
+          <span className="toast__text" role={toast.kind === "error" ? "alert" : undefined}>
             {toast.text}
           </span>
         </button>
         <span
-          className={`admin-toast__feedback${copyResult ? (copyResult.copied ? " is-success" : " is-error") : ""}`}
+          className={`toast__feedback${copyResult ? (copyResult.copied ? " is-success" : " is-error") : ""}`}
           role="status"
           aria-live="polite"
         >
@@ -88,7 +88,7 @@ export function Toast({
       </div>
       <button
         type="button"
-        className="admin-toast__close"
+        className="toast__close"
         aria-label="关闭提示"
         disabled={isLeaving}
         onClick={dismiss}

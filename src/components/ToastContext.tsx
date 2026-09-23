@@ -40,7 +40,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     <ToastCtx.Provider value={contextValue}>
       {children}
       {createPortal(
-        <div className="admin-toast-stack" role="region" aria-label="通知" aria-live="polite">
+        <div className="toast-stack" role="region" aria-label="通知" aria-live="polite">
           {items.map((toast) => (
             <Toast key={toast.id} toast={toast} onDismiss={removeToast} />
           ))}

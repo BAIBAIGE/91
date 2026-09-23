@@ -8,7 +8,7 @@ import {
   Trash2,
 } from "lucide-react";
 import * as api from "./api";
-import { useToast } from "./ToastContext";
+import { useToast } from "@/components/ToastContext";
 import { Modal } from "./Modal";
 import { ConfirmModal } from "./ConfirmModal";
 import { PasswordInput } from "./PasswordInput";

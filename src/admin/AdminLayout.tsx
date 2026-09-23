@@ -19,7 +19,7 @@ import { AdminGlobalActions } from "./AdminGlobalActions";
 import { AdminPageActionsProvider } from "./AdminPageActions";
 import { AdminRouteCache, getAdminRouteCacheKey } from "./AdminRouteCache";
 import { useAuth } from "./AuthContext";
-import { useToast } from "./ToastContext";
+import { useToast } from "@/components/ToastContext";
 import { Modal } from "./Modal";
 import { getAdminPageTitle, shouldShowAdminPageHeader } from "./adminPageTitle";
 import { preloadRemainingAdminPageModules } from "./adminPagePreload";
