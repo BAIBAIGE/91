@@ -146,6 +146,16 @@ test("the app keeps the listing mounted behind an independently scrolling detail
   );
   assert.match(app, /document\.title = returnTitleRef\.current/);
   assert.match(app, /rootRef\.current\.inert = !active/);
+  assert.match(app, /aria-hidden=\{!active \? true : undefined\}/);
+  const inactiveListingStyle = layout.match(
+    /\.app-primary-route\[aria-hidden="true"\]\s*\{([^}]+)\}/
+  )?.[1];
+  assert.ok(inactiveListingStyle);
+  assert.match(inactiveListingStyle, /visibility:\s*hidden;/);
+  assert.match(inactiveListingStyle, /opacity:\s*0;/);
+  assert.match(inactiveListingStyle, /pointer-events:\s*none;/);
+  // Removing layout would destroy the retained scroll surface and row geometry.
+  assert.doesNotMatch(inactiveListingStyle, /display:\s*none|content-visibility:\s*hidden/);
 
   for (const page of [home, listing]) {
     assert.match(page, /const routeActive = useRouteActivity\(\)/);

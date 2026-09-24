@@ -14,6 +14,15 @@
   min-height: 100%;
 }
 
+/* Keep retained routes measurable without painting them behind the scrolling
+ * detail. Opacity also hides descendants that explicitly set visibility:
+ * visible, such as a populated search field's reset button. */
+.app-primary-route[aria-hidden="true"] {
+  visibility: hidden;
+  opacity: 0;
+  pointer-events: none;
+}
+
 /*
  * A detail opened from a listing is a foreground history layer. The listing
  * remains mounted in the document underneath it, including the virtualizer's
