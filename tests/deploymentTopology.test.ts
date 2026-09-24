@@ -74,7 +74,7 @@ test("source deployment creates Telegram configuration once and preserves it acr
     .replace('TELEGRAM_API_ID: ""', 'TELEGRAM_API_ID: "12345"')
     .replace('TELEGRAM_API_HASH: ""', 'TELEGRAM_API_HASH: "0123456789abcdef0123456789abcdef"')
     .replace("aiogram/telegram-bot-api:latest", "aiogram/telegram-bot-api:pinned")
-    .replace("/var/lib/telegram-bot-api:/var/lib/telegram-bot-api", "/nzb/tg:/var/lib/telegram-bot-api");
+    .replace("./data/telegram:/var/lib/telegram-bot-api", "/nzb/tg:/var/lib/telegram-bot-api");
   writeFileSync(compose, customized);
   writeFileSync(template, `# Updated release template\n${example}`);
   update();

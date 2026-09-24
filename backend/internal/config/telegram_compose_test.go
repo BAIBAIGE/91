@@ -46,12 +46,16 @@ func TestTelegramComposeResolvesNativeAndContainerStorage(t *testing.T) {
 }
 
 func TestTelegramComposeAcceptsShippedDeploymentFiles(t *testing.T) {
-	for name, endpoint := range map[string]string{
-		"tg-docker-compose.yml": "http://telegram-bot-api:7878",
-		"telegram.example.yml":  "http://127.0.0.1:7878",
+	directory, err := filepath.Abs(filepath.Join("..", "..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range map[string]struct{ endpoint, localRoot string }{
+		"tg-docker-compose.yml": {"http://telegram-bot-api:7878", telegramDataMount},
+		"telegram.example.yml":  {"http://127.0.0.1:7878", filepath.Join(directory, "data", "telegram")},
 	} {
-		got, err := readTelegramCompose(filepath.Join("..", "..", "..", filepath.FromSlash(name)))
-		if err != nil || got.apiBaseURL != endpoint || got.apiRoot != telegramDataMount || got.localRoot != telegramDataMount {
+		got, err := readTelegramCompose(filepath.Join(directory, name))
+		if err != nil || got.apiBaseURL != want.endpoint || got.apiRoot != telegramDataMount || got.localRoot != want.localRoot {
 			t.Fatalf("%s: storage=%+v error=%v", name, got, err)
 		}
 	}

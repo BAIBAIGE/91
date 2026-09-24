@@ -9,7 +9,7 @@ services:
       VIDEO_TELEGRAM_COMPOSE: /opt/video-site-91/telegram.yml
     volumes:
       - ./data:/opt/video-site-91/data
-      - telegram-cache:/var/lib/telegram-bot-api
+      - ./data/telegram:/var/lib/telegram-bot-api
       # 网站从本部署文件读取 Bot API 端口和共享数据目录配置。
       - ./docker-compose.yml:/opt/video-site-91/telegram.yml:ro
     depends_on:
@@ -26,13 +26,10 @@ services:
       TELEGRAM_HTTP_PORT: "7878"
     stop_grace_period: 30s
     volumes:
-      - telegram-cache:/var/lib/telegram-bot-api
+      - ./data/telegram:/var/lib/telegram-bot-api
     restart: unless-stopped
     logging:
       driver: json-file
       options:
         max-size: "10m"
         max-file: "3"
-
-volumes:
-  telegram-cache:

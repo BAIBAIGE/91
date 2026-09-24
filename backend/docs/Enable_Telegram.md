@@ -96,4 +96,4 @@ docker compose pull && docker compose up -d
 ## 3. `91` Web 端配置
 
 1. 在 **配置面板 → Telegram** 填写 Bot Token，启用 Telegram 并保存，进入 Telegram 页面测试连接
-2. 私聊机器人发送 /id，将回复的数字填入“允许的用户 ID”并再次保存
+2. 私聊机器人发送 /id，将回复的数字填入 `91` 项目中 "允许的用户 ID" 并保存
