@@ -31,18 +31,19 @@ const (
 // ContentHash is the provider's untyped value; its algorithm is not inferred
 // from the string length. SizeBytes is the reported size, not a verified size.
 type duplicateSnapshot struct {
-	ID              string   `json:"id"`
-	DriveID         string   `json:"driveId"`
-	FileID          string   `json:"fileId"`
-	FileName        string   `json:"fileName"`
-	ParentID        string   `json:"parentId,omitempty"`
-	DirName         string   `json:"dirName,omitempty"`
-	AncestorDirIDs  []string `json:"ancestorDirIds,omitempty"`
-	Title           string   `json:"title"`
-	SizeBytes       int64    `json:"sizeBytes"`
-	DurationSeconds int      `json:"durationSeconds"`
-	ContentHash     string   `json:"contentHash,omitempty"`
-	SampledSHA256   string   `json:"sampledSha256,omitempty"`
+	ID               string   `json:"id"`
+	DriveID          string   `json:"driveId"`
+	FileID           string   `json:"fileId"`
+	FileName         string   `json:"fileName"`
+	ParentID         string   `json:"parentId,omitempty"`
+	DirName          string   `json:"dirName,omitempty"`
+	AncestorDirIDs   []string `json:"ancestorDirIds,omitempty"`
+	AncestorDirNames []string `json:"ancestorDirNames,omitempty"`
+	Title            string   `json:"title"`
+	SizeBytes        int64    `json:"sizeBytes"`
+	DurationSeconds  int      `json:"durationSeconds"`
+	ContentHash      string   `json:"contentHash,omitempty"`
+	SampledSHA256    string   `json:"sampledSha256,omitempty"`
 }
 
 func snapshotDuplicateVideo(v *Video) *duplicateSnapshot {
@@ -52,8 +53,9 @@ func snapshotDuplicateVideo(v *Video) *duplicateSnapshot {
 	return &duplicateSnapshot{
 		ID: v.ID, DriveID: v.DriveID, FileID: v.FileID, FileName: v.FileName,
 		ParentID: v.ParentID, DirName: v.DirName,
-		AncestorDirIDs: append([]string(nil), v.AncestorDirIDs...),
-		Title:          v.Title, SizeBytes: v.Size, DurationSeconds: v.DurationSeconds,
+		AncestorDirIDs:   append([]string(nil), v.AncestorDirIDs...),
+		AncestorDirNames: append([]string(nil), v.AncestorDirNames...),
+		Title:            v.Title, SizeBytes: v.Size, DurationSeconds: v.DurationSeconds,
 		ContentHash: normalizeContentHash(v.ContentHash), SampledSHA256: normalizeContentHash(v.SampledSHA256),
 	}
 }

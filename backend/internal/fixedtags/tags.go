@@ -16,12 +16,11 @@ import (
 
 const SourceBuiltin = "builtin"
 
-// Tag 是一条内置标签定义。Aliases 仅作展示同义词；实际匹配走 Rule。
+// Tag 是一条内置标签及其匹配规则。
 type Tag struct {
-	Label   string
-	Source  string
-	Aliases []string
-	Rule    tagging.Rule
+	Label  string
+	Source string
+	Rule   tagging.Rule
 }
 
 // Labels 保留旧包变量名：当前允许保留为 builtin 的全部内置标签名。
@@ -110,14 +109,4 @@ func RuleFor(label string) tagging.Rule {
 		}
 	}
 	return tagging.Rule{}
-}
-
-// AliasesFor 保留旧包函数名：返回旧版 aliases 字段的兼容值（通常为空）。
-func AliasesFor(label string) []string {
-	for _, t := range All() {
-		if t.Label == label {
-			return append([]string(nil), t.Aliases...)
-		}
-	}
-	return nil
 }

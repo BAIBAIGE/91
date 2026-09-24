@@ -225,8 +225,8 @@ func newPublicReadBenchmarkCatalog(b *testing.B, count int) (*Catalog, []string)
 
 	now := int64(1_800_000_000_000)
 	result, err := tx.ExecContext(ctx, `
-INSERT INTO tags (label, aliases, match_rules, source, created_at, updated_at)
-VALUES ('benchmark', '[]', '{}', 'user', ?, ?)
+INSERT INTO tags (label, match_rules, source, created_at, updated_at)
+VALUES ('benchmark', '{}', 'user', ?, ?)
 `, now, now)
 	if err != nil {
 		b.Fatal(err)

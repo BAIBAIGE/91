@@ -35,7 +35,7 @@ func (a *AdminServer) handleCreateTag(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, r, http.StatusBadRequest, err)
 		return
 	}
-	classified, err := a.Catalog.CreateTagAndClassify(r.Context(), body.Label, nil, "user")
+	classified, err := a.Catalog.CreateTagAndClassify(r.Context(), body.Label, "user")
 	if err != nil {
 		writeErr(w, r, http.StatusBadRequest, err)
 		return

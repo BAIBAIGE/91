@@ -11,8 +11,7 @@ import (
 // Application configuration, including preview.enabled, is owned by config.yaml.
 // This endpoint only retains database-backed UI preferences.
 type settingsDTO struct {
-	Theme                   string `json:"theme"`
-	AutoGenerateTagsEnabled bool   `json:"autoGenerateTagsEnabled"`
+	Theme string `json:"theme"`
 }
 
 func (a *AdminServer) handleGetSettings(w http.ResponseWriter, r *http.Request) {
@@ -23,18 +22,8 @@ func (a *AdminServer) handleGetSettings(w http.ResponseWriter, r *http.Request) 
 			theme = v
 		}
 	}
-	autoGenerateTagsEnabled := false
-	if a.Catalog != nil {
-		enabled, err := a.Catalog.AutoGenerateTagsEnabled(r.Context())
-		if err != nil {
-			writeErr(w, r, http.StatusInternalServerError, err)
-			return
-		}
-		autoGenerateTagsEnabled = enabled
-	}
 	writeJSON(w, http.StatusOK, settingsDTO{
-		Theme:                   theme,
-		AutoGenerateTagsEnabled: autoGenerateTagsEnabled,
+		Theme: theme,
 	})
 }
 
@@ -63,31 +52,10 @@ func (a *AdminServer) handlePutSettings(w http.ResponseWriter, r *http.Request) 
 			}
 		}
 	}
-	if v, ok := raw["autoGenerateTagsEnabled"]; ok && a.Catalog != nil {
-		var enabled bool
-		if err := json.Unmarshal(v, &enabled); err != nil {
-			writeErr(w, r, http.StatusBadRequest, err)
-			return
-		}
-		if err := a.Catalog.SetAutoGenerateTagsEnabled(r.Context(), enabled); err != nil {
-			writeErr(w, r, http.StatusInternalServerError, err)
-			return
-		}
-	}
 	// 回显当前值
-	resp := settingsDTO{
-		AutoGenerateTagsEnabled: false,
-	}
+	resp := settingsDTO{}
 	if a.GetTheme != nil {
 		resp.Theme = a.GetTheme()
-	}
-	if a.Catalog != nil {
-		enabled, err := a.Catalog.AutoGenerateTagsEnabled(r.Context())
-		if err != nil {
-			writeErr(w, r, http.StatusInternalServerError, err)
-			return
-		}
-		resp.AutoGenerateTagsEnabled = enabled
 	}
 	writeJSON(w, http.StatusOK, resp)
 }

@@ -24,6 +24,17 @@ func (s *Scanner) discover(ctx context.Context, startDirID string, stats *Stats,
 	if startDirID == "" {
 		startDirID = s.Drive.RootID()
 	}
+	startDirName := ""
+	if provider, ok := s.Drive.(drives.DirectoryNameProvider); ok {
+		name, err := provider.DirectoryName(ctx, startDirID)
+		if err == nil {
+			startDirName = name
+		} else if ctx.Err() != nil {
+			return Snapshot{}, ctx.Err()
+		} else if !errors.Is(err, drives.ErrNotSupported) {
+			log.Printf("[%s] drive=%s start directory name unavailable: %v", s.logPrefix(), s.Drive.ID(), err)
+		}
+	}
 	snapshot := Snapshot{
 		DriveID:          s.Drive.ID(),
 		DriveKind:        s.Drive.Kind(),
@@ -34,7 +45,7 @@ func (s *Scanner) discover(ctx context.Context, startDirID string, stats *Stats,
 		ExcludedDirIDs:   make(map[string]struct{}),
 	}
 	attemptedDirIDs := make(map[string]struct{})
-	if err := s.discoverDir(ctx, startDirID, "", nil, &snapshot, stats, progress, attemptedDirIDs); err != nil {
+	if err := s.discoverDir(ctx, startDirID, startDirName, nil, nil, &snapshot, stats, progress, attemptedDirIDs); err != nil {
 		return snapshot, err
 	}
 	return snapshot, nil
@@ -45,6 +56,7 @@ func (s *Scanner) discoverDir(
 	dirID string,
 	dirName string,
 	ancestorDirIDs []string,
+	ancestorDirNames []string,
 	snapshot *Snapshot,
 	stats *Stats,
 	progress progressFunc,
@@ -67,6 +79,7 @@ func (s *Scanner) discoverDir(
 	delete(snapshot.ExcludedDirIDs, dirID)
 	snapshot.EnumeratedDirIDs[dirID] = struct{}{}
 	currentAncestorDirIDs := appendDirID(ancestorDirIDs, dirID)
+	currentAncestorDirNames := append(append([]string(nil), ancestorDirNames...), dirName)
 	for _, entry := range entries {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -80,7 +93,7 @@ func (s *Scanner) discoverDir(
 				}
 				continue
 			}
-			if err := s.discoverDir(ctx, entry.ID, entry.Name, currentAncestorDirIDs, snapshot, stats, progress, attemptedDirIDs); err != nil {
+			if err := s.discoverDir(ctx, entry.ID, entry.Name, currentAncestorDirIDs, currentAncestorDirNames, snapshot, stats, progress, attemptedDirIDs); err != nil {
 				if ctxErr := ctx.Err(); ctxErr != nil {
 					return ctxErr
 				}
@@ -105,10 +118,11 @@ func (s *Scanner) discoverDir(
 			continue
 		}
 		snapshot.Files = append(snapshot.Files, File{
-			Entry:          entry,
-			ParentID:       dirID,
-			DirName:        dirName,
-			AncestorDirIDs: append([]string(nil), currentAncestorDirIDs...),
+			Entry:            entry,
+			ParentID:         dirID,
+			DirName:          dirName,
+			AncestorDirIDs:   append([]string(nil), currentAncestorDirIDs...),
+			AncestorDirNames: append([]string(nil), currentAncestorDirNames...),
 		})
 		snapshot.SeenFileIDs[entry.ID] = struct{}{}
 		stats.Scanned++

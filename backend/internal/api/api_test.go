@@ -1336,7 +1336,7 @@ func TestHandleUploadVideoSavesFileVideoTagsAndQueuesPreview(t *testing.T) {
 			t.Fatalf("close catalog: %v", err)
 		}
 	})
-	if _, err := cat.CreateTagAndClassify(ctx, "自定义上传", nil, "user"); err != nil {
+	if _, err := cat.CreateTagAndClassify(ctx, "自定义上传", "user"); err != nil {
 		t.Fatalf("create managed upload tag: %v", err)
 	}
 
@@ -1845,7 +1845,7 @@ func TestHandleTagsReturnsUnifiedTagPool(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("seed video: %v", err)
 	}
-	if _, err := cat.CreateTagAndClassify(ctx, "清纯", nil, "user"); err != nil {
+	if _, err := cat.CreateTagAndClassify(ctx, "清纯", "user"); err != nil {
 		t.Fatalf("create tag: %v", err)
 	}
 	if err := cat.SetManualVideoTags(ctx, "video-1", []string{"后入", "女大", "清纯"}); err != nil {
@@ -1895,7 +1895,7 @@ func TestHandleUploadTagsReturnsManagedUserChoices(t *testing.T) {
 		t.Fatalf("open catalog: %v", err)
 	}
 	t.Cleanup(func() { _ = cat.Close() })
-	if _, err := cat.CreateTagAndClassify(ctx, "自定义上传", nil, "user"); err != nil {
+	if _, err := cat.CreateTagAndClassify(ctx, "自定义上传", "user"); err != nil {
 		t.Fatalf("create user tag: %v", err)
 	}
 	if _, err := cat.EnsureCrawlerTag(ctx, "爬虫来源"); err != nil {
@@ -2514,7 +2514,7 @@ func TestHandleUpdateVideoTagsSavesExistingTags(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("seed video: %v", err)
 	}
-	if _, err := cat.CreateTagAndClassify(ctx, "清纯", nil, "user"); err != nil {
+	if _, err := cat.CreateTagAndClassify(ctx, "清纯", "user"); err != nil {
 		t.Fatalf("create tag: %v", err)
 	}
 

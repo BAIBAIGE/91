@@ -17,28 +17,9 @@ type Rule struct {
 	AVCodePrefixes []string `json:"avCodePrefixes,omitempty"`
 }
 
-// IsEmpty 表示该规则没有任何显式配置（调用方可用 label+旧版 aliases 兜底）。
+// IsEmpty 表示该规则没有任何显式配置。
 func (r Rule) IsEmpty() bool {
 	return len(r.Keywords) == 0 && len(r.AVCodePrefixes) == 0 && !r.MatchAVCode
-}
-
-// RuleFromAliases 把"标签名 + 旧版别名"转换成包含词规则。
-func RuleFromAliases(label string, aliases []string) Rule {
-	var rule Rule
-	seen := map[string]struct{}{}
-	for _, candidate := range append([]string{label}, aliases...) {
-		candidate = strings.TrimSpace(candidate)
-		if candidate == "" {
-			continue
-		}
-		key := strings.ToLower(candidate)
-		if _, ok := seen[key]; ok {
-			continue
-		}
-		seen[key] = struct{}{}
-		rule.Keywords = append(rule.Keywords, candidate)
-	}
-	return rule
 }
 
 // TagRule 是编译输入：一个标签名及其规则。
@@ -87,7 +68,7 @@ type Matcher struct {
 	rules []compiledRule
 }
 
-// NewMatcher 编译标签规则。空规则的标签会被跳过（调用方应先用 RuleFromAliases 兜底）。
+// NewMatcher 编译标签规则。空规则的标签会被跳过。
 func NewMatcher(tagRules []TagRule) *Matcher {
 	m := &Matcher{rules: make([]compiledRule, 0, len(tagRules))}
 	seen := map[string]struct{}{}

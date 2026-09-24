@@ -7,7 +7,7 @@ import (
 )
 
 var ErrUnknownTag = errors.New("unknown tag")
-var ErrAutoTagGenerationDisabled = errors.New("auto tag generation is disabled")
+var ErrInvalidTagSource = errors.New("tag source must be builtin or user")
 var ErrBuiltinTagsDisabled = errors.New("built-in tags are disabled")
 
 const avTagLabel = "AV"
@@ -22,20 +22,13 @@ func avRuleFromPrefixes(prefixes []string) tagging.Rule {
 	return tagging.Rule{MatchAVCode: true, AVCodePrefixes: prefixes}
 }
 
-var avLegacyAliases = map[string]struct{}{
-	"jav": {},
-	"番号":  {},
-	"番號":  {},
-}
-
 // settingTagRulesVersion 是标签规则版本号（settings 表）。任何标签的创建、
 // 规则修改、删除都会 +1；Matcher 缓存据此失效重建。
 const (
-	settingTagRulesVersion         = "tags.rules_version"
-	settingAutoGenerateTagsEnabled = "tags.auto_generate_enabled"
-	settingAVCodeMatchingDisabled  = "tags.av_code_matching_disabled"
-	settingBuiltinTagPackInit      = "tags.builtin_pack_initialized_v1"
-	settingBuiltinTagsEnabled      = "tags.builtin_pack_enabled"
+	settingTagRulesVersion        = "tags.rules_version"
+	settingAVCodeMatchingDisabled = "tags.av_code_matching_disabled"
+	settingBuiltinTagPackInit     = "tags.builtin_pack_initialized_v1"
+	settingBuiltinTagsEnabled     = "tags.builtin_pack_enabled"
 )
 
 const avSeriesOrigin = "av_series"
@@ -43,7 +36,6 @@ const avSeriesOrigin = "av_series"
 type Tag struct {
 	ID           int64        `json:"id"`
 	Label        string       `json:"label"`
-	Aliases      []string     `json:"-"`
 	MatchRules   tagging.Rule `json:"matchRules"`
 	Source       string       `json:"source"`
 	Count        int          `json:"count"`

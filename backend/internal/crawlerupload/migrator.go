@@ -1192,13 +1192,14 @@ func (m *Migrator) bindToExistingTarget(ctx context.Context, v, target *catalog.
 		title = firstNonEmpty(videoname.TitleFromFileName(target.FileName), title)
 	}
 	if err := m.cfg.Catalog.MigrateVideoToDrive(ctx, v.ID, catalog.VideoDriveMigration{
-		DriveID:     plan.targetDriveID,
-		FileID:      target.FileID,
-		ContentHash: firstNonEmpty(target.ContentHash, v.ContentHash),
-		ParentID:    target.ParentID,
-		DirName:     firstNonEmpty(target.DirName, v.DirName),
-		FileName:    fileName,
-		Title:       title,
+		DriveID:          plan.targetDriveID,
+		FileID:           target.FileID,
+		ContentHash:      firstNonEmpty(target.ContentHash, v.ContentHash),
+		ParentID:         target.ParentID,
+		DirName:          firstNonEmpty(target.DirName, v.DirName),
+		AncestorDirNames: target.AncestorDirNames,
+		FileName:         fileName,
+		Title:            title,
 	}); err != nil {
 		return false, fmt.Errorf("catalog bind existing target: %w", err)
 	}

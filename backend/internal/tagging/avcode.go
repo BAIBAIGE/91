@@ -201,27 +201,6 @@ func SeriesOf(code string) string {
 	return defaultAVCodeMatcher.SeriesOf(code)
 }
 
-// AutoSeriesOf returns the AV series label that is safe to create
-// automatically for the built-in prefix set.
-func AutoSeriesOf(code string) string {
-	return defaultAVCodeMatcher.SeriesOf(code)
-}
-
-// IsAutoSeriesLabel reports whether label is one of the built-in AV series
-// labels. Catalog code passes custom aliases separately when needed.
-func IsAutoSeriesLabel(label string) bool {
-	label = NormalizeAVCodePrefix(label)
-	if label == "" {
-		return false
-	}
-	for _, prefix := range knownAVSeriesPrefixes {
-		if label == prefix {
-			return true
-		}
-	}
-	return false
-}
-
 // SeriesInText 提取文本中第一个内置车牌番号的系列前缀。
 func SeriesInText(text string) string {
 	return SeriesOf(FindAVCode(text))

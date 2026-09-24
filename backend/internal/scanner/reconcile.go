@@ -62,7 +62,7 @@ func (s *Scanner) reconcileFile(ctx context.Context, file File, result *Result) 
 	if displayTitle == "" {
 		displayTitle = strings.TrimSpace(entry.Name)
 	}
-	assignments, err := s.Catalog.MatchTagAssignments(ctx, parsed.Title, entry.Name, parsed.Author, file.DirName)
+	assignments, err := s.Catalog.MatchTagAssignments(ctx, parsed.Title, entry.Name, parsed.Author, file.DirName, file.AncestorDirNames...)
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctxErr
@@ -129,6 +129,10 @@ func (s *Scanner) reconcileExisting(
 		patch.AncestorDirIDs = append([]string(nil), file.AncestorDirIDs...)
 		patch.AncestorDirIDsSet = true
 	}
+	if !slices.Equal(existing.AncestorDirNames, file.AncestorDirNames) {
+		patch.AncestorDirNames = append([]string(nil), file.AncestorDirNames...)
+		patch.AncestorDirNamesSet = true
+	}
 	if entry.Name != "" && existing.FileName != entry.Name {
 		patch.FileName = entry.Name
 		patch.Author = parsedAuthor
@@ -153,7 +157,8 @@ func (s *Scanner) reconcileExisting(
 		ID: existing.ID, DriveID: s.Drive.ID(), ContentHash: entry.Hash,
 		FileID: entry.ID, FileName: entry.Name, Title: displayTitle, Size: entry.Size,
 		ParentID: file.ParentID, DirName: file.DirName,
-		AncestorDirIDs: append([]string(nil), file.AncestorDirIDs...),
+		AncestorDirIDs:   append([]string(nil), file.AncestorDirIDs...),
+		AncestorDirNames: append([]string(nil), file.AncestorDirNames...),
 	}
 	duplicate, err := s.Catalog.FindScannedVideoDuplicate(ctx, source, result.Snapshot.SeenFileIDs)
 	if err != nil {
@@ -199,22 +204,23 @@ func (s *Scanner) insertNew(
 
 	now := time.Now()
 	video := &catalog.Video{
-		ID:             id,
-		DriveID:        s.Drive.ID(),
-		FileID:         entry.ID,
-		FileName:       entry.Name,
-		ContentHash:    entry.Hash,
-		ParentID:       file.ParentID,
-		DirName:        file.DirName,
-		AncestorDirIDs: append([]string(nil), file.AncestorDirIDs...),
-		Title:          displayTitle,
-		Author:         parsedAuthor,
-		Ext:            strings.TrimPrefix(strings.ToLower(path.Ext(entry.Name)), "."),
-		Size:           entry.Size,
-		PreviewStatus:  "pending",
-		PublishedAt:    now,
-		CreatedAt:      now,
-		UpdatedAt:      now,
+		ID:               id,
+		DriveID:          s.Drive.ID(),
+		FileID:           entry.ID,
+		FileName:         entry.Name,
+		ContentHash:      entry.Hash,
+		ParentID:         file.ParentID,
+		DirName:          file.DirName,
+		AncestorDirIDs:   append([]string(nil), file.AncestorDirIDs...),
+		AncestorDirNames: append([]string(nil), file.AncestorDirNames...),
+		Title:            displayTitle,
+		Author:           parsedAuthor,
+		Ext:              strings.TrimPrefix(strings.ToLower(path.Ext(entry.Name)), "."),
+		Size:             entry.Size,
+		PreviewStatus:    "pending",
+		PublishedAt:      now,
+		CreatedAt:        now,
+		UpdatedAt:        now,
 	}
 	inserted, err := s.Catalog.InsertScannedVideo(ctx, video, result.Snapshot.SeenFileIDs)
 	if err != nil {
@@ -261,7 +267,7 @@ func (r *Result) addIssue(ctx context.Context, file File, stage IssueStage, err 
 
 func metadataPatchSet(patch catalog.VideoMetaPatch) bool {
 	return patch.ContentHash != "" || patch.FileName != "" || patch.ParentIDSet ||
-		patch.DirNameSet || patch.AncestorDirIDsSet || patch.TitleSet || patch.AuthorSet
+		patch.DirNameSet || patch.AncestorDirIDsSet || patch.AncestorDirNamesSet || patch.TitleSet || patch.AuthorSet
 }
 
 func assignmentLabels(assignments []catalog.TagAssignment) []string {

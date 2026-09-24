@@ -60,7 +60,7 @@ func (c *Catalog) reconcileAVTagAssignments(ctx context.Context, previousTag, ta
 	}
 	var activePrefixes []string
 	if avEnabled {
-		activePrefixes = effectiveRule(tag.Label, tag.Aliases, tag.MatchRules).AVCodePrefixes
+		activePrefixes = effectiveRule(tag.Label, tag.MatchRules).AVCodePrefixes
 	}
 	codeMatcher := tagging.NewAVCodeMatcher(activePrefixes)
 
@@ -216,7 +216,7 @@ func (c *Catalog) reconcileAVTagAssignments(ctx context.Context, previousTag, ta
 }
 
 func avPrefixLabelSet(tag Tag) map[string]struct{} {
-	prefixes := effectiveRule(tag.Label, tag.Aliases, tag.MatchRules).AVCodePrefixes
+	prefixes := effectiveRule(tag.Label, tag.MatchRules).AVCodePrefixes
 	out := make(map[string]struct{}, len(prefixes))
 	for _, prefix := range tagging.CleanAVCodePrefixes(prefixes) {
 		out[strings.ToLower(prefix)] = struct{}{}
@@ -228,7 +228,6 @@ func (c *Catalog) loadAVReconcileTags(ctx context.Context, avTagID int64, candid
 	rows, err := c.db.QueryContext(ctx, `
 SELECT id,
        label,
-       COALESCE(aliases, '[]'),
        COALESCE(match_rules, '{}'),
        COALESCE(source, ''),
        COALESCE(origin, '')
@@ -242,8 +241,8 @@ SELECT id,
 	var tags []avReconcileTag
 	for rows.Next() {
 		var tag avReconcileTag
-		var aliasesJSON, rulesJSON string
-		if err := rows.Scan(&tag.ID, &tag.Label, &aliasesJSON, &rulesJSON, &tag.Source, &tag.origin); err != nil {
+		var rulesJSON string
+		if err := rows.Scan(&tag.ID, &tag.Label, &rulesJSON, &tag.Source, &tag.origin); err != nil {
 			return nil, err
 		}
 		labelKey := strings.ToLower(tagging.NormalizeAVCodePrefix(tag.Label))
@@ -253,7 +252,6 @@ SELECT id,
 				continue
 			}
 		}
-		_ = json.Unmarshal([]byte(aliasesJSON), &tag.Aliases)
 		_ = json.Unmarshal([]byte(rulesJSON), &tag.MatchRules)
 		tags = append(tags, tag)
 	}
@@ -278,7 +276,7 @@ func (c *Catalog) avCollisionMatcher(ctx context.Context, tags []avReconcileTag,
 		}
 		rules = append(rules, tagging.TagRule{
 			Label: tag.Label,
-			Rule:  effectiveRule(tag.Label, tag.Aliases, tag.MatchRules),
+			Rule:  effectiveRule(tag.Label, tag.MatchRules),
 		})
 	}
 	return tagging.NewMatcher(rules), nil
@@ -290,7 +288,8 @@ SELECT id,
        title,
        COALESCE(author, ''),
        COALESCE(file_name, ''),
-       COALESCE(dir_name, '')
+       COALESCE(dir_name, ''),
+       COALESCE(ancestor_dir_names, '')
   FROM videos
  WHERE COALESCE(tags_manual, 0) = 0
  ORDER BY id ASC`)
@@ -303,11 +302,13 @@ SELECT id,
 	desiredSeries := make(map[string]struct{})
 	for rows.Next() {
 		var video avReconcileVideo
-		var title, author, fileName, dirName string
-		if err := rows.Scan(&video.id, &title, &author, &fileName, &dirName); err != nil {
+		var title, author, fileName, dirName, dirNamesJSON string
+		if err := rows.Scan(&video.id, &title, &author, &fileName, &dirName, &dirNamesJSON); err != nil {
 			return nil, nil, err
 		}
-		fields := matchFields(title, fileName, author, dirName)
+		var ancestorDirNames []string
+		_ = json.Unmarshal([]byte(dirNamesJSON), &ancestorDirNames)
+		fields := matchFields(title, fileName, author, dirName, ancestorDirNames...)
 		for _, field := range fields {
 			if strings.TrimSpace(field.Text) == "" {
 				continue

@@ -105,12 +105,9 @@ type App struct {
 	// tombstone without making unrelated videos wait on a slow provider call.
 	blacklistVideoLocks videoOperationLocks
 
-	// tagJobMu protects the admin-visible tag job status. tagMaintenanceMu
-	// serializes bulk writes to video_tags across startup, manual, and nightly
-	// maintenance paths.
-	tagJobMu         sync.Mutex
-	tagMaintenanceMu sync.Mutex
-	tagJobState      api.TagJobStatus
+	// tagJobMu protects the admin-visible tag job status and admits one job at a time.
+	tagJobMu    sync.Mutex
+	tagJobState api.TagJobStatus
 }
 
 type videoOperationLocks struct {

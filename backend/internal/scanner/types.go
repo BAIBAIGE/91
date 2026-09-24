@@ -18,11 +18,13 @@ type Stats struct {
 // File is a video candidate with directory identity supplied by the traversal,
 // rather than the provider's optional Entry.ParentID field. AncestorDirIDs runs
 // from the scan start through the direct parent, including both endpoints.
+// AncestorDirNames follows the same order; an unknown start name is empty.
 type File struct {
-	Entry          drives.Entry
-	ParentID       string
-	DirName        string
-	AncestorDirIDs []string
+	Entry            drives.Entry
+	ParentID         string
+	DirName          string
+	AncestorDirIDs   []string
+	AncestorDirNames []string
 }
 
 type IssueStage string

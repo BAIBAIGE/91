@@ -154,6 +154,7 @@ type Video struct {
 	FingerprintError   string    `json:"fingerprintError"`
 	ParentID           string    `json:"parentId"`
 	AncestorDirIDs     []string  `json:"ancestorDirIds,omitempty"`
+	AncestorDirNames   []string  `json:"ancestorDirNames,omitempty"`
 	DirName            string    `json:"dirName"`
 	Title              string    `json:"title"`
 	Author             string    `json:"author"`
@@ -229,9 +230,9 @@ func (c *Catalog) UpsertVideo(ctx context.Context, v *Video) error {
 	}
 	if !existed {
 		if len(storedTags) > 0 {
-			return c.replaceVideoTags(ctx, v.ID, storedTags, "manual", true, true)
+			return c.replaceManualVideoTags(ctx, v.ID, storedTags, true)
 		}
-		assignments, err := c.MatchTagAssignments(ctx, v.Title, v.FileName, v.Author, v.DirName)
+		assignments, err := c.MatchTagAssignments(ctx, v.Title, v.FileName, v.Author, v.DirName, v.AncestorDirNames...)
 		if err != nil {
 			return err
 		}
@@ -265,6 +266,11 @@ func upsertVideoRow(ctx context.Context, exec videoRowExecer, v *Video) ([]strin
 		payload, _ := json.Marshal(v.AncestorDirIDs)
 		ancestorDirIDsJSON = string(payload)
 	}
+	ancestorDirNamesJSON := ""
+	if v.AncestorDirNames != nil {
+		payload, _ := json.Marshal(v.AncestorDirNames)
+		ancestorDirNamesJSON = string(payload)
+	}
 	now := time.Now().UnixMilli()
 	if v.CreatedAt.IsZero() {
 		v.CreatedAt = time.UnixMilli(now)
@@ -291,13 +297,13 @@ func upsertVideoRow(ctx context.Context, exec videoRowExecer, v *Video) ([]strin
 
 	_, err := exec.ExecContext(ctx, `
 INSERT INTO videos (
-  id, drive_id, file_id, file_name, content_hash, sampled_sha256, fingerprint_status, fingerprint_error, parent_id, ancestor_dir_ids, dir_name, title, author, tags,
+  id, drive_id, file_id, file_name, content_hash, sampled_sha256, fingerprint_status, fingerprint_error, parent_id, ancestor_dir_ids, ancestor_dir_names, dir_name, title, author, tags,
 	  duration_seconds, size_bytes, ext, thumbnail_url, thumbnail_updated_at, thumbnail_status,
 	  preview_file_id, preview_local, preview_updated_at, preview_status,
 	  views, last_viewed_at, favorites, comments, likes, last_liked_at, dislikes,
 	  hidden, badges, description, published_at, created_at, updated_at
 	) VALUES (
-	  ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+	  ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 	  ?, ?, ?, ?, ?, CASE WHEN COALESCE(?, '') != '' THEN 'ready' ELSE 'pending' END,
 	  ?, ?, ?, ?,
 	  ?, ?, ?, ?, ?, ?, ?,
@@ -315,6 +321,10 @@ ON CONFLICT(id) DO UPDATE SET
   ancestor_dir_ids = CASE
                       WHEN excluded.ancestor_dir_ids != '' THEN excluded.ancestor_dir_ids
                       ELSE videos.ancestor_dir_ids
+                    END,
+  ancestor_dir_names = CASE
+                      WHEN excluded.ancestor_dir_names != '' THEN excluded.ancestor_dir_names
+                      ELSE videos.ancestor_dir_names
                     END,
   dir_name        = CASE
                       WHEN excluded.dir_name != '' THEN excluded.dir_name
@@ -368,7 +378,7 @@ ON CONFLICT(id) DO UPDATE SET
 	  description     = excluded.description,
   updated_at      = excluded.updated_at
 `,
-		v.ID, v.DriveID, v.FileID, v.FileName, v.ContentHash, v.SampledSHA256, fingerprintStatus, v.FingerprintError, v.ParentID, ancestorDirIDsJSON, v.DirName, v.Title, v.Author, string(tagsJSON),
+		v.ID, v.DriveID, v.FileID, v.FileName, v.ContentHash, v.SampledSHA256, fingerprintStatus, v.FingerprintError, v.ParentID, ancestorDirIDsJSON, ancestorDirNamesJSON, v.DirName, v.Title, v.Author, string(tagsJSON),
 		v.DurationSeconds, v.Size, v.Ext, v.ThumbnailURL, thumbnailUpdatedAt, v.ThumbnailURL,
 		v.PreviewFileID, v.PreviewLocal, previewUpdatedAt, nullableStatus(v.PreviewStatus),
 		v.Views, unixMilliOrZero(v.LastViewedAt), v.Favorites, v.Comments, v.Likes, unixMilliOrZero(v.LastLikedAt), v.Dislikes,
@@ -463,15 +473,16 @@ func (c *Catalog) ListHiddenVideos(ctx context.Context) ([]*Video, error) {
 type VideoDriveMigration struct {
 	// Optional source identity guards against deletion or another migration
 	// while an external upload was in progress.
-	SourceDriveID string
-	SourceFileID  string
-	DriveID       string
-	FileID        string
-	ContentHash   string
-	ParentID      string
-	DirName       string
-	FileName      string
-	Title         string
+	SourceDriveID    string
+	SourceFileID     string
+	DriveID          string
+	FileID           string
+	ContentHash      string
+	ParentID         string
+	DirName          string
+	AncestorDirNames []string
+	FileName         string
+	Title            string
 }
 
 // MigrateVideoToDrive atomically rewrites a video row after it has been
@@ -484,6 +495,12 @@ func (c *Catalog) MigrateVideoToDrive(ctx context.Context, videoID string, targe
 	if strings.TrimSpace(videoID) == "" || strings.TrimSpace(target.DriveID) == "" || strings.TrimSpace(target.FileID) == "" {
 		return fmt.Errorf("catalog: migrate video: empty id/drive/file")
 	}
+	// A new storage location cannot inherit names from the old directory chain.
+	dirNames := target.AncestorDirNames
+	if dirNames == nil {
+		dirNames = []string{}
+	}
+	dirNamesJSON, _ := json.Marshal(dirNames)
 	res, err := c.db.ExecContext(ctx,
 		`UPDATE videos
 		   SET drive_id     = ?,
@@ -491,6 +508,7 @@ func (c *Catalog) MigrateVideoToDrive(ctx context.Context, videoID string, targe
 		       content_hash = CASE WHEN ? != '' THEN ? ELSE content_hash END,
 		       parent_id    = ?,
 		       dir_name     = ?,
+		       ancestor_dir_names = ?,
 		       file_name    = CASE WHEN ? != '' THEN ? ELSE file_name END,
 		       title        = CASE WHEN ? != '' THEN ? ELSE title END,
 		       updated_at   = ?
@@ -501,6 +519,7 @@ func (c *Catalog) MigrateVideoToDrive(ctx context.Context, videoID string, targe
 		target.ContentHash,
 		target.ParentID,
 		target.DirName,
+		string(dirNamesJSON),
 		target.FileName,
 		target.FileName,
 		target.Title,
@@ -667,6 +686,8 @@ type VideoMetaPatch struct {
 	DirNameSet             bool
 	AncestorDirIDs         []string
 	AncestorDirIDsSet      bool
+	AncestorDirNames       []string
+	AncestorDirNamesSet    bool
 	Title                  string
 	TitleSet               bool
 	Author                 string
@@ -739,6 +760,15 @@ func (c *Catalog) UpdateVideoMeta(ctx context.Context, id string, p VideoMetaPat
 		}
 		payload, _ := json.Marshal(ancestorDirIDs)
 		parts = append(parts, "ancestor_dir_ids = ?")
+		args = append(args, string(payload))
+	}
+	if p.AncestorDirNamesSet {
+		dirNames := p.AncestorDirNames
+		if dirNames == nil {
+			dirNames = []string{}
+		}
+		payload, _ := json.Marshal(dirNames)
+		parts = append(parts, "ancestor_dir_names = ?")
 		args = append(args, string(payload))
 	}
 	if p.TitleSet {
@@ -1469,7 +1499,6 @@ type deletedVideoTagRestoreAssignment struct {
 	Source        string `json:"source"`
 	Evidence      string `json:"evidence,omitempty"`
 	CreatedAt     int64  `json:"createdAt,omitempty"`
-	TagAliases    string `json:"tagAliases,omitempty"`
 	TagMatchRules string `json:"tagMatchRules,omitempty"`
 	TagSource     string `json:"tagSource,omitempty"`
 	TagOrigin     string `json:"tagOrigin,omitempty"`
@@ -4114,7 +4143,7 @@ func (c *Catalog) DeleteSettings(ctx context.Context, keys ...string) error {
 const allVideoCols = `
 id, drive_id, file_id, COALESCE(file_name, ''), COALESCE(content_hash, ''),
 COALESCE(sampled_sha256, ''), COALESCE(fingerprint_status, 'pending'), COALESCE(fingerprint_error, ''),
-COALESCE(parent_id, ''), COALESCE(ancestor_dir_ids, ''), COALESCE(dir_name, ''), title, COALESCE(author, ''), COALESCE(tags, '[]'),
+COALESCE(parent_id, ''), COALESCE(ancestor_dir_ids, ''), COALESCE(ancestor_dir_names, ''), COALESCE(dir_name, ''), title, COALESCE(author, ''), COALESCE(tags, '[]'),
 duration_seconds, size_bytes, COALESCE(ext, ''), COALESCE(thumbnail_url, ''), COALESCE(thumbnail_updated_at, 0),
 COALESCE(preview_file_id, ''), COALESCE(preview_local, ''), COALESCE(preview_updated_at, 0), COALESCE(preview_status, 'pending'),
 	views, COALESCE(last_viewed_at, 0), favorites, comments, likes, COALESCE(last_liked_at, 0), dislikes,
@@ -4217,13 +4246,13 @@ func scanVideoSummary(row rowScanner) (*VideoSummary, error) {
 
 func scanVideo(row rowScanner) (*Video, error) {
 	v := &Video{}
-	var ancestorDirIDsJSON, tagsJSON, badgesJSON string
+	var ancestorDirIDsJSON, ancestorDirNamesJSON, tagsJSON, badgesJSON string
 	var publishedAt, createdAt, updatedAt, thumbnailUpdatedAt, previewUpdatedAt, lastViewedAt, lastLikedAt int64
 	var hidden int
 	err := row.Scan(
 		&v.ID, &v.DriveID, &v.FileID, &v.FileName, &v.ContentHash,
 		&v.SampledSHA256, &v.FingerprintStatus, &v.FingerprintError,
-		&v.ParentID, &ancestorDirIDsJSON, &v.DirName, &v.Title, &v.Author, &tagsJSON,
+		&v.ParentID, &ancestorDirIDsJSON, &ancestorDirNamesJSON, &v.DirName, &v.Title, &v.Author, &tagsJSON,
 		&v.DurationSeconds, &v.Size, &v.Ext, &v.ThumbnailURL, &thumbnailUpdatedAt,
 		&v.PreviewFileID, &v.PreviewLocal, &previewUpdatedAt, &v.PreviewStatus,
 		&v.Views, &lastViewedAt, &v.Favorites, &v.Comments, &v.Likes, &lastLikedAt, &v.Dislikes,
@@ -4235,6 +4264,9 @@ func scanVideo(row rowScanner) (*Video, error) {
 	}
 	if ancestorDirIDsJSON != "" {
 		_ = json.Unmarshal([]byte(ancestorDirIDsJSON), &v.AncestorDirIDs)
+	}
+	if ancestorDirNamesJSON != "" {
+		_ = json.Unmarshal([]byte(ancestorDirNamesJSON), &v.AncestorDirNames)
 	}
 	_ = json.Unmarshal([]byte(tagsJSON), &v.Tags)
 	_ = json.Unmarshal([]byte(badgesJSON), &v.Badges)
@@ -4300,7 +4332,6 @@ SELECT t.label,
        COALESCE(vt.source, ''),
        COALESCE(vt.evidence, ''),
        COALESCE(vt.created_at, 0),
-       COALESCE(t.aliases, '[]'),
        COALESCE(t.match_rules, '{}'),
        COALESCE(t.source, 'user'),
        COALESCE(t.origin, ''),
@@ -4322,7 +4353,6 @@ SELECT t.label,
 			&assignment.Source,
 			&assignment.Evidence,
 			&assignment.CreatedAt,
-			&assignment.TagAliases,
 			&assignment.TagMatchRules,
 			&assignment.TagSource,
 			&assignment.TagOrigin,
@@ -4406,7 +4436,6 @@ func fallbackDeletedVideoTagAssignment(label string, manual bool) deletedVideoTa
 	assignment := deletedVideoTagRestoreAssignment{
 		Label:         strings.TrimSpace(label),
 		Source:        "auto",
-		TagAliases:    "[]",
 		TagMatchRules: "{}",
 		TagSource:     "generated",
 	}
@@ -4431,9 +4460,6 @@ func restoreDeletedVideoTagsTx(
 		assignment.Label = strings.TrimSpace(assignment.Label)
 		if assignment.Label == "" {
 			continue
-		}
-		if !json.Valid([]byte(assignment.TagAliases)) {
-			assignment.TagAliases = "[]"
 		}
 		if !json.Valid([]byte(assignment.TagMatchRules)) {
 			assignment.TagMatchRules = "{}"
@@ -4460,11 +4486,10 @@ func restoreDeletedVideoTagsTx(
 			}
 		}
 		if _, err := tx.ExecContext(ctx, `
-INSERT INTO tags (label, aliases, match_rules, source, origin, created_at, updated_at)
-VALUES (?, ?, ?, ?, ?, ?, ?)
+INSERT INTO tags (label, match_rules, source, origin, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?)
 ON CONFLICT(label) DO NOTHING`,
 			assignment.Label,
-			assignment.TagAliases,
 			assignment.TagMatchRules,
 			assignment.TagSource,
 			assignment.TagOrigin,

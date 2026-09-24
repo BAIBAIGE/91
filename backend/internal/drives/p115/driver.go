@@ -433,6 +433,22 @@ func (d *Driver) Stat(ctx context.Context, fileID string) (*drives.Entry, error)
 	return &e, nil
 }
 
+// DirectoryName resolves the scan root name through a direct metadata lookup.
+func (d *Driver) DirectoryName(ctx context.Context, dirID string) (string, error) {
+	// The account root is virtual and has no file metadata or directory name.
+	if dirID == "" || dirID == "0" {
+		return "", nil
+	}
+	entry, err := d.Stat(ctx, dirID)
+	if err != nil {
+		return "", err
+	}
+	if entry == nil || !entry.IsDir {
+		return "", drives.ErrNotSupported
+	}
+	return entry.Name, nil
+}
+
 func (d *Driver) StreamURL(ctx context.Context, fileID string) (*drives.StreamLink, error) {
 	return d.streamURLWithUA(ctx, fileID, d.ua)
 }

@@ -126,11 +126,6 @@ type Config struct {
 	// deletes cloud source files.
 	RunDedupeAssetCleanup func(ctx context.Context) error
 
-	// RunTagMaintenance is optional. The main server leaves this nil because tag
-	// matching is event-driven: new videos and administrator tag edits refresh
-	// labels immediately.
-	RunTagMaintenance func(ctx context.Context) error
-
 	// Now is injected for tests; nil → time.Now.
 	Now func() time.Time
 }
@@ -601,7 +596,6 @@ func (r *Runner) runPipeline(ctx context.Context) {
 	if len(crawlerIDs) == 0 {
 		log.Printf("[nightly] phase 2/3 skipped: no crawler configured")
 		r.runDedupeAssetCleanupPhase(ctx, "nightly", "phase 5")
-		r.runTagMaintenancePhase(ctx, "nightly", "phase 6")
 		return
 	}
 	log.Printf("[nightly] phase 2: crawling %d crawler drive(s)", len(crawlerIDs))
@@ -645,7 +639,6 @@ func (r *Runner) runPipeline(ctx context.Context) {
 	}
 
 	r.runDedupeAssetCleanupPhase(ctx, "nightly", "phase 5")
-	r.runTagMaintenancePhase(ctx, "nightly", "phase 6")
 }
 
 // runScanAllPipeline is the manual admin workflow: configured cloud drives are
@@ -754,20 +747,6 @@ func (r *Runner) waitIdle(ctx context.Context, component, phase string) error {
 		return err
 	}
 	return nil
-}
-
-func (r *Runner) runTagMaintenancePhase(ctx context.Context, component, phase string) {
-	if r.cfg.RunTagMaintenance == nil {
-		return
-	}
-	if r.shouldStop(ctx, component, phase) {
-		return
-	}
-	log.Printf("[%s] %s: tag maintenance", component, phase)
-	if err := r.cfg.RunTagMaintenance(ctx); err != nil {
-		log.Printf("[%s] %s tag maintenance: %v", component, phase, err)
-		r.recordIssue(phase, err)
-	}
 }
 
 func (r *Runner) runDedupeAssetCleanupPhase(ctx context.Context, component, phase string) {

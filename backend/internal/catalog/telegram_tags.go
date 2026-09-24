@@ -15,8 +15,8 @@ const telegramTagOrigin = "telegram"
 func ensureTelegramTagTx(ctx context.Context, tx *sql.Tx) (Tag, error) {
 	now := time.Now().UnixMilli()
 	res, err := tx.ExecContext(ctx, `
-INSERT INTO tags (label, aliases, match_rules, source, origin, created_at, updated_at)
-VALUES (?, '[]', '{}', 'user', ?, ?, ?)
+INSERT INTO tags (label, match_rules, source, origin, created_at, updated_at)
+VALUES (?, '{}', 'user', ?, ?, ?)
 ON CONFLICT(label) DO UPDATE SET source='user', origin=excluded.origin, updated_at=excluded.updated_at
 WHERE tags.source!='user' OR COALESCE(tags.origin,'')!=excluded.origin`, TelegramTagLabel, telegramTagOrigin, now, now)
 	if err != nil {

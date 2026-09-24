@@ -10,6 +10,7 @@ CREATE TABLE IF NOT EXISTS videos (
     fingerprint_error  TEXT DEFAULT '',
     parent_id        TEXT,
     ancestor_dir_ids TEXT NOT NULL DEFAULT '',  -- JSON array；扫描起点到直接父目录（含两端）
+    ancestor_dir_names TEXT NOT NULL DEFAULT '', -- JSON array；同一路径上的目录名，供标签匹配使用
     dir_name         TEXT DEFAULT '',           -- 所在目录名（扫盘时落库，供标签重算使用）
     title            TEXT NOT NULL,
     author           TEXT,
@@ -116,9 +117,8 @@ CREATE INDEX IF NOT EXISTS idx_video_reaction_visits_video
 CREATE TABLE IF NOT EXISTS tags (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     label       TEXT NOT NULL UNIQUE COLLATE NOCASE,
-    aliases     TEXT NOT NULL DEFAULT '[]',       -- JSON array，旧版别名数据，保留用于迁移兼容
-    -- 匹配规则 JSON：{"keywords":[],"matchAvCode":bool}
-    -- 为空时匹配器按 label+旧版 aliases 兜底。
+    -- 匹配规则 JSON：{"keywords":[],"matchAvCode":bool,"avCodePrefixes":[]}
+    -- 普通标签规则为空时按标签名匹配。
     match_rules TEXT NOT NULL DEFAULT '{}',
     source      TEXT NOT NULL DEFAULT 'user',     -- builtin / user / generated
     origin      TEXT NOT NULL DEFAULT '',         -- crawler 等来源型标签标记；不参与匹配来源归一
@@ -130,7 +130,7 @@ CREATE TABLE IF NOT EXISTS video_tags (
     video_id   TEXT NOT NULL,
     tag_id     INTEGER NOT NULL,
     -- auto=规则引擎 / manual=人工 / legacy=旧数据回填 / crawler=爬虫脚本或爬虫名 /
-    -- series=番号系列 / propagated=同类传播 / telegram=Telegram 导入来源
+    -- telegram=Telegram 导入来源；番号系列通过 auto 关联
     source     TEXT NOT NULL DEFAULT 'auto',
     evidence   TEXT NOT NULL DEFAULT '',          -- 命中证据，如 "文件名:翘臀"
     created_at INTEGER NOT NULL,

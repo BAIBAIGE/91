@@ -77,7 +77,7 @@ func cleanRuleTerms(terms []string) []string {
 }
 
 // normalizeTagSource 只用于 tags.source。video_tags.source 是标签挂载来源，
-// 需要继续保留 auto/manual/crawler/series/propagated/legacy 等细分值。
+// 使用 auto/manual/crawler/telegram/legacy 等独立来源。
 func normalizeTagSource(source string) string {
 	switch strings.ToLower(strings.TrimSpace(source)) {
 	case "system", "builtin":
@@ -98,24 +98,6 @@ func parseSettingBool(value string, defaultValue bool) bool {
 	default:
 		return defaultValue
 	}
-}
-
-func cleanAliases(aliases []string, label string) []string {
-	out := make([]string, 0, len(aliases))
-	seen := map[string]bool{strings.ToLower(label): true}
-	for _, alias := range aliases {
-		alias = strings.TrimSpace(alias)
-		if alias == "" {
-			continue
-		}
-		key := strings.ToLower(alias)
-		if seen[key] {
-			continue
-		}
-		seen[key] = true
-		out = append(out, alias)
-	}
-	return out
 }
 
 func uniqueStrings(values []string) []string {

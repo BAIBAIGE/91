@@ -96,3 +96,28 @@ func TestScannerRetries115DirectoryTimeouts(t *testing.T) {
 		})
 	}
 }
+
+func TestScannerUses115StartingDirectoryName(t *testing.T) {
+	metadataCalls := 0
+	driver := newP115ListTestDriver(p115RoundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if request.URL.Path == "/files/get_info" {
+			metadataCalls++
+			if got := request.URL.Query().Get("file_id"); got != "library" {
+				t.Fatalf("metadata file_id = %q", got)
+			}
+			return playbackJSONResponse(request, `{"state":true,"data":[{"cid":"library","pid":"0","n":"旅行"}]}`), nil
+		}
+		if got := request.URL.Query().Get("cid"); got != "library" {
+			t.Fatalf("list cid = %q", got)
+		}
+		return playbackJSONResponse(request, `{"state":true,"cid":"library","count":1,"offset":0,"data":[{"fid":"clip","cid":"library","n":"clip.mp4","s":"12"}]}`), nil
+	}))
+	snapshot, _, err := scanner.New(nil, driver, []string{".mp4"}, nil, nil).Discover(context.Background(), "library")
+	if err != nil || len(snapshot.Files) != 1 {
+		t.Fatalf("discover: snapshot=%#v, err=%v", snapshot, err)
+	}
+	file := snapshot.Files[0]
+	if metadataCalls != 1 || file.DirName != "旅行" || len(file.AncestorDirNames) != 1 || file.AncestorDirNames[0] != "旅行" {
+		t.Fatalf("metadata calls=%d, file=%#v", metadataCalls, file)
+	}
+}

@@ -35,6 +35,13 @@ type Drive interface {
 	RootID() string
 }
 
+// DirectoryNameProvider optionally resolves a directory name without walking
+// its subtree. Scans use it once for their starting directory; descendant names
+// come from List. Providers that cannot query directory metadata may omit it.
+type DirectoryNameProvider interface {
+	DirectoryName(ctx context.Context, dirID string) (string, error)
+}
+
 // GenerationStreamProvider is an optional drive capability for a provider-
 // generated playback stream that is cheaper to seek than the original file.
 // Background thumbnail/preview workers prefer this stream, while ordinary

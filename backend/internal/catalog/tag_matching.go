@@ -17,11 +17,10 @@ func (c *Catalog) SetManualVideoTags(ctx context.Context, videoID string, labels
 	if _, err := c.GetVideo(ctx, videoID); err != nil {
 		return err
 	}
-	return c.replaceVideoTags(ctx, videoID, labels, "manual", true, false)
+	return c.replaceManualVideoTags(ctx, videoID, labels, false)
 }
 
-// SetAutoVideoTags 用引擎结果覆盖视频的 auto/legacy 标签行；其余来源
-// （crawler/series/propagated/manual）不受影响。
+// SetAutoVideoTags 用引擎结果覆盖视频的 auto/legacy 标签行；来源标签和人工标签保留。
 func (c *Catalog) SetAutoVideoTags(ctx context.Context, videoID string, labels []string) error {
 	assignments := make([]TagAssignment, 0, len(labels))
 	for _, label := range labels {
@@ -68,15 +67,15 @@ func (c *Catalog) buildMatcher(ctx context.Context) (*tagging.Matcher, error) {
 		return nil, err
 	}
 	rows, err := c.db.QueryContext(ctx,
-		`SELECT label, aliases, COALESCE(match_rules, '{}'), source, COALESCE(origin, '') FROM tags ORDER BY id ASC`)
+		`SELECT label, COALESCE(match_rules, '{}'), source, COALESCE(origin, '') FROM tags ORDER BY id ASC`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	var tagRules []tagging.TagRule
 	for rows.Next() {
-		var label, aliasesJSON, rulesJSON, source, origin string
-		if err := rows.Scan(&label, &aliasesJSON, &rulesJSON, &source, &origin); err != nil {
+		var label, rulesJSON, source, origin string
+		if err := rows.Scan(&label, &rulesJSON, &source, &origin); err != nil {
 			return nil, err
 		}
 		origin = strings.ToLower(strings.TrimSpace(origin))
@@ -89,11 +88,9 @@ func (c *Catalog) buildMatcher(ctx context.Context) (*tagging.Matcher, error) {
 		if !avEnabled && strings.EqualFold(label, avTagLabel) {
 			continue
 		}
-		var aliases []string
-		_ = json.Unmarshal([]byte(aliasesJSON), &aliases)
 		var rule tagging.Rule
 		_ = json.Unmarshal([]byte(rulesJSON), &rule)
-		tagRules = append(tagRules, tagging.TagRule{Label: label, Rule: effectiveRule(label, aliases, rule)})
+		tagRules = append(tagRules, tagging.TagRule{Label: label, Rule: effectiveRule(label, rule)})
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -101,21 +98,19 @@ func (c *Catalog) buildMatcher(ctx context.Context) (*tagging.Matcher, error) {
 	return tagging.NewMatcher(tagRules), nil
 }
 
-// effectiveRule 计算标签的生效规则：无显式规则时按 label+legacy aliases 兜底；
+// effectiveRule 计算标签的生效规则：普通标签无显式规则时按标签名匹配；
 // 有显式规则时按规则本身执行。AV 标签例外：它只按番号规则识别，避免
 // "AV/JAV/番号" 这类普通描述误触发。
-func effectiveRule(label string, aliases []string, rule tagging.Rule) tagging.Rule {
+func effectiveRule(label string, rule tagging.Rule) tagging.Rule {
 	if strings.EqualFold(label, avTagLabel) {
-		prefixes := append([]string{}, rule.AVCodePrefixes...)
-		prefixes = append(prefixes, aliases...)
-		prefixes = tagging.CleanAVCodePrefixes(prefixes)
+		prefixes := tagging.CleanAVCodePrefixes(rule.AVCodePrefixes)
 		if len(prefixes) == 0 {
 			return tagging.Rule{}
 		}
 		return tagging.Rule{MatchAVCode: true, AVCodePrefixes: prefixes}
 	}
 	if rule.IsEmpty() {
-		return tagging.RuleFromAliases(label, aliases)
+		return tagging.Rule{Keywords: []string{label}}
 	}
 	return rule
 }
@@ -211,23 +206,23 @@ func (c *Catalog) MatchTags(ctx context.Context, text string) ([]string, error) 
 // MatchTagAssignments matches video metadata against the existing tag pool.
 // The only tag definition it may create is an AV series label such as FC2PPV,
 // and only while the built-in AV mechanism is enabled.
-func (c *Catalog) MatchTagAssignments(ctx context.Context, title, fileName, author, dirName string) ([]TagAssignment, error) {
+func (c *Catalog) MatchTagAssignments(ctx context.Context, title, fileName, author, dirName string, ancestorDirNames ...string) ([]TagAssignment, error) {
 	matcher, err := c.Matcher(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return c.matchTagAssignmentsWithMatcher(ctx, matcher, title, fileName, author, dirName)
+	return c.matchTagAssignmentsWithMatcher(ctx, matcher, title, fileName, author, dirName, ancestorDirNames...)
 }
 
-func (c *Catalog) matchTagAssignmentsWithMatcher(ctx context.Context, matcher *tagging.Matcher, title, fileName, author, dirName string) ([]TagAssignment, error) {
-	matches := matcher.Match(matchFields(title, fileName, author, dirName)...)
+func (c *Catalog) matchTagAssignmentsWithMatcher(ctx context.Context, matcher *tagging.Matcher, title, fileName, author, dirName string, ancestorDirNames ...string) ([]TagAssignment, error) {
+	matches := matcher.Match(matchFields(title, fileName, author, dirName, ancestorDirNames...)...)
 	out := make([]TagAssignment, 0, len(matches))
 	seen := map[string]struct{}{}
 	for _, m := range matches {
 		seen[strings.ToLower(strings.TrimSpace(m.Label))] = struct{}{}
 		out = append(out, TagAssignment{Label: m.Label, Source: "auto", Evidence: m.Evidence()})
 	}
-	series, evidence, err := c.matchAVSeriesAssignment(ctx, title, fileName, author, dirName)
+	series, evidence, err := c.matchAVSeriesAssignment(ctx, title, fileName, author, dirName, ancestorDirNames...)
 	if err != nil {
 		return nil, err
 	}
@@ -240,7 +235,7 @@ func (c *Catalog) matchTagAssignmentsWithMatcher(ctx context.Context, matcher *t
 	return out, nil
 }
 
-func (c *Catalog) matchAVSeriesAssignment(ctx context.Context, title, fileName, author, dirName string) (string, string, error) {
+func (c *Catalog) matchAVSeriesAssignment(ctx context.Context, title, fileName, author, dirName string, ancestorDirNames ...string) (string, string, error) {
 	enabled, err := c.avCodeMatchingEnabled(ctx)
 	if err != nil || !enabled {
 		return "", "", err
@@ -249,7 +244,7 @@ func (c *Catalog) matchAVSeriesAssignment(ctx context.Context, title, fileName, 
 	if err != nil {
 		return "", "", err
 	}
-	for _, field := range matchFields(title, fileName, author, dirName) {
+	for _, field := range matchFields(title, fileName, author, dirName, ancestorDirNames...) {
 		code := avCodes.Find(field.Text)
 		if code == "" {
 			continue
@@ -276,24 +271,23 @@ func (c *Catalog) avCodeMatcher(ctx context.Context) (*tagging.AVCodeMatcher, er
 	if err != nil {
 		return nil, err
 	}
-	rule := effectiveRule(avTagLabel, tag.Aliases, tag.MatchRules)
+	rule := effectiveRule(avTagLabel, tag.MatchRules)
 	return tagging.NewAVCodeMatcher(rule.AVCodePrefixes), nil
 }
 
-func (c *Catalog) ensureTag(ctx context.Context, label string, aliases []string, source string) (Tag, error) {
-	return c.ensureTagWithRules(ctx, label, aliases, tagging.Rule{}, source)
+func (c *Catalog) ensureTag(ctx context.Context, label string, source string) (Tag, error) {
+	return c.ensureTagWithRules(ctx, label, tagging.Rule{}, source)
 }
 
 // EnsureTag ensures that a tag exists and returns its canonical database row.
 func (c *Catalog) EnsureTag(ctx context.Context, label, source string) (Tag, error) {
-	return c.ensureTag(ctx, label, nil, source)
+	return c.ensureTag(ctx, label, source)
 }
 
-// EnsureCrawlerTag ensures the crawler ownership tag exists. Crawler tags are
-// source provenance, so they are not blocked by tags.auto_generate_enabled.
+// EnsureCrawlerTag creates a tag owned by a crawler's import pipeline.
 func (c *Catalog) EnsureCrawlerTag(ctx context.Context, label string) (Tag, error) {
 	label = cleanTagLabel(label)
-	tag, err := c.ensureTagWithRulesInternal(ctx, label, nil, tagging.Rule{}, "generated", false)
+	tag, err := c.ensureTagDefinition(ctx, label, tagging.Rule{}, "generated")
 	if err != nil {
 		return Tag{}, err
 	}
@@ -324,8 +318,7 @@ UPDATE tags
 }
 
 // EnsureCrawlerTagForVideo ensures a single crawler-owned video carries its
-// crawler provenance tag. Unlike ordinary auto tags, this bypasses the
-// auto-generation setting and does not skip manually curated videos.
+// crawler provenance tag, including on manually curated videos.
 func (c *Catalog) EnsureCrawlerTagForVideo(ctx context.Context, videoID, label string) (bool, error) {
 	videoID = strings.TrimSpace(videoID)
 	if videoID == "" {
@@ -349,27 +342,30 @@ func (c *Catalog) EnsureCrawlerTagForVideo(ctx context.Context, videoID, label s
 
 // ensureTagWithRules 建标签（存在则复用）。规则只在两种情况下写入：
 // 新建时、或已有行的 match_rules 为空时（升级回填）；不会覆盖管理员显式改过的规则。
-func (c *Catalog) ensureTagWithRules(ctx context.Context, label string, aliases []string, rule tagging.Rule, source string) (Tag, error) {
-	return c.ensureTagWithRulesInternal(ctx, label, aliases, rule, source, true)
+func (c *Catalog) ensureTagWithRules(ctx context.Context, label string, rule tagging.Rule, source string) (Tag, error) {
+	if source == "" {
+		source = "user"
+	}
+	if source != fixedtags.SourceBuiltin && source != "user" {
+		return Tag{}, ErrInvalidTagSource
+	}
+	return c.ensureTagDefinition(ctx, label, rule, source)
 }
 
-func (c *Catalog) ensureTagWithRulesInternal(ctx context.Context, label string, aliases []string, rule tagging.Rule, source string, respectAutoGenerateSetting bool) (Tag, error) {
+// ensureTagDefinition persists definitions for explicit user/builtin tags and
+// the dedicated crawler/AV-series creators. It never derives labels from text.
+func (c *Catalog) ensureTagDefinition(ctx context.Context, label string, rule tagging.Rule, source string) (Tag, error) {
 	label = cleanTagLabel(label)
 	if label == "" {
 		return Tag{}, errors.New("tag label is required")
 	}
 	if isAVCodePollutedLabel(label) {
 		label = avTagLabel
-		aliases = fixedtags.AliasesFor(avTagLabel)
 		rule = avTagRule
 		source = fixedtags.SourceBuiltin
 	}
-	if source == "" {
-		source = "user"
-	}
-	source = normalizeTagSource(source)
 	if source == "builtin" && !fixedtags.IsBuiltinLabel(label) {
-		source = "generated"
+		return Tag{}, ErrInvalidTagSource
 	}
 	if source == fixedtags.SourceBuiltin {
 		enabled, err := c.BuiltinTagsEnabled(ctx)
@@ -388,23 +384,12 @@ func (c *Catalog) ensureTagWithRulesInternal(ctx context.Context, label string, 
 		if !errors.Is(err, sql.ErrNoRows) {
 			return Tag{}, err
 		}
-		if respectAutoGenerateSetting {
-			enabled, err := c.AutoGenerateTagsEnabled(ctx)
-			if err != nil {
-				return Tag{}, err
-			}
-			if !enabled {
-				return Tag{}, ErrAutoTagGenerationDisabled
-			}
-		}
 	}
-	aliases = cleanAliases(aliases, label)
-	aliasesJSON, _ := json.Marshal(aliases)
 	rulesJSON, _ := json.Marshal(rule)
 	now := time.Now().UnixMilli()
 	res, err := c.db.ExecContext(ctx, `
-INSERT OR IGNORE INTO tags (label, aliases, match_rules, source, created_at, updated_at)
-VALUES (?, ?, ?, ?, ?, ?)`, label, string(aliasesJSON), string(rulesJSON), source, now, now)
+INSERT OR IGNORE INTO tags (label, match_rules, source, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?)`, label, string(rulesJSON), source, now, now)
 	if err != nil {
 		return Tag{}, err
 	}
@@ -450,17 +435,6 @@ UPDATE tags
 				}
 			}
 		}
-		if len(aliases) > 0 {
-			res, err := c.db.ExecContext(ctx,
-				`UPDATE tags SET aliases = ?, updated_at = ? WHERE label = ? COLLATE NOCASE AND COALESCE(aliases, '[]') != ?`,
-				string(aliasesJSON), now, label, string(aliasesJSON))
-			if err != nil {
-				return Tag{}, err
-			}
-			if n, err := res.RowsAffected(); err == nil && n > 0 {
-				changed = true
-			}
-		}
 		if !rule.IsEmpty() {
 			// 升级回填：已有行没有显式规则时补上默认规则。
 			res, err := c.db.ExecContext(ctx, `
@@ -494,7 +468,7 @@ func (c *Catalog) ensureAVSeriesTag(ctx context.Context, series string) (Tag, er
 	if series == "" {
 		return Tag{}, errors.New("AV series tag label is required")
 	}
-	tag, err := c.ensureTagWithRulesInternal(ctx, series, nil, tagging.Rule{Keywords: []string{series}}, "generated", false)
+	tag, err := c.ensureTagDefinition(ctx, series, tagging.Rule{Keywords: []string{series}}, "generated")
 	if err != nil {
 		return Tag{}, err
 	}
@@ -560,4 +534,26 @@ ON CONFLICT(key) DO UPDATE SET
   value = excluded.value,
   updated_at = excluded.updated_at`, settingAVCodeMatchingDisabled, value, time.Now().UnixMilli())
 	return err
+}
+
+// matchFields keeps directory names separate so compact matching cannot join
+// words across directory boundaries. Nearer directories take evidence priority.
+func matchFields(title, fileName, author, dirName string, ancestorDirNames ...string) []tagging.Field {
+	fields := []tagging.Field{
+		{Name: "标题", Text: title},
+		{Name: "文件名", Text: fileName},
+		{Name: "作者", Text: author},
+		{Name: "目录", Text: dirName},
+	}
+	seen := map[string]bool{strings.ToLower(strings.TrimSpace(dirName)): true}
+	for i := len(ancestorDirNames) - 1; i >= 0; i-- {
+		name := strings.TrimSpace(ancestorDirNames[i])
+		key := strings.ToLower(name)
+		if name == "" || seen[key] {
+			continue
+		}
+		seen[key] = true
+		fields = append(fields, tagging.Field{Name: "上级目录", Text: name})
+	}
+	return fields
 }

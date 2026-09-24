@@ -92,12 +92,18 @@ UPDATE videos
 	if err := c.addColumnIfMissing(ctx, "videos", "ancestor_dir_ids", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return err
 	}
+	if err := c.addColumnIfMissing(ctx, "videos", "ancestor_dir_names", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
 	// videos.dir_name：视频所在目录名，扫盘时落库；标签全库重算需要用它做匹配材料。
 	if err := c.addColumnIfMissing(ctx, "videos", "dir_name", "TEXT DEFAULT ''"); err != nil {
 		return err
 	}
 	// tags.match_rules：标签匹配规则 JSON；video_tags.evidence：命中证据。
 	if err := c.addColumnIfMissing(ctx, "tags", "match_rules", "TEXT NOT NULL DEFAULT '{}'"); err != nil {
+		return err
+	}
+	if err := c.dropColumnIfExists(ctx, "tags", "aliases"); err != nil {
 		return err
 	}
 	if err := c.removeRetiredTagRuleFields(ctx); err != nil {
@@ -299,46 +305,6 @@ CREATE TABLE IF NOT EXISTS deleted_videos (
 	return nil
 }
 
-// RunPostStartupTagMaintenance normalizes the tag pool, removes retired
-// generated labels, and re-matches videos. The only generated labels it may
-// add are AV series labels while the built-in AV mechanism is enabled.
-func (c *Catalog) RunPostStartupTagMaintenance(ctx context.Context) error {
-	c.tagMaintenanceMu.Lock()
-	defer c.tagMaintenanceMu.Unlock()
-	return c.runPostStartupTagMaintenance(ctx)
-}
-
-func (c *Catalog) runPostStartupTagMaintenance(ctx context.Context) error {
-	if err := c.removeRetiredTagRuleFields(ctx); err != nil {
-		return err
-	}
-	if err := c.removeAutomaticTaggingArtifacts(ctx); err != nil {
-		return err
-	}
-	if err := c.cleanupInvalidAVSeriesTags(ctx); err != nil {
-		return err
-	}
-	matcher, err := c.Matcher(ctx)
-	if err != nil {
-		return err
-	}
-	lastID := ""
-	for {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		_, nextID, done, err := c.RetagVideosBatch(ctx, matcher, lastID, 500, 0)
-		if err != nil {
-			return err
-		}
-		lastID = nextID
-		if done {
-			_, err := c.PruneUnreferencedTags(ctx)
-			return err
-		}
-	}
-}
-
 func (c *Catalog) removeRetiredTagRuleFields(ctx context.Context) error {
 	rows, err := c.db.QueryContext(ctx, `SELECT id, COALESCE(match_rules, '{}') FROM tags`)
 	if err != nil {
@@ -393,7 +359,7 @@ func (c *Catalog) removeRetiredTagRuleFields(ctx context.Context) error {
 }
 
 // normalizeStoredTagSources 把历史标签来源收敛为三类。视频与标签的关联来源
-// video_tags.source 记录具体挂载方式，保留 auto/crawler/series 等细分值。
+// video_tags.source 独立记录 auto/manual/crawler/telegram 等关联来源。
 func (c *Catalog) normalizeStoredTagSources(ctx context.Context) error {
 	if _, err := c.db.ExecContext(ctx, `
 UPDATE tags
@@ -1068,6 +1034,7 @@ var currentVideoColumnNames = []string{
 	"fingerprint_error",
 	"parent_id",
 	"ancestor_dir_ids",
+	"ancestor_dir_names",
 	"dir_name",
 	"title",
 	"author",
@@ -1112,6 +1079,7 @@ CREATE TABLE videos_schema_rebuild_new (
     fingerprint_error  TEXT DEFAULT '',
     parent_id          TEXT,
     ancestor_dir_ids   TEXT NOT NULL DEFAULT '',
+    ancestor_dir_names TEXT NOT NULL DEFAULT '',
     dir_name           TEXT DEFAULT '',
     title              TEXT NOT NULL,
     author             TEXT,

@@ -905,6 +905,9 @@ func TestDiscoverCarriesAncestorDirectoryChain(t *testing.T) {
 	if got, want := snapshot.Files[0].AncestorDirIDs, []string{"root", "series", "season"}; !sameStrings(got, want) {
 		t.Fatalf("ancestor dir ids = %#v, want %#v", got, want)
 	}
+	if got, want := snapshot.Files[0].AncestorDirNames, []string{"", "Series", "Season"}; !sameStrings(got, want) {
+		t.Fatalf("ancestor dir names = %#v, want %#v", got, want)
+	}
 }
 
 func TestRunScansDirectoryNamedPreviews(t *testing.T) {

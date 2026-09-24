@@ -75,8 +75,8 @@ func TestCanonicalMaterializationPreservesIndependentDedupRepresentatives(t *tes
 	assertCanonicalFlag(t, cat, "bridge", false)
 
 	result, err := cat.db.ExecContext(ctx, `
-INSERT INTO tags (label, aliases, match_rules, source, created_at, updated_at)
-VALUES ('bridge-tag', '[]', '{}', 'user', ?, ?)
+INSERT INTO tags (label, match_rules, source, created_at, updated_at)
+VALUES ('bridge-tag', '{}', 'user', ?, ?)
 `, base.UnixMilli(), base.UnixMilli())
 	if err != nil {
 		t.Fatalf("insert tag: %v", err)

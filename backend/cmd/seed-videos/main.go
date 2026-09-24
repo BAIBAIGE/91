@@ -112,7 +112,7 @@ template AS (
 )
 INSERT INTO videos (
     id, drive_id, file_id, file_name, content_hash, sampled_sha256,
-    fingerprint_status, fingerprint_error, parent_id, dir_name, title, author, tags,
+    fingerprint_status, fingerprint_error, parent_id, dir_name, ancestor_dir_names, title, author, tags,
     duration_seconds, size_bytes, ext, thumbnail_url,
     thumbnail_updated_at, thumbnail_status, preview_local, preview_updated_at,
     preview_status, views, favorites, comments, likes, dislikes, hidden,
@@ -124,7 +124,7 @@ SELECT
     template.file_id,
     ? || '-' || printf('%05d', seq.n) || '.mp4',
     '', '', 'failed', 'development seed row; fingerprint disabled',
-    template.parent_id, template.dir_name,
+    template.parent_id, template.dir_name, template.ancestor_dir_names,
     '压测视频 ' || printf('%05d', seq.n),
     template.author, template.tags,
     template.duration_seconds,

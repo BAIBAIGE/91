@@ -344,6 +344,7 @@ func TestRemoveDeletedVideoDirectRestoresLocalUploadLosslessly(t *testing.T) {
 	now := time.Now()
 	if err := cat.UpsertVideo(ctx, &Video{
 		ID: "local-upload-rich", DriveID: "local-upload", FileID: "rich.mp4",
+		DirName: "2026", AncestorDirNames: []string{"旅行", "2026"},
 		FileName: "rich.mp4", Title: "用户起的标题", Author: "上传者",
 		Tags: []string{"标签一", "标签二"}, Description: "简介", DurationSeconds: 42,
 		Size: 4096, Ext: "mp4",
@@ -383,6 +384,9 @@ func TestRemoveDeletedVideoDirectRestoresLocalUploadLosslessly(t *testing.T) {
 	}
 	if restored.DriveID != "local-upload" || restored.FileID != "rich.mp4" || restored.Size != 4096 {
 		t.Fatalf("source identity lost: %#v", restored)
+	}
+	if restored.DirName != "2026" || !sameStrings(restored.AncestorDirNames, []string{"旅行", "2026"}) {
+		t.Fatalf("directory names lost: %#v", restored)
 	}
 	if restored.Hidden {
 		t.Fatalf("restored video must not be hidden")
@@ -471,8 +475,8 @@ func TestRemoveDeletedVideoDirectPreservesAutomaticTagProvenance(t *testing.T) {
 		t.Fatalf("seed video: %v", err)
 	}
 	res, err := cat.db.ExecContext(ctx, `
-INSERT INTO tags (label, aliases, match_rules, source, origin, created_at, updated_at)
-VALUES (?, '[]', '{}', 'generated', '', ?, ?)`, "自动标签", now.UnixMilli(), now.UnixMilli())
+INSERT INTO tags (label, match_rules, source, origin, created_at, updated_at)
+VALUES (?, '{}', 'generated', '', ?, ?)`, "自动标签", now.UnixMilli(), now.UnixMilli())
 	if err != nil {
 		t.Fatalf("seed automatic tag: %v", err)
 	}

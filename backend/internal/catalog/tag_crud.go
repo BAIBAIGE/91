@@ -13,8 +13,8 @@ import (
 	"github.com/video-site/backend/internal/tagging"
 )
 
-func (c *Catalog) CreateTagAndClassify(ctx context.Context, label string, aliases []string, source string) (int, error) {
-	tag, err := c.ensureTag(ctx, label, aliases, source)
+func (c *Catalog) CreateTagAndClassify(ctx context.Context, label string, source string) (int, error) {
+	tag, err := c.ensureTag(ctx, label, source)
 	if err != nil {
 		return 0, err
 	}
@@ -31,11 +31,10 @@ func (c *Catalog) UpdateTag(ctx context.Context, tagID int64, rule tagging.Rule)
 	if strings.EqualFold(tag.Label, avTagLabel) {
 		prefixes := tagging.CleanAVCodePrefixes(rule.AVCodePrefixes)
 		rule = avRuleFromPrefixes(prefixes)
-		aliasesJSON, _ := json.Marshal([]string{})
 		rulesJSON, _ := json.Marshal(rule)
 		if _, err := c.db.ExecContext(ctx,
-			`UPDATE tags SET aliases = ?, match_rules = ?, updated_at = ? WHERE id = ?`,
-			string(aliasesJSON), string(rulesJSON), time.Now().UnixMilli(), tagID); err != nil {
+			`UPDATE tags SET match_rules = ?, updated_at = ? WHERE id = ?`,
+			string(rulesJSON), time.Now().UnixMilli(), tagID); err != nil {
 			return Tag{}, err
 		}
 		if err := c.setAVCodeMatchingDisabled(ctx, len(prefixes) == 0); err != nil {
@@ -47,11 +46,10 @@ func (c *Catalog) UpdateTag(ctx context.Context, tagID int64, rule tagging.Rule)
 		return c.getTagByID(ctx, tagID)
 	}
 	rule = cleanTagRule(rule)
-	aliasesJSON, _ := json.Marshal([]string{})
 	rulesJSON, _ := json.Marshal(rule)
 	if _, err := c.db.ExecContext(ctx,
-		`UPDATE tags SET aliases = ?, match_rules = ?, updated_at = ? WHERE id = ?`,
-		string(aliasesJSON), string(rulesJSON), time.Now().UnixMilli(), tagID); err != nil {
+		`UPDATE tags SET match_rules = ?, updated_at = ? WHERE id = ?`,
+		string(rulesJSON), time.Now().UnixMilli(), tagID); err != nil {
 		return Tag{}, err
 	}
 	if err := c.bumpTagRulesVersion(ctx); err != nil {
@@ -94,10 +92,6 @@ func (c *Catalog) ClassifyTagByID(ctx context.Context, tagID int64) (int, error)
 	return c.classifyTag(ctx, tag)
 }
 
-func (c *Catalog) EnsureTagForVideoIDPrefix(ctx context.Context, prefix, label string, aliases []string, source string) (int, error) {
-	return c.ensureTagForVideoIDPrefix(ctx, prefix, label, aliases, source, true)
-}
-
 func (c *Catalog) EnsureCrawlerTagForVideoIDPrefix(ctx context.Context, prefix, label string) (int, error) {
 	hasVideos, err := c.videoIDPrefixExists(ctx, prefix)
 	if err != nil || !hasVideos {
@@ -107,7 +101,7 @@ func (c *Catalog) EnsureCrawlerTagForVideoIDPrefix(ctx context.Context, prefix, 
 	if err != nil {
 		return 0, err
 	}
-	return c.addTagForVideoIDPrefix(ctx, prefix, tag, false)
+	return c.addTagForVideoIDPrefix(ctx, prefix, tag)
 }
 
 func (c *Catalog) videoIDPrefixExists(ctx context.Context, prefix string) (bool, error) {
@@ -127,28 +121,15 @@ SELECT 1
 	return err == nil, err
 }
 
-func (c *Catalog) ensureTagForVideoIDPrefix(ctx context.Context, prefix, label string, aliases []string, source string, respectAutoGenerateSetting bool) (int, error) {
-	tag, err := c.ensureTagWithRulesInternal(ctx, label, aliases, tagging.Rule{}, source, respectAutoGenerateSetting)
-	if err != nil {
-		return 0, err
-	}
-	return c.addTagForVideoIDPrefix(ctx, prefix, tag, true)
-}
-
-func (c *Catalog) addTagForVideoIDPrefix(ctx context.Context, prefix string, tag Tag, skipManual bool) (int, error) {
+func (c *Catalog) addTagForVideoIDPrefix(ctx context.Context, prefix string, tag Tag) (int, error) {
 	prefix = strings.TrimSpace(prefix)
 	if prefix == "" {
 		return 0, errors.New("video id prefix is required")
-	}
-	manualWhere := ""
-	if skipManual {
-		manualWhere = "   AND COALESCE(v.tags_manual, 0) = 0\n"
 	}
 	rows, err := c.db.QueryContext(ctx, `
 SELECT v.id
   FROM videos v
  WHERE v.id LIKE ? || '%'
-`+manualWhere+`
    AND NOT EXISTS (
 	 SELECT 1
 	   FROM video_tags vt
@@ -399,7 +380,6 @@ func (c *Catalog) ListTags(ctx context.Context) ([]Tag, error) {
 	rows, err := c.db.QueryContext(ctx, `
 SELECT t.id,
        t.label,
-       t.aliases,
        COALESCE(t.match_rules, '{}'),
        t.source,
        COUNT(DISTINCT videos.id) AS cnt,
@@ -422,7 +402,7 @@ LEFT JOIN video_dedup_representatives representative
 LEFT JOIN videos ON videos.id = representative.representative_id
 	AND COALESCE(videos.hidden, 0) = 0
 	AND `+uniqueVideoWhereSQL+`
-GROUP BY t.id, t.label, t.aliases, t.match_rules, t.source, t.origin
+GROUP BY t.id, t.label, t.match_rules, t.source, t.origin
 ORDER BY cnt DESC, t.label ASC`)
 	if err != nil {
 		return nil, err
@@ -431,14 +411,13 @@ ORDER BY cnt DESC, t.label ASC`)
 	out := make([]Tag, 0)
 	for rows.Next() {
 		var tag Tag
-		var aliasesJSON, rulesJSON string
+		var rulesJSON string
 		var crawlerOwned int
-		if err := rows.Scan(&tag.ID, &tag.Label, &aliasesJSON, &rulesJSON, &tag.Source, &tag.Count, &crawlerOwned); err != nil {
+		if err := rows.Scan(&tag.ID, &tag.Label, &rulesJSON, &tag.Source, &tag.Count, &crawlerOwned); err != nil {
 			return nil, err
 		}
-		_ = json.Unmarshal([]byte(aliasesJSON), &tag.Aliases)
 		_ = json.Unmarshal([]byte(rulesJSON), &tag.MatchRules)
-		tag.MatchRules = effectiveRule(tag.Label, tag.Aliases, tag.MatchRules)
+		tag.MatchRules = effectiveRule(tag.Label, tag.MatchRules)
 		tag.CrawlerOwned = crawlerOwned != 0
 		out = append(out, tag)
 	}

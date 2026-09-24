@@ -68,7 +68,7 @@ func TestTelegramSourceTagCoexistsWithContentTags(t *testing.T) {
 			if _, err := c.ReplaceAutoVideoTags(ctx, v.ID, nil); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := c.ResetGeneratedTagState(ctx); err != nil {
+			if err := c.ReconcileVideoTags(ctx); err != nil {
 				t.Fatal(err)
 			}
 			saved, err := c.GetVideo(ctx, v.ID)

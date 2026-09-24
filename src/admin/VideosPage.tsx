@@ -1941,8 +1941,6 @@ function EditVideoModal({
 function tagAssignmentSourceLabel(source: string): string {
   if (source === "manual") return "人工";
   if (source === "auto") return "自动";
-  if (source === "series") return "系列";
-  if (source === "propagated") return "传播";
   if (source === "crawler") return "爬虫";
   if (source === "telegram") return "Telegram";
   if (source === "legacy") return "自动生成";

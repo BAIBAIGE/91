@@ -217,12 +217,10 @@ func seedBuiltinTagPackTx(ctx context.Context, tx *sql.Tx) (bool, error) {
 		if isAVTag {
 			rule = avTagRule
 		}
-		aliases := cleanAliases(definition.Aliases, definition.Label)
-		aliasesJSON, _ := json.Marshal(aliases)
 		rulesJSON, _ := json.Marshal(rule)
 		result, err := tx.ExecContext(ctx, `
-INSERT OR IGNORE INTO tags (label, aliases, match_rules, source, created_at, updated_at)
-VALUES (?, ?, ?, ?, ?, ?)`, definition.Label, string(aliasesJSON), string(rulesJSON), definition.Source, now, now)
+INSERT OR IGNORE INTO tags (label, match_rules, source, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?)`, definition.Label, string(rulesJSON), definition.Source, now, now)
 		if err != nil {
 			return false, err
 		}
@@ -263,21 +261,6 @@ UPDATE tags SET match_rules = ?, updated_at = ? WHERE id = ?`,
 				}
 			}
 
-			if len(aliases) > 0 {
-				result, err = tx.ExecContext(ctx, `
-UPDATE tags
-   SET aliases = ?, updated_at = ?
- WHERE label = ? COLLATE NOCASE
-   AND COALESCE(aliases, '[]') != ?`,
-					string(aliasesJSON), now, definition.Label, string(aliasesJSON))
-				if err != nil {
-					return false, err
-				}
-				if affected, _ := result.RowsAffected(); affected > 0 {
-					changed = true
-				}
-			}
-
 			if !rule.IsEmpty() {
 				result, err = tx.ExecContext(ctx, `
 UPDATE tags
@@ -293,14 +276,6 @@ UPDATE tags
 				}
 			}
 		}
-
-		if isAVTag {
-			aliasesChanged, err := removeAVLegacyAliasesTx(ctx, tx)
-			if err != nil {
-				return false, err
-			}
-			changed = changed || aliasesChanged
-		}
 	}
 
 	avDisabled, err := avCodeMatchingDisabledTx(ctx, tx)
@@ -311,29 +286,4 @@ UPDATE tags
 		return false, err
 	}
 	return changed || avDisabled, nil
-}
-
-func removeAVLegacyAliasesTx(ctx context.Context, tx *sql.Tx) (bool, error) {
-	tag, err := getTagByLabelTxRaw(ctx, tx, avTagLabel)
-	if errors.Is(err, sql.ErrNoRows) {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	filtered := make([]string, 0, len(tag.Aliases))
-	for _, alias := range tag.Aliases {
-		if _, legacy := avLegacyAliases[strings.ToLower(strings.TrimSpace(alias))]; legacy {
-			continue
-		}
-		filtered = append(filtered, alias)
-	}
-	if len(filtered) == len(tag.Aliases) {
-		return false, nil
-	}
-	aliasesJSON, _ := json.Marshal(filtered)
-	_, err = tx.ExecContext(ctx,
-		`UPDATE tags SET aliases = ?, updated_at = ? WHERE id = ?`,
-		string(aliasesJSON), time.Now().UnixMilli(), tag.ID)
-	return err == nil, err
 }

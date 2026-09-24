@@ -787,7 +787,7 @@ func TestSelectiveLocalStorageBackupCopiesOnlyReferencedVideos(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := env.cat.CreateTagAndClassify(ctx, "localrestore", nil, "user"); err != nil {
+	if _, err := env.cat.CreateTagAndClassify(ctx, "localrestore", "user"); err != nil {
 		t.Fatal(err)
 	}
 	if err := env.cat.SetManualVideoTags(ctx, "local-source-only", []string{"localrestore"}); err != nil {
@@ -1153,7 +1153,7 @@ func TestSelectiveUploadStorageRestoreMergesTargetContent(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	backupTagID, err := env.cat.CreateTagAndClassify(ctx, "backupmerge", nil, "user")
+	backupTagID, err := env.cat.CreateTagAndClassify(ctx, "backupmerge", "user")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1217,7 +1217,7 @@ func TestSelectiveUploadStorageRestoreMergesTargetContent(t *testing.T) {
 	}
 	writeTestFile(t, filepath.Join(uploadRoot, "target-only.mp4"), []byte("target-only"))
 	writeTestFile(t, targetPreview, []byte("target-only-preview"))
-	if _, err := env.cat.CreateTagAndClassify(ctx, "targetmerge", nil, "user"); err != nil {
+	if _, err := env.cat.CreateTagAndClassify(ctx, "targetmerge", "user"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := env.cat.CreateRemoteUploadJob(

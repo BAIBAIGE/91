@@ -128,14 +128,6 @@ func TestMatcherAVCodeKnownPrefixes(t *testing.T) {
 	}
 }
 
-func TestRuleFromAliasesUsesKeywords(t *testing.T) {
-	rule := RuleFromAliases("臀", []string{"翘臀", "ass", "屁股"})
-	want := []string{"臀", "翘臀", "ass", "屁股"}
-	if !reflect.DeepEqual(rule.Keywords, want) {
-		t.Fatalf("keywords = %#v, want %#v", rule.Keywords, want)
-	}
-}
-
 func TestSeriesExtraction(t *testing.T) {
 	cases := []struct {
 		text string
@@ -157,28 +149,6 @@ func TestSeriesExtraction(t *testing.T) {
 	for _, c := range cases {
 		if got := SeriesInText(c.text); got != c.want {
 			t.Errorf("SeriesInText(%q) = %q, want %q", c.text, got, c.want)
-		}
-	}
-}
-
-func TestAutoSeriesExtractionUsesCuratedPrefixes(t *testing.T) {
-	cases := []struct {
-		code string
-		want string
-	}{
-		{"ABP-123", "ABP"},
-		{"FC2PPV-4162750", "FC2PPV"},
-		{"ADN-778-FHD", ""},
-		{"390JAC-233", ""},
-		{"FC2-1234567", ""},
-		{"cc-1750027", ""},
-		{"IMG_1234", ""},
-		{"FINAL168045", ""},
-		{"MOV202405", ""},
-	}
-	for _, c := range cases {
-		if got := AutoSeriesOf(c.code); got != c.want {
-			t.Errorf("AutoSeriesOf(%q) = %q, want %q", c.code, got, c.want)
 		}
 	}
 }

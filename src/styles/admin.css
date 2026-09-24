@@ -3850,16 +3850,6 @@ body.admin-mobile-nav-open {
   background: var(--info-soft);
 }
 
-.admin-video-tag-source[data-source="series"] small {
-  color: var(--accent);
-  background: var(--accent-soft);
-}
-
-.admin-video-tag-source[data-source="propagated"] small {
-  color: var(--warning);
-  background: var(--warning-soft);
-}
-
 .admin-videos-results {
   display: flex;
   flex-direction: column;

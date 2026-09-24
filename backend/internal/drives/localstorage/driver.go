@@ -123,6 +123,18 @@ func (d *Driver) Stat(ctx context.Context, fileID string) (*drives.Entry, error)
 	}, nil
 }
 
+// DirectoryName resolves the scan root name through a direct metadata lookup.
+func (d *Driver) DirectoryName(ctx context.Context, dirID string) (string, error) {
+	entry, err := d.Stat(ctx, dirID)
+	if err != nil {
+		return "", err
+	}
+	if entry == nil || !entry.IsDir {
+		return "", drives.ErrNotSupported
+	}
+	return entry.Name, nil
+}
+
 func (d *Driver) StreamURL(ctx context.Context, fileID string) (*drives.StreamLink, error) {
 	p, _, err := d.pathForID(fileID)
 	if err != nil {
