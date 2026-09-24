@@ -43,6 +43,7 @@ import { previewController } from "@/lib/previewController";
 import { watchPreviewSettings } from "@/lib/previewSettings";
 import { RouteActivityProvider } from "@/lib/routeActivity";
 import { useDocumentScrollLock } from "@/lib/useDocumentScrollLock";
+import { navigationHistory } from "@/lib/navigationHistory";
 import { rememberVideoReturnPath, routeToPath } from "@/lib/videoReturnPath";
 import {
   isVideoListingPath,
@@ -102,6 +103,11 @@ function PageSuspense({
 
 function VideoReturnPathRecorder() {
   const location = useLocation();
+  const navigationType = useNavigationType();
+
+  useLayoutEffect(() => {
+    navigationHistory.record(location.key, navigationType);
+  }, [location.key, navigationType]);
 
   useEffect(() => {
     rememberVideoReturnPath(routeToPath(location));

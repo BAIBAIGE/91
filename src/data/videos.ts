@@ -9,6 +9,12 @@ import type {
   VideoReaction,
   VideoReactionCounts,
 } from "@/lib/videoReaction";
+import {
+  filterDeletedVideos,
+  isVideoDeleted,
+  markVideoDeleted,
+  subscribeVideoDeletions,
+} from "@/lib/videoDeletions";
 
 export type VideoShareClaim = {
   shareId: string;
@@ -151,8 +157,10 @@ export async function fetchVideoFeed(
 }
 
 export function fetchVideoDetail(id: string): Promise<VideoDetail | null> {
-  return apiGet<VideoDetail>(`/api/video/${encodeURIComponent(id)}`).catch(
-    (error: unknown) => {
+  if (isVideoDeleted(id)) return Promise.resolve(null);
+  return apiGet<VideoDetail>(`/api/video/${encodeURIComponent(id)}`)
+    .then((detail) => isVideoDeleted(id) ? null : detail)
+    .catch((error: unknown) => {
       if (
         error instanceof HTTPStatusError &&
         (error.status === 404 || error.status === 410)
@@ -160,8 +168,7 @@ export function fetchVideoDetail(id: string): Promise<VideoDetail | null> {
         return null;
       }
       throw error;
-    }
-  );
+    });
 }
 
 const VIDEO_DETAIL_PREFETCH_TTL_MS = 30_000;
@@ -218,6 +225,7 @@ export function prefetchVideoDetail(id: string): Promise<VideoDetail | null> {
 export function consumePrefetchedVideoDetail(
   id: string
 ): Promise<VideoDetail | null> | null {
+  if (isVideoDeleted(id)) return Promise.resolve(null);
   const entry = prefetchedVideoDetailsByID.get(id);
   prefetchedVideoDetailsByID.delete(id);
   if (!entry || entry.expiresAt <= Date.now()) return null;
@@ -249,7 +257,7 @@ export async function fetchVideoRecommendations(
   if (!Array.isArray(items)) {
     throw new Error("Invalid video recommendations response");
   }
-  return items;
+  return filterDeletedVideos(items);
 }
 
 const VIDEO_RECOMMENDATIONS_PREFETCH_TTL_MS = 30_000;
@@ -264,6 +272,12 @@ const prefetchedVideoRecommendationsByID = new Map<
   string,
   PrefetchedVideoRecommendations
 >();
+
+subscribeVideoDeletions((id) => {
+  prefetchedVideoDetailsByID.delete(id);
+  // Recommendation prefetches may contain this ID under any source video.
+  prefetchedVideoRecommendationsByID.clear();
+});
 
 /**
  * Start recommendations only after a click is confirmed as navigation. Their
@@ -479,17 +493,20 @@ export function hideVideo(id: string): Promise<{ ok: boolean }> {
   );
 }
 
-export function deleteVideo(
+export async function deleteVideo(
   id: string,
   options: { deleteSource?: boolean } = {}
 ): Promise<{ ok: boolean; deletedSource: boolean }> {
-  return apiJSON<{ ok: boolean; deletedSource: boolean }>(
+  const result = await apiJSON<{ ok: boolean; deletedSource: boolean }>(
     `/admin/api/videos/${encodeURIComponent(id)}`,
     {
       method: "DELETE",
       body: JSON.stringify({ deleteSource: !!options.deleteSource }),
     }
   );
+  if (!result.ok) throw new Error("Video deletion failed");
+  markVideoDeleted(id);
+  return result;
 }
 
 export function recordView(id: string): Promise<{ views: number }> {

@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import {
   useLocation,
   useNavigate,
@@ -29,6 +36,14 @@ import {
 import { useAuth } from "@/admin/AuthContext";
 import { useDocumentScrollLock } from "@/lib/useDocumentScrollLock";
 import { resolveVideoReturnPath } from "@/lib/videoReturnPath";
+import { readVideoListingBackground } from "@/lib/videoListingBackground";
+import { navigationHistory } from "@/lib/navigationHistory";
+import {
+  filterDeletedVideos,
+  getDeletedVideoIDs,
+  isVideoDeleted,
+  subscribeVideoDeletions,
+} from "@/lib/videoDeletions";
 import { scrollPageTo, usePageScrollRoot } from "@/lib/pageScroll";
 import type {
   TagItem,
@@ -53,12 +68,23 @@ const cachedCollectionSummariesByID = new Map<
   VideoCollectionSummary | null
 >();
 
+subscribeVideoDeletions((id) => {
+  forgetVideoDetail(id);
+  for (const [key, videos] of cachedRecommendationsByID) {
+    cachedRecommendationsByID.set(key, filterDeletedVideos(videos));
+  }
+  // Summaries have no member IDs; invalidate them to refresh counts/indices.
+  cachedCollectionSummariesByID.clear();
+});
+
 function readCachedVideoDetail(id: string): VideoDetailSnapshot | null {
+  if (isVideoDeleted(id)) return null;
   return cachedVideoDetailsByID.get(id) ?? null;
 }
 
 function rememberVideoDetail(snapshot: VideoDetailSnapshot) {
   const id = snapshot.detail.id;
+  if (isVideoDeleted(id)) return;
   cachedVideoDetailsByID.delete(id);
   cachedVideoDetailsByID.set(id, snapshot);
 
@@ -96,7 +122,7 @@ function rememberRecommendations(id: string, videos: VideoItem[]) {
     const oldestID = cachedRecommendationsByID.keys().next().value;
     if (oldestID) cachedRecommendationsByID.delete(oldestID);
   }
-  cachedRecommendationsByID.set(id, videos);
+  cachedRecommendationsByID.set(id, filterDeletedVideos(videos));
 }
 
 export default function VideoDetailPage() {
@@ -107,6 +133,11 @@ export default function VideoDetailPage() {
 }
 
 function VideoDetailContent({ id }: { id?: string }) {
+  const deletedVideoIDs = useSyncExternalStore(
+    subscribeVideoDeletions,
+    getDeletedVideoIDs,
+    getDeletedVideoIDs
+  );
   const scrollRootRef = usePageScrollRoot();
   const navigate = useNavigate();
   const location = useLocation();
@@ -128,6 +159,10 @@ function VideoDetailContent({ id }: { id?: string }) {
   );
   const [recommendations, setRecommendations] = useState<VideoItem[]>(
     initialRecommendations ?? []
+  );
+  const visibleRecommendations = useMemo(
+    () => filterDeletedVideos(recommendations, deletedVideoIDs),
+    [recommendations, deletedVideoIDs]
   );
   const [recommendationsLoading, setRecommendationsLoading] = useState(
     !!id && initialRecommendations === null
@@ -188,7 +223,7 @@ function VideoDetailContent({ id }: { id?: string }) {
     detailRequest
       .then((d) => {
         if (!active) return;
-        let stableDetail = d;
+        let stableDetail = isVideoDeleted(id) ? null : d;
         const localReactionCounts = reactionCountsRef.current;
         if (stableDetail && localReactionCounts?.videoId === stableDetail.id) {
           stableDetail = {
@@ -311,7 +346,7 @@ function VideoDetailContent({ id }: { id?: string }) {
   }, [availableTagsLoadVersion, isAdmin]);
 
   useEffect(() => {
-    if (!id || !detail?.collectionCandidate) {
+    if (!id || deletedVideoIDs.has(id) || !detail?.collectionCandidate) {
       if (id) cachedCollectionSummariesByID.delete(id);
       setCollectionSummary(null);
       return;
@@ -339,7 +374,7 @@ function VideoDetailContent({ id }: { id?: string }) {
       active = false;
       controller.abort();
     };
-  }, [detail?.collectionCandidate, id]);
+  }, [detail?.collectionCandidate, id, deletedVideoIDs]);
 
   async function handleTagsChange(nextTags: string[]) {
     if (!detail) return;
@@ -373,7 +408,17 @@ function VideoDetailContent({ id }: { id?: string }) {
     setDeleteError("");
     try {
       await deleteVideo(detail.id, { deleteSource });
-      forgetVideoDetail(detail.id);
+      // Deletion still propagates if the user left during the request, but it
+      // must not redirect a different page when that request finishes.
+      if (!navigationHistory.isCurrent(location.key)) return;
+      const background = readVideoListingBackground(location.state);
+      const delta = background
+        ? navigationHistory.backDelta(location.key, background.key)
+        : null;
+      if (delta !== null) {
+        navigate(delta);
+        return;
+      }
       const from = typeof locationState?.from === "string" ? locationState.from : null;
       navigate(resolveVideoReturnPath(from), { replace: true });
     } catch {
@@ -512,7 +557,7 @@ function VideoDetailContent({ id }: { id?: string }) {
             </div>
 
             <RecommendedRail
-              videos={recommendations}
+              videos={visibleRecommendations}
               videoId={detail.id}
               collection={collectionSummary ?? undefined}
               recommendationsLoading={recommendationsLoading}

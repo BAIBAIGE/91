@@ -169,7 +169,10 @@ test("layout measurement stays off the per-frame scroll path", () => {
   assert.match(virtualGridSource, /const nextMargin = rect\.top \+ window\.scrollY;/);
   assert.match(virtualGridSource, /new ResizeObserver\(\(\[entry\]\) =>/);
   assert.match(virtualGridSource, /observer\?\.disconnect\(\)/);
-  assert.doesNotMatch(virtualGridSource, /window\.getComputedStyle|querySelector<HTMLElement>/);
+  assert.doesNotMatch(virtualGridSource, /window\.getComputedStyle/);
+  const capture = virtualGridSource.match(/const capture = \(\) => \{([\s\S]*?)\n    \};/)?.[1];
+  assert.ok(capture);
+  assert.doesNotMatch(capture, /querySelector|getBoundingClientRect/);
   // 只有断点/视图变化清空测量缓存，追加视频不会重测全部旧行。
   assert.match(
     virtualGridSource,

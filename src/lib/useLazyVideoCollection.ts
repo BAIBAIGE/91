@@ -1,5 +1,16 @@
-import { useCallback, useEffect, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { fetchVideoCollection } from "@/data/videos";
+import {
+  filterDeletedCollection,
+  getDeletedVideoIDs,
+  subscribeVideoDeletions,
+} from "@/lib/videoDeletions";
 import type { VideoCollection } from "@/types";
 
 const COLLECTION_CACHE_LIMIT = 8;
@@ -10,6 +21,16 @@ type CachedCollection = {
 };
 
 const cachedCollectionsByVideoID = new Map<string, CachedCollection>();
+
+subscribeVideoDeletions((id) => {
+  cachedCollectionsByVideoID.delete(id);
+  for (const [key, cached] of cachedCollectionsByVideoID) {
+    cachedCollectionsByVideoID.set(key, {
+      ...cached,
+      data: filterDeletedCollection(cached.data),
+    });
+  }
+});
 
 function readCachedCollection(videoId: string, requirePreview: boolean) {
   const cached = cachedCollectionsByVideoID.get(videoId);
@@ -22,6 +43,7 @@ function rememberCollection(
   collection: VideoCollection,
   includesPreview: boolean
 ) {
+  collection = filterDeletedCollection(collection);
   const existing = cachedCollectionsByVideoID.get(videoId);
   if (existing?.includesPreview && !includesPreview) {
     return existing.data;
@@ -50,6 +72,11 @@ export function useLazyVideoCollection(
   enabled: boolean,
   options: { includePreview?: boolean } = {}
 ) {
+  const deletedVideoIDs = useSyncExternalStore(
+    subscribeVideoDeletions,
+    getDeletedVideoIDs,
+    getDeletedVideoIDs
+  );
   const includePreview = options.includePreview === true;
   const [data, setData] = useState<VideoCollection | null>(() =>
     readCachedCollection(videoId, includePreview)
@@ -105,7 +132,11 @@ export function useLazyVideoCollection(
     setReloadVersion((version) => version + 1);
   }, [videoId]);
 
-  return { data, loading, error, retry };
+  const visibleData = useMemo(
+    () => data ? filterDeletedCollection(data, deletedVideoIDs) : null,
+    [data, deletedVideoIDs]
+  );
+  return { data: visibleData, loading, error, retry };
 }
 
 function isAbortError(error: unknown) {

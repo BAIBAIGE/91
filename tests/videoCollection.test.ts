@@ -65,7 +65,7 @@ test("collection items load lazily through one shared resource", () => {
   );
   assert.match(
     detailSource,
-    /if \(!id \|\| !detail\?\.collectionCandidate\) \{[\s\S]*?return;[\s\S]*?fetchVideoCollectionSummary\(id, \{ signal: controller\.signal \}\)/
+    /if \(!id \|\| deletedVideoIDs\.has\(id\) \|\| !detail\?\.collectionCandidate\) \{[\s\S]*?return;[\s\S]*?fetchVideoCollectionSummary\(id, \{ signal: controller\.signal \}\)/
   );
   assert.match(detailSource, /cachedCollectionSummariesByID/);
   assert.match(
@@ -95,7 +95,7 @@ test("collection items load lazily through one shared resource", () => {
 test("desktop recommendation rail always uses tabs while mobile keeps its heading", () => {
   assert.match(
     detailSource,
-    /<RecommendedRail[\s\S]*?videos=\{recommendations\}[\s\S]*?videoId=\{detail\.id\}[\s\S]*?collection=\{collectionSummary \?\? undefined\}[\s\S]*?recommendationsLoading=\{recommendationsLoading\}[\s\S]*?recommendationsError=\{recommendationsError\}/
+    /<RecommendedRail[\s\S]*?videos=\{visibleRecommendations\}[\s\S]*?videoId=\{detail\.id\}[\s\S]*?collection=\{collectionSummary \?\? undefined\}[\s\S]*?recommendationsLoading=\{recommendationsLoading\}[\s\S]*?recommendationsError=\{recommendationsError\}/
   );
   assert.match(
     railSource,

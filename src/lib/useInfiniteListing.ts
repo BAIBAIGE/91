@@ -1,4 +1,17 @@
-import { useCallback, useEffect, useReducer, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useReducer,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
+import {
+  filterDeletedVideos,
+  getDeletedVideoIDs,
+  subscribeVideoDeletions,
+} from "@/lib/videoDeletions";
 import type { VideoFeedCursor } from "@/data/videos";
 import {
   emptyInfiniteListingState,
@@ -32,6 +45,13 @@ type CachedInfiniteListing = {
 
 const infiniteListingCache = new Map<string, CachedInfiniteListing>();
 
+subscribeVideoDeletions(() => {
+  for (const [key, cached] of infiniteListingCache) {
+    const items = filterDeletedVideos(cached.items);
+    if (items !== cached.items) infiniteListingCache.set(key, { ...cached, items });
+  }
+});
+
 function readInfiniteListingCache(
   key: string,
   restore: { feedToken: string; count: number }
@@ -59,7 +79,10 @@ function readInfiniteListingCache(
 
 function writeInfiniteListingCache(entry: CachedInfiniteListing) {
   infiniteListingCache.delete(entry.key);
-  infiniteListingCache.set(entry.key, entry);
+  infiniteListingCache.set(entry.key, {
+    ...entry,
+    items: filterDeletedVideos(entry.items),
+  });
   while (infiniteListingCache.size > INFINITE_LISTING_CACHE_MAX_ENTRIES) {
     const oldestKey = infiniteListingCache.keys().next().value as
       | string
@@ -128,6 +151,11 @@ export function useInfiniteListing(
   source: InfiniteFeedSource,
   options: UseInfiniteListingOptions = {}
 ) {
+  const deletedVideoIDs = useSyncExternalStore(
+    subscribeVideoDeletions,
+    getDeletedVideoIDs,
+    getDeletedVideoIDs
+  );
   const enabled = options.enabled ?? true;
   const pausePagination = options.pausePagination ?? false;
   const key = source.key;
@@ -174,7 +202,7 @@ export function useInfiniteListing(
             requestID,
             requestCursor: request.cursor,
             cursor: result.cursor,
-            items: result.items ?? [],
+            items: filterDeletedVideos(result.items ?? []),
             total: result.total ?? 0,
             exhausted: result.exhausted,
             receivedAt: Date.now(),
@@ -324,10 +352,26 @@ export function useInfiniteListing(
   }, [reload, requestBatch]);
 
   const matchesQuery = state.key === key;
-  const items = matchesQuery ? state.items : [];
+  const items = useMemo(
+    () => matchesQuery ? filterDeletedVideos(state.items, deletedVideoIDs) : [],
+    [matchesQuery, state.items, deletedVideoIDs]
+  );
   const initialLoading =
     enabled &&
     (!matchesQuery || (state.status === "initial-loading" && items.length === 0));
+
+  // Removing the last loaded card must not strand a feed that still has pages.
+  useEffect(() => {
+    if (
+      enabled && !pausePagination && matchesQuery && items.length === 0 &&
+      state.status === "ready" && !state.exhausted
+    ) {
+      requestBatch();
+    }
+  }, [
+    enabled, pausePagination, matchesQuery, items.length,
+    state.status, state.exhausted, state.requestedCount, requestBatch,
+  ]);
 
   return {
     items,
