@@ -13,6 +13,7 @@
 - **短视频模式** — 一键切换抖音风格，沉浸刷片
 - **视频分享** — 视频支持一次性分享，"看完即焚"
 - **爬虫脚本** — 支持导入自定义脚本，但是有一些规范，具体可以参考 [SpiderFor91](https://github.com/Just-Spider/SpiderFor91)
+- **接入TG** — 支持通过机器人接入 Telegram，具体可查看 [接入指南](backend/docs/Enable_Telegram.md)
 
 ## 预览图
 <img src="ReadMeImage/home.webp" alt="首页展示" width="100%" />
@@ -127,5 +128,18 @@ docker compose logs -f                                  # 查看日志
   <tr>
     <td align="center">微信</td>
     <td align="center">支付宝</td>
+  </tr>
+</table>
+
+## 赞助者
+
+感谢支持，你的支持是我前进的动力💗
+
+<table>
+  <tr>
+    <td align="center" width="120">
+      <img src="ReadMeImage/sponsors/sponsor001.png" alt="*帅的头像" width="80" height="80" /><br />
+      <sub>*帅</sub>
+    </td>
   </tr>
 </table>
